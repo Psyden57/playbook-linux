@@ -37,10 +37,12 @@ created from a booted OS — before a CRC-sealed image will boot; see
 `docs/project/SAFETY.md` and `docs/project/FACTORY-PATH.md`.
 
 Our image is a **replacement for the region-0 IFS**, not an extra file: RIM's
-startup prefix is kept and the imagefs is rebuilt behind it.  A small ARM
-chainloader at image offset `0x800` copies the 6.15.11 `zImage` and the board
-DTB to high DRAM, checks the DTB magic, and jumps with the ARM boot protocol.
-The kernel is pristine Linux 6.15.11 plus one patch set
+fixed startup prefix and header are kept, and our chainloader, `zImage` and DTB
+are placed in the image behind them.  (The separate 2.1.0.1917 work rebuilds the
+imagefs itself behind the same prefix; see `docs/project/IFS-REBUILD.md`.)  A
+small ARM chainloader at image offset `0x800` copies the 6.15.11 `zImage` and the
+board DTB to high DRAM, checks the DTB magic, and jumps with the ARM boot
+protocol.  The kernel is pristine Linux 6.15.11 plus one patch set
 (`kernel/clean-kernel-6.15.11-changes.patch`, 34 files) carrying the
 `omap4-winchester` board DTS and the board quirks.  The initramfs contains a
 static PID 1 and a purpose-built console (no busybox, no shell) whose commands
