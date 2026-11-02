@@ -1,0 +1,54 @@
+pbrpmb read-only probe — image 0xDDB9D733 (pbrpmb3), 2026-10-30
+Device: /dev/mmcblk1rpmb, kernel 6.15.11, OMAP4430 spare
+
+Commands:
+  run /pbrpmb selftest   -> SHA-256(abc) OK, HMAC RFC4231#2 OK,
+                            ioctl CMD=0xc048b300 MULTI=0xc008b301 sizeof(cmd)=72
+  run /pbrpmb probe
+
+Result (probe):
+  counter(bc=0): result=0 req_resp=0x0200 counter=4179 (0x00001053)
+  counter(bc=1): not reached (bc=0 succeeded)
+  read 0(bc=0): result=0 req_resp=0x0400
+  read 0: result=0 counter=0 nonce=ok
+  frame MAC: fc3958404f5955bb8551546f19e16c9e95fc12bef28786118a1bc34f5645f568
+  data[0:32]: 8aa08be838c17bc112e1779630dc6641fee085328063313d66f4c14b36401691
+
+The exact 284-byte MAC input, resp[0xE4..0x200), as received:
+  8aa08be838c17bc112e1779630dc6641fee085328063313d66f4c14b36401691
+  b839236a52a7a710ab42b80b02326bbd901d197148af756b875552ba18ad9019
+  c74ee9aec7d14c97822862bee2bc591fb42e5ba87a5bc2fa92e693651d4ce32f
+  b4bbe6dae83a951a15744ae5bc11f161aabcb43a94290690409234b28378ba1d
+  6a292630be0b3dc2027dfdb0c3bcd6e2bd2ac71f7470db6fb64cdc761ad15efe
+  5b93437f43cf2c35ee9535b9ec6c30d7e7166d46d1f85edbc67233177b944ff1
+  2e58ac72f8f5f071ae66d703226fa2d372aa8a4b79be32c29a8e132e073ac3d8
+  b5085d0fa2fc09dcc347c90d6afde73883e54538c26a534a5b1c3fa00e3730e3
+  ec0fd292cb74bc6a547491afffc8ed0e
+  nonce[16]: b5085d0fa2fc09dcc347c90d6afde738  (first 16 bytes of the last line)
+  write_counter: 00000000
+  addr: 0000
+  block_count: 0001
+  result: 0000
+  req_resp: 0400
+
+Candidate tests (all failed):
+  literal seed "retreating is advancing in the o":
+    identity, HMAC(0^16,seed), SHA256(seed),
+    HMAC(seed[0:16],seed[16:32]), HMAC(seed,0^16)
+  CID seed (20+B + 12 zeros), reconstructed from rpmb-omap4 0x2d40:
+    the same five derivations
+  offline, against the exact 284-byte input above:
+    SHA256(seed), SHA256(seed||0^32), SHA256(0^32||seed),
+    HMAC(z16,seed), HMAC(seed,z16), HMAC(z32,seed), HMAC(seed,seed),
+    HMAC(seed,z32), SHA-512/32, AES-128-ECB enc/dec with a zero key,
+    AES-CMAC/ECB combinations — no match.
+
+Observation: the RPMB write counter read 4177 on the first probe boot and 4179
+on the second: each factory/CRC boot writes RPMB (the bootloader's per-boot
+counter decrement), so the counter is a useful per-boot witness.
+
+Next: the effective 32-byte frame key is written to page+0x460 (rpmb-omap4
+0x30a0-0x30f4 sets the pointer; the 0x2F op 1 call outputs only 16 bytes to
+page+0x000).  The exact f is not a simple hash/AES/CMAC of the seed.  Extract
+the key once from a live QNX page (read-only) — find the seed at page+0x440,
+read 32 bytes at seed+0x20 — or call the smc #1 0x2F path from Linux.

@@ -1,0 +1,816 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * BlackBerry PlayBook (RIM "winchester", OMAP4430 ES2.2 HS).
+ *
+ * Reverse-engineered from the running QNX OS (2.0.0.4869) register map and
+ * the OS 2.0 IFS buildfile; no vendor DT exists.  Booted from the CRC-path
+ * chainloader (r0=0, r1=0xffffffff, r2=DTB), not by the stock boot ROM.
+ *
+ * First-boot scope: memory, UART3 console, TWL6030 PMIC, eMMC on MMC2.
+ * QNX already muxed/ clocked the pads the OS used (UART3, I2C1, MMC2), so
+ * no pinctrl nodes are needed (and none are known yet).
+ */
+
+/dts-v1/;
+
+#include "omap443x.dtsi"
+
+/ {
+	model = "BlackBerry PlayBook (winchester)";
+	compatible = "blackberry,omap4-winchester", "ti,omap4430", "ti,omap4";
+
+	/*
+	 * The internal eMMC is soldered to a fixed 3.3 V rail (QNX keeps the
+	 * TWL vmmc rail off - that one is the SD slot).  The MMC core takes
+	 * host->ocr_avail from the vmmc-supply regulator's constraints, so
+	 * without a supply it stays 0 and mmc_select_voltage() rejects the
+	 * card with "no support for card's volts" (-EINVAL) even though the
+	 * eMMC answers CMD1 with OCR 0xc0ff8080.
+	 */
+	vemmc: regulator-emmc {
+		compatible = "regulator-fixed";
+		regulator-name = "vemmc";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+
+	chosen {
+		/* No stdout-path: it makes the 8250 driver register ttyS2 as a
+		 * second console.  That console writes to the (dead) UART3 THR
+		 * and would also split the capture between two writers.  The
+		 * earlyprintk earlycon is the only console and writes every
+		 * character into the DRAM ring. */
+		/* clk_ignore_unused: keep the bootloader-armed WDT2's clock alive
+		 * so a hung kernel still self-resets (the omap_wdt driver is a
+		 * module and never loads, so clk_disable_unused would otherwise
+		 * gate WD_TIMER2 and the bootrom window would never reappear). */
+		/* loglevel=0: only KERN_EMERG reaches the console.  The boot
+		 * prints are the only heavy DRAM writer; silencing them tells
+		 * the DRAM event log/heartbeat whether the CPU survives past
+		 * the ~1.5 s stall on its own. */
+		bootargs = "earlyprintk keep_bootcon ignore_loglevel maxcpus=1 clk_ignore_unused panic=10 fw_devlink=permissive";
+	};
+
+	/* CRC/chainloader path: the zImage is entered at 0x84000000, so the
+	 * decompressor lands the kernel at zreladdr = PHYS_OFFSET + 0x8000 =
+	 * 0x80008000 (CONFIG_PHYS_OFFSET default 0x80000000).  The 64 GB
+	 * PlayBook reports 1024 MB of Elpida DRAM at 0x80000000-0xBFFFFFFF
+	 * (CFP `info`: two 512 MB banks), so the single 1 GB bank below is
+	 * the one that contains the running kernel.  (The old 0xa0000000
+	 * bank was sized for the kexec decompressor bucket and is wrong for
+	 * this entry path.) */
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x80000000 0x40000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		/* DEBUG_LL capture rings (scatter-proven survivor pages); read
+		 * back from the QNX side after the WDT2 warm reset.  no-map:
+		 * they are never allocated and deliberately NOT in the linear
+		 * map.  The kernel-proper writes them through the dedicated
+		 * non-cacheable aliases installed in omap44xx_io_desc
+		 * (0xFE800000/0xFE900000/0xFEA00000), so no cacheable alias
+		 * exists and no cache maintenance is needed. */
+		kexec_bc@88000000 {
+			reg = <0x88000000 0x8000>;
+			no-map;
+		};
+		kexec_bc@90000000 {
+			reg = <0x90000000 0x8000>;
+			no-map;
+		};
+		kexec_bc@94000000 {
+			reg = <0x94000000 0x8000>;
+			no-map;
+		};
+		kexec_bc@9fe00000 {
+			reg = <0x9fe00000 0x8000>;
+			no-map;
+		};
+
+		/* pbmon's 0x12 address-oracle pages (session 20).  The monitor
+		 * may write a 16-byte nonce into any of the addresses these can
+		 * resolve to, so each candidate is a page we own: the "low" page,
+		 * its -0x10000000 shadow and its +0x10000000 shadow. */
+		pbmon-low@a0200000 {
+			reg = <0xa0200000 0x1000>;
+			no-map;
+		};
+		pbmon-shadow@90200000 {
+			reg = <0x90200000 0x1000>;
+			no-map;
+		};
+		pbmon-high@b0200000 {
+			reg = <0xb0200000 0x1000>;
+			no-map;
+		};
+	};
+
+	/* PL310 L2 — the payload keeps QNX's enabled L2 in whatever state it
+	 * was left; the kernel's l2x0 driver reprograms aux/latency/prefetch
+	 * through omap4_l2c310_write_sec (monitor SMCs 0x102/0x109/0x113).
+	 * Latencies are the conservative 3-cycle values (QNX's 1-cycle
+	 * config is the prime suspect for the session's wedges/corruption). */
+	l2-cache@48242000 {
+		compatible = "arm,pl310-cache";
+		reg = <0x48242000 0x1000>;
+		cache-unified;
+		cache-level = <2>;
+		arm,tag-latency = <3 3 3>;
+		arm,data-latency = <3 3 3>;
+	};
+};
+
+/* PMIC — TWL6030 on I2C1 (0x48072000), slave 0x48, IRQ_SYS_1N */
+&i2c1 {
+	clock-frequency = <400000>;
+
+	twl: twl@48 {
+		reg = <0x48>;
+		interrupts = <GIC_SPI 7 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	/*
+	 * Backlight LED driver, same bus, 7-bit 0x38 (report 111 §4.2 — this is
+	 * NOT the TC358764; the bridge is programmed over DSI generic writes,
+	 * not I2C).
+	 *
+	 * The chip is *gated* by GPIO2_16 (OMAP gpio_48, ball gpmc_a24,
+	 * CONTROL_CORE_PAD0_G 0x4A100070[15:0]) — measured on the bench
+	 * 2026-10-27 (report 120): with that line low 0x38 NAKs ("Remote I/O
+	 * error"); driving it high makes 0x38 ACK immediately, and taking it
+	 * low again removes it.  The reference OS leaves the line high; the
+	 * Linux boot path resets GPIO2's OE/DATAOUT and leaves the pad in safe
+	 * mode (mux 7), which is why every earlier probe failed and why binding
+	 * the driver without the rail hung the bus.
+	 *
+	 * `vin-supply` orders the enable before the driver's first transfer
+	 * (leds-lm3532 calls regulator_enable() before any I2C access).
+	 */
+	lm3532: led-controller@38 {
+		compatible = "ti,lm3532";
+		reg = <0x38>;
+		vin-supply = <&panel_vdd>;
+		status = "okay";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		bl_led: led@0 {
+			reg = <0>;
+			led-sources = <0>;
+			ti,led-mode = <0>;
+			label = ":backlight";
+			led-max-microamp = <20000>;
+		};
+	};
+};
+
+/*
+ * QNX enumerates THREE omap i2c controllers (0x48070000, 0x48072000,
+ * 0x48350000) and its /dev/i2c0 need not be the first of them, so we cannot
+ * assume the LM3532 is on the TWL's bus.  Bring the other two up so all of
+ * them can be scanned.  (The `.script` order is 0x48070000, 0x48072000,
+ * 0x48350000.)  i2c4 stays off: it is the one QNX does not instantiate.
+ */
+&i2c2 {
+	clock-frequency = <400000>;
+	status = "okay";
+};
+&i2c3 {
+	clock-frequency = <400000>;
+	status = "okay";
+};
+&i2c4 {
+	status = "disabled";
+};
+
+#include "twl6030.dtsi"
+#include "twl6030_omap4.dtsi"
+
+/*
+ * VAUX3 is ON in the reference OS — live `pmic-twl6030-ctl get_state vaux3`
+ * on TabletOS reports "APP: ON, LDO: ON" (REGEN1 likewise; REGEN2 off).  It is
+ * the most likely panel/backlight rail, and the LM3532 on I2C 0x38 holding the
+ * bus looks exactly like an unpowered slave.  Force it on; read the result
+ * back from /sys/class/regulator before trusting it.
+ *
+ * (This block must come AFTER the twl6030.dtsi include: dtc does not allow a
+ * forward reference to a label that is only defined later in the tree.)
+ */
+/* VAUX1/VAUX2 are also ON at 2800 mV in the reference OS; Linux had both
+ * enabled-but-unprogrammed, exactly like VAUX3.  One of the three is the
+ * backlight/panel rail, so give all of them the reference voltage. */
+&vaux1 {
+	regulator-min-microvolt = <2800000>;
+	regulator-max-microvolt = <2800000>;
+	regulator-always-on;
+	regulator-boot-on;
+};
+
+&vaux2 {
+	regulator-min-microvolt = <2800000>;
+	regulator-max-microvolt = <2800000>;
+	regulator-always-on;
+	regulator-boot-on;
+};
+
+&vaux3 {
+	/*
+	 * The reference OS reports VAUX3 at 2800 mV, APP:ON, LDO:ON
+	 * (pmic-twl6030-ctl get_state/get_vout on TabletOS).  Linux had it
+	 * enabled but with NO voltage at all, i.e. VSEL never programmed.
+	 * A fixed min==max makes the regulator core apply it at registration
+	 * (apply_uV), which programs VSEL to selector 19 = 2.8 V.
+	 * 2.8 V is inside the LM3532's 2.7-5.5 V range, and QNX also
+	 * configures the TWL's PWM block (slave 0x49 reg 0x92 <- 0x30), so
+	 * this is the backlight rail.
+	 */
+	regulator-min-microvolt = <2800000>;
+	regulator-max-microvolt = <2800000>;
+	regulator-always-on;
+	regulator-boot-on;
+};
+
+/*
+ * VDAC and VANA are the only two rails the reference and Linux disagree about
+ * (session 14, measured live on both):
+ *
+ *   reference (pmic-twl6030-ctl get_state/get_vout):  VDAC ON 1800 mV,
+ *                                                     VANA ON 2100 mV
+ *   Linux (/sys/class/regulator/*\/state):            VDAC disabled,
+ *                                                     VANA disabled
+ *
+ * VANA/VDAC are analog supplies, and the one subsystem that does not work is
+ * the analog end of the display chain (the DSI PHY's transmit path and the
+ * bridge).  Only the enable is set here — get_vout reports both rails already
+ * at their reference voltages, so there is nothing to program.
+ */
+&vdac {
+	regulator-always-on;
+	regulator-boot-on;
+};
+
+&vana {
+	regulator-always-on;
+	regulator-boot-on;
+};
+
+/*
+ * PlayBook bring-up: keep the MMC2 interconnect target out of idle.
+ *
+ * The first MMC2 register access after a short idle window stalls
+ * (timing-dependent: the 1 ms mmc_delay in mmc_go_idle, the STAT poll in
+ * send_init_stream).  The target normally programs SIDLE/MIDLE to
+ * SMART_WKUP (fls of the four listed modes), so the module is allowed to
+ * request idle and l3_init_clkdm may gate the interface clock.  Force
+ * SIDLE/MIDLE to NO so the module never asks to idle, and hold the ti-sysc
+ * parent's runtime-PM usage count (ti,no-idle) so the module clock
+ * (CLKCTRL MODULEMODE=ENABLED) is never dropped.  Bring-up only; this
+ * should become a proper clkdm/power-domain policy once PM is up.
+ */
+&mmc2_target {
+	ti,no-idle;
+	ti,sysc-sidle = <SYSC_IDLE_NO>;
+	ti,sysc-midle = <SYSC_IDLE_NO>;
+};
+
+/* Internal eMMC (Samsung, 64 GB class) on MMC2 @ 0x480B4000 — 8-bit, fixed */
+&mmc2 {
+	vmmc-supply = <&vemmc>;
+	bus-width = <8>;
+	ti,non-removable;
+	/* eMMC only: do not send SDIO CMD52 or SD commands during rescan */
+	no-sdio;
+	no-sd;
+	status = "okay";
+};
+
+/*
+ * USB: the OMAP4 OTG/MUSB controller in peripheral (gadget) mode.  The DT
+ * (omap4-l4.dtsi) already wires usb_otg_hs to the OMAP USB2 PHY and the
+ * CONTROL USB mailbox; on the bench both were already live and in device role
+ * (DPLL_USB locked, MUSB_DEVCTL=0x80 BSESSVLD, USBOTGHS_CONTROL=0x15), so no
+ * PHY or VBUS work is expected - see report 112.
+ */
+&usb_otg_hs {
+	status = "okay";
+	/*
+	 * The OMAP musb glue (omap2430.c) parses the *legacy* property `mode`,
+	 * not `dr_mode`: extra it as a u32 and hands it to musb as plat->mode.
+	 * Without it musb->port_mode stays 0 and the controller fails with
+	 * "unsupported port mode 0" (no UDC, so no gadget).
+	 * 0 = UNDEFINED, 1 = HOST, 2 = PERIPHERAL, 3 = OTG.
+	 */
+	mode = <2>;
+	/*
+	 * OMAP4430's OTG port uses the internal UTMI+ PHY, not ULPI (Panda
+	 * uses interface-type = <1> too).  Without it the glue programs the
+	 * ULPI path and the UTMI PHY is left in the wrong mode.
+	 */
+	interface-type = <1>;
+	power = <50>;
+};
+
+/*
+ * The VBUS/ID comparators live in the TWL6030, not in the OMAP PHY, so musb
+ * only sees a session once this driver is probed with its rail.  Without it
+ * the UDC binds but reports "not attached" (report 112 / bench run 2).
+ * QNX keeps vusb alive across power transitions, so enabling it is expected.
+ */
+&twl_usb_comparator {
+	usb-supply = <&vusb>;
+};
+
+/* no external SD slot, no wifi SDIO brought up yet */
+&mmc1 {
+	status = "disabled";
+};
+
+/*
+ * Leave WDT2 exactly as the bootloader armed it.  The omap_wdt driver is a
+ * module and never loads during bring-up, so nothing kicks it; with
+ * clk_ignore_unused above its clock keeps running and the bootloader's
+ * ~58 s timeout still resets a hung kernel, giving the recovery tool its
+ * bootrom window without a power-cycle.
+ */
+&mmc3 {
+	status = "disabled";
+};
+&mmc4 {
+	status = "disabled";
+};
+&mmc5 {
+	status = "disabled";
+};
+
+/*
+ * The crypto engines live in l4_secure_clkdm (DES3DES, AES1/AES2,
+ * SHA2MD5, RNG) and are behind the L3 firewall.  The ti-sysc revision
+ * read at probe time is a non-secure access: on this unit it raises
+ * "L3 Custom Error: MASTER MPU TARGET L4PER2 (Read)" and then an
+ * imprecise external abort (0x1406) that kills the probe worker.
+ * Keep them disabled until the secure world/firewall is understood.
+ */
+&des_target {
+	status = "disabled";
+};
+&rng_target {
+	status = "disabled";
+};
+&sham_target {
+	status = "disabled";
+};
+&aes1_target {
+	status = "disabled";
+};
+&aes2_target {
+	status = "disabled";
+};
+
+/*
+ * ABE (audio back end) is not needed for bring-up.  Its targets live in
+ * abe_pwrdm/abe_clkdm; after l4_abe populates them, the WD_TIMER3 target
+ * (0x40130000) hangs in the ti-sysc enable/softreset path right after its
+ * revision read.  Disable the whole segment until ABE power/clock bring-up
+ * is understood.
+ */
+&l4_abe {
+	status = "disabled";
+};
+
+/*
+ * SPI controllers are not needed for bring-up.  The MCSPI4 child probe
+ * (0x480ba000) stalls right after its target is enabled, before the next
+ * target is probed; keep all four off until the SPI/DMA path is debugged.
+ */
+&mcspi1 {
+	status = "disabled";
+};
+&mcspi2 {
+	status = "disabled";
+};
+&mcspi3 {
+	status = "disabled";
+};
+/*
+ * MCSPI4 = the panel's TCON control port.  QNX calls it /dev/spi3 and drives it
+ * at 450 kHz to send the 9-word Hitachi init table (report 111 §3.5); without
+ * that table the panel is lit but shows no image (report 120).
+ *
+ * Its four signals are on OMAP "Type 2" (SMART3IO) pads, CONTROL_CORE_PAD0_M,
+ * and the reference muxes only three of them (somi is left in safe mode — the
+ * TCON is write-only):
+ *
+ *   0x4A100070+…   0x154[15:0]  mcspi4_clk   0x1700  (mux 0 + off-mode bits)
+ *                  0x154[31:16] mcspi4_simo  0x1700
+ *                  0x158[31:16] mcspi4_cs0   0x1708
+ *                  0x158[15:0]  mcspi4_somi  0x000f  (safe mode, unused)
+ *
+ * The values are the reference's own readback, not a decoding of the pad
+ * fields (§18.4.12.9.4 is opaque enough that copying is safer).
+ */
+&omap4_pmx_core {
+	mcspi4_pins: mcspi4-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x154, 0x1700)	/* mcspi4_clk  (gpio_151) */
+			OMAP4_IOPAD(0x156, 0x1700)	/* mcspi4_simo (gpio_152) */
+			OMAP4_IOPAD(0x15a, 0x1708)	/* mcspi4_cs0  (gpio_154) */
+		>;
+	};
+};
+
+&mcspi4 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&mcspi4_pins>;
+
+	/* spidev so the initramfs console can send the TCON table; replace with a
+	 * real panel driver once the sequence is confirmed on the bench. */
+	tcon@0 {
+		compatible = "rohm,dh2228fv";
+		reg = <0>;
+		spi-max-frequency = <450000>;
+	};
+};
+
+/* predictable /dev/spidev3.0, matching QNX's /dev/spi3 */
+/ {
+	aliases {
+		spi3 = &mcspi4;
+	};
+};
+
+/*
+ * EMIF1/EMIF2 are the DRAM controllers (0x4c000000 / 0x4d000000).  They
+ * are already set up by the bootloader/QNX and must not be reset from the
+ * non-secure kernel: probing EMIF2 stalls right after its revision read
+ * (and touching a live DRAM controller is not something bring-up should
+ * do).  The memory node describes the RAM; the ti,emif driver is optional.
+ * clk_ignore_unused keeps their clock alive.
+ */
+&emif1_target {
+	status = "disabled";
+};
+&emif2_target {
+	status = "disabled";
+};
+
+/*
+ * DSS (display) and IVA-HD sit in powered-off domains left by QNX.  Their
+ * ti-sysc reset path polls SYSSTATUS and stalls; skip the init-time reset
+ * for now (the child DSS/IPU drivers stay disabled until display bring-up).
+ */
+&dss_target {
+	ti,no-reset-on-init;
+};
+
+/* GPU (SGX) and IVA-HD have no in-tree driver / are not needed yet. */
+&sgx_module {
+	status = "disabled";
+};
+&iva_hd_target {
+	status = "disabled";
+};
+
+/* ---------------------------------------------------------------- display */
+/*
+ * DSI1 -> TC358764 (DSI/LVDS) -> the panel's LVDS input, 1024x600 @ 60 Hz.
+ *
+ * Every number here was measured from the running reference OS, not inferred
+ * (report 118): HBP/HFP/HSW = 138/162/20, VBP/VFP/VSW = 12/12/1, Htotal 1344,
+ * Vtotal 625, pixel clock 50.400 MHz, no sync inversion, pixel data on the
+ * rising edge.  The DSI link runs FOUR data lanes of RGB888: 1024x600x24bpp at
+ * 60 Hz is 1.2096 Gbps, i.e. 302.4 Mbps/lane and a 37.8 MHz byte clock, which is
+ * exactly the reference's TL 1008.  (An earlier two-lane build ran 75.6 MHz and
+ * was wrong — report 121 §11.)
+ *
+ * The panel itself is an LVDS panel with an SPI control port (MCSPI4, QNX's
+ * /dev/spi3) and an LM3532 backlight on I2C 0x38.  Neither has a driver yet:
+ * until they do, the DSS/DSI pipeline can run but the panel stays dark
+ * (report 118 §6.1 proved that on the reference OS itself).
+ */
+&dss {
+	status = "okay";
+};
+
+&dsi1 {
+	status = "okay";
+
+	port {
+		dsi1_out: endpoint {
+			remote-endpoint = <&tc358764_in>;
+			/*
+			 * lane pairs: clock + DATA1..DATA4.  The reference uses
+			 * FOUR data lanes, not two: DSI_COMPLEXIO_CFG1 reads
+			 * 0x2A054321 on QNX (CLK=1 DATA1=2 DATA2=3 DATA3=4
+			 * DATA4=5) against 0x2A000321 for a two-lane build.
+			 * With 4 lanes, 1024x600x24bpp at 50.4 MHz is
+			 * 1.2096 Gbps total = 302 Mbps/lane = a 37.8 MHz byte
+			 * clock, which is exactly QNX's PLL (REGM 756/REGN 95,
+			 * txbyteclkhs 37.8 MHz).  The two-lane build forced a
+			 * 75.6 MHz byte clock instead.
+			 */
+			lanes = <0 1 2 3 4 5 6 7 8 9>;
+		};
+	};
+
+	bridge@0 {
+		compatible = "toshiba,tc358764";
+		reg = <0>;		/* DSI virtual channel, not an address */
+		/*
+		 * TC358764 RESETN = GPIO2_24 (gpio_56, pad 0x4A100080).  Report
+		 * 122 proved it from winch_lcdctl: CLEARDATAOUT 0x01000000 at
+		 * vaddr 0x192d4, usleep(20000), SETDATAOUT at 0x19338,
+		 * usleep(20000) - i.e. a 20 ms active-LOW pulse, taken after the
+		 * DSI programming and before the panel strap read.  Holding the
+		 * line statically high (as we did) never gives the bridge a
+		 * reset edge, which is why it never answered SYS_ID.
+		 */
+		reset-gpios = <&gpio2 24 GPIO_ACTIVE_LOW>;
+
+		/*
+		 * The QNX boot set never writes a pad mux (report 122), so on
+		 * the reference the RIM bootloader has already muxed these
+		 * balls; our chainloader does not.  Two of them are the
+		 * bridge's own GPIO status balls, wired back into the OMAP and
+		 * used by QNX as its bridge self-test ("GPIO status good
+		 * (GPIO36 and GPIO171 high)"): they must be muxed as GPIO for
+		 * the diagnostic to mean anything.
+		 */
+		pinctrl-names = "default";
+		pinctrl-0 = <&bridge_pins>;
+
+		lanes = <4>;
+		hs-rate = <604800000>;
+		/*
+		 * 10.08 MHz is the reference's LP escape clock: with the
+		 * reference's 100.8 MHz DSI functional clock (clkdco / 6)
+		 * that is DSI_CLK_CTRL.LP_CLK_DIVISOR = 5, exactly QNX's
+		 * 0xA0346005 word.  The old 10 MHz made the divisor 6.
+		 */
+		lp-rate = <10080000>;
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				tc358764_in: endpoint {
+					remote-endpoint = <&dsi1_out>;
+				};
+			};
+
+			port@1 {
+				reg = <1>;
+				tc358764_out: endpoint {
+					remote-endpoint = <&panel_in>;
+				};
+			};
+		};
+	};
+};
+
+/*
+ * Panel/display enables on GPIO2.
+ *
+ * The reference OS drives six GPIO2 lines high and holds them:
+ * `GPIO2_DATAOUT = 0x31013200` (bits 9, 12, 13, 16, 28, 29), with those bits
+ * output (`GPIO2_OE = 0xce3ecd5f`) — report 118 §10.1.  Linux's boot path
+ * resets GPIO2 (`OE = 0xffffffff`, `DATAOUT = 0`) and leaves the pads in safe
+ * mode, so none of them is driven.
+ *
+ * Bit 16 is the LM3532's gate (measured causally, report 120 §0.3).  The other
+ * five are held high by the reference and have never been validly tested (every
+ * earlier attempt was made with the backlight dark, so a panel-side change was
+ * invisible).  They are hogged here, matching the reference.
+ *
+ * It is a HOG, not a regulator GPIO: the lines have to be up *before* the
+ * devices probe, and a regulator-fixed only drives its GPIO at
+ * regulator_init_complete (late_initcall_sync), which lost the race with async
+ * probing (report 120 §1.1).  Hogs are applied at gpiochip registration.
+ *
+ * Pad values are the reference's own 16-bit readbacks for the pads in these
+ * words (CONTROL_CORE_PAD0_G 0x4A100060/0x068/0x070/0x088); writing both
+ * halves keeps the paired pad on the same function QNX leaves it on.
+ */
+&omap4_pmx_core {
+	panel_en_pins: panel-en-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x060, 0x410b)	/* gpio_41  (GPIO2_9)  */
+			OMAP4_IOPAD(0x062, 0x0003)
+			OMAP4_IOPAD(0x068, 0x0003)	/* gpio_45  (GPIO2_13) */
+			OMAP4_IOPAD(0x06a, 0x0003)
+			OMAP4_IOPAD(0x070, 0x0003)	/* gpio_48  (GPIO2_16) */
+			OMAP4_IOPAD(0x072, 0x4103)
+			OMAP4_IOPAD(0x088, 0x0003)	/* gpio_60/61 (2_28/2_29) */
+			OMAP4_IOPAD(0x08a, 0x0003)
+		>;
+	};
+
+	/* bridge reset + the bridge's two status balls (report 122) */
+	bridge_pins: bridge-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x080, 0x4003)	/* gpio_56  (GPIO2_24) RESETN */
+			OMAP4_IOPAD(0x058, 0x011b)	/* gpio_36  (GPIO2_4)  in */
+			OMAP4_IOPAD(0x17c, 0x0103)	/* gpio_171 (GPIO6_11) in */
+			/*
+			 * gpmc_ncs2 / gpmc_ncs3.  The reference drives both as
+			 * GPIO outputs, low: pad word 0x4A100078 reads
+			 * 0x410B4103 on TabletOS against 0x011F011F here
+			 * (safe mode, pulled high).  These two words were the
+			 * only ones in the display group never captured — the
+			 * earlier comparison used 0x060/0x068/0x070/0x088
+			 * only.  The GPIO outputs are set low by the hogs
+			 * below, matching the reference's GPIO2_DATAOUT.
+			 */
+			OMAP4_IOPAD(0x078, 0x4103)	/* gpio_52  (GPIO2_20) out */
+			OMAP4_IOPAD(0x07a, 0x410b)	/* gpio_53  (GPIO2_21) out */
+		>;
+	};
+};
+
+&gpio2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&panel_en_pins>;
+
+	/* LM3532 / panel I2C gate — measured (report 120) */
+	panel-en-hog {
+		gpio-hog;
+		gpios = <16 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "panel-enable";
+	};
+
+	/* the other six lines the reference holds high (bits 9, 12, 13, 24, 28, 29) */
+	disp-en-9-hog {
+		gpio-hog;
+		gpios = <9 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "disp-en-9";
+	};
+	disp-en-12-hog {
+		gpio-hog;
+		gpios = <12 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "disp-en-12";
+	};
+	disp-en-13-hog {
+		gpio-hog;
+		gpios = <13 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "disp-en-13";
+	};
+	disp-en-28-hog {
+		gpio-hog;
+		gpios = <28 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "disp-en-28";
+	};
+	disp-en-29-hog {
+		gpio-hog;
+		gpios = <29 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "disp-en-29";
+	};
+
+	/*
+	 * gpio_52 / gpio_53 (GPIO2_20 / GPIO2_21): the reference configures
+	 * both balls as GPIO outputs and its GPIO2_DATAOUT does not set
+	 * either bit, so they are driven LOW.  We used to leave them in safe
+	 * mode, i.e. high.  See bridge_pins above for the measured values.
+	 */
+	disp-en-20-hog {
+		gpio-hog;
+		gpios = <20 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "gpio2-20";
+	};
+	disp-en-21-hog {
+		gpio-hog;
+		gpios = <21 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "gpio2-21";
+	};
+};
+
+/*
+ * The reference also drives four GPIO1 lines high: `GPIO1_DATAOUT = 0x00006044`
+ * (bits 2, 6, 13, 14) with OE bits 2/6/13/14 output.  Linux's boot path resets
+ * GPIO1 outright (`DATAOUT = 0`), so on every boot so far these have been low
+ * while the reference holds them high.
+ *
+ * The TC358764's reset line is still unidentified and the bridge's supplies are
+ * dummy regulators (`supply vddlvds not found`), so a line here is a plausible
+ * RESETN / bridge-power enable — and an unreset bridge cannot answer the DSI
+ * bus turnaround, which is exactly what the log shows ("bta sync failed",
+ * "ID: 0x0").  Only the pads the reference actually muxes as GPIO are set
+ * (gpio_2 at 0x190, gpio_14 at 0x1b4; gpio_13's pad 0x1b0 is in safe mode on
+ * the reference too, and gpio_6's pad is not in the TRM's CORE table).
+ */
+&omap4_pmx_core {
+	gpio1_en_pins: gpio1-en-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x190, 0x0003)	/* gpio_2  (GPIO1_2)  */
+			OMAP4_IOPAD(0x1b4, 0x0003)	/* gpio_14 (GPIO1_14) */
+		>;
+	};
+};
+
+&gpio1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&gpio1_en_pins>;
+
+	gpio1-en-2-hog {
+		gpio-hog;
+		gpios = <2 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "regen1-gpio";
+	};
+	gpio1-en-6-hog {
+		gpio-hog;
+		gpios = <6 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "gpio1-6";
+	};
+	gpio1-en-14-hog {
+		gpio-hog;
+		gpios = <14 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "gpio1-14";
+	};
+};
+
+/ {
+	/*
+	 * The panel rail itself is always on (the LM3532 keeps its register
+	 * state across an OMAP reset, so it is not switched by us); only the
+	 * enable line above is under software control.  Kept as a regulator so
+	 * the LM3532 can name it as `vin-supply` and probe after it.
+	 */
+	panel_vdd: regulator-panel-vdd {
+		compatible = "regulator-fixed";
+		regulator-name = "panel_vdd";
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	/*
+	 * Backlight: the LM3532 sits at 7-bit 0x38 on the TWL's bus
+	 * (0x48070000 = &i2c1 = /dev/i2c-0), and nothing else drives it at
+	 * splash time on the reference OS either (report 111 §4.3 / 118 §6.1:
+	 * a correct DSS+DSI mode still leaves the panel DARK until this is on).
+	 * default-brightness-level is non-zero on purpose: an LED class device
+	 * otherwise comes up at 0 and nothing lights.
+	 */
+	backlight: backlight {
+		compatible = "led-backlight";
+		leds = <&bl_led>;
+		default-brightness-level = <255>;
+		/*
+		 * default-brightness-level is non-zero on purpose: an LED class
+		 * device otherwise comes up at 0 and nothing lights.  The panel
+		 * node names this as its backlight, so drm_panel unblanks it.
+		 */
+		status = "okay";
+	};
+
+	lcd0: panel-lvds {
+		compatible = "panel-lvds";
+		/* the TC358764 LV_MX map is written as VESA-24 by its driver */
+		data-mapping = "vesa-24";
+		width-mm = <153>;
+		height-mm = <90>;
+		/* drm_panel enables/unblanks this at panel-enable time;
+		 * without the link the backlight stays at bl_power=4 (report 120). */
+		backlight = <&backlight>;
+
+		panel-timing {
+			clock-frequency = <50400000>;
+			hactive = <1024>;
+			vactive = <600>;
+			hback-porch = <138>;
+			hfront-porch = <162>;
+			hsync-len = <20>;
+			vback-porch = <12>;
+			vfront-porch = <12>;
+			vsync-len = <1>;
+			hsync-active = <1>;
+			vsync-active = <1>;
+			de-active = <1>;
+			pixelclk-active = <1>;
+		};
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&tc358764_out>;
+			};
+		};
+	};
+};

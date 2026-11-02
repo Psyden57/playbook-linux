@@ -1,0 +1,47 @@
+== osregion
+@osregion
+ActualBootCount:n:3
+ActualBootRegion:n:0
+BootStatus::Success.
+[n]BootUp::booted
+InstallTime:n:0
+MaxBootCount:n:0
+RequestedBootCount:n:3
+RequestedBootRegion:n:0
+Version:n:3
+
+== deviceinfo
+@deviceinfo
+BSN::1063043093
+BTMAC::1474119691e3
+BootromBuildDate::Mar 24 2011
+BootromBuildTime::15:31:02
+BootromBuildUserName::ec_agent
+CDMA:n:0
+DeviceName::RIM BlackBerry Device
+DeviceSerialNumber::134371296155
+GUID::23f5e483576be8c24d1b9ee510a8fa54bb6c2c2e
+HSPAplus:n:0
+HardwareID::0x06001a06
+IMEI::000000000000000
+InProduction:b:false
+LTE:n:0
+MBSerialNumber::PRU2QCIK014M02181
+PIN::0x50176EC1
+PIN64::0x0000000050176EC1
+SecureDevice:b:true
+SystemSerialNumber::DRU2QCI14Q6A06
+USBNetMAC1::1674119691df
+USBNetMAC2::1674119691e3
+VendorId::0x1f8
+WLANMAC::1474119691df
+
+== installer
+appdetails
+coreos
+hmi
+radio
+registeredapps
+removedapps
+stagedapps
+upd

@@ -1,0 +1,93 @@
+Raw MMC write-path measurements — image 0xEB617C60 — 2026-10-30 (session 17)
+============================================================================
+
+Image: local/images/kernel-0xEB617C60-mmcwrite.img, 11 159 480 B,
+crc 0xEB617C60.  Kernel/DTB identical to 0xC07AB9FA; console gains
+`sink` and `blkwr`; omap_hsmmc PBREQ/PBIRQ now behind the `trace` module
+parameter (default off).
+
+All writes are to region 1 (raw 0x28000000..0x47F00000).  The tested ranges
+were verified all-zero before use.  No NVRAM/RPMB/MCT/region 0/TabletOS FS
+write was made.
+
+Pre-write checks
+----------------
+$ blk info                          -> size 0 B, mode 0600   (st_size bug: use BLKGETSIZE64)
+$ blk sumb 0x40000000 8388608      -> fnv1a64 637a2df54e222325   (= 8 MiB of zeros)
+
+Link (no media)
+---------------
+$ sink 16777216
+sink: done 16777216/16777216 bytes in 124695252 us (134 KB/s)
+  - host handed 16 MiB to the tty in ~3 s; device drained it at its own rate
+  - device was short by ~768 KiB and needed paced bytes to finish
+$ sink 1048576
+  - host wrote the MiB in 0.08 s (>12 MB/s); device did not finish in 120 s
+  - bytes are DROPPED when the sender outruns the reader (console had to be
+    paced out of the command)
+$ lsusb -d 0fca:8010 -v           -> Negotiated speed: High Speed (480Mbps)
+                                     wMaxPacketSize 0x0200 (512 B) bulk
+
+Media, blkwr (O_DIRECT; pattern buf[i] = (u8)(off + written + i))
+------------------------------------------------------------------
+$ blkwr 0x40000000 4194304
+blkwr: done 4194304/4194304 bytes in 760589 us (5514 KB/s) fnv1a64 529aaa6348e22325
+
+$ blkwr 0x40400000 1048576                      (with trace on)
+blkwr: done 1048576/1048576 bytes in 184906 us (5670 KB/s) fnv1a64 8505ae4435522325
+
+$ blkwr 0x42000000 1048576 4096
+blkwr: done 1048576/1048576 bytes in 1132447 us (925 KB/s) fnv1a64 8505ae4435522325
+
+$ blkwr 0x43000000 2097152 65536
+blkwr: done 2097152/2097152 bytes in 354553 us (5914 KB/s) fnv1a64 59280ba3e6822325
+
+$ blkwr 0x43200000 2097152 262144
+blkwr: done 2097152/2097152 bytes in 300232 us (6985 KB/s) fnv1a64 59280ba3e6822325
+
+Per-request time: 4 KiB -> 4.42 ms, 64 KiB -> 11.1 ms, 256 KiB -> 37.5 ms.
+
+Read-back (blk sumb, read-only)
+-------------------------------
+$ blk sumb 0x40000000 4194304   -> fnv1a64 529aaa6348e22325   MATCH (pattern)
+$ blk sumb 0x40400000 4194304   -> fnv1a64 f8e3e56ce9222325   (zeros; untouched)
+Host-computed expectations: 4 MiB pattern 529aaa6348e22325, zeros 4 MiB
+f8e3e56ce9222325, zeros 8 MiB 637a2df54e222325.
+
+Request shape (trace on, 1 MiB O_DIRECT, kmsg PBREQ)
+-----------------------------------------------------
+PBREQ: mmc1 CMD25 arg=00202000 W blksz=512 blocks=512 bytes=262144 sg=64 dt=0ns
+PBREQ: mmc1 CMD13 arg=00010000 dt=27832032ns
+PBREQ: mmc1 CMD25 arg=00202200 W blksz=512 blocks=512 bytes=262144 sg=64 dt=5615234ns
+PBREQ: mmc1 CMD13 arg=00010000 dt=29663086ns
+PBREQ: mmc1 CMD25 arg=00202400 W blksz=512 blocks=512 bytes=262144 sg=64 dt=6774902ns
+PBREQ: mmc1 CMD13 arg=00010000 dt=29541016ns
+PBREQ: mmc1 CMD25 arg=00202600 W blksz=512 blocks=512 bytes=262144 sg=64 dt=6347656ns
+PBREQ: mmc1 CMD13 arg=00010000 dt=29907227ns
+
+  4 requests per MiB; 256 KiB each; one CMD13 (mmc_blk_card_busy) per request.
+  dt is inflated by the trace prints themselves.
+
+Card / driver state at boot
+---------------------------
+mmc1: new high speed MMC card at address 0001
+mmcblk1: mmc1:0001 MCGAFA 59.4 GiB
+mmcblk1boot0/boot1 512 KiB; mmcblk1rpmb 128 KiB
+PBX: mmc1 probe-pm fck=96000000 pclk=96000000
+
+Old recv path (buffered), reproduced
+------------------------------------
+$ python3 tools/pbrecv.py 0x41000000 boot/chainloader/kernel.img
+  recv: off 0x41000000 len 11159480
+  -> did not finish within 300 s; console still inside recv afterwards
+$ blk sumb 0x41000000 11159480 -> fnv1a64 25a2c15560ac5bda
+Host FNV-1a64 of the file      -> 473dcd0176320fba          MISMATCH
+(two causes: ~512-byte buffered writes + fbcon printk per request; ACM byte
+ loss when blasted)
+
+Restore
+-------
+pre_os_ifs_flash --template-ifs local/images/ifs0.sealed.bin: 181 frames
+ifs sha256 c72b053027769c4d49270e9ee208fd2b0afcf69ce4fb3cf0c0be3c938ee05299
+BOOTCTR_FCTRY 32 00 00 00 ; TabletOS up ; df / = 58G, 2.2G used ;
+startup.sh 4490 B.

@@ -1,0 +1,48 @@
+=== 0x2002
+Loaded libnvram from /lib/libnvram.so.1
+Reading block 8194
+NVRAM: nv_get_record( 0x2002, 1)
+NVRAM: nv_get_record( 0x2002, 4)
+Recieved bytes: 4
+c1 6e 17 50 
+=== 0x2004
+Loaded libnvram from /lib/libnvram.so.1
+Reading block 8196
+NVRAM: nv_get_record( 0x2004, 1)
+Recieved bytes: 0
+
+=== 0x2040
+Loaded libnvram from /lib/libnvram.so.1
+Reading block 8256
+NVRAM: nv_get_record( 0x2040, 1)
+NVRAM: nv_get_record( 0x2040, 4)
+Recieved bytes: 4
+02 00 00 00 
+=== 0x2074
+Loaded libnvram from /lib/libnvram.so.1
+Reading block 8308
+NVRAM: nv_get_record( 0x2074, 1)
+NVRAM: nv_get_record( 0x2074, 72)
+Recieved bytes: 72
+03 00 00 00 00 00 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+=== 0x2801
+Loaded libnvram from /lib/libnvram.so.1
+Reading block 10241
+NVRAM: nv_get_record( 0x2801, 1)
+NVRAM: nv_get_record( 0x2801, 112)
+Recieved bytes: 112
+00 00 02 00 70 00 00 00 01 00 00 00 b2 16 00 00 13 92 dc 9f 09 76 a8 87 00 00 00 00 0a 00 00 00 af 79 6b 0d 00 00 00 00 30 00 00 00 40 00 00 00 a8 02 02 8e 5a 68 7f ce c9 41 43 46 24 f4 19 5d 7d 94 17 1e f5 57 3a 59 e1 34 8b b5 20 31 f1 f6 1d 8c 5a d6 24 a9 1c 03 a9 9c f5 e4 f4 90 2f eb 89 3b 3f fc 30 2f 5c 69 1a 7c cf 0c 55 41 bc 10 
+=== 0x2802
+Loaded libnvram from /lib/libnvram.so.1
+Reading block 10242
+NVRAM: nv_get_record( 0x2802, 1)
+NVRAM: nv_get_record( 0x2802, 112)
+Recieved bytes: 112
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 b0 30 40 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+=== flags
+Loaded libnvram from /lib/libnvram.so.1
+1
+Loaded libnvram from /lib/libnvram.so.1
+0
+Loaded libnvram from /lib/libnvram.so.1
+0

@@ -1,0 +1,5137 @@
+--- a/arch/arm/boot/compressed/head.S
++++ b/arch/arm/boot/compressed/head.S
+@@ -222,6 +222,13 @@
+ 		__EFI_HEADER
+ 1:
+  ARM_BE8(	setend	be		)	@ go BE8 if compiled for BE8
++	@ PlayBook CRC path: decompressor entry marker.  The chainloader
++	@ jumps to the zImage header with the MMU off; this plain physical
++	@ store proves the branch landed here.  r1 (machine) and r2 (DTB)
++	@ must survive; r3/r12 are free.
++	ldr	r3, =0x9000000C
++	ldr	r12, =0x51000002
++	str	r12, [r3]
+  AR_CLASS(	mrs	r9, cpsr	)
+ #ifdef CONFIG_ARM_VIRT_EXT
+ 		bl	__hyp_stub_install	@ get into SVC mode, reversibly
+@@ -627,12 +634,25 @@
+  *   r7  = architecture ID
+  *   r8  = atags pointer
+  */
++		@ PlayBook CRC path: about to run the decompressor.  The MMU is
++		@ on and the page table maps the whole 4 GB, with the first
++		@ 256 MB cacheable RAM; 0x90000018 is in the first non-RAM
++		@ (non-cacheable) section, so the store lands in DRAM directly.
++		ldr	r0, =0x90000018
++		ldr	r1, =0x51000004
++		str	r1, [r0]
++
+ 		mov	r0, r4
+ 		mov	r1, sp			@ malloc space above stack
+ 		add	r2, sp, #MALLOC_SIZE	@ 64k max
+ 		mov	r3, r7
+ 		bl	decompress_kernel
+ 
++		@ PlayBook CRC path: the decompressor returned.
++		ldr	r2, =0x9000001C
++		ldr	r3, =0x51000005
++		str	r3, [r2]
++
+ 		get_inflated_image_size	r1, r2, r3
+ 
+ 		mov	r0, r4			@ start of inflated image
+@@ -1432,6 +1452,12 @@
+ #endif /* CONFIG_ARM_VIRT_EXT */
+ 
+ __enter_kernel:
++		@ PlayBook CRC path: decompression finished and the MMU is off
++		@ again; mark the hand-off to the kernel Image.  r4 holds the
++		@ entry point and must survive; r3/r12 are free.
++		ldr	r3, =0x90000010
++		ldr	r12, =0x51000003
++		str	r12, [r3]
+ 		mov	r0, #0			@ must be 0
+ 		mov	r1, r7			@ restore architecture number
+ 		mov	r2, r8			@ restore atags pointer
+--- a/arch/arm/boot/compressed/misc.c
++++ b/arch/arm/boot/compressed/misc.c
+@@ -135,6 +135,14 @@
+ {
+ 	int ret;
+ 
++	/* PlayBook CRC path: MMU-on markers in the first non-cacheable
++	 * section of the decompressor's page table (0x90000000). */
++	*(volatile unsigned int *)0x90000020 = 0x51000006;
++	*(volatile unsigned int *)0x90000034 = (unsigned int)output_start;
++	*(volatile unsigned int *)0x90000038 = (unsigned int)free_mem_ptr_p;
++	*(volatile unsigned int *)0x9000003c = (unsigned int)free_mem_ptr_end_p;
++	*(volatile unsigned int *)0x90000040 = (unsigned int)(input_data_end - input_data);
++
+ 	output_data		= (unsigned char *)output_start;
+ 	free_mem_ptr		= free_mem_ptr_p;
+ 	free_mem_end_ptr	= free_mem_ptr_end_p;
+@@ -146,8 +154,22 @@
+ 	arch_decomp_setup();
+ 
+ 	putstr("Uncompressing Linux...");
+-	ret = do_decompress(input_data, input_data_end - input_data,
+-			    output_data, error);
++	/*
++	 * PlayBook CRC path: the LZMA range decoder keeps a lookahead window
++	 * and reads a few bytes past the end marker.  input_data_end is the
++	 * piggy-size bound and leaves no slack, so rc_read() runs off the
++	 * supplied buffer with fill == NULL and faults.  Hand it the whole
++	 * initialized-data range instead; the decoder stops at the end
++	 * marker and ignores the trailing GOT/padding bytes.
++	 */
++	{
++		extern char _edata[];
++		ret = do_decompress(input_data,
++				    _edata - (char *)input_data,
++				    output_data, error);
++	}
++	*(volatile unsigned int *)0x90000028 = 0x51000008;
++	*(volatile unsigned int *)0x9000002c = (unsigned int)ret;
+ 	if (ret)
+ 		error("decompressor returned an error");
+ 	else
+--- a/arch/arm/boot/dts/ti/omap/Makefile
++++ b/arch/arm/boot/dts/ti/omap/Makefile
+@@ -80,6 +80,7 @@
+ 	omap4-sdp-es23plus.dtb \
+ 	omap4-var-dvk-om44.dtb \
+ 	omap4-var-stk-om44.dtb \
++	omap4-winchester.dtb \
+ 	omap4-xyboard-mz609.dtb \
+ 	omap4-xyboard-mz617.dtb
+ dtb-$(CONFIG_SOC_AM33XX) += \
+--- a/arch/arm/boot/dts/ti/omap/omap4.dtsi
++++ b/arch/arm/boot/dts/ti/omap/omap4.dtsi
+@@ -302,7 +302,7 @@
+ 			};
+ 		};
+ 
+-		target-module@4c000000 {
++		emif1_target: target-module@4c000000 {
+ 			compatible = "ti,sysc-omap4-simple", "ti,sysc";
+ 			reg = <0x4c000000 0x4>;
+ 			reg-names = "rev";
+@@ -324,7 +324,7 @@
+ 			};
+ 		};
+ 
+-		target-module@4d000000 {
++		emif2_target: target-module@4d000000 {
+ 			compatible = "ti,sysc-omap4-simple", "ti,sysc";
+ 			reg = <0x4d000000 0x4>;
+ 			reg-names = "rev";
+@@ -512,7 +512,7 @@
+ 		 * DSS is only using l3 mapping without l4 as noted in the TRM
+ 		 * "10.1.3 DSS Register Manual" for omap4460.
+ 		 */
+-		target-module@58000000 {
++		dss_target: target-module@58000000 {
+ 			compatible = "ti,sysc-omap2", "ti,sysc";
+ 			reg = <0x58000000 4>,
+ 			      <0x58000014 4>;
+--- a/arch/arm/boot/dts/ti/omap/omap4-l4.dtsi
++++ b/arch/arm/boot/dts/ti/omap/omap4-l4.dtsi
+@@ -1126,6 +1126,15 @@
+ 					<SYSC_IDLE_SMART>,
+ 					<SYSC_IDLE_SMART_WKUP>;
+ 			ti,syss-mask = <1>;
++			/*
++			 * PlayBook: leave the bootloader-armed WDT2 untouched.
++			 * The watchdog driver is a module and never loads during
++			 * bring-up, so the sysc layer must not idle or reset this
++			 * module; otherwise a hung kernel never self-resets and
++			 * the DRAM ring can never be read back.
++			 */
++			ti,no-idle;
++			ti,no-reset-on-init;
+ 			/* Domains (V, P, C): wakeup, wkup_pwrdm, l4_wkup_clkdm */
+ 			clocks = <&l4_wkup_clkctrl OMAP4_WD_TIMER2_CLKCTRL 0>;
+ 			clock-names = "fck";
+@@ -2286,7 +2295,7 @@
+ 			};
+ 		};
+ 
+-		target-module@b4000 {			/* 0x480b4000, ap 67 46.0 */
++		mmc2_target: target-module@b4000 {	/* 0x480b4000, ap 67 46.0 */
+ 			compatible = "ti,sysc-omap4", "ti,sysc";
+ 			reg = <0xb4000 0x4>,
+ 			      <0xb4010 0x4>;
+--- a/arch/arm/boot/dts/ti/omap/omap4-winchester.dts
++++ b/arch/arm/boot/dts/ti/omap/omap4-winchester.dts
+@@ -0,0 +1,816 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * BlackBerry PlayBook (RIM "winchester", OMAP4430 ES2.2 HS).
++ *
++ * Reverse-engineered from the running QNX OS (2.0.0.4869) register map and
++ * the OS 2.0 IFS buildfile; no vendor DT exists.  Booted from the CRC-path
++ * chainloader (r0=0, r1=0xffffffff, r2=DTB), not by the stock boot ROM.
++ *
++ * First-boot scope: memory, UART3 console, TWL6030 PMIC, eMMC on MMC2.
++ * QNX already muxed/ clocked the pads the OS used (UART3, I2C1, MMC2), so
++ * no pinctrl nodes are needed (and none are known yet).
++ */
++
++/dts-v1/;
++
++#include "omap443x.dtsi"
++
++/ {
++	model = "BlackBerry PlayBook (winchester)";
++	compatible = "blackberry,omap4-winchester", "ti,omap4430", "ti,omap4";
++
++	/*
++	 * The internal eMMC is soldered to a fixed 3.3 V rail (QNX keeps the
++	 * TWL vmmc rail off - that one is the SD slot).  The MMC core takes
++	 * host->ocr_avail from the vmmc-supply regulator's constraints, so
++	 * without a supply it stays 0 and mmc_select_voltage() rejects the
++	 * card with "no support for card's volts" (-EINVAL) even though the
++	 * eMMC answers CMD1 with OCR 0xc0ff8080.
++	 */
++	vemmc: regulator-emmc {
++		compatible = "regulator-fixed";
++		regulator-name = "vemmc";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		regulator-always-on;
++	};
++
++	chosen {
++		/* No stdout-path: it makes the 8250 driver register ttyS2 as a
++		 * second console.  That console writes to the (dead) UART3 THR
++		 * and would also split the capture between two writers.  The
++		 * earlyprintk earlycon is the only console and writes every
++		 * character into the DRAM ring. */
++		/* clk_ignore_unused: keep the bootloader-armed WDT2's clock alive
++		 * so a hung kernel still self-resets (the omap_wdt driver is a
++		 * module and never loads, so clk_disable_unused would otherwise
++		 * gate WD_TIMER2 and the bootrom window would never reappear). */
++		/* loglevel=0: only KERN_EMERG reaches the console.  The boot
++		 * prints are the only heavy DRAM writer; silencing them tells
++		 * the DRAM event log/heartbeat whether the CPU survives past
++		 * the ~1.5 s stall on its own. */
++		bootargs = "earlyprintk keep_bootcon ignore_loglevel maxcpus=1 clk_ignore_unused panic=10 fw_devlink=permissive";
++	};
++
++	/* CRC/chainloader path: the zImage is entered at 0x84000000, so the
++	 * decompressor lands the kernel at zreladdr = PHYS_OFFSET + 0x8000 =
++	 * 0x80008000 (CONFIG_PHYS_OFFSET default 0x80000000).  The 64 GB
++	 * PlayBook reports 1024 MB of Elpida DRAM at 0x80000000-0xBFFFFFFF
++	 * (CFP `info`: two 512 MB banks), so the single 1 GB bank below is
++	 * the one that contains the running kernel.  (The old 0xa0000000
++	 * bank was sized for the kexec decompressor bucket and is wrong for
++	 * this entry path.) */
++	memory@80000000 {
++		device_type = "memory";
++		reg = <0x80000000 0x40000000>;
++	};
++
++	reserved-memory {
++		#address-cells = <1>;
++		#size-cells = <1>;
++		ranges;
++
++		/* DEBUG_LL capture rings (scatter-proven survivor pages); read
++		 * back from the QNX side after the WDT2 warm reset.  no-map:
++		 * they are never allocated and deliberately NOT in the linear
++		 * map.  The kernel-proper writes them through the dedicated
++		 * non-cacheable aliases installed in omap44xx_io_desc
++		 * (0xFE800000/0xFE900000/0xFEA00000), so no cacheable alias
++		 * exists and no cache maintenance is needed. */
++		kexec_bc@88000000 {
++			reg = <0x88000000 0x8000>;
++			no-map;
++		};
++		kexec_bc@90000000 {
++			reg = <0x90000000 0x8000>;
++			no-map;
++		};
++		kexec_bc@94000000 {
++			reg = <0x94000000 0x8000>;
++			no-map;
++		};
++		kexec_bc@9fe00000 {
++			reg = <0x9fe00000 0x8000>;
++			no-map;
++		};
++
++		/* pbmon's 0x12 address-oracle pages (session 20).  The monitor
++		 * may write a 16-byte nonce into any of the addresses these can
++		 * resolve to, so each candidate is a page we own: the "low" page,
++		 * its -0x10000000 shadow and its +0x10000000 shadow. */
++		pbmon-low@a0200000 {
++			reg = <0xa0200000 0x1000>;
++			no-map;
++		};
++		pbmon-shadow@90200000 {
++			reg = <0x90200000 0x1000>;
++			no-map;
++		};
++		pbmon-high@b0200000 {
++			reg = <0xb0200000 0x1000>;
++			no-map;
++		};
++	};
++
++	/* PL310 L2 — the payload keeps QNX's enabled L2 in whatever state it
++	 * was left; the kernel's l2x0 driver reprograms aux/latency/prefetch
++	 * through omap4_l2c310_write_sec (monitor SMCs 0x102/0x109/0x113).
++	 * Latencies are the conservative 3-cycle values (QNX's 1-cycle
++	 * config is the prime suspect for the session's wedges/corruption). */
++	l2-cache@48242000 {
++		compatible = "arm,pl310-cache";
++		reg = <0x48242000 0x1000>;
++		cache-unified;
++		cache-level = <2>;
++		arm,tag-latency = <3 3 3>;
++		arm,data-latency = <3 3 3>;
++	};
++};
++
++/* PMIC — TWL6030 on I2C1 (0x48072000), slave 0x48, IRQ_SYS_1N */
++&i2c1 {
++	clock-frequency = <400000>;
++
++	twl: twl@48 {
++		reg = <0x48>;
++		interrupts = <GIC_SPI 7 IRQ_TYPE_LEVEL_HIGH>;
++	};
++
++	/*
++	 * Backlight LED driver, same bus, 7-bit 0x38 (report 111 §4.2 — this is
++	 * NOT the TC358764; the bridge is programmed over DSI generic writes,
++	 * not I2C).
++	 *
++	 * The chip is *gated* by GPIO2_16 (OMAP gpio_48, ball gpmc_a24,
++	 * CONTROL_CORE_PAD0_G 0x4A100070[15:0]) — measured on the bench
++	 * 2026-10-27 (report 120): with that line low 0x38 NAKs ("Remote I/O
++	 * error"); driving it high makes 0x38 ACK immediately, and taking it
++	 * low again removes it.  The reference OS leaves the line high; the
++	 * Linux boot path resets GPIO2's OE/DATAOUT and leaves the pad in safe
++	 * mode (mux 7), which is why every earlier probe failed and why binding
++	 * the driver without the rail hung the bus.
++	 *
++	 * `vin-supply` orders the enable before the driver's first transfer
++	 * (leds-lm3532 calls regulator_enable() before any I2C access).
++	 */
++	lm3532: led-controller@38 {
++		compatible = "ti,lm3532";
++		reg = <0x38>;
++		vin-supply = <&panel_vdd>;
++		status = "okay";
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		bl_led: led@0 {
++			reg = <0>;
++			led-sources = <0>;
++			ti,led-mode = <0>;
++			label = ":backlight";
++			led-max-microamp = <20000>;
++		};
++	};
++};
++
++/*
++ * QNX enumerates THREE omap i2c controllers (0x48070000, 0x48072000,
++ * 0x48350000) and its /dev/i2c0 need not be the first of them, so we cannot
++ * assume the LM3532 is on the TWL's bus.  Bring the other two up so all of
++ * them can be scanned.  (The `.script` order is 0x48070000, 0x48072000,
++ * 0x48350000.)  i2c4 stays off: it is the one QNX does not instantiate.
++ */
++&i2c2 {
++	clock-frequency = <400000>;
++	status = "okay";
++};
++&i2c3 {
++	clock-frequency = <400000>;
++	status = "okay";
++};
++&i2c4 {
++	status = "disabled";
++};
++
++#include "twl6030.dtsi"
++#include "twl6030_omap4.dtsi"
++
++/*
++ * VAUX3 is ON in the reference OS — live `pmic-twl6030-ctl get_state vaux3`
++ * on TabletOS reports "APP: ON, LDO: ON" (REGEN1 likewise; REGEN2 off).  It is
++ * the most likely panel/backlight rail, and the LM3532 on I2C 0x38 holding the
++ * bus looks exactly like an unpowered slave.  Force it on; read the result
++ * back from /sys/class/regulator before trusting it.
++ *
++ * (This block must come AFTER the twl6030.dtsi include: dtc does not allow a
++ * forward reference to a label that is only defined later in the tree.)
++ */
++/* VAUX1/VAUX2 are also ON at 2800 mV in the reference OS; Linux had both
++ * enabled-but-unprogrammed, exactly like VAUX3.  One of the three is the
++ * backlight/panel rail, so give all of them the reference voltage. */
++&vaux1 {
++	regulator-min-microvolt = <2800000>;
++	regulator-max-microvolt = <2800000>;
++	regulator-always-on;
++	regulator-boot-on;
++};
++
++&vaux2 {
++	regulator-min-microvolt = <2800000>;
++	regulator-max-microvolt = <2800000>;
++	regulator-always-on;
++	regulator-boot-on;
++};
++
++&vaux3 {
++	/*
++	 * The reference OS reports VAUX3 at 2800 mV, APP:ON, LDO:ON
++	 * (pmic-twl6030-ctl get_state/get_vout on TabletOS).  Linux had it
++	 * enabled but with NO voltage at all, i.e. VSEL never programmed.
++	 * A fixed min==max makes the regulator core apply it at registration
++	 * (apply_uV), which programs VSEL to selector 19 = 2.8 V.
++	 * 2.8 V is inside the LM3532's 2.7-5.5 V range, and QNX also
++	 * configures the TWL's PWM block (slave 0x49 reg 0x92 <- 0x30), so
++	 * this is the backlight rail.
++	 */
++	regulator-min-microvolt = <2800000>;
++	regulator-max-microvolt = <2800000>;
++	regulator-always-on;
++	regulator-boot-on;
++};
++
++/*
++ * VDAC and VANA are the only two rails the reference and Linux disagree about
++ * (session 14, measured live on both):
++ *
++ *   reference (pmic-twl6030-ctl get_state/get_vout):  VDAC ON 1800 mV,
++ *                                                     VANA ON 2100 mV
++ *   Linux (/sys/class/regulator/*\/state):            VDAC disabled,
++ *                                                     VANA disabled
++ *
++ * VANA/VDAC are analog supplies, and the one subsystem that does not work is
++ * the analog end of the display chain (the DSI PHY's transmit path and the
++ * bridge).  Only the enable is set here — get_vout reports both rails already
++ * at their reference voltages, so there is nothing to program.
++ */
++&vdac {
++	regulator-always-on;
++	regulator-boot-on;
++};
++
++&vana {
++	regulator-always-on;
++	regulator-boot-on;
++};
++
++/*
++ * PlayBook bring-up: keep the MMC2 interconnect target out of idle.
++ *
++ * The first MMC2 register access after a short idle window stalls
++ * (timing-dependent: the 1 ms mmc_delay in mmc_go_idle, the STAT poll in
++ * send_init_stream).  The target normally programs SIDLE/MIDLE to
++ * SMART_WKUP (fls of the four listed modes), so the module is allowed to
++ * request idle and l3_init_clkdm may gate the interface clock.  Force
++ * SIDLE/MIDLE to NO so the module never asks to idle, and hold the ti-sysc
++ * parent's runtime-PM usage count (ti,no-idle) so the module clock
++ * (CLKCTRL MODULEMODE=ENABLED) is never dropped.  Bring-up only; this
++ * should become a proper clkdm/power-domain policy once PM is up.
++ */
++&mmc2_target {
++	ti,no-idle;
++	ti,sysc-sidle = <SYSC_IDLE_NO>;
++	ti,sysc-midle = <SYSC_IDLE_NO>;
++};
++
++/* Internal eMMC (Samsung, 64 GB class) on MMC2 @ 0x480B4000 — 8-bit, fixed */
++&mmc2 {
++	vmmc-supply = <&vemmc>;
++	bus-width = <8>;
++	ti,non-removable;
++	/* eMMC only: do not send SDIO CMD52 or SD commands during rescan */
++	no-sdio;
++	no-sd;
++	status = "okay";
++};
++
++/*
++ * USB: the OMAP4 OTG/MUSB controller in peripheral (gadget) mode.  The DT
++ * (omap4-l4.dtsi) already wires usb_otg_hs to the OMAP USB2 PHY and the
++ * CONTROL USB mailbox; on the bench both were already live and in device role
++ * (DPLL_USB locked, MUSB_DEVCTL=0x80 BSESSVLD, USBOTGHS_CONTROL=0x15), so no
++ * PHY or VBUS work is expected - see report 112.
++ */
++&usb_otg_hs {
++	status = "okay";
++	/*
++	 * The OMAP musb glue (omap2430.c) parses the *legacy* property `mode`,
++	 * not `dr_mode`: extra it as a u32 and hands it to musb as plat->mode.
++	 * Without it musb->port_mode stays 0 and the controller fails with
++	 * "unsupported port mode 0" (no UDC, so no gadget).
++	 * 0 = UNDEFINED, 1 = HOST, 2 = PERIPHERAL, 3 = OTG.
++	 */
++	mode = <2>;
++	/*
++	 * OMAP4430's OTG port uses the internal UTMI+ PHY, not ULPI (Panda
++	 * uses interface-type = <1> too).  Without it the glue programs the
++	 * ULPI path and the UTMI PHY is left in the wrong mode.
++	 */
++	interface-type = <1>;
++	power = <50>;
++};
++
++/*
++ * The VBUS/ID comparators live in the TWL6030, not in the OMAP PHY, so musb
++ * only sees a session once this driver is probed with its rail.  Without it
++ * the UDC binds but reports "not attached" (report 112 / bench run 2).
++ * QNX keeps vusb alive across power transitions, so enabling it is expected.
++ */
++&twl_usb_comparator {
++	usb-supply = <&vusb>;
++};
++
++/* no external SD slot, no wifi SDIO brought up yet */
++&mmc1 {
++	status = "disabled";
++};
++
++/*
++ * Leave WDT2 exactly as the bootloader armed it.  The omap_wdt driver is a
++ * module and never loads during bring-up, so nothing kicks it; with
++ * clk_ignore_unused above its clock keeps running and the bootloader's
++ * ~58 s timeout still resets a hung kernel, giving the recovery tool its
++ * bootrom window without a power-cycle.
++ */
++&mmc3 {
++	status = "disabled";
++};
++&mmc4 {
++	status = "disabled";
++};
++&mmc5 {
++	status = "disabled";
++};
++
++/*
++ * The crypto engines live in l4_secure_clkdm (DES3DES, AES1/AES2,
++ * SHA2MD5, RNG) and are behind the L3 firewall.  The ti-sysc revision
++ * read at probe time is a non-secure access: on this unit it raises
++ * "L3 Custom Error: MASTER MPU TARGET L4PER2 (Read)" and then an
++ * imprecise external abort (0x1406) that kills the probe worker.
++ * Keep them disabled until the secure world/firewall is understood.
++ */
++&des_target {
++	status = "disabled";
++};
++&rng_target {
++	status = "disabled";
++};
++&sham_target {
++	status = "disabled";
++};
++&aes1_target {
++	status = "disabled";
++};
++&aes2_target {
++	status = "disabled";
++};
++
++/*
++ * ABE (audio back end) is not needed for bring-up.  Its targets live in
++ * abe_pwrdm/abe_clkdm; after l4_abe populates them, the WD_TIMER3 target
++ * (0x40130000) hangs in the ti-sysc enable/softreset path right after its
++ * revision read.  Disable the whole segment until ABE power/clock bring-up
++ * is understood.
++ */
++&l4_abe {
++	status = "disabled";
++};
++
++/*
++ * SPI controllers are not needed for bring-up.  The MCSPI4 child probe
++ * (0x480ba000) stalls right after its target is enabled, before the next
++ * target is probed; keep all four off until the SPI/DMA path is debugged.
++ */
++&mcspi1 {
++	status = "disabled";
++};
++&mcspi2 {
++	status = "disabled";
++};
++&mcspi3 {
++	status = "disabled";
++};
++/*
++ * MCSPI4 = the panel's TCON control port.  QNX calls it /dev/spi3 and drives it
++ * at 450 kHz to send the 9-word Hitachi init table (report 111 §3.5); without
++ * that table the panel is lit but shows no image (report 120).
++ *
++ * Its four signals are on OMAP "Type 2" (SMART3IO) pads, CONTROL_CORE_PAD0_M,
++ * and the reference muxes only three of them (somi is left in safe mode — the
++ * TCON is write-only):
++ *
++ *   0x4A100070+…   0x154[15:0]  mcspi4_clk   0x1700  (mux 0 + off-mode bits)
++ *                  0x154[31:16] mcspi4_simo  0x1700
++ *                  0x158[31:16] mcspi4_cs0   0x1708
++ *                  0x158[15:0]  mcspi4_somi  0x000f  (safe mode, unused)
++ *
++ * The values are the reference's own readback, not a decoding of the pad
++ * fields (§18.4.12.9.4 is opaque enough that copying is safer).
++ */
++&omap4_pmx_core {
++	mcspi4_pins: mcspi4-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x154, 0x1700)	/* mcspi4_clk  (gpio_151) */
++			OMAP4_IOPAD(0x156, 0x1700)	/* mcspi4_simo (gpio_152) */
++			OMAP4_IOPAD(0x15a, 0x1708)	/* mcspi4_cs0  (gpio_154) */
++		>;
++	};
++};
++
++&mcspi4 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&mcspi4_pins>;
++
++	/* spidev so the initramfs console can send the TCON table; replace with a
++	 * real panel driver once the sequence is confirmed on the bench. */
++	tcon@0 {
++		compatible = "rohm,dh2228fv";
++		reg = <0>;
++		spi-max-frequency = <450000>;
++	};
++};
++
++/* predictable /dev/spidev3.0, matching QNX's /dev/spi3 */
++/ {
++	aliases {
++		spi3 = &mcspi4;
++	};
++};
++
++/*
++ * EMIF1/EMIF2 are the DRAM controllers (0x4c000000 / 0x4d000000).  They
++ * are already set up by the bootloader/QNX and must not be reset from the
++ * non-secure kernel: probing EMIF2 stalls right after its revision read
++ * (and touching a live DRAM controller is not something bring-up should
++ * do).  The memory node describes the RAM; the ti,emif driver is optional.
++ * clk_ignore_unused keeps their clock alive.
++ */
++&emif1_target {
++	status = "disabled";
++};
++&emif2_target {
++	status = "disabled";
++};
++
++/*
++ * DSS (display) and IVA-HD sit in powered-off domains left by QNX.  Their
++ * ti-sysc reset path polls SYSSTATUS and stalls; skip the init-time reset
++ * for now (the child DSS/IPU drivers stay disabled until display bring-up).
++ */
++&dss_target {
++	ti,no-reset-on-init;
++};
++
++/* GPU (SGX) and IVA-HD have no in-tree driver / are not needed yet. */
++&sgx_module {
++	status = "disabled";
++};
++&iva_hd_target {
++	status = "disabled";
++};
++
++/* ---------------------------------------------------------------- display */
++/*
++ * DSI1 -> TC358764 (DSI/LVDS) -> the panel's LVDS input, 1024x600 @ 60 Hz.
++ *
++ * Every number here was measured from the running reference OS, not inferred
++ * (report 118): HBP/HFP/HSW = 138/162/20, VBP/VFP/VSW = 12/12/1, Htotal 1344,
++ * Vtotal 625, pixel clock 50.400 MHz, no sync inversion, pixel data on the
++ * rising edge.  The DSI link runs FOUR data lanes of RGB888: 1024x600x24bpp at
++ * 60 Hz is 1.2096 Gbps, i.e. 302.4 Mbps/lane and a 37.8 MHz byte clock, which is
++ * exactly the reference's TL 1008.  (An earlier two-lane build ran 75.6 MHz and
++ * was wrong — report 121 §11.)
++ *
++ * The panel itself is an LVDS panel with an SPI control port (MCSPI4, QNX's
++ * /dev/spi3) and an LM3532 backlight on I2C 0x38.  Neither has a driver yet:
++ * until they do, the DSS/DSI pipeline can run but the panel stays dark
++ * (report 118 §6.1 proved that on the reference OS itself).
++ */
++&dss {
++	status = "okay";
++};
++
++&dsi1 {
++	status = "okay";
++
++	port {
++		dsi1_out: endpoint {
++			remote-endpoint = <&tc358764_in>;
++			/*
++			 * lane pairs: clock + DATA1..DATA4.  The reference uses
++			 * FOUR data lanes, not two: DSI_COMPLEXIO_CFG1 reads
++			 * 0x2A054321 on QNX (CLK=1 DATA1=2 DATA2=3 DATA3=4
++			 * DATA4=5) against 0x2A000321 for a two-lane build.
++			 * With 4 lanes, 1024x600x24bpp at 50.4 MHz is
++			 * 1.2096 Gbps total = 302 Mbps/lane = a 37.8 MHz byte
++			 * clock, which is exactly QNX's PLL (REGM 756/REGN 95,
++			 * txbyteclkhs 37.8 MHz).  The two-lane build forced a
++			 * 75.6 MHz byte clock instead.
++			 */
++			lanes = <0 1 2 3 4 5 6 7 8 9>;
++		};
++	};
++
++	bridge@0 {
++		compatible = "toshiba,tc358764";
++		reg = <0>;		/* DSI virtual channel, not an address */
++		/*
++		 * TC358764 RESETN = GPIO2_24 (gpio_56, pad 0x4A100080).  Report
++		 * 122 proved it from winch_lcdctl: CLEARDATAOUT 0x01000000 at
++		 * vaddr 0x192d4, usleep(20000), SETDATAOUT at 0x19338,
++		 * usleep(20000) - i.e. a 20 ms active-LOW pulse, taken after the
++		 * DSI programming and before the panel strap read.  Holding the
++		 * line statically high (as we did) never gives the bridge a
++		 * reset edge, which is why it never answered SYS_ID.
++		 */
++		reset-gpios = <&gpio2 24 GPIO_ACTIVE_LOW>;
++
++		/*
++		 * The QNX boot set never writes a pad mux (report 122), so on
++		 * the reference the RIM bootloader has already muxed these
++		 * balls; our chainloader does not.  Two of them are the
++		 * bridge's own GPIO status balls, wired back into the OMAP and
++		 * used by QNX as its bridge self-test ("GPIO status good
++		 * (GPIO36 and GPIO171 high)"): they must be muxed as GPIO for
++		 * the diagnostic to mean anything.
++		 */
++		pinctrl-names = "default";
++		pinctrl-0 = <&bridge_pins>;
++
++		lanes = <4>;
++		hs-rate = <604800000>;
++		/*
++		 * 10.08 MHz is the reference's LP escape clock: with the
++		 * reference's 100.8 MHz DSI functional clock (clkdco / 6)
++		 * that is DSI_CLK_CTRL.LP_CLK_DIVISOR = 5, exactly QNX's
++		 * 0xA0346005 word.  The old 10 MHz made the divisor 6.
++		 */
++		lp-rate = <10080000>;
++
++		ports {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			port@0 {
++				reg = <0>;
++				tc358764_in: endpoint {
++					remote-endpoint = <&dsi1_out>;
++				};
++			};
++
++			port@1 {
++				reg = <1>;
++				tc358764_out: endpoint {
++					remote-endpoint = <&panel_in>;
++				};
++			};
++		};
++	};
++};
++
++/*
++ * Panel/display enables on GPIO2.
++ *
++ * The reference OS drives six GPIO2 lines high and holds them:
++ * `GPIO2_DATAOUT = 0x31013200` (bits 9, 12, 13, 16, 28, 29), with those bits
++ * output (`GPIO2_OE = 0xce3ecd5f`) — report 118 §10.1.  Linux's boot path
++ * resets GPIO2 (`OE = 0xffffffff`, `DATAOUT = 0`) and leaves the pads in safe
++ * mode, so none of them is driven.
++ *
++ * Bit 16 is the LM3532's gate (measured causally, report 120 §0.3).  The other
++ * five are held high by the reference and have never been validly tested (every
++ * earlier attempt was made with the backlight dark, so a panel-side change was
++ * invisible).  They are hogged here, matching the reference.
++ *
++ * It is a HOG, not a regulator GPIO: the lines have to be up *before* the
++ * devices probe, and a regulator-fixed only drives its GPIO at
++ * regulator_init_complete (late_initcall_sync), which lost the race with async
++ * probing (report 120 §1.1).  Hogs are applied at gpiochip registration.
++ *
++ * Pad values are the reference's own 16-bit readbacks for the pads in these
++ * words (CONTROL_CORE_PAD0_G 0x4A100060/0x068/0x070/0x088); writing both
++ * halves keeps the paired pad on the same function QNX leaves it on.
++ */
++&omap4_pmx_core {
++	panel_en_pins: panel-en-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x060, 0x410b)	/* gpio_41  (GPIO2_9)  */
++			OMAP4_IOPAD(0x062, 0x0003)
++			OMAP4_IOPAD(0x068, 0x0003)	/* gpio_45  (GPIO2_13) */
++			OMAP4_IOPAD(0x06a, 0x0003)
++			OMAP4_IOPAD(0x070, 0x0003)	/* gpio_48  (GPIO2_16) */
++			OMAP4_IOPAD(0x072, 0x4103)
++			OMAP4_IOPAD(0x088, 0x0003)	/* gpio_60/61 (2_28/2_29) */
++			OMAP4_IOPAD(0x08a, 0x0003)
++		>;
++	};
++
++	/* bridge reset + the bridge's two status balls (report 122) */
++	bridge_pins: bridge-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x080, 0x4003)	/* gpio_56  (GPIO2_24) RESETN */
++			OMAP4_IOPAD(0x058, 0x011b)	/* gpio_36  (GPIO2_4)  in */
++			OMAP4_IOPAD(0x17c, 0x0103)	/* gpio_171 (GPIO6_11) in */
++			/*
++			 * gpmc_ncs2 / gpmc_ncs3.  The reference drives both as
++			 * GPIO outputs, low: pad word 0x4A100078 reads
++			 * 0x410B4103 on TabletOS against 0x011F011F here
++			 * (safe mode, pulled high).  These two words were the
++			 * only ones in the display group never captured — the
++			 * earlier comparison used 0x060/0x068/0x070/0x088
++			 * only.  The GPIO outputs are set low by the hogs
++			 * below, matching the reference's GPIO2_DATAOUT.
++			 */
++			OMAP4_IOPAD(0x078, 0x4103)	/* gpio_52  (GPIO2_20) out */
++			OMAP4_IOPAD(0x07a, 0x410b)	/* gpio_53  (GPIO2_21) out */
++		>;
++	};
++};
++
++&gpio2 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&panel_en_pins>;
++
++	/* LM3532 / panel I2C gate — measured (report 120) */
++	panel-en-hog {
++		gpio-hog;
++		gpios = <16 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "panel-enable";
++	};
++
++	/* the other six lines the reference holds high (bits 9, 12, 13, 24, 28, 29) */
++	disp-en-9-hog {
++		gpio-hog;
++		gpios = <9 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "disp-en-9";
++	};
++	disp-en-12-hog {
++		gpio-hog;
++		gpios = <12 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "disp-en-12";
++	};
++	disp-en-13-hog {
++		gpio-hog;
++		gpios = <13 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "disp-en-13";
++	};
++	disp-en-28-hog {
++		gpio-hog;
++		gpios = <28 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "disp-en-28";
++	};
++	disp-en-29-hog {
++		gpio-hog;
++		gpios = <29 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "disp-en-29";
++	};
++
++	/*
++	 * gpio_52 / gpio_53 (GPIO2_20 / GPIO2_21): the reference configures
++	 * both balls as GPIO outputs and its GPIO2_DATAOUT does not set
++	 * either bit, so they are driven LOW.  We used to leave them in safe
++	 * mode, i.e. high.  See bridge_pins above for the measured values.
++	 */
++	disp-en-20-hog {
++		gpio-hog;
++		gpios = <20 GPIO_ACTIVE_HIGH>;
++		output-low;
++		line-name = "gpio2-20";
++	};
++	disp-en-21-hog {
++		gpio-hog;
++		gpios = <21 GPIO_ACTIVE_HIGH>;
++		output-low;
++		line-name = "gpio2-21";
++	};
++};
++
++/*
++ * The reference also drives four GPIO1 lines high: `GPIO1_DATAOUT = 0x00006044`
++ * (bits 2, 6, 13, 14) with OE bits 2/6/13/14 output.  Linux's boot path resets
++ * GPIO1 outright (`DATAOUT = 0`), so on every boot so far these have been low
++ * while the reference holds them high.
++ *
++ * The TC358764's reset line is still unidentified and the bridge's supplies are
++ * dummy regulators (`supply vddlvds not found`), so a line here is a plausible
++ * RESETN / bridge-power enable — and an unreset bridge cannot answer the DSI
++ * bus turnaround, which is exactly what the log shows ("bta sync failed",
++ * "ID: 0x0").  Only the pads the reference actually muxes as GPIO are set
++ * (gpio_2 at 0x190, gpio_14 at 0x1b4; gpio_13's pad 0x1b0 is in safe mode on
++ * the reference too, and gpio_6's pad is not in the TRM's CORE table).
++ */
++&omap4_pmx_core {
++	gpio1_en_pins: gpio1-en-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x190, 0x0003)	/* gpio_2  (GPIO1_2)  */
++			OMAP4_IOPAD(0x1b4, 0x0003)	/* gpio_14 (GPIO1_14) */
++		>;
++	};
++};
++
++&gpio1 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&gpio1_en_pins>;
++
++	gpio1-en-2-hog {
++		gpio-hog;
++		gpios = <2 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "regen1-gpio";
++	};
++	gpio1-en-6-hog {
++		gpio-hog;
++		gpios = <6 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "gpio1-6";
++	};
++	gpio1-en-14-hog {
++		gpio-hog;
++		gpios = <14 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "gpio1-14";
++	};
++};
++
++/ {
++	/*
++	 * The panel rail itself is always on (the LM3532 keeps its register
++	 * state across an OMAP reset, so it is not switched by us); only the
++	 * enable line above is under software control.  Kept as a regulator so
++	 * the LM3532 can name it as `vin-supply` and probe after it.
++	 */
++	panel_vdd: regulator-panel-vdd {
++		compatible = "regulator-fixed";
++		regulator-name = "panel_vdd";
++		regulator-always-on;
++		regulator-boot-on;
++	};
++
++	/*
++	 * Backlight: the LM3532 sits at 7-bit 0x38 on the TWL's bus
++	 * (0x48070000 = &i2c1 = /dev/i2c-0), and nothing else drives it at
++	 * splash time on the reference OS either (report 111 §4.3 / 118 §6.1:
++	 * a correct DSS+DSI mode still leaves the panel DARK until this is on).
++	 * default-brightness-level is non-zero on purpose: an LED class device
++	 * otherwise comes up at 0 and nothing lights.
++	 */
++	backlight: backlight {
++		compatible = "led-backlight";
++		leds = <&bl_led>;
++		default-brightness-level = <255>;
++		/*
++		 * default-brightness-level is non-zero on purpose: an LED class
++		 * device otherwise comes up at 0 and nothing lights.  The panel
++		 * node names this as its backlight, so drm_panel unblanks it.
++		 */
++		status = "okay";
++	};
++
++	lcd0: panel-lvds {
++		compatible = "panel-lvds";
++		/* the TC358764 LV_MX map is written as VESA-24 by its driver */
++		data-mapping = "vesa-24";
++		width-mm = <153>;
++		height-mm = <90>;
++		/* drm_panel enables/unblanks this at panel-enable time;
++		 * without the link the backlight stays at bl_power=4 (report 120). */
++		backlight = <&backlight>;
++
++		panel-timing {
++			clock-frequency = <50400000>;
++			hactive = <1024>;
++			vactive = <600>;
++			hback-porch = <138>;
++			hfront-porch = <162>;
++			hsync-len = <20>;
++			vback-porch = <12>;
++			vfront-porch = <12>;
++			vsync-len = <1>;
++			hsync-active = <1>;
++			vsync-active = <1>;
++			de-active = <1>;
++			pixelclk-active = <1>;
++		};
++
++		port {
++			panel_in: endpoint {
++				remote-endpoint = <&tc358764_out>;
++			};
++		};
++	};
++};
+--- a/arch/arm/include/debug/omap4bc.S
++++ b/arch/arm/include/debug/omap4bc.S
+@@ -0,0 +1,129 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * omap4bc.S — DEBUG_LL for the BlackBerry PlayBook (OMAP4430 "winchester").
++ *
++ * UART3 is wired internally but no pads are externally accessible, so plain
++ * DEBUG_LL output would be invisible.  Every character is therefore written
++ * to UART3 (0x48020000, as usual) AND mirrored into THREE ring buffers in
++ * DRAM.  Per ring (base page): u32 monotonic count at +0x80, u32 wrapping
++ * index at +0x84, 32512 chars at +0x100..+0x7FFF.  Rings (scatter-proven
++ * survivor pages — kexec/scatter.c, SESSION-HANDOFF ROUND 5):
++ *
++ *	0x88000000 / 0x90000000 / 0x94000000
++ *
++ * The pages survive the WDT2 warm reset (and are no-map reserved in the DTS
++ * so the kernel will not allocate over them).  They are read back from the
++ * QNX side with memdump3 after the reboot.
++ *
++ * L2 (PL310) flush: with MMU on the ring VAs are cached-normal; DCCMVAC only
++ * pushes L1->L2, and the ring lines are HOT (re-dirtied every char) so they
++ * never evict — a warm reset then destroys dirty PL310 lines and the capture
++ * is lost (observed).  Direct PL310 access works on this unit (ROUND 4
++ * smcprobe experiments), so every put also issues a PL310 clean+invalidate
++ * by physical address (0x48242000+0x768) to force the lines to DRAM.
++ * MMU on:  PL310 reached through the static map at 0xFEB42000 (set up in
++ *          debug_ll_io_init, arch/arm/mm/mmu.c) and ring PAs derived via
++ *          LOWMEM_DELTA.
++ * MMU off: writes already bypass L1 but still allocate in L2 — same PL310
++ *          CI-by-PA sequence at its physical address, then dsb.
++ *
++ * Register constraints inside printascii/printch (arch/arm/kernel/debug.S):
++ *   r0 = string ptr (dead in busyuart), r1 = char (dead after busyuart),
++ *   r2 = \rd scratch (dead), r3 = \rx UART base (MUST survive busyuart).
++ * We push {r1,r2,r3,r4} for the capture (r4 callee-saved for the C caller);
++ * the bounded LSR drain afterwards uses r1 (free) as countdown.
++ */
++
++#include <linux/serial_reg.h>
++
++#define UART3_BASE	0x48020000
++
++/*
++ * Non-cacheable ring aliases (see head.S and omap44xx_io_desc):
++ *	0xFE800000 -> PA 0x88000000
++ *	0xFE900000 -> PA 0x90000000
++ *	0xFEA00000 -> PA 0x94000000
++ * With MMU on the debug code uses these; with MMU off it uses the PAs.
++ * Non-cacheable means every character is in DRAM immediately, so there is
++ * no cache maintenance here at all.  (The old cacheable alias + PL310
++ * clean-by-PA broke once the L2C driver took secure ownership of the
++ * PL310: non-secure maintenance then aborted inside printk.)
++ */
++
++		.macro	addruart, rp, rv, tmp
++		ldr	\rp, =UART3_BASE
++		ldr	\rv, =0xFED20000	@ static map by debug_ll_io_init()
++						@ (section VA 0xFED00000 -> PA
++						@  0x48000000, also early-mapped
++						@  from __create_page_tables via
++						@  this same macro)
++		.endm
++
++.macro	senduart, rd, rx
++		@ PlayBook 2026-09-02: UART3 write REMOVED. When L4PER auto-idles,
++		@ a posted store to the dead THR never completes and the next ring
++		@ load stalls on the store buffer (the 132-console-wall). The three
++		@ DRAM rings carry the console text instead.
++		.endm
++
++		.macro	waituarttxrdy, rd, rx
++		.endm
++
++		.macro	waituartcts, rd, rx
++		.endm
++
++		@ ring_put <count-addr-reg> <char-reg> <scratch-reg>
++		@   count addr in \base on entry (and restored on exit);
++		@   \sc left holding the char slot index (0..0x7EFF).
++		.macro	ring_put, base, ch, sc
++		ldr	\sc, [\base]		@ monotonic count
++		add	\sc, \sc, #1
++		str	\sc, [\base]
++		ldr	\sc, [\base, #4]	@ wrapping index
++		add	\sc, \sc, #1
++		cmp	\sc, #0x7F00		@ 32512-char ring (32 KB page)
++		subcs	\sc, \sc, #0x7F00
++		str	\sc, [\base, #4]
++		add	\sc, \sc, #0x80		@ char addr = count+0x80+idx
++		strb	\ch, [\base, \sc]	@   (= ring base + 0x100 + idx)
++		sub	\sc, \sc, #0x80
++		.endm
++
++		@ busyuart: mirror char into the 3 breadcrumb rings.  The rings
++		@ are mapped non-cacheable, so the stores are already DRAM truth;
++		@ just drain the write buffer every 8 chars.  A dead/gated UART
++		@ must not hang the boot, so nothing is read back from it.
++		.macro	busyuart, rd, rx
++		push	{r1, r2, r3, r4, r5}
++		mov	r2, r1			@ char
++		mrc	p15, 0, r1, c1, c0, 0	@ SCTLR
++		tst	r1, #1			@ MMU on?
++		mov	r4, #0			@ remember MMU state in r4: the
++		movne	r4, #1			@ ring_put cmps clobber the flags
++		@ ring 3: 0x94000000 (PA) / 0xFEA00000 (VA)
++		cmp	r4, #1
++		ldreq	r1, =0xFEA00080
++		ldrne	r1, =0x94000080
++		ring_put r1, r2, r3
++		@ ring 2: 0x90000000 / 0xFE900000
++		cmp	r4, #1
++		ldreq	r1, =0xFE900080
++		ldrne	r1, =0x90000080
++		ring_put r1, r2, r3
++		@ ring 1: 0x88000000 / 0xFE800000
++		cmp	r4, #1
++		ldreq	r1, =0xFE800080
++		ldrne	r1, =0x88000080
++		ring_put r1, r2, r3
++		ldr	r5, [r1]		@ ring1 monotonic count
++		tst	r5, #7			@ drain the write buffer every 8th
++		bne	95f
++		dsb
++95:
++		b	98f
++
++98:
++		@ PlayBook 2026-09-02: LSR drain removed too - a read from a dead
++		@ UART stalls forever (non-posted). Rings only.
++		pop	{r1, r2, r3, r4, r5}
++		.endm
+\ No newline at end of file
+--- a/arch/arm/include/debug/uncompress.h
++++ b/arch/arm/include/debug/uncompress.h
+@@ -2,7 +2,27 @@
+ #ifdef CONFIG_DEBUG_UNCOMPRESS
+ extern void putc(int c);
+ #else
+-static inline void putc(int c) {}
++/*
++ * PlayBook CRC path: the ARM decompressor's console is otherwise a no-op.
++ * Route it to the DRAM capture ring instead.  decompress_kernel() runs with
++ * the MMU on and the decompressor page table maps the 0x90000000 section as
++ * non-cacheable, so these stores land in DRAM directly and survive the WDT2
++ * warm reset for readback with memdump3.
++ */
++static inline void putc(int c)
++{
++	unsigned int count = *(volatile unsigned int *)0x90000080;
++	unsigned int idx = *(volatile unsigned int *)0x90000084;
++
++	if (idx >= 0x7F00)
++		idx = 0;
++	((volatile char *)0x90000100)[idx] = (char)c;
++	idx++;
++	if (idx >= 0x7F00)
++		idx = 0;
++	*(volatile unsigned int *)0x90000084 = idx;
++	*(volatile unsigned int *)0x90000080 = count + 1;
++}
+ #endif
+ static inline void flush(void) {}
+ static inline void arch_decomp_setup(void) {}
+--- a/arch/arm/Kconfig.debug
++++ b/arch/arm/Kconfig.debug
+@@ -778,6 +778,18 @@
+ 		depends on ARCH_OMAP2PLUS
+ 		select DEBUG_OMAP2PLUS_UART
+ 
++	config DEBUG_PLAYBOOK_BC
++		bool "PlayBook low-level debug: RAM breadcrumb ring (blackberry,omap4-winchester)"
++		depends on ARCH_OMAP2PLUS
++		help
++		  DEBUG_LL for the BlackBerry PlayBook (OMAP4430 "winchester").
++		  UART3 is wired internally but has no accessible pads, so every
++		  debug character is written to ring buffers in DRAM at
++		  0x88000000 / 0x90000000 / 0x94000000 (count at +0x80, index at
++		  +0x84, 3840 chars at +0x100).  The pages survive the WDT2 warm
++		  reset and are read back from the QNX side with memdump3 — the
++		  only debug channel when no UART pads are available.
++
+ 	config DEBUG_PXA_UART1
+ 		depends on ARCH_PXA
+ 		bool "Use PXA UART1 for low-level debug"
+@@ -1479,6 +1491,7 @@
+ 
+ config DEBUG_LL_INCLUDE
+ 	string
++	default "debug/omap4bc.S" if DEBUG_PLAYBOOK_BC
+ 	default "debug/sa1100.S" if DEBUG_SA1100
+ 	default "debug/palmchip.S" if DEBUG_UART_8250_PALMCHIP
+ 	default "debug/8250.S" if DEBUG_LL_UART_8250 || DEBUG_UART_8250
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -93,6 +93,15 @@
+ ENTRY(stext)
+  ARM_BE8(setend	be )			@ ensure we are in BE8 mode
+ 
++	@ PlayBook CRC path: mark kernel entry.  The decompressor jumps here
++	@ with the MMU off, so this is a plain physical store to the DRAM
++	@ breadcrumb page.  r3/ip are free at entry (r0=0, r1=machine,
++	@ r2=DTB must survive).  A nonzero word here proves the decompressor
++	@ handed off to the kernel Image at 0x80008000.
++	ldr	r3, =0x90000014
++	ldr	ip, =0x51000001
++	str	ip, [r3]
++
+  THUMB(	badr	r9, 1f		)	@ Kernel is always entered in ARM.
+  THUMB(	bx	r9		)	@ If this is a Thumb-2 kernel,
+  THUMB(	.thumb			)	@ switch to Thumb now.
+@@ -246,6 +255,41 @@
+ 	blo	1b
+ 
+ 	/*
++	 * PlayBook CRC path: early-map the DEBUG_LL ring pages.
++	 *
++	 * debug/omap4bc.S writes the rings through a *non-cacheable* alias once
++	 * the MMU is on: 0xFE800000 / 0xFE900000 / 0xFEA00000 for PA
++	 * 0x88000000 / 0x90000000 / 0x94000000.  Non-cacheable means the
++	 * characters reach DRAM immediately and no cache maintenance is
++	 * needed -- the old cacheable alias + PL310 clean-by-PA is not usable
++	 * after the L2C driver takes secure ownership of the PL310 (non-secure
++	 * maintenance then aborts).
++	 *
++	 * These VAs live in the vmalloc window (above lowmem) and are also
++	 * installed permanently by omap44xx_io_desc; earlyprintk can fire
++	 * between __enable_mmu and map_io, so map them here first.
++	 * r6 = r7 with C cleared (B stays set) = normal non-cacheable XCB=001
++	 * on ARMv7 with TEX remapping.
++	 * Clobbers r0, r3, r6; r4 (page table) and r7 are preserved.
++	 */
++	bic	r6, r7, #(1 << 3)		@ clear C, keep B: normal NC
++	orr	r6, r6, #PMD_SECT_XN
++	mov	r0, #0xFE0
++	add	r0, r0, #0x0A			@ VA 0xFEA00000 -> PA 0x94000000
++	add	r0, r4, r0, lsl #PMD_ENTRY_ORDER
++	mov	r3, #0x94000
++	orr	r3, r6, r3, lsl #12
++	str	r3, [r0]
++	sub	r0, r0, #(1 << PMD_ENTRY_ORDER)	@ VA 0xFE900000 -> PA 0x90000000
++	mov	r3, #0x90000
++	orr	r3, r6, r3, lsl #12
++	str	r3, [r0]
++	sub	r0, r0, #(1 << PMD_ENTRY_ORDER)	@ VA 0xFE800000 -> PA 0x88000000
++	mov	r3, #0x88000
++	orr	r3, r6, r3, lsl #12
++	str	r3, [r0]
++
++	/*
+ 	 * The main matter: map in the kernel using section mappings, and
+ 	 * set two variables to indicate the physical start and end of the
+ 	 * kernel.
+--- a/arch/arm/mach-omap2/io.c
++++ b/arch/arm/mach-omap2/io.c
+@@ -226,6 +226,34 @@
+ 		.length		= L4_PER_44XX_SIZE,
+ 		.type		= MT_DEVICE,
+ 	},
++	/*
++	 * PlayBook: permanent non-cacheable aliases for the DEBUG_LL rings
++	 * (see arch/arm/include/debug/omap4bc.S and kernel/head.S).  The
++	 * early head.S section maps are dropped by paging_init, and a debug
++	 * write after that would walk an unmapped page and fault mid-printk.
++	 * These live in the vmalloc window above lowmem.  Non-cacheable (not
++	 * device) so a store is a normal posted write that lands in DRAM
++	 * without any cache maintenance; the old PL310 clean-by-PA is not
++	 * usable after the L2C driver takes secure ownership of the PL310.
++	 */
++	{
++		.virtual	= 0xFE800000,
++		.pfn		= __phys_to_pfn(0x88000000),
++		.length		= SZ_1M,
++		.type		= MT_MEMORY_RWX_NONCACHED,
++	},
++	{
++		.virtual	= 0xFE900000,
++		.pfn		= __phys_to_pfn(0x90000000),
++		.length		= SZ_1M,
++		.type		= MT_MEMORY_RWX_NONCACHED,
++	},
++	{
++		.virtual	= 0xFEA00000,
++		.pfn		= __phys_to_pfn(0x94000000),
++		.length		= SZ_1M,
++		.type		= MT_MEMORY_RWX_NONCACHED,
++	},
+ };
+ #endif
+ 
+--- a/arch/arm/mach-omap2/omap4-common.c
++++ b/arch/arm/mach-omap2/omap4-common.c
+@@ -154,6 +154,14 @@
+ 
+ void __init omap_barriers_init(void)
+ {
++	/*
++	 * PlayBook: the OMAP4 DRAM-barrier page is not usable on this unit.
++	 * Mapping it and issuing the first soc_mb() write aborts, killing the
++	 * boot immediately after this message.  Leave soc_mb at the default
++	 * mb(); the OMAP4 WFI-erratum workaround is not needed for bring-up.
++	 */
++	pr_info("OMAP4: dram barrier disabled (PlayBook)\n");
++#if 0
+ 	struct map_desc dram_io_desc[1];
+ 
+ 	dram_io_desc[0].virtual = OMAP4_DRAM_BARRIER_VA;
+@@ -167,6 +175,7 @@
+ 		&dram_sync_paddr, dram_sync);
+ 
+ 	soc_mb = omap4_mb;
++#endif
+ }
+ 
+ #endif
+--- a/arch/arm/mm/mmu.c
++++ b/arch/arm/mm/mmu.c
+@@ -1445,10 +1445,13 @@
+ 		mdesc->map_io();
+ 	else
+ 		debug_ll_io_init();
++	pr_info("PB: post-map_io\n");
+ 	fill_pmd_gaps();
++	pr_info("PB: post-fill_pmd_gaps\n");
+ 
+ 	/* Reserve fixed i/o space in VMALLOC region */
+ 	pci_reserve_io();
++	pr_info("PB: post-pci_reserve_io\n");
+ 
+ 	/*
+ 	 * Finally flush the caches and tlb to ensure that we're in a
+@@ -1457,10 +1460,13 @@
+ 	 * back.  After this point, we can start to touch devices again.
+ 	 */
+ 	local_flush_tlb_all();
++	pr_info("PB: post-tlb\n");
+ 	flush_cache_all();
++	pr_info("PB: post-cache\n");
+ 
+ 	/* Enable asynchronous aborts */
+ 	early_abt_enable();
++	pr_info("PB: post-abt\n");
+ }
+ 
+ static void __init kmap_init(void)
+--- a/drivers/base/dd.c
++++ b/drivers/base/dd.c
+@@ -18,6 +18,7 @@
+ 
+ #include <linux/debugfs.h>
+ #include <linux/device.h>
++#include <linux/pb_event.h>
+ #include <linux/delay.h>
+ #include <linux/dma-map-ops.h>
+ #include <linux/init.h>
+@@ -616,6 +617,8 @@
+ 		return -EPROBE_DEFER;
+ 	}
+ 
++	pr_info("PBR: %s <- %s\n", dev_name(dev), drv->name);
++
+ 	link_ret = device_links_check_suppliers(dev);
+ 	if (link_ret == -EPROBE_DEFER)
+ 		return link_ret;
+@@ -766,12 +769,16 @@
+  */
+ void wait_for_device_probe(void)
+ {
++	pb_event(0x7001);
+ 	/* wait for the deferred probe workqueue to finish */
+ 	flush_work(&deferred_probe_work);
++	pb_event(0x7002);
+ 
+ 	/* wait for the known devices to complete their probing */
+ 	wait_event(probe_waitqueue, atomic_read(&probe_count) == 0);
++	pb_event(0x7003);
+ 	async_synchronize_full();
++	pb_event(0x7004);
+ }
+ EXPORT_SYMBOL_GPL(wait_for_device_probe);
+ 
+--- a/drivers/base/power/runtime.c
++++ b/drivers/base/power/runtime.c
+@@ -10,6 +10,7 @@
+ #include <linux/hrtimer.h>
+ #include <linux/export.h>
+ #include <linux/pm_runtime.h>
++#include <linux/pb_event.h>
+ #include <linux/pm_wakeirq.h>
+ #include <linux/rculist.h>
+ #include <trace/events/rpm.h>
+@@ -390,8 +391,11 @@
+ 		}
+ 	}
+ 
+-	if (cb)
++	if (cb) {
++		pb_event(0xb100);
+ 		retval = cb(dev);
++		pb_event(0xb101);
++	}
+ 
+ 	if (dev->power.irq_safe) {
+ 		spin_lock(&dev->power.lock);
+@@ -414,7 +418,9 @@
+ 			device_links_read_unlock(idx);
+ 		}
+ 
++		pb_event(0xb102);
+ 		spin_lock_irq(&dev->power.lock);
++		pb_event(0xb103);
+ 	}
+ 
+ 	return retval;
+@@ -681,6 +687,7 @@
+ 
+ 	dev_pm_enable_wake_irq_check(dev, true);
+ 	retval = rpm_callback(callback, dev);
++	pb_event(0xb110);
+ 	if (retval)
+ 		goto fail;
+ 
+@@ -711,7 +718,9 @@
+ 		spin_unlock(&dev->power.lock);
+ 
+ 		spin_lock(&parent->power.lock);
++		pb_event(0xb114);
+ 		rpm_idle(parent, RPM_ASYNC);
++		pb_event(0xb115);
+ 		spin_unlock(&parent->power.lock);
+ 
+ 		spin_lock(&dev->power.lock);
+@@ -720,12 +729,15 @@
+ 	if (dev->power.links_count > 0) {
+ 		spin_unlock_irq(&dev->power.lock);
+ 
++		pb_event(0xb111);
+ 		rpm_suspend_suppliers(dev);
++		pb_event(0xb112);
+ 
+ 		spin_lock_irq(&dev->power.lock);
+ 	}
+ 
+  out:
++	pb_event(0xb113);
+ 	trace_rpm_return_int(dev, _THIS_IP_, retval);
+ 
+ 	return retval;
+--- a/drivers/bus/ti-sysc.c
++++ b/drivers/bus/ti-sysc.c
+@@ -24,6 +24,7 @@
+ #include <linux/platform_device.h>
+ #include <linux/pm_domain.h>
+ #include <linux/pm_runtime.h>
++#include <linux/pb_event.h>
+ #include <linux/reset.h>
+ #include <linux/of_address.h>
+ #include <linux/of_platform.h>
+@@ -1270,6 +1271,7 @@
+ 	if (!ddata->enabled)
+ 		return 0;
+ 
++	pb_event(0xb021);
+ 	sysc_clkdm_deny_idle(ddata);
+ 
+ 	if (ddata->legacy_mode) {
+@@ -1282,11 +1284,13 @@
+ 			goto err_allow_idle;
+ 	}
+ 
++	pb_event(0xb022);
+ 	sysc_disable_main_clocks(ddata);
+ 
+ 	if (sysc_opt_clks_needed(ddata))
+ 		sysc_disable_opt_clocks(ddata);
+ 
++	pb_event(0xb023);
+ 	ddata->enabled = false;
+ 
+ err_allow_idle:
+@@ -1308,6 +1312,7 @@
+ 		return 0;
+ 
+ 
++	pb_event(0xb031);
+ 	sysc_clkdm_deny_idle(ddata);
+ 
+ 	if (sysc_opt_clks_needed(ddata)) {
+@@ -1333,6 +1338,7 @@
+ 	}
+ 
+ 	ddata->enabled = true;
++	pb_event(0xb032);
+ 
+ 	sysc_clkdm_allow_idle(ddata);
+ 
+@@ -2180,7 +2186,9 @@
+ 		rstctrl_deasserted = true;
+ 	}
+ 
++	pr_info("PBS: %s rev read\n", dev_name(ddata->dev));
+ 	ddata->revision = sysc_read_revision(ddata);
++	pr_info("PBS: %s rev=%08x\n", dev_name(ddata->dev), ddata->revision);
+ 	sysc_init_revision_quirks(ddata);
+ 	sysc_init_module_quirks(ddata);
+ 
+@@ -2191,13 +2199,17 @@
+ 	}
+ 
+ 	if (!ddata->legacy_mode) {
++		pr_info("PBS: %s enable\n", dev_name(ddata->dev));
+ 		error = sysc_enable_module(ddata->dev);
++		pr_info("PBS: %s enable done\n", dev_name(ddata->dev));
+ 		if (error)
+ 			goto err_main_clocks;
+ 	}
+ 
+ 	if (!(ddata->cfg.quirks & SYSC_QUIRK_NO_RESET_ON_INIT)) {
++		pr_info("PBS: %s reset\n", dev_name(ddata->dev));
+ 		error = sysc_reset(ddata);
++		pr_info("PBS: %s reset done\n", dev_name(ddata->dev));
+ 		if (error)
+ 			dev_err(ddata->dev, "Reset failed with %d\n", error);
+ 
+@@ -3124,6 +3136,9 @@
+ 	struct sysc *ddata;
+ 	int error;
+ 
++	/* PlayBook bring-up checkpoints (debug-only). */
++	pr_info("PBS: %s +\n", dev_name(&pdev->dev));
++
+ 	ddata = devm_kzalloc(&pdev->dev, sizeof(*ddata), GFP_KERNEL);
+ 	if (!ddata)
+ 		return -ENOMEM;
+@@ -3146,6 +3161,17 @@
+ 	if (error)
+ 		return error;
+ 
++	/*
++	 * PlayBook bring-up: a child driver's runtime-resume does not resume
++	 * this parent, and the init epilogue gates the module clocks before
++	 * of_platform_populate() probes the child.  The first register access
++	 * (e.g. omap2_mcspi's WAKEUPENABLE) then stalls on an idled L4 target.
++	 * Keep every target clocked for the existing 3 s NO_IDLE_ON_INIT
++	 * window instead of gating immediately.
++	 */
++	if (of_machine_is_compatible("blackberry,omap4-winchester"))
++		ddata->cfg.quirks |= SYSC_QUIRK_NO_IDLE_ON_INIT;
++
+ 	error = sysc_map_and_check_registers(ddata);
+ 	if (error)
+ 		return error;
+@@ -3196,6 +3222,7 @@
+ 		pm_runtime_disable(ddata->dev);
+ 		goto unprepare;
+ 	}
++	pr_info("PBS: %s pm ok\n", dev_name(&pdev->dev));
+ 
+ 	/* Balance use counts as PM runtime should have enabled these all */
+ 	if (!(ddata->cfg.quirks &
+@@ -3204,6 +3231,7 @@
+ 		sysc_disable_opt_clocks(ddata);
+ 		sysc_clkdm_allow_idle(ddata);
+ 	}
++	pr_info("PBS: %s idle\n", dev_name(&pdev->dev));
+ 
+ 	if (!(ddata->cfg.quirks & SYSC_QUIRK_NO_RESET_ON_INIT))
+ 		reset_control_assert(ddata->rsts);
+--- a/drivers/gpio/gpio-omap.c
++++ b/drivers/gpio/gpio-omap.c
+@@ -1398,6 +1398,9 @@
+ 	struct gpio_bank *bank;
+ 	int ret;
+ 
++	/* PlayBook bring-up checkpoints (debug-only). */
++	pr_info("PBG: %s probe\n", dev_name(dev));
++
+ 	pdata = device_get_match_data(dev);
+ 
+ 	pdata = pdata ?: dev_get_platdata(dev);
+@@ -1462,12 +1465,15 @@
+ 	platform_set_drvdata(pdev, bank);
+ 
+ 	pm_runtime_enable(dev);
++	pr_info("PBG: %s pm_get\n", dev_name(dev));
+ 	pm_runtime_get_sync(dev);
++	pr_info("PBG: %s pm_get done\n", dev_name(dev));
+ 
+ 	if (bank->is_mpuio)
+ 		omap_mpuio_init(bank);
+ 
+ 	omap_gpio_mod_init(bank);
++	pr_info("PBG: %s mod_init done\n", dev_name(dev));
+ 
+ 	ret = omap_gpio_chip_init(bank, dev);
+ 	if (ret) {
+@@ -1478,11 +1484,13 @@
+ 		return ret;
+ 	}
+ 
++	pr_info("PBG: %s chip_init done\n", dev_name(dev));
+ 	omap_gpio_show_rev(bank);
+ 
+ 	bank->nb.notifier_call = gpio_omap_cpu_notifier;
+ 	cpu_pm_register_notifier(&bank->nb);
+ 
++	pr_info("PBG: %s ok\n", dev_name(dev));
+ 	pm_runtime_put(dev);
+ 
+ 	return 0;
+--- a/drivers/gpu/drm/bridge/tc358764.c
++++ b/drivers/gpu/drm/bridge/tc358764.c
+@@ -9,8 +9,10 @@
+ 
+ #include <linux/delay.h>
+ #include <linux/gpio/consumer.h>
++#include <linux/io.h>
+ #include <linux/mod_devicetable.h>
+ #include <linux/module.h>
++#include <linux/of.h>
+ #include <linux/of_graph.h>
+ #include <linux/regulator/consumer.h>
+ 
+@@ -153,6 +155,8 @@
+ 	struct regulator_bulk_data supplies[ARRAY_SIZE(tc358764_supplies)];
+ 	struct gpio_desc *gpio_reset;
+ 	int error;
++	bool warned;
++	bool inited;
+ };
+ 
+ static int tc358764_clear_error(struct tc358764 *ctx)
+@@ -196,8 +200,26 @@
+ 	data[5] = val >> 24;
+ 
+ 	ret = mipi_dsi_generic_write(dsi, data, sizeof(data));
+-	if (ret < 0)
+-		ctx->error = ret;
++	if (ret < 0) {
++		/*
++		 * PlayBook bring-up.  The TC358764's reset line is unknown, so
++		 * the bridge starts in whatever state the previous OS left it
++		 * in, and it does not answer the DSI bus turnaround (BTA) until
++		 * it has been programmed.  The write packet itself is still
++		 * transmitted; only the ack times out (-EIO).  Aborting the
++		 * sequence here (ctx->error) leaves the bridge completely
++		 * unconfigured — measured: "write 0x013c failed: -5" then
++		 * "error initializing bridge", and a black panel.
++		 *
++		 * So: report the first failure once, then keep programming.
++		 */
++		if (!ctx->warned) {
++			dev_err(ctx->dev,
++				"write 0x%04x <- 0x%08x failed: %d (continuing)\n",
++				addr, val, (int)ret);
++			ctx->warned = true;
++		}
++	}
+ }
+ 
+ static inline struct tc358764 *bridge_to_tc358764(struct drm_bridge *bridge)
+@@ -205,67 +227,164 @@
+ 	return container_of(bridge, struct tc358764, bridge);
+ }
+ 
+-static int tc358764_init(struct tc358764 *ctx)
+-{
+-	u32 v = 0;
++/*
++ * PlayBook (winchester): reproduce QNX's bridge-GPIO self-test
++ * (winch_lcdctl 0x196dc, report 126).  It writes the bridge's GPIO block
++ * (0x0520 = 5), then cycles 0x0524 through 1/4/5/0; bit 0 is wired to OMAP
++ * GPIO2_4 (GPIO36) and bit 2 to GPIO6_11 (GPIO171).  Reading GPIO2_DATAIN
++ * bit 4 after each write is a delivery test that needs no BTA: if it does
++ * not follow 0x0524 bit 0, the bridge is not receiving our generic writes.
++ */
++static void pb_bridge_selftest(struct tc358764 *ctx)
++{
++	static const u32 vals[] = { 1, 4, 5, 0 };
++	void __iomem *gpio2;
++	u32 v;
++	int i;
++
++	gpio2 = ioremap(0x48055000, 0x1000);
++	if (!gpio2) {
++		dev_err(ctx->dev, "selftest: cannot map GPIO2\n");
++		return;
++	}
+ 
+-	tc358764_read(ctx, SYS_ID, &v);
+-	if (ctx->error)
+-		return tc358764_clear_error(ctx);
+-	dev_info(ctx->dev, "ID: %#x\n", v);
++	tc358764_write(ctx, 0x0520, 5);
++	usleep_range(1000, 2000);
++	for (i = 0; i < ARRAY_SIZE(vals); i++) {
++		tc358764_write(ctx, 0x0524, vals[i]);
++		usleep_range(1000, 2000);
++		v = readl(gpio2 + 0x138);	/* GPIO2_DATAIN */
++		dev_info(ctx->dev,
++			 "selftest 0x0524=%u -> GPIO2_DATAIN=0x%08x GPIO36=%u\n",
++			 vals[i], v, !!(v & BIT(4)));
++	}
++	iounmap(gpio2);
++}
+ 
+-	/* configure PPI counters */
+-	tc358764_write(ctx, PPI_TX_RX_TA, TTA_GET | TTA_SURE);
+-	tc358764_write(ctx, PPI_LPTXTIMECNT, LPX_PERIOD);
+-	tc358764_write(ctx, PPI_D0S_CLRSIPOCOUNT, 5);
+-	tc358764_write(ctx, PPI_D1S_CLRSIPOCOUNT, 5);
+-	tc358764_write(ctx, PPI_D2S_CLRSIPOCOUNT, 5);
+-	tc358764_write(ctx, PPI_D3S_CLRSIPOCOUNT, 5);
+-
+-	/* enable four data lanes and clock lane */
+-	tc358764_write(ctx, PPI_LANEENABLE, LANEENABLE_L3EN | LANEENABLE_L2EN |
+-		       LANEENABLE_L1EN | LANEENABLE_L0EN | LANEENABLE_CLEN);
+-	tc358764_write(ctx, DSI_LANEENABLE, LANEENABLE_L3EN | LANEENABLE_L2EN |
+-		       LANEENABLE_L1EN | LANEENABLE_L0EN | LANEENABLE_CLEN);
++static int tc358764_init(struct tc358764 *ctx)
++{
++	ctx->error = 0;
+ 
+-	/* start */
++	/*
++	 * PlayBook (winchester): the reference DOES program the bridge.
++	 *
++	 * The splash sequencer in winch_lcdctl calls the function at vaddr
++	 * 0x13e50 from 0x1938c (between the DSI PHY/PLL programming and the
++	 * DSI VC enable).  It writes a complete register set over DSI
++	 * generic long-write packets, including LV_CFG.LVEN.  Reports 121
++	 * §12 and 122 concluded "nothing programs it"; that was wrong - the
++	 * call is present in the splash path and this is its exact sequence
++	 * (recovered instruction by instruction; see report 125).
++	 *
++	 * Do NOT use SYS_RST <- 0x1f: the reference writes SYS_RST_LCD (4),
++	 * and the 0x1f value degrades the reference display until a battery
++	 * pull (trap 28).
++	 */
++	/*
++	 * PPI_TX_RX_TA: gma500's 0x00040006 (see dsi.c's pb_bridge_seq for the
++	 * session-15 measurements — the reference's 4 leaves our bridge reads
++	 * failing half the time).  Not reached on this board: pre_enable()
++	 * leaves init to dsi.c's pb_bridge_program().
++	 */
++	tc358764_write(ctx, PPI_TX_RX_TA, 0x00040006);
++	tc358764_write(ctx, PPI_LPTXTIMECNT, 4);
++	tc358764_write(ctx, PPI_D0S_CLRSIPOCOUNT, 4);
++	tc358764_write(ctx, PPI_D1S_CLRSIPOCOUNT, 4);
++	tc358764_write(ctx, PPI_D2S_CLRSIPOCOUNT, 4);
++	tc358764_write(ctx, PPI_D3S_CLRSIPOCOUNT, 4);
++	tc358764_write(ctx, DSI_LANEENABLE, 0x1f);
++	tc358764_write(ctx, PPI_LANEENABLE, 0x1f);
+ 	tc358764_write(ctx, PPI_STARTPPI, PPI_START_FUNCTION);
+ 	tc358764_write(ctx, DSI_STARTDSI, DSI_RX_START);
+ 
+-	/* configure video path */
+-	tc358764_write(ctx, VP_CTRL, VP_CTRL_VSDELAY(15) | VP_CTRL_RGB888 |
+-		       VP_CTRL_EVTMODE | VP_CTRL_HSPOL | VP_CTRL_VSPOL);
+-
+-	/* reset PHY */
+-	tc358764_write(ctx, LV_PHY0, LV_PHY0_RST(1) |
+-		       LV_PHY0_PRBS_ON(4) | LV_PHY0_IS(2) | LV_PHY0_ND(6));
+-	tc358764_write(ctx, LV_PHY0, LV_PHY0_PRBS_ON(4) | LV_PHY0_IS(2) |
+-		       LV_PHY0_ND(6));
+-
+-	/* reset bridge */
++	tc358764_write(ctx, 0x04a4, 0);
++	/* LVDS PHY: reset asserted, then the reference's IS/ND range */
++	tc358764_write(ctx, LV_PHY0, 0x0044c02d);
++
++	tc358764_write(ctx, LV_MX0003, 0x03020100);
++	tc358764_write(ctx, LV_MX0407, 0x08050704);
++	tc358764_write(ctx, LV_MX0811, 0x0f0e0a09);
++	tc358764_write(ctx, LV_MX1215, 0x100d0c0b);
++	tc358764_write(ctx, LV_MX1619, 0x12111716);
++	tc358764_write(ctx, LV_MX2023, 0x1b151413);
++	tc358764_write(ctx, LV_MX2427, 0x061a1819);
++
++	tc358764_write(ctx, VP_CTRL, 0x03f00120);
++	/*
++	 * PlayBook: HBP/HFP live in bits 24:16 (VP_HTIM1_HBP/VP_HTIM2_HFP
++	 * above), so the reference's values are 0x00780001 / 0x00760400, not
++	 * the 0x78000001 / 0x76000400 this tree carried until session 15 —
++	 * those put the porches in the reserved top byte and the bridge
++	 * stored HBP = HFP = 0.  Report 132.
++	 */
++	tc358764_write(ctx, VP_HTIM1, 0x00780001);
++	tc358764_write(ctx, VP_HTIM2, 0x00760400);
++	tc358764_write(ctx, VP_VTIM1, 0x000a0001);
++	tc358764_write(ctx, VP_VTIM2, 0x000c0258);
++
++	msleep(100);
++
++	/* release the LVDS PHY reset, enable LVDS (single link, no clock
++	 * polarity inversion - upstream uses 0xd here, the reference 0x1) */
++	tc358764_write(ctx, LV_PHY0, 0x0004c02d);
++	tc358764_write(ctx, LV_CFG, LV_CFG_LVEN);
++	tc358764_write(ctx, 0x0520, 5);
++	tc358764_write(ctx, 0x0524, 5);
+ 	tc358764_write(ctx, SYS_RST, SYS_RST_LCD);
++	tc358764_write(ctx, VP_VFUEN, 1);
+ 
+-	/* set bit order */
+-	tc358764_write(ctx, LV_MX0003, LV_MX(LVI_R0, LVI_R1, LVI_R2, LVI_R3));
+-	tc358764_write(ctx, LV_MX0407, LV_MX(LVI_R4, LVI_R7, LVI_R5, LVI_G0));
+-	tc358764_write(ctx, LV_MX0811, LV_MX(LVI_G1, LVI_G2, LVI_G6, LVI_G7));
+-	tc358764_write(ctx, LV_MX1215, LV_MX(LVI_G3, LVI_G4, LVI_G5, LVI_B0));
+-	tc358764_write(ctx, LV_MX1619, LV_MX(LVI_B6, LVI_B7, LVI_B1, LVI_B2));
+-	tc358764_write(ctx, LV_MX2023, LV_MX(LVI_B3, LVI_B4, LVI_B5, LVI_L0));
+-	tc358764_write(ctx, LV_MX2427, LV_MX(LVI_HS, LVI_VS, LVI_DE, LVI_R6));
+-	tc358764_write(ctx, LV_CFG, LV_CFG_CLKPOL2 | LV_CFG_CLKPOL1 |
+-		       LV_CFG_LVEN);
++	/*
++	 * Diagnostic only: a read still needs the bridge to answer BTA.  A
++	 * non-zero value proves the command VC works and the writes landed;
++	 * 0 is inconclusive (report 121 §7.5).
++	 */
++	{
++		u32 id = 0;
++		tc358764_read(ctx, SYS_ID, &id);
++		dev_info(ctx->dev, "SYS_ID after programming: 0x%08x\n", id);
++		ctx->error = 0;
++	}
+ 
+-	return tc358764_clear_error(ctx);
++	pb_bridge_selftest(ctx);
++
++	dev_info(ctx->dev, "programmed the bridge with the reference sequence\n");
++	return 0;
+ }
+ 
+ static void tc358764_reset(struct tc358764 *ctx)
+ {
++	if (!ctx->gpio_reset)
++		return;
++
++	/*
++	 * PlayBook bring-up: RESETN is active-low, and the reference holds it
++	 * asserted for 20 ms (winch_lcdctl: CLEARDATAOUT, usleep(20000),
++	 * SETDATAOUT, usleep(20000) — report 122).  Upstream's 1-2 ms was
++	 * never exercised on this board.
++	 */
+ 	gpiod_set_value(ctx->gpio_reset, 1);
+-	usleep_range(1000, 2000);
++	msleep(20);
+ 	gpiod_set_value(ctx->gpio_reset, 0);
+-	usleep_range(1000, 2000);
++	msleep(20);
++}
++
++/*
++ * PlayBook: the DSI host calls this from dsi_init_dsi(), after the DSI
++ * PHY/PLL programming and before the bridge register writes — the exact point
++ * winch_lcdctl pulses RESX (report 125/126).  The bridge's pre_enable must not
++ * pulse it earlier.
++ */
++void tc358764_playbook_reset(struct mipi_dsi_device *dsi)
++{
++	struct tc358764 *ctx = mipi_dsi_get_drvdata(dsi);
++
++	if (!ctx) {
++		pr_err("tc358764: no drvdata for bridge reset\n");
++		return;
++	}
++	tc358764_reset(ctx);
+ }
++EXPORT_SYMBOL_GPL(tc358764_playbook_reset);
+ 
+ static void tc358764_post_disable(struct drm_bridge *bridge)
+ {
+@@ -274,6 +393,7 @@
+ 
+ 	tc358764_reset(ctx);
+ 	usleep_range(10000, 15000);
++	ctx->inited = false;
+ 	ret = regulator_bulk_disable(ARRAY_SIZE(ctx->supplies), ctx->supplies);
+ 	if (ret < 0)
+ 		dev_err(ctx->dev, "error disabling regulators (%d)\n", ret);
+@@ -288,10 +408,36 @@
+ 	if (ret < 0)
+ 		dev_err(ctx->dev, "error enabling regulators (%d)\n", ret);
+ 	usleep_range(10000, 15000);
++
++	/*
++	 * PlayBook bring-up: the bridge is normally programmed in attach()
++	 * while the DSI link is still in command mode.  Only retry here if
++	 * that failed — by this point the host is in video mode and every
++	 * generic write dies on BTA ("bta sync failed", report 121 §7).
++	 */
++	if (ctx->inited) {
++		dev_info(ctx->dev, "bridge already programmed at attach\n");
++		return;
++	}
++
++	/*
++	 * PlayBook (winchester): the DSI host pulses RESX and programs the
++	 * bridge inside dsi_init_dsi(), after the DSI PHY/PLL and before its
++	 * VC/video enable — the reference's order (reports 125/126).  Do
++	 * nothing here; doing it from this callback would run before the DSI
++	 * is up and would auto-enable the host through the generic-write path.
++	 */
++	if (of_machine_is_compatible("blackberry,omap4-winchester")) {
++		ctx->inited = true;
++		return;
++	}
++
+ 	tc358764_reset(ctx);
+ 	ret = tc358764_init(ctx);
+ 	if (ret < 0)
+ 		dev_err(ctx->dev, "error initializing bridge (%d)\n", ret);
++	else
++		ctx->inited = true;
+ }
+ 
+ static int tc358764_attach(struct drm_bridge *bridge,
+@@ -299,6 +445,15 @@
+ {
+ 	struct tc358764 *ctx = bridge_to_tc358764(bridge);
+ 
++	/*
++	 * Measured 2026-10-27: programming the bridge here does NOT work — the
++	 * DSI host rejects transfers before the link has been configured
++	 * ("write 0x013c failed: -22", -EINVAL), so init is left to
++	 * pre_enable().  Kept as a note so nobody repeats the experiment
++	 * without knowing the result.
++	 */
++	dev_info(ctx->dev, "attach: bridge init deferred to pre_enable\n");
++
+ 	return drm_bridge_attach(bridge->encoder, ctx->next_bridge, bridge, flags);
+ }
+ 
+@@ -312,11 +467,14 @@
+ {
+ 	struct device *dev = ctx->dev;
+ 
+-	ctx->gpio_reset = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
+-	if (IS_ERR(ctx->gpio_reset)) {
+-		dev_err(dev, "no reset GPIO pin provided\n");
++	/*
++	 * PlayBook bring-up: the bridge reset line is not known yet.  Treat the
++	 * GPIO as optional so the driver can bind and we can see whether the
++	 * bootloader already left the bridge configured.
++	 */
++	ctx->gpio_reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_LOW);
++	if (IS_ERR(ctx->gpio_reset))
+ 		return PTR_ERR(ctx->gpio_reset);
+-	}
+ 
+ 	ctx->next_bridge = devm_drm_of_get_bridge(dev, dev->of_node, 1, 0);
+ 	if (IS_ERR(ctx->next_bridge))
+@@ -354,10 +512,37 @@
+ 
+ 	ctx->dev = dev;
+ 
++	/*
++	 * PlayBook bring-up: the DSI host takes its lane count from the DT
++	 * `lanes` list on the host endpoint, and its PLL range from hs_rate /
++	 * lp_rate, which this driver used to leave at 0 (the OMAP host then
++	 * computes pll_max = 0 and refuses the mode).  Allow the board to set
++	 * them; keep the old 4-lane/0-rate default otherwise.
++	 */
+ 	dsi->lanes = 4;
++	of_property_read_u32(dev->of_node, "lanes", &dsi->lanes);
++	dsi->hs_rate = 604800000;
++	dsi->lp_rate = 10000000;
++	{
++		u32 tmp;
++
++		if (!of_property_read_u32(dev->of_node, "hs-rate", &tmp))
++			dsi->hs_rate = tmp;
++		if (!of_property_read_u32(dev->of_node, "lp-rate", &tmp))
++			dsi->lp_rate = tmp;
++	}
+ 	dsi->format = MIPI_DSI_FMT_RGB888;
++	/*
++	 * PlayBook: keep BURST (non-burst sync-pulse is rejected at this
++	 * pixel clock, trap 31).  Do NOT set MIPI_DSI_MODE_LPM: it makes
++	 * mipi_dsi_generic_write() mark every bridge register message
++	 * MIPI_DSI_MSG_USE_LPM, i.e. send it on the LP path, while the
++	 * reference's sender leaves VC1 on the normal HS packet path.  The
++	 * bridge's HS receiver is the packet path; LP writes did not reach it
++	 * (report 126 delivery test: GPIO36 never followed 0x0524 bit 0).
++	 */
+ 	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST
+-		| MIPI_DSI_MODE_VIDEO_AUTO_VERT | MIPI_DSI_MODE_LPM;
++		| MIPI_DSI_MODE_VIDEO_AUTO_VERT;
+ 
+ 	ret = tc358764_parse_dt(ctx);
+ 	if (ret < 0)
+--- a/drivers/gpu/drm/omapdrm/dss/dsi.c
++++ b/drivers/gpu/drm/omapdrm/dss/dsi.c
+@@ -850,6 +850,15 @@
+ 	/* LP_RX_SYNCHRO_ENABLE */
+ 	REG_FLD_MOD(dsi, DSI_CLK_CTRL, dsi_fclk > 30000000 ? 1 : 0, 21, 21);
+ 
++	/*
++	 * PlayBook (winchester): the reference runs DSI_CLK_CTRL =
++	 * 0xA0346005 with HS_AUTO_STOP_ENABLE (bit 18) set; upstream leaves
++	 * it at its reset value 0.  It is the last bit that differs from the
++	 * reference word and is part of the measured QNX timing set.
++	 */
++	if (of_machine_is_compatible("blackberry,omap4-winchester"))
++		REG_FLD_MOD(dsi, DSI_CLK_CTRL, 1, 18, 18);
++
+ 	return 0;
+ }
+ 
+@@ -906,7 +915,16 @@
+ 
+ 	max_dsi_fck = dsi->data->max_fck_freq;
+ 
+-	cinfo->mX[HSDIV_DSI] = DIV_ROUND_UP(cinfo->clkdco, max_dsi_fck);
++	/*
++	 * PlayBook (winchester): the reference's DSI functional clock is
++	 * clkdco / 6 = 100.8 MHz (it feeds the LP escape clock, and with a
++	 * 10.08 MHz LP clock gives DSI_CLK_CTRL.LP_CLK_DIVISOR = 5).  The
++	 * generic ceil() would pick 4 (151.2 MHz, divisor 8).
++	 */
++	if (of_machine_is_compatible("blackberry,omap4-winchester"))
++		cinfo->mX[HSDIV_DSI] = 6;
++	else
++		cinfo->mX[HSDIV_DSI] = DIV_ROUND_UP(cinfo->clkdco, max_dsi_fck);
+ 	cinfo->clkout[HSDIV_DSI] = cinfo->clkdco / cinfo->mX[HSDIV_DSI];
+ }
+ 
+@@ -1416,6 +1434,20 @@
+ 	r = dsi_read_reg(dsi, DSI_DSIPHY_CFG2);
+ 	r = FLD_MOD(r, tclk_prepare, 7, 0);
+ 	dsi_write_reg(dsi, DSI_DSIPHY_CFG2, r);
++
++	/*
++	 * PlayBook (winchester): substitute the reference's measured
++	 * DSIPHY_CFG0/1/2 words.  With the link at the same 37.8 MHz byte
++	 * clock the rest of the PHY set (CFG3/4/5/6/8/9/11/12/14/15) is
++	 * already byte-identical to the reference; only these three differ,
++	 * because QNX's DDR/HS-LP constants are not mainline's.  Reported
++	 * live on the reference in report 118 §3.3.
++	 */
++	if (of_machine_is_compatible("blackberry,omap4-winchester")) {
++		dsi_write_reg(dsi, DSI_DSIPHY_CFG0, 0x0b190d13);
++		dsi_write_reg(dsi, DSI_DSIPHY_CFG1, 0x42040a22);
++		dsi_write_reg(dsi, DSI_DSIPHY_CFG2, 0xb8800009);
++	}
+ }
+ 
+ static int dsi_cio_wait_tx_clk_esc_reset(struct dsi_data *dsi)
+@@ -2788,12 +2820,19 @@
+ 	}
+ 
+ 	r = dsi_read_reg(dsi, DSI_CTRL);
+-	r = FLD_MOD(r, 1, 1, 1);	/* CS_RX_EN */
++	/*
++	 * PlayBook (winchester): the reference runs DSI_CTRL = 0x00EAEF9D,
++	 * i.e. CS_RX_EN = 0 and VP_CLK_POL = 1, where upstream sets the
++	 * opposite (0x00EAEE9F).  Every other field matches.  Follow the
++	 * reference — VP_CLK_POL is the video-port sampling edge into the DSI
++	 * protocol engine.
++	 */
++	r = FLD_MOD(r, 0, 1, 1);	/* CS_RX_EN */
+ 	r = FLD_MOD(r, 1, 2, 2);	/* ECC_RX_EN */
+ 	r = FLD_MOD(r, 1, 3, 3);	/* TX_FIFO_ARBITRATION */
+ 	r = FLD_MOD(r, 1, 4, 4);	/* VP_CLK_RATIO, always 1, see errata*/
+ 	r = FLD_MOD(r, buswidth, 7, 6); /* VP_DATA_BUS_WIDTH */
+-	r = FLD_MOD(r, 0, 8, 8);	/* VP_CLK_POL */
++	r = FLD_MOD(r, 1, 8, 8);	/* VP_CLK_POL */
+ 	r = FLD_MOD(r, 1, 14, 14);	/* TRIGGER_RESET_MODE */
+ 	r = FLD_MOD(r, 1, 19, 19);	/* EOT_ENABLE */
+ 	if (!(dsi->data->quirks & DSI_QUIRK_DCS_CMD_CONFIG_VC)) {
+@@ -2914,7 +2953,14 @@
+ 		r = dsi_read_reg(dsi, DSI_VM_TIMING1);
+ 		r = FLD_MOD(r, hbp, 11, 0);	/* HBP */
+ 		r = FLD_MOD(r, hfp, 23, 12);	/* HFP */
+-		r = FLD_MOD(r, hsync_end ? hsa : 0, 31, 24);	/* HSA */
++		/*
++		 * PlayBook (winchester): the reference keeps HSA = 1 in
++		 * DSI_VM_TIMING1 even in burst mode, where it is not counted
++		 * in TL.  Writing the stored value instead of forcing 0 in
++		 * burst mode reproduces the reference word; for every other
++		 * board the stored value is still 0 in burst mode.
++		 */
++		r = FLD_MOD(r, hsa, 31, 24);	/* HSA */
+ 		dsi_write_reg(dsi, DSI_VM_TIMING1, r);
+ 
+ 		r = dsi_read_reg(dsi, DSI_VM_TIMING2);
+@@ -3426,6 +3472,678 @@
+ 		dsi_vc_send_null(dsi, VC_CMD, dsi->dsidev->channel);
+ }
+ 
++/*
++ * PlayBook (winchester): program the TC358764 at the reference's point —
++ * after the DSI PHY/PLL/protocol-engine setup and BEFORE the VC/interface is
++ * enabled for video.  winch_lcdctl calls its bridge programmer (0x13e50) from
++ * 0x1938c, before its DSI VC enable (0x16bd8).  Doing it later through the
++ * generic-write path auto-enables the DSI (omap_dsi_host_transfer ->
++ * dsi_enable), so the VC setup and null packet run first; the bridge then
++ * never receives the register writes (report 126 delivery test: GPIO36 never
++ * followed 0x0524 bit 0).
++ */
++struct pb_bridge_reg {
++	u16 addr;
++	u32 val;
++	u8 delay_ms;
++};
++
++/* implemented in drivers/gpu/drm/bridge/tc358764.c, built-in for this board */
++extern void tc358764_playbook_reset(struct mipi_dsi_device *dsi);
++
++static const struct pb_bridge_reg pb_bridge_seq[] = {
++	/*
++	 * PPI_TX_RX_TA is the DSI bus turn-around timing, i.e. the window the
++	 * bridge gets to drive the lane back.  Session 15 measured it, twice:
++	 *
++	 *   boot with 4        -> boot-time reads 4/8, "t" samples 8/16
++	 *   boot with 0x40006  -> boot-time reads 8/8, "t" samples 16/16
++	 *
++	 * and changing 0x013c after boot in either direction does not move
++	 * the rate.  The value is latched by PPI_STARTPPI (0x0104), which this
++	 * sequence writes 8 entries below.  That also explains session 14's
++	 * intermittent -EIO.
++	 *
++	 * It is also the only value in the whole bridge/DSI configuration where
++	 * we deliberately differ from the reference.  A build with the
++	 * reference's 4 was flashed to test whether that deviation destabilises
++	 * the video link: it does not make the picture worse, so the reliable
++	 * reads win and 0x40006 stays.  Report 133.
++	 */
++	{ 0x013c, 0x00040006, 0 },	/* PPI_TX_RX_TA */
++	{ 0x0114, 0x00000004, 0 },	/* PPI_LPTXTIMECNT */
++	{ 0x0164, 0x00000004, 0 },	/* PPI_D0S_CLRSIPOCOUNT */
++	{ 0x0168, 0x00000004, 0 },	/* PPI_D1S_CLRSIPOCOUNT */
++	{ 0x016c, 0x00000004, 0 },	/* PPI_D2S_CLRSIPOCOUNT */
++	{ 0x0170, 0x00000004, 0 },	/* PPI_D3S_CLRSIPOCOUNT */
++	{ 0x0210, 0x0000001f, 0 },	/* DSI_LANEENABLE */
++	{ 0x0134, 0x0000001f, 0 },	/* PPI_LANEENABLE */
++	{ 0x0104, 0x00000001, 0 },	/* PPI_STARTPPI */
++	{ 0x0204, 0x00000001, 0 },	/* DSI_STARTDSI */
++	{ 0x04a4, 0x00000000, 0 },
++	{ 0x04a0, 0x0044c02d, 0 },	/* LV_PHY0, reset asserted */
++	{ 0x0480, 0x03020100, 0 },	/* LV_MX0003 */
++	{ 0x0484, 0x08050704, 0 },	/* LV_MX0407 */
++	{ 0x0488, 0x0f0e0a09, 0 },	/* LV_MX0811 */
++	{ 0x048c, 0x100d0c0b, 0 },	/* LV_MX1215 */
++	{ 0x0490, 0x12111716, 0 },	/* LV_MX1619 */
++	{ 0x0494, 0x1b151413, 0 },	/* LV_MX2023 */
++	{ 0x0498, 0x061a1819, 0 },	/* LV_MX2427 */
++	{ 0x0450, 0x03f00120, 0 },	/* VP_CTRL */
++	/*
++	 * VP_HTIM1 = HBP[24:16] | HPW[8:0], VP_HTIM2 = HFP[24:16] | HACT[10:0].
++	 * Session 15: these were 0x78000001 / 0x76000400, which puts the
++	 * porches in the reserved top byte; they read back as 0x00000001 /
++	 * 0x00000400 (HBP = HFP = 0) and report 131 mis-read that as "the
++	 * upper half is not stored".  The reference's own values are
++	 * 0x00780001 / 0x00760400 (winch_lcdctl 0x13f78/0x13f88, report 130),
++	 * i.e. HBP 120, HPW 1, HFP 118, HACT 1024 — and a whole-map diff
++	 * against TabletOS showed these as the only configuration registers
++	 * that differed.  Report 132.
++	 */
++	{ 0x0454, 0x00780001, 0 },	/* VP_HTIM1 */
++	{ 0x0458, 0x00760400, 0 },	/* VP_HTIM2 */
++	{ 0x045c, 0x000a0001, 0 },	/* VP_VTIM1 */
++	{ 0x0460, 0x000c0258, 100 },	/* VP_VTIM2, then 100 ms */
++	{ 0x04a0, 0x0004c02d, 0 },	/* LV_PHY0, reset released */
++	{ 0x049c, 0x00000001, 0 },	/* LV_CFG = LVEN */
++	{ 0x0520, 0x00000005, 0 },
++	{ 0x0524, 0x00000005, 0 },
++	{ 0x0504, 0x00000004, 0 },	/* SYS_RST_LCD */
++	{ 0x0464, 0x00000001, 0 },	/* VP_VFUEN */
++};
++
++static void pb_bridge_write(struct dsi_data *dsi, u16 addr, u32 val)
++{
++	u8 data[6] = {
++		addr & 0xff, addr >> 8,
++		val & 0xff, (val >> 8) & 0xff, (val >> 16) & 0xff, (val >> 24) & 0xff,
++	};
++	int t;
++
++	/* wait until the previous packet has left the VC TX FIFO */
++	for (t = 0; t < 1000; t++) {
++		u32 s = dsi_read_reg(dsi, DSI_VC_CTRL(VC_CMD));
++
++		if (!(s & BIT(16)) && !(s & BIT(5)))
++			break;
++		udelay(10);
++	}
++	dsi_vc_write_long_header(dsi, VC_CMD, 0, MIPI_DSI_GENERIC_LONG_WRITE, 6, 0);
++	dsi_vc_write_long_payload(dsi, VC_CMD, data[0], data[1], data[2], data[3]);
++	dsi_vc_write_long_payload(dsi, VC_CMD, data[4], data[5], 0, 0);
++	/* and wait for this one to drain before the caller writes again */
++	for (t = 0; t < 1000; t++) {
++		if (!(dsi_read_reg(dsi, DSI_VC_CTRL(VC_CMD)) & BIT(5)))
++			break;
++		udelay(10);
++	}
++}
++
++/*
++ * PlayBook delivery probe.  Session 14: the GPIO36 read-back proved that the
++ * bridge does not react to our writes, and the OMAP DSI reports PACKET_SENT
++ * with no error — i.e. the packet leaves the host and nothing answers.  A DSI
++ * generic read is the only test that distinguishes "the bridge is alive and
++ * receiving" from "the bridge is not there": a working driver for this chip
++ * (Qualcomm msm mipi_tc358764_dsi2lvds.c) reads IDREG 0x0580 and requires
++ * 0x00006500 before programming anything.
++ *
++ * dsi_vc_generic_read() is used directly, not mipi_dsi_generic_read(): the
++ * latter goes through omap_dsi_host_transfer(), which calls dsi_enable() when
++ * the interface is down, and dsi_enable() calls dsi_init_dsi() — i.e. it would
++ * re-enter the very function we are called from.
++ */
++static int pb_bridge_read(struct dsi_data *dsi, u16 addr, u32 *val)
++{
++	u8 req[2] = { addr & 0xff, addr >> 8 };
++	const struct mipi_dsi_msg msg = {
++		.channel = 0,
++		.type = MIPI_DSI_GENERIC_READ_REQUEST_2_PARAM,
++		.tx_len = sizeof(req),
++		.tx_buf = req,
++		.rx_len = sizeof(*val),
++		.rx_buf = val,
++	};
++
++	*val = 0;
++
++	return dsi_vc_generic_read(&dsi->output, VC_CMD, &msg);
++}
++
++static void pb_bridge_probe(struct dsi_data *dsi, const char *when)
++{
++	u32 id, gpioo, sysstat;
++	int ri, rg, rs;
++
++	ri = pb_bridge_read(dsi, 0x0580, &id);		/* IDREG */
++	rg = pb_bridge_read(dsi, 0x0524, &gpioo);	/* GPIOO */
++	rs = pb_bridge_read(dsi, 0x0500, &sysstat);	/* SYSSTAT */
++
++	pr_err("pb probe %s: VC1=0x%08x IDREG r=%d 0x%08x (want 0x00006500) "
++	       "GPIOO r=%d 0x%08x SYSSTAT r=%d 0x%08x\n",
++	       when, dsi_read_reg(dsi, DSI_VC_CTRL(VC_CMD)),
++	       ri, id, rg, gpioo, rs, sysstat);
++}
++
++static void pb_bridge_send_seq(struct dsi_data *dsi)
++{
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(pb_bridge_seq); i++) {
++		pb_bridge_write(dsi, pb_bridge_seq[i].addr, pb_bridge_seq[i].val);
++		if (pb_bridge_seq[i].delay_ms)
++			msleep(pb_bridge_seq[i].delay_ms);
++	}
++}
++
++/*
++ * QNX's bridge-GPIO self-test (winch_lcdctl 0x196dc, report 126): 0x0524 bit 0
++ * drives the pin on the GPIO36 net (OMAP GPIO2_4), bit 2 the one on GPIO171.
++ * Returns true only if GPIO36 followed bit 0 for every pattern.
++ */
++static bool __maybe_unused pb_bridge_gpio_test(struct dsi_data *dsi)
++{
++	static const u32 vals[] = { 1, 4, 5, 0 };
++	void __iomem *gpio2;
++	u32 v;
++	bool ok = true;
++	int i;
++
++	gpio2 = ioremap(0x48055000, 0x1000);
++	if (!gpio2) {
++		pr_err("pb gpio test: cannot map GPIO2\n");
++		return false;
++	}
++
++	pb_bridge_write(dsi, 0x0520, 5);	/* GPIOC: pins 0 and 2 out */
++	usleep_range(1000, 2000);
++
++	for (i = 0; i < ARRAY_SIZE(vals); i++) {
++		u32 want = vals[i] & 1;
++
++		pb_bridge_write(dsi, 0x0524, vals[i]);	/* GPIOO */
++		usleep_range(1000, 2000);
++		v = readl(gpio2 + 0x138);		/* GPIO2_DATAIN */
++		pr_err("pb gpio test 0x0524=%u -> DATAIN=0x%08x GPIO36=%u want %u\n",
++		       vals[i], v, !!(v & BIT(4)), want);
++		if (!!(v & BIT(4)) != want)
++			ok = false;
++	}
++
++	iounmap(gpio2);
++
++	return ok;
++}
++
++static void pb_vc_setup_lp(struct dsi_data *dsi)
++{
++	/*
++	 * QNX's command-VC word: bit 12 (RGB565_ORDER) set, DMA_TX_REQ_NB 0,
++	 * MODE_SPEED (bit 9) = 0 = LP.  (Session 14 correction: the earlier
++	 * "QNX runs HS" reading was wrong — see report 129.)
++	 */
++	dsi_write_reg(dsi, DSI_VC_CTRL(VC_CMD), 0x20009d81);
++	dsi_if_enable(dsi, 1);
++	usleep_range(1000, 2000);
++}
++
++/*
++ * Start the DSI HS clock the way the reference does.
++ *
++ * L1DSS_DSI1_lp_mode_start_DSI_QNX (winch_lcdctl 0x17094, report 128 §1.1)
++ * finishes by writing VC_SHORT_PACKET_HEADER(1) = 0 — a MIPI null packet —
++ * and busy-polling VC_IRQSTATUS(1) for PACKET_SENT, then does the same on
++ * VC0.  Its error string is literally "Could not send inital null packet to
++ * start HS clock".
++ *
++ * Until that happens the clock lane is idle, so the TC358764's DSI receiver
++ * has nothing to lock to and drops every packet the protocol engine hands to
++ * the PHY — which is exactly what we measured: PACKET_SENT with no error on
++ * our side, and no reaction at all on the bridge.
++ */
++static void pb_start_hs_clock(struct dsi_data *dsi)
++{
++	u32 v = 0;
++	int i;
++
++	/*
++	 * Read-modify-write, not a whole-word store: VC0 already carries the
++	 * DMA/no-DMA and FIFO fields from dsi_vc_initial_config(), and
++	 * clobbering them with the command-VC word broke the video VC.
++	 * Here we only need command mode (bit 4 = 0), HS (bit 9) and VC_EN.
++	 */
++	{
++		u32 r = dsi_read_reg(dsi, DSI_VC_CTRL(VC_VIDEO));
++
++		r &= ~BIT(4);
++		r |= BIT(9) | BIT(0);
++		dsi_write_reg(dsi, DSI_VC_CTRL(VC_VIDEO), r);
++	}
++	dsi_if_enable(dsi, 1);
++	usleep_range(1000, 2000);
++
++	dsi_write_reg(dsi, DSI_VC_IRQSTATUS(VC_VIDEO), DSI_VC_IRQ_PACKET_SENT);
++	dsi_write_reg(dsi, DSI_VC_SHORT_PACKET_HEADER(VC_VIDEO), 0);
++
++	for (i = 0; i < 2000; i++) {
++		v = dsi_read_reg(dsi, DSI_VC_IRQSTATUS(VC_VIDEO));
++		if (v & DSI_VC_IRQ_PACKET_SENT)
++			break;
++		udelay(10);
++	}
++
++	pr_err("pb hs-clock: null packet on VC0/HS -> irqstatus=0x%08x polls=%d%s\n",
++	       v, i, (v & DSI_VC_IRQ_PACKET_SENT) ? "" : " (NO PACKET_SENT)");
++
++	/* Step 2 — the reference then does the same on VC1 (LP). */
++	dsi_write_reg(dsi, DSI_VC_IRQSTATUS(VC_CMD),
++		      DSI_VC_IRQ_PACKET_SENT);
++	dsi_write_reg(dsi, DSI_VC_SHORT_PACKET_HEADER(VC_CMD), 0);
++
++	for (i = 0; i < 2000; i++) {
++		v = dsi_read_reg(dsi, DSI_VC_IRQSTATUS(VC_CMD));
++		if (v & DSI_VC_IRQ_PACKET_SENT)
++			break;
++		udelay(10);
++	}
++
++	pr_err("pb hs-clock: null packet on VC1/LP -> irqstatus=0x%08x polls=%d%s\n",
++	       v, i, (v & DSI_VC_IRQ_PACKET_SENT) ? "" : " (NO PACKET_SENT)");
++}
++
++static void pb_bridge_dump(struct dsi_data *dsi)
++{
++	static const u16 regs[] = {
++		0x0500,	/* SYSSTAT */
++		0x0504,	/* SYS_RST        (we write 4) */
++		0x049c,	/* LV_CFG         (we write 1) */
++		0x04a0,	/* LV_PHY0        (we write 0x0004c02d) */
++		0x0450,	/* VP_CTRL        (0x03f00120) */
++		0x0454,	/* VP_HTIM1       (0x78000001) */
++		0x0458,	/* VP_HTIM2       (0x76000400) */
++		0x045c,	/* VP_VTIM1       (0x000a0001) */
++		0x0460,	/* VP_VTIM2       (0x000c0258) */
++		0x0464,	/* VP_VFUEN       (1) */
++		0x0520,	/* GPIOC          (5) */
++		0x0524,	/* GPIOO          (5) */
++		0x0210,	/* DSI_LANEENABLE (0x1f) */
++		0x0104,	/* PPI_STARTPPI   (1) */
++		0x0204,	/* DSI_STARTDSI   (1) */
++		0x0580,	/* IDREG          (0x00006500) */
++	};
++	char line[320];
++	int i, n = 0;
++
++	for (i = 0; i < ARRAY_SIZE(regs); i++) {
++		u32 v = 0;
++		int r = pb_bridge_read(dsi, regs[i], &v);
++
++		n += scnprintf(line + n, sizeof(line) - n, " %04x=%08x%s",
++			       regs[i], v, r ? "!" : "");
++	}
++
++	pr_err("pb bridge dump:%s\n", line);
++
++	/*
++	 * The D-PHY / PPI-lite block.  Neither the reference's sequence nor any
++	 * working driver writes these (mainline's gma500 tc35876x driver and the
++	 * msm one both leave them alone), so what is here is the chip's POR
++	 * state — worth recording because it is what the HS receiver runs on.
++	 */
++	{
++		static const u16 dphy[] = {
++			0x0004,	/* D0W_DPHYCONTTX */
++			0x0020,	/* CLW_DPHYCONTRX */
++			0x0024,	/* D0W_DPHYCONTRX */
++			0x0028,	/* D1W_DPHYCONTRX */
++			0x0038,	/* COM_DPHYCONTRX */
++			0x0040,	/* CLW_CNTRL */
++			0x0044,	/* D0W_CNTRL */
++			0x0110,	/* PPI_LINEINITCNT */
++			0x0118,
++			0x01f0,	/* HSTIMEOUT */
++			0x01f4,	/* HSTIMEOUTENABLE */
++		};
++
++		n = 0;
++		for (i = 0; i < ARRAY_SIZE(dphy); i++) {
++			u32 v = 0;
++			int r = pb_bridge_read(dsi, dphy[i], &v);
++
++			n += scnprintf(line + n, sizeof(line) - n, " %04x=%08x%s",
++				       dphy[i], v, r ? "!" : "");
++		}
++		pr_err("pb dphy dump:%s\n", line);
++	}
++}
++
++static struct dsi_data *pb_late_dsi;
++
++/*
++ * Boot-time DSI/bridge read probes.  They are diagnostic only: every generic
++ * read is a BTA turnaround, and the OMAP CIO reports ERRCONTENTIONLP1_2
++ * (bit 23) on each one, so the DSI error handler logs one line per read
++ * (report 140/141).  They proved what was needed; keep them off by default so
++ * a normal boot has no spurious DSI errors.  The essential PlayBook sequence
++ * (reset, VC setup, HS clock start, bridge programming) is NOT gated.
++ */
++static bool pb_probe;
++module_param(pb_probe, bool, 0644);
++MODULE_PARM_DESC(pb_probe, "PlayBook: run the boot-time DSI/bridge read probes (default off)");
++
++
++static void pb_late_check(struct work_struct *work)
++{
++	static const u16 regs[] = {
++		0x0214,	/* DSI_LANESTATUS0: lane is in HS RX mode */
++		0x0218,	/* DSI_LANESTATUS1: lane is in ULPS or STOP */
++		0x0220,	/* DSI_INTSTATUS */
++		0x0300,	/* DSIERRCNT */
++		0x0500,	/* SYSSTAT */
++		0x049c,	/* LV_CFG */
++		0x0230,	/* DSI_LPTXTO */
++		0x0110,	/* PPI_LINEINITCNT (one of the intermittently failing reads) */
++	};
++	struct dsi_data *dsi = pb_late_dsi;
++	char line[256];
++	int i, n = 0;
++
++	if (!dsi)
++		return;
++
++	dsi_bus_lock(dsi);
++
++	if (dsi->iface_enabled) {
++		u32 hit = 0, last = 0, first = 0;
++		int k;
++
++		/*
++		 * How fast is the DISPC scanning?  LINE_STATUS advances once
++		 * per line, so two reads 1 ms apart give the line rate directly.
++		 * At the reference's 50.4 MHz pixel clock and a 1348-pixel total
++		 * the line rate is ~37.4 kHz, i.e. ~37 lines/ms; a DISPC clocked
++		 * at the 48 MHz FCK instead of the LCD PLL would give about
++		 * half that, which would break the DSI packet rate.
++		 */
++		{
++			void __iomem *dispc = ioremap(0x58001000, 0x1000);
++			u32 l1 = 0, l2 = 0, l3 = 0;
++
++			if (dispc) {
++				l1 = readl(dispc + 0x5C);	/* LINE_STATUS */
++				udelay(1000);
++				l2 = readl(dispc + 0x5C);
++				udelay(1000);
++				l3 = readl(dispc + 0x5C);
++				iounmap(dispc);
++			}
++			pr_err("pb late scan: line %u -> %u -> %u (lines/ms)\n",
++			       l1, l2, l3);
++		}
++
++		/* LANESTATUS0 is a single-sample read of a per-lane state that
++		 * changes with the HS bursts, so one zeroed read proves
++		 * nothing.  Sample it repeatedly: any non-zero value means a
++		 * lane was in HS RX mode, i.e. the video stream does arrive.
++		 */
++		for (k = 0; k < 24; k++) {
++			u32 ls = 0;
++			int rr = pb_bridge_read(dsi, 0x0214, &ls);
++
++			if (k == 0)
++				first = rr ? 0xffffffff : ls;
++			if (!rr && ls) {
++				if (!hit)
++					last = ls;
++				hit++;
++			}
++		}
++		pr_err("pb late lanes: first=0x%08x nonzero=%d last=0x%08x\n",
++		       first, hit, last);
++
++		/*
++		 * Repeat every read: the point of this dump is no longer just
++		 * the values but whether they can be obtained at all.  With the
++		 * reference's PPI_TX_RX_TA (4) these reads failed intermittently
++		 * with -EIO from the bus turnaround; booting with
++		 * 0x00040006 and seeing ok=8/8 here is the measurement that
++		 * makes LANESTATUS0 = 0 trustworthy (report 131 §4g).
++		 */
++		for (i = 0; i < ARRAY_SIZE(regs); i++) {
++			u32 lv = 0;
++			int ok = 0, k;
++
++			for (k = 0; k < 8; k++) {
++				u32 x = 0;
++
++				pb_vc_setup_lp(dsi);
++				if (!pb_bridge_read(dsi, regs[i], &x)) {
++					ok++;
++					lv = x;
++				}
++			}
++			n += scnprintf(line + n, sizeof(line) - n,
++				       " %04x=%08x%c%d/8", regs[i], lv,
++				       ok == 8 ? ' ' : '!', ok);
++		}
++		pr_err("pb late bridge:%s\n", line);
++	} else {
++		pr_err("pb late bridge: interface not enabled, skipped\n");
++	}
++
++	dsi_bus_unlock(dsi);
++}
++
++static DECLARE_DELAYED_WORK(pb_late_work, pb_late_check);
++
++static void pb_bridge_program(struct dsi_data *dsi)
++{
++	/*
++	 * Session 14 experiment: do NOT pulse RESX here.
++	 *
++	 * The bridge's register state survives a warm reset (trap 28; that is
++	 * why QNX's grey self-test pattern was still on the panel after
++	 * booting Linux over it).  So at this point the bridge is in
++	 * whatever state the previous OS left it in — a programmed,
++	 * DSI-RX-running state that QNX has already proven it accepts
++	 * generic writes in.  Our previous image pulsed RESX first, which
++	 * destroys that state, and then failed to reprogram it — so the
++	 * pulse made the experiment unfalsifiable.
++	 *
++	 * With it removed:
++	 *   - if the IDREG read and the GPIO36 test now succeed, the bridge
++	 *     was fine and our RESX pulse/sequence was the problem;
++	 *   - if they still fail, the fault is in this host's DSI packet
++	 *     path, not in the bridge's state.
++	 *
++	 * pb_bridge_gpio_test() leaves 0x0524 = 0, so this image is still a
++	 * diagnostic and must not be treated as a display build.
++	 */
++	/*
++	 * The reference pulses RESX here, before it programs the bridge
++	 * (winch_lcdctl 0x192d4/0x19338: CLEARDATAOUT, 20 ms, SETDATAOUT,
++	 * 20 ms).  We removed this while chasing the delivery failure, on the
++	 * theory that the boot chain left the bridge configured.  It does not
++	 * — IDREG reads -5 before the sequence on every boot — so the chip has
++	 * never had a proper reset edge before being programmed.
++	 */
++	tc358764_playbook_reset(dsi->dsidev);
++
++	pb_vc_setup_lp(dsi);
++
++	/* this is what starts the HS clock; without it nothing reaches the bridge */
++	pb_start_hs_clock(dsi);
++
++	usleep_range(1000, 2000);
++
++	pb_vc_setup_lp(dsi);
++
++	if (pb_probe)
++		pb_bridge_probe(dsi, "before-seq");
++
++	/* a failed BTA clears VC_EN behind our back; restore before writing */
++	pb_vc_setup_lp(dsi);
++
++	pb_bridge_send_seq(dsi);
++
++	if (pb_probe) {
++		pb_bridge_probe(dsi, "after-seq");
++
++		pb_vc_setup_lp(dsi);
++		pb_bridge_dump(dsi);
++	}
++}
++
++/*
++ * PlayBook debug hook.  Now that the TC358764 answers, iterating on it costs a
++ * flash + boot per hypothesis unless it can be reached from the console:
++ *
++ * The console's `write` command passes only the first token, so the format has
++ * no spaces:  "r<addr>" to read, "w<addr>:<val>" to write, "t<addr>" to read
++ * the same register 16 times and report how many attempts answered, "v" to
++ * test whether the video VC is still being fed.
++ */
++static ssize_t pb_reg_store(struct device *dev, struct device_attribute *attr,
++			    const char *buf, size_t count)
++{
++	struct dsi_data *dsi = dev_get_drvdata(dev);
++	unsigned int addr = 0, val = 0;
++	char op;
++	int n, r = 0;
++
++	n = sscanf(buf, "%c%x:%x", &op, &addr, &val);
++	if (n < 1)
++		return -EINVAL;
++	/* 'v' takes no argument; every other op needs at least an address */
++	if (op != 'v' && n < 2)
++		return -EINVAL;
++
++	dsi_bus_lock(dsi);
++
++	if (!dsi->iface_enabled) {
++		r = -ENODEV;
++	} else if (op == 'w' && n == 3) {
++		pb_vc_setup_lp(dsi);
++		pb_bridge_write(dsi, addr, val);
++		pr_err("pb reg: w %04x <- %08x\n", addr, val);
++	} else if (op == 'v') {
++		/*
++		 * Is the host really sending video?  PACKET_SENT is sticky, so
++		 * clear it and see whether it comes back: in video mode a long
++		 * packet is sent every line (~37 kHz), so it reappears within a
++		 * few microseconds if the engine is running.
++		 */
++		u32 a, b;
++
++		dsi_write_reg(dsi, DSI_VC_IRQSTATUS(VC_VIDEO), 0xffffffff);
++		usleep_range(5000, 6000);
++		a = dsi_read_reg(dsi, DSI_VC_IRQSTATUS(VC_VIDEO));
++		usleep_range(5000, 6000);
++		b = dsi_read_reg(dsi, DSI_VC_IRQSTATUS(VC_VIDEO));
++		pr_err("pb reg: video irq 0x%08x then 0x%08x -> PACKET_SENT %d %d (VC0=0x%08x)\n",
++		       a, b, !!(a & DSI_VC_IRQ_PACKET_SENT),
++		       !!(b & DSI_VC_IRQ_PACKET_SENT),
++		       dsi_read_reg(dsi, DSI_VC_CTRL(VC_VIDEO)));
++	} else if (op == 't') {
++		/*
++		 * Read one register 16 times and report how many attempts
++		 * answered.  This is the A/B instrument for PPI_TX_RX_TA
++		 * (report 131 §4g): "w013c:4", "t0214", "w013c:40006",
++		 * "t0214" — same boot, one variable.  The VC is re-armed
++		 * before each attempt because a failed BTA clears VC_EN.
++		 */
++		u32 last = 0;
++		int ok = 0, i;
++
++		for (i = 0; i < 16; i++) {
++			u32 x = 0;
++
++			pb_vc_setup_lp(dsi);
++			if (!pb_bridge_read(dsi, addr, &x)) {
++				ok++;
++				last = x;
++			}
++		}
++		pr_err("pb reg: t %04x ok=%d/16 fail=%d value=%08x\n",
++		       addr, ok, 16 - ok, last);
++	} else if (op == 'u') {
++		/*
++		 * As 't', but without re-arming the VC between attempts.  This
++		 * is the control that separates "the register value matters"
++		 * from trap 37 ("a failed BTA clears VC_EN"): run "t0214" and
++		 * "u0214" in the same boot and compare.
++		 */
++		u32 last = 0;
++		int ok = 0, i;
++
++		for (i = 0; i < 16; i++) {
++			u32 x = 0;
++
++			if (!pb_bridge_read(dsi, addr, &x)) {
++				ok++;
++				last = x;
++			}
++		}
++		pr_err("pb reg: u %04x ok=%d/16 fail=%d value=%08x (no VC re-arm)\n",
++		       addr, ok, 16 - ok, last);
++	} else if (op == 'd') {
++		/*
++		 * Dump every 32-bit register in [addr, val] to kmsg, 8 per
++		 * line.  This is what makes a whole-map diff against a capture
++		 * from a working TabletOS display possible in one command
++		 * (tools/qnx-dsiread.c does the capturing side).
++		 */
++		char line[160];
++		int used = 0, k = 0;
++		unsigned r;
++
++		line[0] = 0;
++		for (r = addr; r <= val; r += 4) {
++			u32 v = 0;
++			int e;
++
++			pb_vc_setup_lp(dsi);
++			e = pb_bridge_read(dsi, r, &v);
++			used += scnprintf(line + used, sizeof(line) - used,
++					  "%04x=%08x%c", r, v, e ? '!' : ' ');
++			if (++k == 8 || r + 4 > val) {
++				pr_err("pb dump: %s\n", line);
++				line[0] = 0;
++				used = 0;
++				k = 0;
++			}
++		}
++	} else if (op == 'r') {
++		u32 v = 0;
++
++		pb_vc_setup_lp(dsi);
++		r = pb_bridge_read(dsi, addr, &v);
++		pr_err("pb reg: r %04x -> %d %08x\n", addr, r, v);
++	} else {
++		r = -EINVAL;
++	}
++
++	dsi_bus_unlock(dsi);
++
++	return r ? r : count;
++}
++
++static DEVICE_ATTR_WO(pb_reg);
++
++/*
++ * Create pb_reg through the driver's group rather than a manual
++ * device_create_file() in probe: the encoder is probed twice (the DT
++ * dependency cycle defers the first probe), and a manual create made the
++ * second one hit sysfs_warn_dup() and taint the kernel.  A driver group is
++ * created once by the driver core and is removed/restored with the device.
++ */
++static struct attribute *dsi_pb_attrs[] = {
++	&dev_attr_pb_reg.attr,
++	NULL,
++};
++ATTRIBUTE_GROUPS(dsi_pb);
++
+ static int dsi_init_dsi(struct dsi_data *dsi)
+ {
+ 	int r;
+@@ -3468,8 +4186,67 @@
+ 	if (r)
+ 		goto err3;
+ 
++	/*
++	 * PlayBook (winchester): force the three protocol-engine timing words
++	 * that still differ from the reference (report 129 §4).  They are the
++	 * LP<->HS transition timers (TIMING1 STOP_STATE / FORCE_TX_STOP_MODE,
++	 * TIMING2 HS_TX_TO / LP_RX_TO) and the DDR-clock pre/post data-request
++	 * timing, so they are the only remaining host-side difference on the
++	 * exact path our bridge writes take.  DSI_CLK_TIMING must not be
++	 * modified while IF_EN is set, and the interface is still down here.
++	 */
++	if (of_machine_is_compatible("blackberry,omap4-winchester")) {
++		dsi_write_reg(dsi, DSI_TIMING1, 0x79190999);
++		dsi_write_reg(dsi, DSI_TIMING2, 0x7fff7fff);
++		dsi_write_reg(dsi, DSI_CLK_TIMING, 0x00000e0b);
++	}
++
++	/*
++	 * PlayBook (winchester): the reference programs the bridge here,
++	 * after the PHY/PLL/protocol engine and before the VC/interface is set
++	 * up for video (winch_lcdctl 0x1938c, before 0x16bd8).
++	 *
++	 * Session 14: pb_bridge_program() now starts the DSI HS clock itself
++	 * (the VC0/HS null packet of the reference's lp_mode_start), so the
++	 * bridge can be programmed here without disturbing the video setup —
++	 * an earlier build that moved dsi_setup_dsi_vcs() ahead of this
++	 * stopped the DISPC scanout (LINE_STATUS stuck at 0).
++	 */
++	if (of_machine_is_compatible("blackberry,omap4-winchester")) {
++		pb_bridge_program(dsi);
++
++		/* read the bridge's DSI-RX state once the video stream is up */
++		pb_late_dsi = dsi;
++		if (pb_probe)
++			schedule_delayed_work(&pb_late_work, msecs_to_jiffies(6000));
++	}
++
+ 	dsi_setup_dsi_vcs(dsi);
+ 
++	if (of_machine_is_compatible("blackberry,omap4-winchester")) {
++		/*
++		 * OCP_DATA_BUS_WIDTH (VC_CTRL[11:10]) is 32-bit here because of
++		 * DSI_QUIRK_VC_OCP_WIDTH; the reference's video VC reads
++		 * 0x20808791, i.e. 24-bit (field = 1).  It defines the width of
++		 * the interface data bus for the pixel stream, so it is the one
++		 * setting that can make our video differ while every timing
++		 * register matches.  Must be applied after the VC setup, which
++		 * re-enables the VC.
++		 */
++		REG_FLD_MOD(dsi, DSI_VC_CTRL(VC_VIDEO), 1, 11, 10);
++
++		/*
++		 * The last two video-mode words that still differ from the
++		 * reference (report 129 §4): VM_TIMING6 is
++		 * BL_HS_INTERLEAVING[31:16] | BL_LP_INTERLEAVING[15:0] —
++		 * mainline computes 486 HS cycles / 26 LP bytes, the reference
++		 * has 0 / 200 — and VM_TIMING7 differs by one bit
++		 * (0x000B000A against 0x000B0009).
++		 */
++		dsi_write_reg(dsi, DSI_VM_TIMING6, 0x000000c8);
++		dsi_write_reg(dsi, DSI_VM_TIMING7, 0x000b0009);
++	}
++
+ 	return 0;
+ err3:
+ 	dsi_cio_uninit(dsi);
+@@ -3766,6 +4543,15 @@
+ 	struct videomode *dispc_vm;
+ 	struct omap_dss_dsi_videomode_timings *dsi_vm;
+ 	u64 dsi_tput, dispc_tput;
++	/*
++	 * PlayBook (winchester): the reference splits the same horizontal
++	 * blanking differently from the generic redistribution below.  Force
++	 * the reference's split; the totals and TL are unchanged.  This is
++	 * one half of the "complete QNX timing set" experiment (the clocks
++	 * are made to match in dsi_vm_calc_hsdiv_cb/dsi_pll_calc_dsi_fck).
++	 */
++	const bool qnx_timing =
++		of_machine_is_compatible("blackberry,omap4-winchester");
+ 
+ 	dsi_tput = (u64)byteclk * ndl * 8;
+ 
+@@ -3879,6 +4665,19 @@
+ 	if (hfp < 1)
+ 		return false;
+ 
++	if (qnx_timing) {
++		/*
++		 * QNX DSI_VM_TIMING1 = HBP 116 / HFP 121 / HSA 1 (byte
++		 * clocks).  HSA is kept non-zero in burst mode because the
++		 * reference register word has it; it is not counted in TL.
++		 */
++		hsa = 1;
++		hbp = 116;
++		hfp = dsi_hbl - (hss + hbp);
++		if (hfp < 1)
++			return false;
++	}
++
+ 	dsi_vm->hss = hss;
+ 	dsi_vm->hsa = hsa;
+ 	dsi_vm->hse = hse;
+@@ -3937,6 +4736,21 @@
+ 	if (hfp < 1)
+ 		return false;
+ 
++	if (qnx_timing) {
++		/*
++		 * QNX DISPC_TIMING_H = 0x0890A113, i.e. HBP/HFP/HSW
++		 * 137/161/19 in the register, written from the requested
++		 * 138/162/20.  dispc_hbl is 320 here, the same total the
++		 * generic redistribution would produce; only the split is
++		 * different.
++		 */
++		hsa = req_vm->hsync_len;
++		hbp = req_vm->hback_porch;
++		hfp = dispc_hbl - hsa - hbp;
++		if (hfp < 1)
++			return false;
++	}
++
+ 	dispc_vm->hfront_porch = hfp;
+ 	dispc_vm->hsync_len = hsa;
+ 	dispc_vm->hback_porch = hbp;
+@@ -3974,6 +4788,18 @@
+ 	struct dsi_clk_calc_ctx *ctx = data;
+ 	unsigned long pck_max;
+ 
++	/*
++	 * PlayBook (winchester): the reference's DISPC functional clock is
++	 * clkdco / 6 = 100.8 MHz, which with DISPC_DIVISOR.LCD = 2 gives the
++	 * 50.4 MHz pixel clock.  Mainline's search would pick m = 4
++	 * (151.2 MHz) and LCD divisor 3.  The total is the same, but the
++	 * DISPC_DIVISOR and DSI_CLK_CTRL (LP divisor) register words - and
++	 * the local LP escape-clock rate - are part of the measured QNX set,
++	 * so select the reference's HSDIV.
++	 */
++	if (of_machine_is_compatible("blackberry,omap4-winchester") && m_dispc != 6)
++		return false;
++
+ 	ctx->dsi_cinfo.mX[HSDIV_DISPC] = m_dispc;
+ 	ctx->dsi_cinfo.clkout[HSDIV_DISPC] = dispc;
+ 
+@@ -3998,6 +4824,28 @@
+ 	struct dsi_clk_calc_ctx *ctx = data;
+ 	struct dsi_data *dsi = ctx->dsi;
+ 
++	/*
++	 * PlayBook (winchester): use the reference's PLL words verbatim.
++	 * QNX runs REGM=756 / REGN=95 (n=96) with mX=6, i.e. fint 0.4 MHz and
++	 * clkdco 604.8 MHz; mainline's search picks 126/16 (fint 2.4 MHz, the
++	 * same DCO) with a very different reference-divider/jitter.  With the
++	 * lanes/timings now matched, the transient LVDS lock / grey-line
++	 * symptom points at the PLL dynamics rather than the DCO, so make
++	 * CONFIGURATION1/2 byte-identical to the reference.  (The earlier
++	 * "do not force the PLL words" was about the 2x lane confusion.)
++	 */
++	if (of_machine_is_compatible("blackberry,omap4-winchester")) {
++		unsigned long clkin = clk_get_rate(ctx->pll->clkin);
++
++		n = 96;
++		m = 756;
++		fint = DIV_ROUND_CLOSEST(clkin, n);
++		clkdco = fint * 2 * m;
++		dev_info(dsi->dev,
++			 "pb PLL forced: clkin=%lu fint=%lu clkdco=%lu\n",
++			 clkin, fint, clkdco);
++	}
++
+ 	ctx->dsi_cinfo.n = n;
+ 	ctx->dsi_cinfo.m = m;
+ 	ctx->dsi_cinfo.fint = fint;
+@@ -5099,5 +5947,6 @@
+ 		.pm	= &dsi_pm_ops,
+ 		.of_match_table = dsi_of_match,
+ 		.suppress_bind_attrs = true,
++		.dev_groups = dsi_pb_groups,
+ 	},
+ };
+--- a/drivers/gpu/drm/omapdrm/dss/dss.c
++++ b/drivers/gpu/drm/omapdrm/dss/dss.c
+@@ -677,7 +677,17 @@
+ 
+ 	max_dss_fck = dss->feat->fck_freq_max;
+ 
+-	if (dss->parent_clk == NULL) {
++	if (of_machine_is_compatible("blackberry,omap4-winchester")) {
++		/*
++		 * PlayBook: the boot chain leaves the parent at 48 MHz, and the
++		 * arithmetic rate below is not achievable until the parent is
++		 * raised (dss_probe does that after this call).  Ask for a rate
++		 * the tree can actually produce now, so the WARN in
++		 * dss_set_fck_rate() does not fire; the real rate is recorded
++		 * when the parent is set.  Report 133 §6.
++		 */
++		fck = clk_round_rate(dss->dss_clk, max_dss_fck);
++	} else if (dss->parent_clk == NULL) {
+ 		fck = clk_round_rate(dss->dss_clk, max_dss_fck);
+ 	} else {
+ 		prate = clk_get_rate(dss->parent_clk);
+@@ -1457,6 +1467,31 @@
+ 	if (r)
+ 		goto err_put_clocks;
+ 
++	/*
++	 * PlayBook (winchester): the DSS functional clock is the DISPC's core
++	 * clock, and on this board the boot chain leaves it at 48 MHz
++	 * (dpll_per_m5x2) while the panel's pixel clock is 50.4 MHz.  The
++	 * reference OS runs the same DSS at 100.8 MHz.  A core clock below the
++	 * pixel clock is the kind of marginality that shows up as an unstable
++	 * picture, so ask the parent for the reference's rate; the log line
++	 * says whether the clock tree allowed it.  Report 133.
++	 */
++	if (of_machine_is_compatible("blackberry,omap4-winchester")) {
++		struct clk *pc = clk_get_parent(dss->dss_clk);
++
++		if (pc) {
++			int rr = clk_set_rate(pc, 100800000);
++			unsigned long fck = clk_get_rate(dss->dss_clk);
++
++			/* the DISPC core clock is now the real rate, not 48 MHz */
++			dss->dss_clk_rate = fck;
++			pr_err("pb dss: parent want 100800000 rr %d -> %lu, fck %lu\n",
++			       rr, clk_get_rate(pc), fck);
++		} else {
++			pr_err("pb dss: no parent clock\n");
++		}
++	}
++
+ 	/* Setup the video PLLs and the DPI and SDI ports. */
+ 	r = dss_video_pll_probe(dss);
+ 	if (r)
+--- a/drivers/gpu/drm/omapdrm/dss/pll.c
++++ b/drivers/gpu/drm/omapdrm/dss/pll.c
+@@ -9,6 +9,7 @@
+ #include <linux/clk.h>
+ #include <linux/io.h>
+ #include <linux/kernel.h>
++#include <linux/of.h>
+ #include <linux/regulator/consumer.h>
+ #include <linux/sched.h>
+ 
+@@ -400,9 +401,17 @@
+ 	void __iomem *base = pll->base;
+ 	int r = 0;
+ 	u32 l;
++	bool pb_winchester =
++		of_machine_is_compatible("blackberry,omap4-winchester");
+ 
+ 	l = 0;
+-	if (hw->has_stopmode)
++	/*
++	 * PlayBook: the reference leaves PLL_STOPMODE clear (QNX CFG1 =
++	 * 0x14A5E8BE, mainline 0x14A5E8BF).  With HS_AUTO_STOP_ENABLE set,
++	 * STOPMODE=1 stops the PLL output while it is not locked, which is
++	 * consistent with the panel showing one frame and then blanking.
++	 */
++	if (hw->has_stopmode && !pb_winchester)
+ 		l = FLD_MOD(l, 1, 0, 0);		/* PLL_STOPMODE */
+ 	l = FLD_MOD(l, cinfo->n - 1, hw->n_msb, hw->n_lsb);	/* PLL_REGN */
+ 	l = FLD_MOD(l, cinfo->m, hw->m_msb, hw->m_lsb);		/* PLL_REGM */
+@@ -437,6 +446,10 @@
+ 
+ 		l = FLD_MOD(l, f, 3, 1);	/* PLL_SELFREQDCO */
+ 	}
++	/* PlayBook: the reference CFG2 has bits 3:1 clear (0x00056000 vs
++	 * mainline's 0x00056008). */
++	if (pb_winchester)
++		l = FLD_MOD(l, 0, 3, 1);
+ 	l = FLD_MOD(l, 1, 13, 13);		/* PLL_REFEN */
+ 	l = FLD_MOD(l, 0, 14, 14);		/* PHY_CLKINEN */
+ 	l = FLD_MOD(l, 0, 16, 16);		/* M4_CLOCK_EN */
+--- a/drivers/irqchip/irq-gic.c
++++ b/drivers/irqchip/irq-gic.c
+@@ -28,6 +28,7 @@
+ #include <linux/cpu_pm.h>
+ #include <linux/cpumask.h>
+ #include <linux/io.h>
++#include <linux/pb_event.h>
+ #include <linux/of.h>
+ #include <linux/of_address.h>
+ #include <linux/of_irq.h>
+@@ -35,6 +36,7 @@
+ #include <linux/irqdomain.h>
+ #include <linux/interrupt.h>
+ #include <linux/percpu.h>
++#include <linux/timer.h>
+ #include <linux/seq_file.h>
+ #include <linux/slab.h>
+ #include <linux/irqchip.h>
+@@ -331,6 +333,323 @@
+ 	return !gic_irq_set_irqchip_state(data, IRQCHIP_STATE_PENDING, true);
+ }
+ 
++/*
++ * PlayBook bring-up (report 109): the ~2.24 s freeze is kernel-entry
++ * relative.  Latch the MPU power/clock-domain state on every timer tick into
++ * the unused tail of the DEBUG_LL ring page, so the last heartbeat on record
++ * also carries the domain state at the wall.  Offsets are relative to the
++ * kernel's ring alias (PB_EVENT_VA); the chainloader owns +0x88..+0xb3.
++ *
++ *   +0xb4 CM_MPU_CLKSTCTRL    (0x4A004300) last
++ *   +0xb8 CM_MPU_MPU_CLKCTRL  (0x4A004320) last
++ *   +0xbc PM_MPU_PWRSTST      (0x4A306304) last
++ *   +0xc0 CM_IDLEST_DPLL_MPU  (0x4A004164) last
++ *   +0xc4..+0xd0              first sample of the same four
++ *   +0xd4 sample count        +0xd8 change count
++ *   +0xdc jiffies of last change (low 16)
++ *   +0xe0 magic 0x50425354 "PBST"
++ *   +0xe4 32k sync counter (0x4A304010) at first sample
++ *   +0xe8 32k sync counter at last sample
++ */
++#define PB_STATE_OFF		0xb4
++#define PB_STATE_MAGIC		0x50425354	/* "PBST" */
++
++static void __iomem *pb_cm1;		/* 0x4A004000, CKGEN_CM1 */
++static void __iomem *pb_mpu_prm;	/* 0x4A306000, MPU_PRM */
++static void __iomem *pb_sync32k;	/* 0x4A304000, 32k sync counter */
++static void __iomem *pb_cm2;		/* 0x4A009000, CKGEN_CM2 / L4SEC */
++static void __iomem *pb_wdt2;		/* 0x4A314000, WDT2 (always-on) */
++static u32 pb_state_first[4];
++static u32 pb_state_n;
++static u32 pb_state_chg;
++static u32 pb_state_chg_j;
++static u32 pb_state_32k_first;
++
++static void __init pb_state_init(void)
++{
++	pb_cm1 = ioremap(0x4a004000, 0x1000);
++	pb_mpu_prm = ioremap(0x4a306000, 0x1000);
++	pb_sync32k = ioremap(0x4a304000, 0x1000);
++	pb_cm2 = ioremap(0x4a009000, 0x1000);
++	pb_wdt2 = ioremap(0x4a314000, 0x1000);
++}
++
++/*
++ * WDT2 policy for bring-up (report 109 §8.1)
++ * ------------------------------------------
++ * The bootloader arms the always-on watchdog with LDR = 0xfffc1800 (7.812 s)
++ * and that value cannot be changed from our side: LDR writes are dropped,
++ * measured from both the chainloader and the kernel.  The TGR kick *does*
++ * reload CRR (QNX's own kicker is exactly read TGR -> invert -> write), so we
++ * pet it instead:
++ *
++ *   - once at gic init, which covers the ~0.8 s before any timer exists;
++ *   - from a 2 s timer_list thereafter.  It must be a timer, not a tick: as
++ *     soon as userspace goes idle the kernel is tickless, and a tick-driven
++ *     kick was measured running only ~36x/s and missing its slot (the board
++ *     still reset at 8.64 s).
++ *
++ * We deliberately do not use omap_wdt: it only arms the watchdog when
++ * userspace opens /dev/watchdog, so it cannot pet an already-running
++ * bootloader-armed timer across kernel boot.  A future step can hand over to
++ * it once PID 1 pets /dev/watchdog.
++ *
++ * CM_WKUP_WDTIMER2_CLKCTRL (0x4A307830 = WKUP_CM 0x4A307800 + 0x30) already
++ * reads MODULEMODE=HW_AUTO, IDLEST=0, so the module clock was never the issue.
++ * (0x4A31C030, used in an earlier attempt, is the *keypad* target-module.)
++ */
++#define PB_WDT_KICK_HZ	2
++#define PB_CM_WKUP	0x4a307000
++
++static struct timer_list pb_wdt_timer;
++
++static inline void pb_wdt_kick(void)
++{
++	if (pb_wdt2)
++		__raw_writel(~__raw_readl(pb_wdt2 + 0x30), pb_wdt2 + 0x30);
++}
++
++static void pb_wdt_kick_fn(struct timer_list *t)
++{
++	pb_wdt_kick();
++	mod_timer(&pb_wdt_timer, jiffies + PB_WDT_KICK_HZ * HZ);
++}
++
++static int __init pb_wdt_timer_init(void)
++{
++	if (!pb_wdt2)
++		return 0;
++	timer_setup(&pb_wdt_timer, pb_wdt_kick_fn, 0);
++	mod_timer(&pb_wdt_timer, jiffies + PB_WDT_KICK_HZ * HZ);
++	return 0;
++}
++late_initcall(pb_wdt_timer_init);
++
++/* One-shot: confirm the module clock state and that the kick reloads CRR. */
++static void __init pb_wdt_probe(void)
++{
++	void __iomem *cm, *wdt = pb_wdt2;
++	u32 clk, ldr, crr0, crr1;
++
++	if (!wdt || !(cm = ioremap(PB_CM_WKUP, 0x1000)))
++		return;
++
++	clk = readl_relaxed(cm + 0x830);
++	ldr = readl_relaxed(wdt + 0x2c);
++	crr0 = readl_relaxed(wdt + 0x28);
++	pb_wdt_kick();
++	crr1 = readl_relaxed(wdt + 0x28);
++	pr_emerg("PLAYBOOK WDT: clk=%08x ldr=%08x crr %08x->%08x (%s)\n",
++		 clk, ldr, crr0, crr1,
++		 crr1 < crr0 ? "kicked" : "KICK FAILED");
++}
++
++static inline void pb_state_tick(void)
++{
++	void __iomem *ev = (void __iomem *)PB_EVENT_VA;
++	u32 v[4], k, i, chg = 0;
++
++	if (unlikely(!pb_cm1 || !pb_mpu_prm))
++		return;
++
++	v[0] = __raw_readl(pb_cm1 + 0x300);	/* CM_MPU_CLKSTCTRL */
++	v[1] = __raw_readl(pb_cm1 + 0x320);	/* CM_MPU_MPU_CLKCTRL */
++	v[2] = __raw_readl(pb_mpu_prm + 0x304);	/* PM_MPU_PWRSTST */
++	v[3] = __raw_readl(pb_cm1 + 0x164);	/* CM_IDLEST_DPLL_MPU */
++	k = pb_sync32k ? __raw_readl(pb_sync32k + 0x10) : 0;
++
++	if (!pb_state_n) {
++		for (i = 0; i < 4; i++)
++			pb_state_first[i] = v[i];
++		pb_state_32k_first = k;
++		__raw_writel(PB_STATE_MAGIC, ev + PB_STATE_OFF + 0x2c);
++		__raw_writel(k, ev + PB_STATE_OFF + 0x30);
++	}
++	for (i = 0; i < 4; i++) {
++		__raw_writel(v[i], ev + PB_STATE_OFF + i * 4);
++		if (!pb_state_n)
++			__raw_writel(v[i], ev + PB_STATE_OFF + 0x10 + i * 4);
++		else if (v[i] != pb_state_first[i])
++			chg = 1;
++	}
++	if (chg) {
++		pb_state_chg++;
++		pb_state_chg_j = (u16)jiffies;
++	}
++	pb_state_n++;
++	__raw_writel(pb_state_n, ev + PB_STATE_OFF + 0x20);
++	__raw_writel(pb_state_chg, ev + PB_STATE_OFF + 0x24);
++	__raw_writel(pb_state_chg_j, ev + PB_STATE_OFF + 0x28);
++	__raw_writel(k, ev + PB_STATE_OFF + 0x34);
++}
++
++/*
++ * Ring3 (VA 0xFEA00000 -> PA 0x94000000, non-cached, no-map reserved) still
++ * has its breadcrumb words +0x00..+0x7c free after boot, so the SMC liveness
++ * log (report 107 §8 E1) and the GIC group census (E6) live there.  Ring1 has
++ * no room left (+0x88..+0xeb taken by the epoch block and the MPU sampler).
++ *
++ *   +0x00 magic "PSMC"       +0x04 completed-probe mask
++ *   +0x08 + i*12             probe i: {jiffies<<16 | 0x5000|i} / ret / ret-jiffies
++ *   +0x38 magic "PGIC"       +0x3c GICD_CTLR   +0x40 GICD_CTR
++ *   +0x44..+0x50 IGROUPR0..3 +0x54..+0x60 ISENABLER0..3
++ *   +0x64 ISACTIVER0         +0x68 ISPENDR0
++ *   +0x6c CM_L4SEC_CLKSTCTRL +0x70 CM_MPU_STATICDEP (read back after the prep)
++ *   +0x78                    select_kek descriptor {1, 0} (PA 0x94000078)
++ */
++#define PB_R3_VA		0xfea00000
++#define PB_SMC_MAGIC_OFF	0x00
++#define PB_SMC_MAGIC		0x434d5350	/* "PSMC" */
++#define PB_SMC_MASK_OFF		0x04
++#define PB_SMC_ENTRY(i)		(0x08 + (i) * 12)
++#define PB_GIC_MAGIC_OFF	0x38
++#define PB_GIC_MAGIC		0x43494750	/* "PGIC" */
++#define PB_SMC_DESC		0x78
++
++/* trustzone-omap4's own L4SEC setup (report 107 §2.1/§4), CM2 window. */
++#define PB_CM2_BASE		0x4a009000
++#define PB_L4SEC_CLKSTCTRL	0x580		/* -> 0x4A009580 */
++#define PB_CM_MPU_STATICDEP	0x4a004304
++#define PB_L4SEC_ENGINES	{ 0x5a0, 0x5a8, 0x5b0, 0x5b8, 0x5c0, 0x5c8 }
++#define PB_L4SEC_MODES		{ 2, 2, 2, 2, 1, 2 }	/* RNG is forced ENABLED */
++
++#define PB_SMC_PROBES		0	/* re-enable to fire select_kek probes */
++static const u16 pb_smc_at_ms[4] = { 300, 800, 1300, 2000 };
++static u32 pb_smc_next;
++
++/*
++ * trustzone-omap4's own monitor entry (report 107 §3.1): BPIALL, then
++ * DSB/ISB/DMB, then SMC #1 with r0=func, r1=a1, r2=a2, r3=phys(descriptor).
++ * r12 is deliberately not programmed - it is not a selector in this ABI.
++ */
++static noinline int pb_smc1(u32 cmd, u32 a1, u32 a2, u32 desc)
++{
++	register u32 r0 asm("r0") = cmd;
++	register u32 r1 asm("r1") = a1;
++	register u32 r2 asm("r2") = a2;
++	register u32 r3 asm("r3") = desc;
++
++	/*
++	 * The monitor clobbers r4-r12 - which is exactly why trustzone-omap4's
++	 * own thunk does push {r4-r12,lr} - so they must be saved here: the
++	 * compiler assumes a C callee preserves them and keeps live values
++	 * (the ring pointer among them) in those registers.
++	 */
++	asm volatile("push\t{r4-r12, lr}\n\t"
++		     ".arch\tarmv7-a\n\t"
++		     ".arch_extension sec\n\t"
++		     "mcr\tp15, 0, %0, c7, c5, 6\n"
++		     "dsb\tsy\n\tisb\tsy\n\tdmb\tsy\n"
++		     "smc\t#1\n"
++		     "pop\t{r4-r12, lr}\n"
++		     : "+r"(r0) : "r"(r1), "r"(r2), "r"(r3) : "memory");
++	return (int)r0;
++}
++
++/*
++ * trustzone-omap4 sets these two PRCM bits once at startup and brackets every
++ * SMC with l4sec_crypto_clocks_on/off (report 107 §2.1/§4).  The monitor is
++ * expected to hang on its first L4SEC crypto access without them, which is
++ * exactly what the 300 ms probe showed when they were missing.
++ */
++static void __init pb_secure_prep(void)
++{
++	void __iomem *r3 = (void __iomem *)PB_R3_VA;
++
++	if (!pb_cm2 || !pb_cm1)
++		return;
++	__raw_writel(__raw_readl(pb_cm2 + PB_L4SEC_CLKSTCTRL) | 3,
++		     pb_cm2 + PB_L4SEC_CLKSTCTRL);
++	__raw_writel(__raw_readl(pb_cm1 + 0x304) | 0x4000, pb_cm1 + 0x304);
++	dsb();
++
++	__raw_writel(__raw_readl(pb_cm2 + PB_L4SEC_CLKSTCTRL), r3 + 0x6c);
++	__raw_writel(__raw_readl(pb_cm1 + 0x304), r3 + 0x70);
++}
++
++static inline void pb_l4sec_clocks(int on)
++{
++	static const u16 eng[] = PB_L4SEC_ENGINES;
++	static const u8 mode[] = PB_L4SEC_MODES;
++	u32 v;
++	int i;
++
++	if (unlikely(!pb_cm2))
++		return;
++	for (i = 0; i < ARRAY_SIZE(eng); i++) {
++		v = __raw_readl(pb_cm2 + eng[i]) & ~3u;
++		__raw_writel(v | (on ? mode[i] : 0), pb_cm2 + eng[i]);
++	}
++	dsb();
++}
++
++/*
++ * Fire the next liveness probe once its deadline has passed.  Entry word 0 is
++ * written *before* the SMC, so a hang still names the probe that killed the
++ * CPU; words 1/2 (return value, return jiffies) only appear if it came back.
++ */
++static inline void pb_smc_tick(void)
++{
++	void __iomem *r3 = (void __iomem *)PB_R3_VA;
++	u32 j = (u16)jiffies, i;
++	int ret;
++
++	if (!PB_SMC_PROBES || pb_smc_next >= ARRAY_SIZE(pb_smc_at_ms))
++		return;
++
++	i = pb_smc_next;
++	if ((u16)(j - (0x8ad0 + pb_smc_at_ms[i] / 10)) >= 0x8000)
++		return;				/* not yet */
++	pb_smc_next++;
++
++	__raw_writel(1, r3 + PB_SMC_DESC);	/* select_kek: {1, 0} */
++	__raw_writel(0, r3 + PB_SMC_DESC + 4);
++	__raw_writel(((u32)j << 16) | (0x5000 | i), r3 + PB_SMC_ENTRY(i));
++	__raw_writel(0, r3 + PB_SMC_ENTRY(i) + 4);
++	__raw_writel(0, r3 + PB_SMC_ENTRY(i) + 8);
++	dsb();
++
++	pb_l4sec_clocks(1);
++	ret = pb_smc1(0x31, 0, 4, 0x94000000 + PB_SMC_DESC);
++	pb_l4sec_clocks(0);
++
++	__raw_writel((u32)ret, r3 + PB_SMC_ENTRY(i) + 4);
++	__raw_writel((u32)(u16)jiffies, r3 + PB_SMC_ENTRY(i) + 8);
++	__raw_writel(__raw_readl(r3 + PB_SMC_MASK_OFF) | (1u << i),
++		     r3 + PB_SMC_MASK_OFF);
++}
++
++static void __init pb_gic_census(void __iomem *dist)
++{
++	void __iomem *r3 = (void __iomem *)PB_R3_VA;
++	u32 i;
++
++	if (!dist)
++		return;
++
++	__raw_writel(PB_GIC_MAGIC, r3 + PB_GIC_MAGIC_OFF);
++	__raw_writel(readl_relaxed(dist + GIC_DIST_CTRL), r3 + PB_GIC_MAGIC_OFF + 0x04);
++	__raw_writel(readl_relaxed(dist + GIC_DIST_CTR), r3 + PB_GIC_MAGIC_OFF + 0x08);
++	for (i = 0; i < 4; i++)
++		__raw_writel(readl_relaxed(dist + GIC_DIST_IGROUP + i * 4),
++			     r3 + PB_GIC_MAGIC_OFF + 0x0c + i * 4);
++	for (i = 0; i < 4; i++)
++		__raw_writel(readl_relaxed(dist + GIC_DIST_ENABLE_SET + i * 4),
++			     r3 + PB_GIC_MAGIC_OFF + 0x1c + i * 4);
++	__raw_writel(readl_relaxed(dist + GIC_DIST_ACTIVE_SET),
++		     r3 + PB_GIC_MAGIC_OFF + 0x2c);
++	__raw_writel(readl_relaxed(dist + GIC_DIST_PENDING_SET),
++		     r3 + PB_GIC_MAGIC_OFF + 0x30);
++
++	__raw_writel(PB_SMC_MAGIC, r3 + PB_SMC_MAGIC_OFF);
++	__raw_writel(0, r3 + PB_SMC_MASK_OFF);
++	for (i = 0; i < 4; i++) {
++		__raw_writel(0, r3 + PB_SMC_ENTRY(i));
++		__raw_writel(0, r3 + PB_SMC_ENTRY(i) + 4);
++		__raw_writel(0, r3 + PB_SMC_ENTRY(i) + 8);
++	}
++}
++
+ static void __exception_irq_entry gic_handle_irq(struct pt_regs *regs)
+ {
+ 	u32 irqstat, irqnr;
+@@ -367,7 +686,23 @@
+ 			this_cpu_write(sgi_intid, irqstat);
+ 		}
+ 
++		/*
++		 * PlayBook bring-up: log peripheral IRQs (skip the GPT1
++		 * clockevent, IRQ 37) into the DRAM event ring before and
++		 * after dispatch.  A missing "after" event means the handler
++		 * never returned.
++		 */
++		/* Heartbeat on the A9 local timer (PPI 13 -> INTID 29) and the
++		 * always-on GPT clockevent (INTID 37). */
++		if (irqnr == 29 || irqnr == 37) {
++			pb_tick();
++			pb_state_tick();
++			pb_smc_tick();
++		} else if (irqnr > 15)
++			pb_event(0xe000 | (irqnr & 0x3ff));
+ 		generic_handle_domain_irq(gic->domain, irqnr);
++		if (irqnr > 15 && irqnr != 29 && irqnr != 37)
++			pb_event(0xd000 | (irqnr & 0x3ff));
+ 	} while (1);
+ }
+ 
+@@ -1469,6 +1804,9 @@
+ 	struct gic_chip_data *gic;
+ 	int irq, ret;
+ 
++	pb_event_init();
++	pb_state_init();
++
+ 	if (WARN_ON(!node))
+ 		return -ENODEV;
+ 
+@@ -1497,6 +1835,10 @@
+ 	if (!gic_cnt) {
+ 		gic_init_physaddr(node);
+ 		gic_of_setup_kvm_info(node);
++		pb_gic_census(gic_data_dist_base(gic));
++		pb_wdt_probe();
++		if (PB_SMC_PROBES)
++			pb_secure_prep();
+ 	}
+ 
+ 	if (parent) {
+--- a/drivers/mfd/twl-core.c
++++ b/drivers/mfd/twl-core.c
+@@ -34,6 +34,7 @@
+ 
+ #include <linux/mfd/core.h>
+ #include <linux/mfd/twl.h>
++#include <linux/pb_event.h>
+ 
+ /* Register descriptions for audio */
+ #include <linux/mfd/twl4030-audio.h>
+@@ -868,6 +869,24 @@
+ 	if (twl_class_is_6030()) {
+ 		const struct mfd_cell *cells;
+ 		int num_cells;
++		u8 wd = 0;
++
++		/*
++		 * PlayBook bring-up: the bootloader arms the TWL6030
++		 * primary watchdog with a short timeout and TabletOS keeps
++		 * it alive with `omap4430-wdtkick -P` (register 0x2c =
++		 * timeout in seconds, default 127).  Linux does not kick it,
++		 * so reload it here, before the sub-devices probe.
++		 */
++		if (twl_i2c_read_u8(TWL_MODULE_PM_MASTER, &wd,
++				    0x2c - TWL6030_BASEADD_PM_MASTER) == 0) {
++			pb_event(0xe100 | (wd & 0xff));
++			twl_i2c_write_u8(TWL_MODULE_PM_MASTER, 127,
++					 0x2c - TWL6030_BASEADD_PM_MASTER);
++			pb_event(0xe201);
++		} else {
++			pb_event(0xe200);
++		}
+ 
+ 		if (id->driver_data & TWL6032_SUBCLASS) {
+ 			cells = twl6032_cells;
+--- a/drivers/mmc/core/core.c
++++ b/drivers/mmc/core/core.c
+@@ -25,6 +25,7 @@
+ #include <linux/slab.h>
+ #include <linux/of.h>
+ 
++#include <linux/pb_event.h>
+ #include <linux/mmc/card.h>
+ #include <linux/mmc/host.h>
+ #include <linux/mmc/mmc.h>
+@@ -1132,6 +1133,7 @@
+ 		ocr &= ~0x7F;
+ 	}
+ 
++	pr_info("PBVOLT: card_ocr=%08x host_avail=%08x\n", ocr, host->ocr_avail);
+ 	ocr &= host->ocr_avail;
+ 	if (!ocr) {
+ 		dev_warn(mmc_dev(host), "no support for card's volts\n");
+@@ -1347,26 +1349,35 @@
+ 	/* Set initial state and call mmc_set_ios */
+ 	mmc_set_initial_state(host);
+ 
++	pr_info("PBC: %s initial_voltage\n", mmc_hostname(host));
+ 	mmc_set_initial_signal_voltage(host);
+ 
+ 	/*
+ 	 * This delay should be sufficient to allow the power supply
+ 	 * to reach the minimum voltage.
+ 	 */
++	pr_info("PBC: %s delay1 %ums\n", mmc_hostname(host),
++		host->ios.power_delay_ms);
+ 	mmc_delay(host->ios.power_delay_ms);
++	pr_info("PBC: %s delay1 done\n", mmc_hostname(host));
+ 
+ 	mmc_pwrseq_post_power_on(host);
++	pr_info("PBC: %s post_pwrseq\n", mmc_hostname(host));
+ 
+ 	host->ios.clock = host->f_init;
+ 
+ 	host->ios.power_mode = MMC_POWER_ON;
+ 	mmc_set_ios(host);
++	pr_info("PBC: %s power_on ios done\n", mmc_hostname(host));
+ 
+ 	/*
+ 	 * This delay must be at least 74 clock sizes, or 1 ms, or the
+ 	 * time required to reach a stable voltage.
+ 	 */
++	pr_info("PBC: %s power_on delay %ums\n", mmc_hostname(host),
++		host->ios.power_delay_ms);
+ 	mmc_delay(host->ios.power_delay_ms);
++	pr_info("PBC: %s power_on delay done\n", mmc_hostname(host));
+ }
+ 
+ void mmc_power_off(struct mmc_host *host)
+@@ -1374,6 +1385,7 @@
+ 	if (host->ios.power_mode == MMC_POWER_OFF)
+ 		return;
+ 
++	pb_event(0xa400);
+ 	mmc_pwrseq_power_off(host);
+ 
+ 	host->ios.clock = 0;
+@@ -2076,6 +2088,7 @@
+ {
+ 	host->f_init = freq;
+ 
++	pr_info("PBC: %s try %uHz\n", mmc_hostname(host), freq);
+ 	pr_debug("%s: %s: trying to init card at %u Hz\n",
+ 		mmc_hostname(host), __func__, host->f_init);
+ 
+@@ -2085,7 +2098,9 @@
+ 	 * Some eMMCs (with VCCQ always on) may not be reset after power up, so
+ 	 * do a hardware reset if possible.
+ 	 */
++	pr_info("PBC: %s hw_reset\n", mmc_hostname(host));
+ 	mmc_hw_reset_for_init(host);
++	pr_info("PBC: %s hw_reset done\n", mmc_hostname(host));
+ 
+ 	/*
+ 	 * sdio_reset sends CMD52 to reset card.  Since we do not know
+@@ -2093,10 +2108,15 @@
+ 	 * should be ignored by SD/eMMC cards.
+ 	 * Skip it if we already know that we do not support SDIO commands
+ 	 */
+-	if (!(host->caps2 & MMC_CAP2_NO_SDIO))
++	if (!(host->caps2 & MMC_CAP2_NO_SDIO)) {
++		pr_info("PBC: %s sdio_reset\n", mmc_hostname(host));
+ 		sdio_reset(host);
++		pr_info("PBC: %s sdio_reset done\n", mmc_hostname(host));
++	}
+ 
++	pr_info("PBC: %s go_idle\n", mmc_hostname(host));
+ 	mmc_go_idle(host);
++	pr_info("PBC: %s go_idle done\n", mmc_hostname(host));
+ 
+ 	if (!(host->caps2 & MMC_CAP2_NO_SD)) {
+ 		if (mmc_send_if_cond_pcie(host, host->ocr_avail))
+@@ -2106,17 +2126,26 @@
+ 	}
+ 
+ 	/* Order's important: probe SDIO, then SD, then MMC */
+-	if (!(host->caps2 & MMC_CAP2_NO_SDIO))
++	if (!(host->caps2 & MMC_CAP2_NO_SDIO)) {
++		pr_info("PBC: %s attach_sdio\n", mmc_hostname(host));
+ 		if (!mmc_attach_sdio(host))
+ 			return 0;
++		pr_info("PBC: %s attach_sdio no\n", mmc_hostname(host));
++	}
+ 
+-	if (!(host->caps2 & MMC_CAP2_NO_SD))
++	if (!(host->caps2 & MMC_CAP2_NO_SD)) {
++		pr_info("PBC: %s attach_sd\n", mmc_hostname(host));
+ 		if (!mmc_attach_sd(host))
+ 			return 0;
++		pr_info("PBC: %s attach_sd no\n", mmc_hostname(host));
++	}
+ 
+-	if (!(host->caps2 & MMC_CAP2_NO_MMC))
++	if (!(host->caps2 & MMC_CAP2_NO_MMC)) {
++		pr_info("PBC: %s attach_mmc\n", mmc_hostname(host));
+ 		if (!mmc_attach_mmc(host))
+ 			return 0;
++		pr_info("PBC: %s attach_mmc no\n", mmc_hostname(host));
++	}
+ 
+ out:
+ 	mmc_power_off(host);
+@@ -2234,6 +2263,9 @@
+ 	if (host->rescan_disable)
+ 		return;
+ 
++	pr_info("PBC: %s rescan\n", mmc_hostname(host));
++	pb_event(0xa001);
++
+ 	/* If there is a non-removable card registered, only scan once */
+ 	if (!mmc_card_is_removable(host) && host->rescan_entered)
+ 		return;
+@@ -2257,6 +2289,7 @@
+ 		goto out;
+ 
+ 	mmc_claim_host(host);
++	pr_info("PBC: %s claimed\n", mmc_hostname(host));
+ 	if (mmc_card_is_removable(host) && host->ops->get_cd &&
+ 			host->ops->get_cd(host) == 0) {
+ 		mmc_power_off(host);
+@@ -2295,6 +2328,8 @@
+ 			break;
+ 	}
+ 
++	pb_event(0xa002);
++
+ 	/* A non-removable card should have been detected by now. */
+ 	if (!mmc_card_is_removable(host) && !host->bus_ops)
+ 		pr_info("%s: Failed to initialize a non-removable card",
+@@ -2306,8 +2341,10 @@
+ 	 */
+ 	host->err_stats[MMC_ERR_CMD_TIMEOUT] = 0;
+ 	mmc_release_host(host);
++	pb_event(0xa003);
+ 
+  out:
++	pb_event(0xa004);
+ 	if (host->caps & MMC_CAP_NEEDS_POLL)
+ 		mmc_schedule_delayed_work(&host->detect, HZ);
+ }
+@@ -2321,13 +2358,17 @@
+ 	host->rescan_disable = 0;
+ 
+ 	if (power_up) {
++		pr_info("PBC: %s power_up\n", mmc_hostname(host));
+ 		mmc_claim_host(host);
+ 		mmc_power_up(host, host->ocr_avail);
+ 		mmc_release_host(host);
++		pr_info("PBC: %s power_up done\n", mmc_hostname(host));
+ 	}
+ 
+ 	mmc_gpiod_request_cd_irq(host);
++	pr_info("PBC: %s detect_change\n", mmc_hostname(host));
+ 	_mmc_detect_change(host, 0, false);
++	pr_info("PBC: %s detect_change done\n", mmc_hostname(host));
+ }
+ 
+ void __mmc_stop_host(struct mmc_host *host)
+--- a/drivers/mmc/core/host.c
++++ b/drivers/mmc/core/host.c
+@@ -648,12 +648,15 @@
+ 	err = device_add(&host->class_dev);
+ 	if (err)
+ 		return err;
++	pr_info("PBC: %s device_add done\n", dev_name(&host->class_dev));
+ 
+ 	led_trigger_register_simple(dev_name(&host->class_dev), &host->led);
+ 
+ 	mmc_add_host_debugfs(host);
+ 
++	pr_info("PBC: %s start_host\n", dev_name(&host->class_dev));
+ 	mmc_start_host(host);
++	pr_info("PBC: %s start_host done\n", dev_name(&host->class_dev));
+ 	return 0;
+ }
+ 
+--- a/drivers/mmc/core/mmc.c
++++ b/drivers/mmc/core/mmc.c
+@@ -8,6 +8,7 @@
+  */
+ 
+ #include <linux/err.h>
++#include <linux/pb_event.h>
+ #include <linux/of.h>
+ #include <linux/slab.h>
+ #include <linux/stat.h>
+@@ -2299,6 +2300,7 @@
+ 	int err;
+ 	u32 ocr, rocr;
+ 
++	pb_event(0xa300);
+ 	WARN_ON(!host->claimed);
+ 
+ 	/* Set correct bus mode for MMC before attempting attach */
+@@ -2306,6 +2308,7 @@
+ 		mmc_set_bus_mode(host, MMC_BUSMODE_OPENDRAIN);
+ 
+ 	err = mmc_send_op_cond(host, 0, &ocr);
++	pb_event(0xa301 | (err & 0xff));
+ 	if (err)
+ 		return err;
+ 
+--- a/drivers/mmc/core/mmc_ops.c
++++ b/drivers/mmc/core/mmc_ops.c
+@@ -153,7 +153,9 @@
+ 	cmd.arg = 0;
+ 	cmd.flags = MMC_RSP_SPI_R1 | MMC_RSP_NONE | MMC_CMD_BC;
+ 
++	pr_info("PBC: %s __go wait\n", mmc_hostname(host));
+ 	err = mmc_wait_for_cmd(host, &cmd, 0);
++	pr_info("PBC: %s __go wait done\n", mmc_hostname(host));
+ 	mmc_delay(1);
+ 
+ 	return err;
+@@ -173,11 +175,16 @@
+ 	 * won't even know about.
+ 	 */
+ 	if (!mmc_host_is_spi(host)) {
++		pr_info("PBC: %s go_idle cs_high\n", mmc_hostname(host));
+ 		mmc_set_chip_select(host, MMC_CS_HIGH);
++		pr_info("PBC: %s go_idle cs_high done\n", mmc_hostname(host));
+ 		mmc_delay(1);
++		pr_info("PBC: %s go_idle delay done\n", mmc_hostname(host));
+ 	}
+ 
++	pr_info("PBC: %s go_idle core\n", mmc_hostname(host));
+ 	err = __mmc_go_idle(host);
++	pr_info("PBC: %s go_idle core done\n", mmc_hostname(host));
+ 
+ 	if (!mmc_host_is_spi(host)) {
+ 		mmc_set_chip_select(host, MMC_CS_DONTCARE);
+@@ -201,6 +208,10 @@
+ 	if (err)
+ 		return err;
+ 
++	pr_info("PBOCR: arg=%08x resp=%08x host_avail=%08x%s\n",
++		cmd->arg, cmd->resp[0], host->ocr_avail,
++		(cmd->resp[0] & MMC_CARD_BUSY) ? "" : " busy");
++
+ 	if (mmc_host_is_spi(host)) {
+ 		if (!(cmd->resp[0] & R1_SPI_IDLE)) {
+ 			*busy = false;
+--- a/drivers/mmc/host/omap_hsmmc.c
++++ b/drivers/mmc/host/omap_hsmmc.c
+@@ -36,6 +36,7 @@
+ #include <linux/mmc/mmc.h>
+ #include <linux/mmc/slot-gpio.h>
+ #include <linux/io.h>
++#include <linux/pb_event.h>
+ #include <linux/irq.h>
+ #include <linux/regulator/consumer.h>
+ #include <linux/pinctrl/consumer.h>
+@@ -211,6 +212,55 @@
+ 	u8 controller_flags;
+ };
+ 
++/*
++ * PlayBook bring-up: dump the MMC2 clock/power state.
++ *   CM_L3INIT_HSMMC2_CLKCTRL @ 0x4a009330  (L3INIT_CM2; MODULEMODE/IDLEST/
++ *                                           STBYST/CLKSEL per SWPU231AP)
++ *   CM_L3INIT_CLKSTCTRL      @ 0x4a009300  (CLKTRCTRL)
++ *   MMC2 target SYSCONFIG    @ 0x480b4010  (owned by ti-sysc: MIDLE/SIDLE)
++ */
++static void __iomem *pb_cm_l3init;
++static int pb_irq_log;
++
++/*
++ * PlayBook: PBREQ/PBIRQ tracing is OFF by default.  The only console on this
++ * board is tty0 (fbcon), and printk draws synchronously, so logging every
++ * request perturbs the I/O path it is meant to measure (report 136).  Turn it
++ * on for a bounded diagnostic only:
++ *   write /sys/module/omap_hsmmc/parameters/trace 1
++ */
++static bool pb_trace;
++module_param_named(trace, pb_trace, bool, 0644);
++MODULE_PARM_DESC(trace, "PlayBook: log MMC requests and IRQs (PBREQ/PBIRQ)");
++static u64 pb_req_ns;
++
++static void pb_mmc_state(struct omap_hsmmc_host *host, const char *tag)
++{
++	void __iomem *sysc = (u8 __iomem *)host->base -
++			     host->pdata->reg_offset + 0x10;
++	struct clk *parent = clk_get_parent(host->fclk);
++	u32 ctrl = 0, st = 0, cfg;
++
++	if (!pb_cm_l3init)
++		pb_cm_l3init = ioremap(0x4a009000, 0x1000);
++	if (pb_cm_l3init) {
++		ctrl = readl(pb_cm_l3init + 0x330);
++		st = readl(pb_cm_l3init + 0x300);
++	}
++	pr_info("PBX: %s %s fck=%lu pclk=%lu mm=%u idlest=%u stby=%u sel=%u clkst=%u\n",
++		mmc_hostname(host->mmc), tag,
++		clk_get_rate(host->fclk),
++		parent ? clk_get_rate(parent) : 0UL,
++		ctrl & 3, (ctrl >> 16) & 3, (ctrl >> 18) & 1, (ctrl >> 24) & 1,
++		st & 3);
++
++	/* This one is in the MMC2 target: it can hang if the target is idled. */
++	cfg = readl(sysc);
++	pr_info("PBX: %s %s sysc=%08x midle=%u sidle=%u\n",
++		mmc_hostname(host->mmc), tag, cfg,
++		(cfg >> 4) & 3, (cfg >> 2) & 3);
++}
++
+ static void omap_hsmmc_start_dma_transfer(struct omap_hsmmc_host *host);
+ 
+ static int omap_hsmmc_enable_supply(struct mmc_host *mmc)
+@@ -539,7 +589,9 @@
+ 
+ 	dev_vdbg(mmc_dev(host->mmc), "Set clock to %uHz\n", ios->clock);
+ 
++	pr_info("PBCLK: %s enter %uHz\n", mmc_hostname(host->mmc), ios->clock);
+ 	omap_hsmmc_stop_clock(host);
++	pr_info("PBCLK: %s stopped\n", mmc_hostname(host->mmc));
+ 
+ 	regval = OMAP_HSMMC_READ(host->base, SYSCTL);
+ 	regval = regval & ~(CLKD_MASK | DTO_MASK);
+@@ -550,10 +602,12 @@
+ 		OMAP_HSMMC_READ(host->base, SYSCTL) | ICE);
+ 
+ 	/* Wait till the ICS bit is set */
++	pr_info("PBCLK: %s ics poll\n", mmc_hostname(host->mmc));
+ 	timeout = jiffies + msecs_to_jiffies(MMC_TIMEOUT_MS);
+ 	while ((OMAP_HSMMC_READ(host->base, SYSCTL) & ICS) != ICS
+ 		&& time_before(jiffies, timeout))
+ 		cpu_relax();
++	pr_info("PBCLK: %s ics done\n", mmc_hostname(host->mmc));
+ 
+ 	/*
+ 	 * Enable High-Speed Support
+@@ -578,6 +632,8 @@
+ 	}
+ 
+ 	omap_hsmmc_start_clock(host);
++	pb_event(0x1400);
++	pr_info("PBCLK: %s done\n", mmc_hostname(host->mmc));
+ }
+ 
+ static void omap_hsmmc_set_bus_width(struct omap_hsmmc_host *host)
+@@ -718,15 +774,29 @@
+ 	unsigned long timeout;
+ 
+ 	disable_irq(host->irq);
++	pb_event(0x2100);
++	pr_info("PBINI: %s enter\n", mmc_hostname(host->mmc));
+ 
+ 	OMAP_HSMMC_WRITE(host->base, IE, INT_EN_MASK);
++	pb_event(0x2200);
+ 	OMAP_HSMMC_WRITE(host->base, CON,
+ 		OMAP_HSMMC_READ(host->base, CON) | INIT_STREAM);
++	pb_event(0x2300);
+ 	OMAP_HSMMC_WRITE(host->base, CMD, INIT_STREAM_CMD);
++	pb_event(0x2400);
++	pr_info("PBINI: %s cmd sent\n", mmc_hostname(host->mmc));
++
++	pr_info("PBINI: %s first read\n", mmc_hostname(host->mmc));
++	reg = OMAP_HSMMC_READ(host->base, STAT);
++	pb_event(0x2500 | (reg & 0xff));
++	pr_info("PBINI: %s stat=%08x\n", mmc_hostname(host->mmc), reg);
+ 
++	reg &= CC_EN;
+ 	timeout = jiffies + msecs_to_jiffies(MMC_TIMEOUT_MS);
+ 	while ((reg != CC_EN) && time_before(jiffies, timeout))
+ 		reg = OMAP_HSMMC_READ(host->base, STAT) & CC_EN;
++	pb_event(0x2600 | (reg & 0xff));
++	pr_info("PBINI: %s cc=%d\n", mmc_hostname(host->mmc), reg);
+ 
+ 	OMAP_HSMMC_WRITE(host->base, CON,
+ 		OMAP_HSMMC_READ(host->base, CON) & ~INIT_STREAM);
+@@ -1068,10 +1138,31 @@
+ 	struct omap_hsmmc_host *host = dev_id;
+ 	int status;
+ 
++	pb_event(0x4100);
++	if (pb_trace && pb_irq_log < 24) {
++		pb_irq_log++;
++		pr_info("PBIRQ: %s enter\n", mmc_hostname(host->mmc));
++	}
+ 	status = OMAP_HSMMC_READ(host->base, STAT);
++	pb_event(0x4200 | ((status >> 16) & 0xff));
++	if (pb_trace)
++		pr_info("PBIRQ: %s stat=%08x req=%d\n", mmc_hostname(host->mmc),
++			status, host->req_in_progress);
+ 	while (status & (INT_EN_MASK | CIRQ_EN)) {
+-		if (host->req_in_progress)
++		if (host->req_in_progress) {
+ 			omap_hsmmc_do_irq(host, status);
++		} else {
++			/*
++			 * PlayBook: the init-stream (CMD0) completion can
++			 * arrive after send_init_stream() cleared STAT and
++			 * re-enabled the IRQ.  With no request in progress
++			 * nothing acked it, and this loop spun forever on
++			 * the same status word.
++			 */
++			pr_info("PBIRQ: %s stray stat=%08x\n",
++				mmc_hostname(host->mmc), status);
++			OMAP_HSMMC_WRITE(host->base, STAT, status);
++		}
+ 
+ 		if (status & CIRQ_EN)
+ 			mmc_signal_sdio_irq(host->mmc);
+@@ -1423,6 +1514,26 @@
+ 	struct omap_hsmmc_host *host = mmc_priv(mmc);
+ 	int err;
+ 
++	pb_event(0x3100 | (req->cmd->opcode & 0xff));
++	if (pb_trace) {
++		u64 now = ktime_get_ns();
++		u64 dt = pb_req_ns ? now - pb_req_ns : 0;
++
++		pb_req_ns = now;
++		if (req->data)
++			pr_info("PBREQ: %s CMD%d arg=%08x %s blksz=%u blocks=%u bytes=%u sg=%u dt=%lluns\n",
++				mmc_hostname(mmc), req->cmd->opcode,
++				req->cmd->arg,
++				(req->data->flags & MMC_DATA_WRITE) ? "W" : "R",
++				req->data->blksz, req->data->blocks,
++				req->data->blksz * req->data->blocks,
++				req->data->sg_len, (unsigned long long)dt);
++		else
++			pr_info("PBREQ: %s CMD%d arg=%08x dt=%lluns\n",
++				mmc_hostname(mmc), req->cmd->opcode,
++				req->cmd->arg, (unsigned long long)dt);
++	}
++
+ 	BUG_ON(host->req_in_progress);
+ 	BUG_ON(host->dma_ch != -1);
+ 	if (host->reqs_blocked)
+@@ -1454,6 +1565,10 @@
+ 	struct omap_hsmmc_host *host = mmc_priv(mmc);
+ 	int do_send_init_stream = 0;
+ 
++	pb_event(0x1100 | (ios->power_mode & 0xff));
++	pr_info("PBSIO: %s enter pm=%d clk=%u bw=%d\n",
++		mmc_hostname(mmc), ios->power_mode, ios->clock, ios->bus_width);
++
+ 	if (ios->power_mode != host->power_mode) {
+ 		switch (ios->power_mode) {
+ 		case MMC_POWER_OFF:
+@@ -1471,7 +1586,9 @@
+ 
+ 	/* FIXME: set registers based only on changes to ios */
+ 
++	pr_info("PBSIO: %s power done\n", mmc_hostname(mmc));
+ 	omap_hsmmc_set_bus_width(host);
++	pr_info("PBSIO: %s width done\n", mmc_hostname(mmc));
+ 
+ 	if (host->pdata->controller_flags & OMAP_HSMMC_SUPPORTS_DUAL_VOLT) {
+ 		/* Only MMC1 can interface at 3V without some flavor
+@@ -1491,12 +1608,23 @@
+ 		}
+ 	}
+ 
++	pb_event(0x1300);
++	pr_info("PBSIO: %s clock\n", mmc_hostname(mmc));
+ 	omap_hsmmc_set_clock(host);
++	pb_event(0x1500);
++	pr_info("PBSIO: %s clock done\n", mmc_hostname(mmc));
+ 
+-	if (do_send_init_stream)
++	if (do_send_init_stream) {
++		pb_event(0x1600);
++		pr_info("PBSIO: %s init_stream\n", mmc_hostname(mmc));
+ 		send_init_stream(host);
++		pb_event(0x1700);
++		pr_info("PBSIO: %s init_stream done\n", mmc_hostname(mmc));
++	}
+ 
+ 	omap_hsmmc_set_bus_mode(host);
++	pr_info("PBSIO: %s done\n", mmc_hostname(mmc));
++	pb_event(0x1800);
+ }
+ 
+ static void omap_hsmmc_enable_sdio_irq(struct mmc_host *mmc, int enable)
+@@ -1771,6 +1899,9 @@
+ 	const struct omap_mmc_of_data *data;
+ 	void __iomem *base;
+ 
++	pb_event(0x5000);
++	pr_info("PBM: %s probe\n", dev_name(&pdev->dev));
++
+ 	match = of_match_device(of_match_ptr(omap_mmc_of_match), &pdev->dev);
+ 	if (match) {
+ 		pdata = of_get_hsmmc_pdata(&pdev->dev);
+@@ -1807,6 +1938,7 @@
+ 	ret = mmc_of_parse(mmc);
+ 	if (ret)
+ 		goto err1;
++	pr_info("PBM: %s of_parse\n", dev_name(&pdev->dev));
+ 
+ 	host		= mmc_priv(mmc);
+ 	host->mmc	= mmc;
+@@ -1844,6 +1976,7 @@
+ 		host->fclk = NULL;
+ 		goto err1;
+ 	}
++	pr_info("PBM: %s fclk\n", dev_name(&pdev->dev));
+ 
+ 	if (host->pdata->controller_flags & OMAP_HSMMC_BROKEN_MULTIBLOCK_READ) {
+ 		dev_info(&pdev->dev, "multiblock reads disabled due to 35xx erratum 2.1.1.128; MMC read performance may suffer\n");
+@@ -1852,11 +1985,26 @@
+ 
+ 	device_init_wakeup(&pdev->dev, true);
+ 	pm_runtime_enable(host->dev);
++	/*
++	 * PlayBook bring-up: make the child's runtime PM hold the ti-sysc
++	 * parent, so an MMC transfer can never run with the interconnect
++	 * target suspended.  (With &mmc2_target { ti,no-idle; } this is
++	 * belt-and-braces; without it the child resume only wakes the parent
++	 * if the parent-child PM hierarchy is intact.)
++	 */
++	pr_info("PBM: %s parent=%s link=%d\n", dev_name(&pdev->dev),
++		pdev->dev.parent ? dev_name(pdev->dev.parent) : "none",
++		pdev->dev.parent ? !!device_link_add(&pdev->dev, pdev->dev.parent,
++			DL_FLAG_PM_RUNTIME | DL_FLAG_AUTOREMOVE_CONSUMER) : 0);
++	pr_info("PBM: %s pm_get\n", dev_name(&pdev->dev));
+ 	pm_runtime_get_sync(host->dev);
++	pr_info("PBM: %s pm_get done\n", dev_name(&pdev->dev));
++	pb_mmc_state(host, "probe-pm");
+ 	pm_runtime_set_autosuspend_delay(host->dev, MMC_AUTOSUSPEND_DELAY);
+ 	pm_runtime_use_autosuspend(host->dev);
+ 
+ 	omap_hsmmc_context_save(host);
++	pr_info("PBM: %s ctx_save\n", dev_name(&pdev->dev));
+ 
+ 	host->dbclk = devm_clk_get(&pdev->dev, "mmchsdb_fck");
+ 	/*
+@@ -1889,16 +2037,22 @@
+ 
+ 	mmc->pm_caps |= mmc_pdata(host)->pm_caps;
+ 
++	pr_info("PBM: %s bus_power\n", dev_name(&pdev->dev));
+ 	omap_hsmmc_conf_bus_power(host);
++	pr_info("PBM: %s bus_power done\n", dev_name(&pdev->dev));
+ 
++	pr_info("PBM: %s rx dma\n", dev_name(&pdev->dev));
+ 	host->rx_chan = dma_request_chan(&pdev->dev, "rx");
++	pr_info("PBM: %s rx dma done\n", dev_name(&pdev->dev));
+ 	if (IS_ERR(host->rx_chan)) {
+ 		dev_err(mmc_dev(host->mmc), "RX DMA channel request failed\n");
+ 		ret = PTR_ERR(host->rx_chan);
+ 		goto err_irq;
+ 	}
+ 
++	pr_info("PBM: %s tx dma\n", dev_name(&pdev->dev));
+ 	host->tx_chan = dma_request_chan(&pdev->dev, "tx");
++	pr_info("PBM: %s tx dma done\n", dev_name(&pdev->dev));
+ 	if (IS_ERR(host->tx_chan)) {
+ 		dev_err(mmc_dev(host->mmc), "TX DMA channel request failed\n");
+ 		ret = PTR_ERR(host->tx_chan);
+@@ -1924,9 +2078,11 @@
+ 		goto err_irq;
+ 	}
+ 
++	pr_info("PBM: %s reg_get\n", dev_name(&pdev->dev));
+ 	ret = omap_hsmmc_reg_get(host);
+ 	if (ret)
+ 		goto err_irq;
++	pr_info("PBM: %s reg_get done\n", dev_name(&pdev->dev));
+ 
+ 	if (!mmc->ocr_avail)
+ 		mmc->ocr_avail = mmc_pdata(host)->ocr_mask;
+@@ -1945,7 +2101,9 @@
+ 	if (!ret)
+ 		mmc->caps |= MMC_CAP_SDIO_IRQ;
+ 
++	pr_info("PBM: %s add_host\n", dev_name(&pdev->dev));
+ 	ret = mmc_add_host(mmc);
++	pr_info("PBM: %s add_host done\n", dev_name(&pdev->dev));
+ 	if (ret)
+ 		goto err_irq;
+ 
+@@ -2052,10 +2210,14 @@
+ 	int ret = 0;
+ 
+ 	host = dev_get_drvdata(dev);
++	pb_event(0xb001);
+ 	omap_hsmmc_context_save(host);
++	pb_event(0xb002);
+ 	dev_dbg(dev, "disabled\n");
+ 
++	pb_event(0xb003);
+ 	spin_lock_irqsave(&host->irq_lock, flags);
++	pb_event(0xb004);
+ 	if ((host->mmc->caps & MMC_CAP_SDIO_IRQ) &&
+ 	    (host->flags & HSMMC_SDIO_IRQ_ENABLED)) {
+ 		/* disable sdio irq handling to prevent race */
+@@ -2083,7 +2245,9 @@
+ 	}
+ 
+ abort:
++	pb_event(0xb005);
+ 	spin_unlock_irqrestore(&host->irq_lock, flags);
++	pb_event(0xb006);
+ 	return ret;
+ }
+ 
+@@ -2093,7 +2257,9 @@
+ 	unsigned long flags;
+ 
+ 	host = dev_get_drvdata(dev);
++	pb_event(0xb011);
+ 	omap_hsmmc_context_restore(host);
++	pb_event(0xb012);
+ 	dev_dbg(dev, "enabled\n");
+ 
+ 	spin_lock_irqsave(&host->irq_lock, flags);
+--- a/include/linux/pb_event.h
++++ b/include/linux/pb_event.h
+@@ -0,0 +1,75 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * PlayBook bring-up: printk-free event log in the DEBUG_LL ring page.
++ *
++ * The DRAM ring page at PA 0x88000000 is reachable through the permanent
++ * non-cacheable alias 0xFE800000 (omap44xx_io_desc).  ring_put uses +0x80
++ * (count), +0x84 (index) and +0x100..+0x7F7F (chars), so the chainloader
++ * breadcrumb words at +0x00..+0x7C are free while the kernel runs.
++ *
++ * Layout (initialised early from the GIC driver, before any IRQ):
++ *   +0x00  heartbeat: (0x3700 << 16) | (jiffies & 0xffff), one per timer IRQ
++ *   +0x08  magic 0x50424556 ("PBEV")
++ *   +0x0c  event counter (u32)
++ *   +0x10  ring of 28 u32 events, slot = counter % 28
++ *
++ * Each event word is: (code16 << 16) | (jiffies & 0xffff), so a post-mortem
++ * read gives both the sequence and the time it happened.  This is
++ * deliberately not printk: it must work in IRQ context, before console
++ * output can be emitted, and while the CPU is about to stop.
++ */
++#ifndef _LINUX_PB_EVENT_H
++#define _LINUX_PB_EVENT_H
++
++#include <linux/io.h>
++#include <linux/jiffies.h>
++#include <linux/types.h>
++
++#define PB_EVENT_VA		0xfe800000
++#define PB_EVENT_MAGIC		0x50424556	/* "PBEV" */
++#define PB_EVENT_SLOTS		28
++#define PB_EVENT_HEARTBEAT_OFF	0x00
++#define PB_EVENT_MAGIC_OFF	0x08
++#define PB_EVENT_COUNT_OFF	0x0c
++#define PB_EVENT_SLOTS_OFF	0x10
++
++/*
++ * __raw_*: no barrier, so a stuck posted peripheral write cannot stall these.
++ * A positive heartbeat is therefore proof the CPU is still executing with
++ * interrupts enabled; a negative one is inconclusive (DRAM path may be
++ * blocked or IRQs off).
++ */
++static inline void pb_event_init(void)
++{
++	void __iomem *ev = (void __iomem *)PB_EVENT_VA;
++
++	__raw_writel(0x37000000u, ev + PB_EVENT_HEARTBEAT_OFF);
++	__raw_writel(PB_EVENT_MAGIC, ev + PB_EVENT_MAGIC_OFF);
++	__raw_writel(0, ev + PB_EVENT_COUNT_OFF);
++	dsb();
++}
++
++static inline void pb_event(u16 code)
++{
++	void __iomem *ev = (void __iomem *)PB_EVENT_VA;
++	u32 n = __raw_readl(ev + PB_EVENT_COUNT_OFF);
++
++	__raw_writel(((u32)code << 16) | (jiffies & 0xffff),
++		     ev + PB_EVENT_SLOTS_OFF + (n % PB_EVENT_SLOTS) * 4);
++	__raw_writel(n + 1, ev + PB_EVENT_COUNT_OFF);
++}
++
++static inline void pb_ptr(u32 val)
++{
++	__raw_writel(val, (void __iomem *)PB_EVENT_VA + 0x04);
++}
++
++static inline void pb_tick(void)
++{
++	void __iomem *ev = (void __iomem *)PB_EVENT_VA;
++
++	__raw_writel(0x37000000u | (jiffies & 0xffff),
++		     ev + PB_EVENT_HEARTBEAT_OFF);
++}
++
++#endif /* _LINUX_PB_EVENT_H */
+--- a/init/do_mounts.c
++++ b/init/do_mounts.c
+@@ -13,6 +13,7 @@
+ #include <linux/init.h>
+ #include <linux/fs.h>
+ #include <linux/initrd.h>
++#include <linux/pb_event.h>
+ #include <linux/async.h>
+ #include <linux/fs_struct.h>
+ #include <linux/slab.h>
+@@ -476,7 +477,9 @@
+ 	 * For example, it is not atypical to wait 5 seconds here
+ 	 * for the touchpad of a laptop to initialize.
+ 	 */
++	pb_event(0x6001);
+ 	wait_for_device_probe();
++	pb_event(0x6002);
+ 
+ 	md_run_setup();
+ 
+@@ -489,7 +492,9 @@
+ 	if (root_wait)
+ 		wait_for_root(saved_root_name);
+ 	mount_root(saved_root_name);
++	pb_event(0x6003);
+ out:
++	pb_event(0x6004);
+ 	devtmpfs_mount();
+ 	init_mount(".", "/", NULL, MS_MOVE, NULL);
+ 	init_chroot(".");
+--- a/init/main.c
++++ b/init/main.c
+@@ -25,6 +25,8 @@
+ #include <linux/delay.h>
+ #include <linux/ioport.h>
+ #include <linux/init.h>
++#include <linux/pb_event.h>
++#include <asm/processor.h>
+ #include <linux/initrd.h>
+ #include <linux/memblock.h>
+ #include <linux/acpi.h>
+@@ -1253,6 +1255,9 @@
+ 	if (initcall_blacklisted(fn))
+ 		return -EPERM;
+ 
++	pb_ptr((u32)(unsigned long)fn);
++	pb_event(0x8000);
++
+ 	do_trace_initcall_start(fn);
+ 	ret = fn();
+ 	do_trace_initcall_finish(fn, ret);
+@@ -1314,9 +1319,11 @@
+ 		   level, level,
+ 		   NULL, ignore_unknown_bootoption);
+ 
++	pb_event(0x8100 | (level & 0xff));
+ 	trace_initcall_level(initcall_level_names[level]);
+ 	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++)
+ 		do_one_initcall(initcall_from_entry(fn));
++	pb_event(0x8200 | (level & 0xff));
+ }
+ 
+ static void __init do_initcalls(void)
+@@ -1591,3 +1598,4 @@
+ 
+ 	integrity_load_keys();
+ }
++
+--- a/kernel/async.c
++++ b/kernel/async.c
+@@ -45,6 +45,7 @@
+ */
+ 
+ #include <linux/async.h>
++#include <linux/pb_event.h>
+ #include <linux/atomic.h>
+ #include <linux/export.h>
+ #include <linux/ktime.h>
+@@ -279,9 +280,31 @@
+  *
+  * This function waits until all asynchronous function calls have been done.
+  */
++/* PlayBook bring-up: record how many async entries are pending and the
++ * function pointer of the oldest one (the one blocking the sync). */
++static void pb_async_dump(void)
++{
++	struct async_entry *first;
++	unsigned long flags;
++
++	pb_event(0x7200 | (atomic_read(&entry_count) & 0xff));
++
++	spin_lock_irqsave(&async_lock, flags);
++	if (!list_empty(&async_global_pending)) {
++		first = list_first_entry(&async_global_pending,
++					 struct async_entry, global_list);
++		__raw_writel((u32)(unsigned long)first->func,
++			     (void __iomem *)PB_EVENT_VA + 0x04);
++	}
++	spin_unlock_irqrestore(&async_lock, flags);
++}
++
+ void async_synchronize_full(void)
+ {
++	pb_event(0x7101);
++	pb_async_dump();
+ 	async_synchronize_full_domain(NULL);
++	pb_event(0x7102);
+ }
+ EXPORT_SYMBOL_GPL(async_synchronize_full);
+ 
+--- a/drivers/misc/pbmon.c
++++ b/drivers/misc/pbmon.c
+@@ -0,0 +1,862 @@
++/*
++ * pbmon — call the OMAP4430 secure monitor's RPMB block seal/unseal services.
++ *
++ * Why: the 224-byte RPMB record block is encrypted on media by the secure
++ * monitor (report 144).  The non-secure resmgr (QNX rpmb-omap4) reaches it with
++ * two smc calls, both with domain 4 and a physically-addressed command page:
++ *
++ *   service 0x33: {u32 2, u32 phys(key), u32 keylen}   load the 16-byte key
++ *   service 0x2F: {u32 1, u32 phys(desc)}              run the transform
++ *
++ * The 0x2F descriptor (little-endian, zero otherwise):
++ *   +0x00 u16 1          +0x02 u16 op | 0x400 (0x400 = the 0x33 preload)
++ *   +0x04 u8  dir        +0x05 u8 0     (dir 1 = seal, 0 = unseal)
++ *   +0x0c u32 len        +0x10 u32 0     +0x14 u32 0
++ *   +0x18 u32 phys(data) +0x1c u32 len
++ *   +0x20 u32 phys(out)  +0x24 u32 len
++ * op is 0 on Winchester (rpmb-omap4 0x29cc), and op 0 does not take key2.
++ * The key is page+0x20 = 86 78 7c 2a 63 2f be 16 48 ec ab a6 d8 84 01 09.
++ *
++ * The marshaller (0x22e8) also enables six CM2 L4SEC crypto clocks around the
++ * call: 0x4A0095A0/A8/B0/B8/C0/C8 (AES1, AES2, DES3DES, PKA, RNG, SHA2MD5),
++ * MODULEMODE=2, restored afterwards.
++ *
++ * Session 20 correction: RpmbInit's second PRCM write is
++ * CM_MPU_STATICDEP[14] (L4SEC_STATDEP) at 0x4A004304 — the MPU_CM1 instance
++ * mapped at 0x4A004300, offset 0x004 (report 107 §4/§H3, TRM Table 3-1034).
++ * Session 19's driver wrote 0x4A004004, which is an *undefined* offset of
++ * INTRCONN_SOCKET_CM1 (0x4A004000), so the MPU->L4SEC dependency was never
++ * enabled and the L4SEC domain could idle under the crypto engines the monitor
++ * reaches for.  Both QNX components that touch the monitor (rpmb-omap4's
++ * RpmbInit and trustzone-omap4's TrustZoneInit) set this bit and never restore
++ * it.
++ *
++ * The address oracle (`/dev/pboracle`, `pbrpmb oracle [n]`) runs one graded,
++ * hang-safe 0x12 (nonce fill) probe per write: the nonce appearing in one of
++ * three reserved DRAM pages identifies the monitor's address view even when the
++ * call returns an error.  Pages (DTS reserved-memory, no-map):
++ *   0xA0200000  "low"    — the identity candidate
++ *   0x90200000  "shadow" — low − 0x10000000, absorbs the biased-mode write
++ *   0xB0200000  "high"   — low + 0x10000000, absorbs the identity-mode write
++ * Result (report 147): the monitor is identity — probe 6 passed 0xA0200000 and
++ * the nonce appeared in that page.  The low page is therefore also the page
++ * every transform uses; the coherent buffer at 0xbf... is out of the monitor's
++ * reachable window and only serves the baseline probe.
++ *
++ * The selftest is read-only: it unseals the on-media bytes of block 0x43 and
++ * compares with the plaintext captured from the live rpmb-omap4 page buffer,
++ * then seals the plaintext and compares with the media.  A PASS proves the ABI,
++ * the key, the clock enables and the physical-address convention before any
++ * RPMB write is attempted.
++ *
++ * The whole call is a guess-free transcription of the QNX code; the only
++ * unknown is whether the monitor accepts domain 4 from this OS at all.
++ */
++#include <linux/dma-mapping.h>
++#include <linux/fs.h>
++#include <linux/init.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/kstrtox.h>
++#include <linux/miscdevice.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/uaccess.h>
++#include <linux/delay.h>
++
++#define PBMON_LEN 0xE0
++#define PBMON_PAGE 0x1000
++
++/*
++ * Page layout, mirroring the live QNX page (report 143's dump):
++ *   +0x020 key        the 0x33 preload slot QNX keeps the key in
++ *   +0x400 command pages (0x33, 0x2F, 0x31, 0x12)
++ *   +0x480 descriptor
++ *   +0x500 nonce buffer
++ *   +0x700 input block (plaintext or ciphertext)
++ *   +0x800 output block
++ * The input must NOT overlap +0x020: if the monitor takes the key from the
++ * fixed slot rather than the pointer, an input at +0x000 would hand it 16
++ * bytes of ciphertext as the key — a ret=0 with garbage output, which is
++ * exactly what the first identity-era seal test produced.
++ */
++#define OFF_IN   0x700
++#define OFF_OUT  0x800
++#define OFF_DESC 0x480
++#define OFF_CMD  0x400
++#define OFF_KEY  0x020
++
++#define CM2_PHYS 0x4A009000
++#define CM2_L4SEC_CLKSTCTRL 0x580
++/* MPU_CM1 is the instance at 0x4A004300 (CM_MPU_CLKSTCTRL at +0x000,
++ * CM_MPU_STATICDEP at +0x004); 0x4A004000 is INTRCONN_SOCKET_CM1. */
++#define CM1_PHYS 0x4A004000
++#define CM1_MPU_STATICDEP_OFF 0x304
++#define CM_MPU_L4SEC_STATDEP (1u << 14)
++#define CM2_L4SEC_AES1    0x5A0
++#define CM2_L4SEC_AES2    0x5A8
++#define CM2_L4SEC_DES3DES 0x5B0
++#define CM2_L4SEC_PKA     0x5B8
++#define CM2_L4SEC_RNG     0x5C0
++#define CM2_L4SEC_SHA2MD5 0x5C8
++
++/* address-oracle pages (DTS reserved-memory, no-map) */
++#define PB_LOW_PA    0xA0200000u
++#define PB_SHADOW_PA 0x90200000u
++#define PB_HIGH_PA   0xB0200000u
++#define PB_DATA_OFF  0x100
++#define PB_ORACLE_MAX 7
++
++/*
++ * The 16-byte key the 0x33 service preloads, from the live page at +0x20
++ * (report 144).  /dev/pbkey overrides it so the key/framing matrix can be run
++ * in one boot; the default is QNX's value, restored by a reboot.
++ */
++static u8 pb_xf_key[16] = {
++	0x86, 0x78, 0x7c, 0x2a, 0x63, 0x2f, 0xbe, 0x16,
++	0x48, 0xec, 0xab, 0xa6, 0xd8, 0x84, 0x01, 0x09,
++};
++
++/*
++ * ABI knobs for the known-pair sweep (/dev/pbctl: four bytes
++ * {op, kek, desc_mode, key_mode}).
++ *
++ * op         descriptor op field (rpmb-omap4 accepts 0 and 2)
++ * kek        which select_kek(0x31) precedes the transform
++ *            (0 = none, 1 = index 0, 2 = index 1 — its read path uses 1)
++ * desc_mode  addresses written into the descriptor: 0 = identity,
++ *            1 = phys - 0x10000000 (what QNX puts there, measured)
++ * key_mode   the 0x33 key pointer: 0 = identity, 1 = phys - 0x10000000
++ *
++ * The measured convention (session 20, live QNX page): the command page and
++ * its arguments are TRUE physical addresses, while the descriptor's data/out
++ * fields are stored 0x10000000 LOWER — the monitor adds 0x10000000 back when
++ * it hands those to the crypto engine.  Passing identity addresses there made
++ * the engine read the wrong buffer, which is why ret=0 came with garbage.
++ */
++static u8 pb_op = 0;
++static u8 pb_kek = 2;
++static u8 pb_desc_mode;
++static u8 pb_key_mode;
++
++/* block 0x43: plaintext from rpmb-omap4 page+0x700, ciphertext from media */
++#include "pbmon-pair.h"
++/* the whole captured RpmbInit page, for the key-window sweep */
++#include "pbmon-page.h"
++
++static void __iomem *cm2, *cm1;
++static void *pb_buf;
++static dma_addr_t pb_pa;
++static void *pb_low, *pb_shadow, *pb_high;
++static char pb_rep[256];
++static struct device *pb_dev;
++static struct platform_device *pb_pdev;
++static DEFINE_MUTEX(pb_lock);
++static u8 pb_out[PBMON_LEN];
++static bool pb_out_valid;
++
++static const u32 cm2_offs[6] = {
++	CM2_L4SEC_AES1, CM2_L4SEC_AES2, CM2_L4SEC_DES3DES,
++	CM2_L4SEC_PKA, CM2_L4SEC_RNG, CM2_L4SEC_SHA2MD5,
++};
++static u32 cm2_saved[6];
++static u32 cm2_ctl_saved, cm1_saved;
++
++static noinline u32 pb_smc(u32 svc, u32 x1, u32 dom, u32 arg)
++{
++	register u32 r0 asm("r0") = svc;
++	register u32 r1 asm("r1") = x1;
++	register u32 r2 asm("r2") = dom;
++	register u32 r3 asm("r3") = arg;
++
++	/*
++	 * Match rpmb-omap4 0x21f0 exactly: r6 = 0xff is the "monitor call"
++	 * tag, r12 (ip) = 0, ICIALLU, and the monitor clobbers r4-r12, so the
++	 * veneer saves them.  r0-r3 carry the service and the return.
++	 */
++	asm volatile(
++		"push {r4-r12, lr}\n\t"
++		"mov r6, #0xff\n\t"
++		"mov r12, #0\n\t"
++		"mcr p15, 0, r0, c7, c5, 6\n\t"
++		".word 0xf57ff04f\n\t"	/* dsb sy */
++		".word 0xf57ff06f\n\t"	/* isb sy */
++		".word 0xf57ff05f\n\t"	/* dmb sy */
++		".word 0xe1600071\n\t"	/* smc #1 */
++		"pop {r4-r12, lr}\n\t"
++		: "+r"(r0), "+r"(r1), "+r"(r2), "+r"(r3)
++		:
++		: "memory");
++	return r0;
++}
++
++/*
++ * RpmbInit's 0x2218, once, before any crypto-engine use:
++ *   CM_L4SEC_CLKSTCTRL (0x4A009580) |= 3          (CLKTRCTRL = HW_AUTO)
++ *   CM_MPU_STATICDEP  (0x4A004304) |= 0x4000      (L4SEC_STATDEP = 1)
++ * The six module clocks alone are not enough: without the MPU->L4SEC static
++ * dependency the L4SEC domain can go idle under the engines the monitor uses.
++ * QNX never restores either register, so neither do we.
++ */
++static void pb_domain_on(void)
++{
++	u32 v;
++
++	cm2_ctl_saved = readl(cm2 + CM2_L4SEC_CLKSTCTRL);
++	writel(cm2_ctl_saved | 3u, cm2 + CM2_L4SEC_CLKSTCTRL);
++
++	cm1_saved = readl(cm1 + CM1_MPU_STATICDEP_OFF);
++	writel(cm1_saved | CM_MPU_L4SEC_STATDEP,
++	       cm1 + CM1_MPU_STATICDEP_OFF);
++
++	v = readl(cm1 + CM1_MPU_STATICDEP_OFF);
++	pr_err("pbmon: CM_L4SEC_CLKSTCTRL 0x%08x CM_MPU_STATICDEP 0x%08x (was 0x%08x)\n",
++	       readl(cm2 + CM2_L4SEC_CLKSTCTRL), v, cm1_saved);
++}
++
++static void pb_clocks_on(void)
++{
++	int i;
++
++	for (i = 0; i < 6; i++) {
++		cm2_saved[i] = readl(cm2 + cm2_offs[i]);
++		/* RNG uses MODULEMODE 1, the others 2 (QNX 0x2384-0x240c) */
++		writel((cm2_saved[i] & ~3u) | (i == 4 ? 1u : 2u),
++		       cm2 + cm2_offs[i]);
++	}
++	/* let the crypto modules come up */
++	udelay(100);
++}
++
++static void pb_clocks_off(void)
++{
++	int i;
++
++	for (i = 0; i < 6; i++)
++		writel(cm2_saved[i] & ~3u, cm2 + cm2_offs[i]);
++}
++
++/*
++ * Session 19 believed the monitor addressed DRAM 0x10000000 below the
++ * non-secure physical address, from QNX's live 0x2F descriptor (data
++ * 0xafb2b700 for a page PTINFO reports at 0xbfb2b000).  Report 147 disproved
++ * it: that offset is QNX's own (QNX's paddr_t space puts DRAM at 0x90000000),
++ * and the monitor reads identity addresses.  The helper survives only to
++ * reproduce the old failing call as the oracle's baseline probe 1.
++ */
++#define PB_DRAM_BIAS 0x10000000u
++
++static inline u32 pb_mon_pa(u32 pa)
++{
++	return pa >= 0x80000000u ? pa - PB_DRAM_BIAS : pa;
++}
++
++/*
++ * Descriptor data/out addresses.  QNX stores them as phys - 0x10000000 (the
++ * monitor's engine view) while the command page and its arguments are true
++ * physical addresses; pb_desc_mode selects which form we write.
++ */
++static u32 pb_eng_addr(u32 pa)
++{
++	return pb_desc_mode ? pb_mon_pa(pa) : pa;
++}
++
++/*
++ * The 0x12 address oracle (report 146 "what to try next", report 145 §4.3).
++ *
++ * 0x12 fills a 16-byte buffer with a fresh nonce.  The buffer's address is the
++ * only thing we vary, and the three reserved pages let us see where the monitor
++ * actually wrote even when the service returns an error, so the compare is
++ * "did my memory change", not "did the call succeed":
++ *
++ *   identity mode: pass the true physical address (A -> NS A)
++ *   biased mode:   pass A - 0x10000000  (A -> NS A + 0x10000000)
++ *
++ * Both modes are hang-safe by construction: every address the monitor can
++ * resolve from the three candidates is a reserved, no-map page, so a stray
++ * 16-byte write lands in our own scratch and never in kernel memory.
++ */
++static void pb_scrub(void)
++{
++	if (pb_low)
++		memset(pb_low, 0xaa, PBMON_PAGE);
++	if (pb_shadow)
++		memset(pb_shadow, 0xaa, PBMON_PAGE);
++	if (pb_high)
++		memset(pb_high, 0xaa, PBMON_PAGE);
++	memset(pb_buf + 0x500, 0xaa, 16);
++	memset(pb_buf + OFF_CMD, 0, 0x40);
++}
++
++static const char *pb_hit(void)
++{
++	if (pb_low && memchr_inv(pb_low + PB_DATA_OFF, 0xaa, 16))
++		return "low";
++	if (pb_shadow && memchr_inv(pb_shadow + PB_DATA_OFF, 0xaa, 16))
++		return "shadow";
++	if (pb_high && memchr_inv(pb_high + PB_DATA_OFF, 0xaa, 16))
++		return "high";
++	if (memchr_inv(pb_buf + 0x500, 0xaa, 16))
++		return "coherent";
++	return "none";
++}
++
++static u32 pb_oracle_call(u32 svc, u32 dom, void *page, u32 page_pa,
++			  u32 count, u32 a1, u32 a2, bool biased)
++{
++	u32 *p = page;
++	u32 r;
++
++	memset(p, 0, 0x40);
++	p[0] = count;
++	p[1] = a1;
++	p[2] = a2;
++	mb();
++	pb_clocks_on();
++	mb();
++	r = pb_smc(svc, 0, dom, biased ? pb_mon_pa(page_pa) : page_pa);
++	mb();
++	pb_clocks_off();
++	return r;
++}
++
++static int pb_oracle(unsigned n)
++{
++	void *page = pb_buf + OFF_CMD;
++	u32 page_pa = (u32)pb_pa + OFF_CMD;
++	u32 dpa = (u32)pb_pa + 0x500;
++	u32 svc, dom = 4, count, a1 = 0, a2 = 0, ret;
++	bool biased = true;
++	const char *verdict;
++
++	switch (n) {
++	case 1:		/* baseline: the session-19 call, unchanged */
++		svc = 0x12; count = 2; a1 = pb_mon_pa(dpa); a2 = 16;
++		break;
++	case 2:		/* zero-argument service: is the monitor reachable? */
++		svc = 0x3A; count = 0;
++		break;
++	case 3:		/* the exact bootloader 0x31 form, domain 4 (QNX) */
++		svc = 0x31; count = 1;
++		break;
++	case 4:		/* 0x31 with the bootloader's domain 5 */
++		svc = 0x31; count = 1; dom = 5;
++		break;
++	case 5:		/* 0x12 with the bootloader's domain 0 */
++		svc = 0x12; count = 2; dom = 0; a1 = pb_mon_pa(dpa); a2 = 16;
++		break;
++	case 6:		/* low page, identity address */
++		page = pb_low;
++		page_pa = PB_LOW_PA;
++		dpa = PB_LOW_PA + PB_DATA_OFF;
++		biased = false;
++		svc = 0x12; count = 2; a1 = dpa; a2 = 16;
++		break;
++	default:	/* 7: low page, biased address */
++		page = pb_low;
++		page_pa = PB_LOW_PA;
++		dpa = PB_LOW_PA + PB_DATA_OFF;
++		biased = true;
++		svc = 0x12; count = 2; a1 = pb_mon_pa(dpa); a2 = 16;
++		break;
++	}
++
++	pb_scrub();
++	pr_err("pbmon: oracle %u start svc=0x%x dom=%u page=0x%08x %s\n",
++	       n, svc, dom, biased ? pb_mon_pa(page_pa) : page_pa,
++	       biased ? "biased" : "identity");
++	ret = pb_oracle_call(svc, dom, page, page_pa, count, a1, a2, biased);
++
++	verdict = (ret == 0 && strcmp(pb_hit(), "none")) ? "OK" : "FAIL";
++	scnprintf(pb_rep, sizeof(pb_rep),
++		  "oracle %u: svc=0x%x dom=%u r3=0x%08x ret=%u w=%s %s\n",
++		  n, svc, dom, biased ? pb_mon_pa(page_pa) : page_pa, ret,
++		  pb_hit(), verdict);
++	pr_err("pbmon: %s", pb_rep);
++	return ret == 0 ? 0 : -EIO;
++}
++
++/*
++ * The transform path.  Everything the monitor touches lives in the reserved
++ * low page at PB_LOW_PA and is addressed by its true physical address: report
++ * 147 pinned the monitor's view as identity, with a reachable window that
++ * excludes 0xBF040000 (where a coherent allocation lands) and includes
++ * 0xA0200000.  The session-19 bias is gone.
++ */
++static int pb_xform(const u8 *in, u8 *out, int dir)
++{
++	const u32 base = PB_LOW_PA;
++	u32 *desc = (u32 *)(pb_low + OFF_DESC);
++	u32 *cmd33 = (u32 *)(pb_low + OFF_CMD);
++	u32 *cmd2f = (u32 *)(pb_low + OFF_CMD + 0x10);
++	u32 *cmd31 = (u32 *)(pb_low + OFF_CMD + 0x20);
++	u32 *cmd12 = (u32 *)(pb_low + OFF_CMD + 0x30);
++	u32 r12, r31, r33, r2f;
++
++	memcpy(pb_low + OFF_IN, in, PBMON_LEN);
++	memcpy(pb_low + OFF_KEY, pb_xf_key, sizeof(pb_xf_key));
++
++	memset(desc, 0, 0x160);
++	((u16 *)desc)[0] = 1;
++	((u16 *)desc)[1] = pb_op | 0x0400;	/* op | key33 preload */
++	((u8 *)desc)[4] = (u8)dir;
++	((u8 *)desc)[5] = 0;
++	desc[3] = PBMON_LEN;			/* +0x0c */
++	desc[4] = 0;				/* +0x10 */
++	desc[5] = 0;				/* +0x14 */
++	desc[6] = pb_eng_addr(base + OFF_IN);	/* +0x18 data */
++	desc[7] = PBMON_LEN;			/* +0x1c */
++	desc[8] = pb_eng_addr(base + OFF_OUT);	/* +0x20 out */
++	desc[9] = PBMON_LEN;			/* +0x24 */
++
++	cmd33[0] = 2;
++	cmd33[1] = pb_key_mode ? pb_mon_pa(base + OFF_KEY) : base + OFF_KEY;
++	cmd33[2] = sizeof(pb_xf_key);
++	cmd2f[0] = 1;
++	cmd2f[1] = base + OFF_DESC;
++	cmd31[0] = 1;
++	cmd31[1] = 1;				/* 0x31 index 1 */
++	cmd12[0] = 2;
++	cmd12[1] = base + 0x500;
++	cmd12[2] = 16;
++	memset(pb_low + 0x500, 0xaa, 16);
++
++	mb();
++	pb_clocks_on();
++	mb();
++	r12 = pb_smc(0x12, 0, 4, base + OFF_CMD + 0x30);
++	mb();
++	if (pb_kek) {
++		cmd31[1] = pb_kek - 1;		/* 1 = index 0, 2 = index 1 */
++		mb();
++		r31 = pb_smc(0x31, 0, 4, base + OFF_CMD + 0x20);
++		mb();
++	} else {
++		r31 = 0;
++	}
++	r33 = pb_smc(0x33, 0, 4, base + OFF_CMD);
++	mb();
++	if (r33 == 0) {
++		r2f = pb_smc(0x2F, 0, 4, base + OFF_CMD + 0x10);
++		mb();
++	} else {
++		r2f = 0xffffffff;
++	}
++	/* QNX's block path closes with select_kek(0) (rpmb-omap4 0x2bd0) */
++	if (pb_kek) {
++		cmd31[1] = 0;
++		mb();
++		pb_smc(0x31, 0, 4, base + OFF_CMD + 0x20);
++		mb();
++	}
++	pb_clocks_off();
++
++	pr_err("pbmon: xform dir=%d op=%u kek=%u page=0x%08x 0x12=%u 0x31=%u 0x33=%u 0x2F=%u nonce=%*phN\n",
++	       dir, pb_op, pb_kek, base, r12, r31, r33, r2f, 16,
++	       (u8 *)(pb_low + 0x500));
++	if (r33 != 0 || r2f != 0)
++		return -EIO;
++	memcpy(out, pb_low + OFF_OUT, PBMON_LEN);
++	return 0;
++}
++
++static int __init pb_selftest(void)
++{
++	u8 out[PBMON_LEN];
++	int u = -1, s = -1;
++
++	u = pb_xform(pb_c67, out, 0);
++	pr_info("pbmon: unseal(C67) -> %s\n",
++		u ? "smc error" : (memcmp(out, pb_p67, PBMON_LEN) ?
++				  "MISMATCH" : "PASS"));
++	if (u == 0 && memcmp(out, pb_p67, PBMON_LEN))
++		print_hex_dump(KERN_INFO, "pbmon: unsealed ", DUMP_PREFIX_NONE,
++			       16, 1, out, 32, false);
++
++	s = pb_xform(pb_p67, out, 1);
++	pr_info("pbmon: seal(P67)   -> %s\n",
++		s ? "smc error" : (memcmp(out, pb_c67, PBMON_LEN) ?
++				  "MISMATCH" : "PASS"));
++	if (s == 0 && memcmp(out, pb_c67, PBMON_LEN))
++		print_hex_dump(KERN_INFO, "pbmon: sealed ", DUMP_PREFIX_NONE,
++			       16, 1, out, 32, false);
++
++	return (u == 0 && s == 0 && !memcmp(out, pb_c67, PBMON_LEN)) ? 0 : -EIO;
++}
++
++static int pb_xform_user(const char __user *ubuf, size_t n, int dir)
++{
++	u8 in[PBMON_LEN];
++	int ret;
++
++	if (n != PBMON_LEN)
++		return -EINVAL;
++	if (copy_from_user(in, ubuf, PBMON_LEN))
++		return -EFAULT;
++	mutex_lock(&pb_lock);
++	ret = pb_xform(in, pb_out, dir);
++	if (ret == 0)
++		pb_out_valid = true;
++	mutex_unlock(&pb_lock);
++	return ret ? ret : (int)n;
++}
++
++static ssize_t pbseal_write(struct file *f, const char __user *u, size_t n,
++			    loff_t *o)
++{
++	return pb_xform_user(u, n, 1);
++}
++
++static ssize_t pbunseal_write(struct file *f, const char __user *u, size_t n,
++			      loff_t *o)
++{
++	return pb_xform_user(u, n, 0);
++}
++
++static ssize_t pb_read(struct file *f, char __user *u, size_t n, loff_t *o)
++{
++	int ret;
++
++	if (*o != 0)
++		return 0;
++	mutex_lock(&pb_lock);
++	if (!pb_out_valid) {
++		mutex_unlock(&pb_lock);
++		return -EAGAIN;
++	}
++	if (n > PBMON_LEN)
++		n = PBMON_LEN;
++	ret = copy_to_user(u, pb_out, n) ? -EFAULT : (int)n;
++	mutex_unlock(&pb_lock);
++	return ret;
++}
++
++static const struct file_operations pbseal_fops = {
++	.owner = THIS_MODULE, .write = pbseal_write, .read = pb_read,
++};
++static const struct file_operations pbunseal_fops = {
++	.owner = THIS_MODULE, .write = pbunseal_write, .read = pb_read,
++};
++
++static struct miscdevice pbseal_misc = {
++	.minor = MISC_DYNAMIC_MINOR, .name = "pbseal", .fops = &pbseal_fops,
++};
++static struct miscdevice pbunseal_misc = {
++	.minor = MISC_DYNAMIC_MINOR, .name = "pbunseal", .fops = &pbunseal_fops,
++};
++
++/*
++ * /dev/pbkey: read or replace the transform key (16 bytes).  Test-only knob
++ * for the key/framing matrix; a reboot restores QNX's value.
++ */
++static ssize_t pbkey_write(struct file *f, const char __user *u, size_t n,
++			   loff_t *o)
++{
++	if (n != sizeof(pb_xf_key))
++		return -EINVAL;
++	mutex_lock(&pb_lock);
++	if (copy_from_user(pb_xf_key, u, n)) {
++		mutex_unlock(&pb_lock);
++		return -EFAULT;
++	}
++	mutex_unlock(&pb_lock);
++	return n;
++}
++
++static ssize_t pbkey_read(struct file *f, char __user *u, size_t n, loff_t *o)
++{
++	if (*o != 0)
++		return 0;
++	if (n > sizeof(pb_xf_key))
++		n = sizeof(pb_xf_key);
++	if (copy_to_user(u, pb_xf_key, n))
++		return -EFAULT;
++	*o += n;
++	return n;
++}
++
++static const struct file_operations pbkey_fops = {
++	.owner = THIS_MODULE, .write = pbkey_write, .read = pbkey_read,
++};
++static struct miscdevice pbkey_misc = {
++	.minor = MISC_DYNAMIC_MINOR, .name = "pbkey", .fops = &pbkey_fops,
++};
++
++/* /dev/pbctl: four bytes {op, kek, desc_mode, key_mode} for the ABI sweep */
++static ssize_t pbctl_write(struct file *f, const char __user *u, size_t n,
++			   loff_t *o)
++{
++	u8 v[4];
++
++	if (n != sizeof(v))
++		return -EINVAL;
++	if (copy_from_user(v, u, n))
++		return -EFAULT;
++	mutex_lock(&pb_lock);
++	pb_op = v[0];
++	pb_kek = v[1];
++	pb_desc_mode = v[2];
++	pb_key_mode = v[3];
++	mutex_unlock(&pb_lock);
++	return n;
++}
++
++static ssize_t pbctl_read(struct file *f, char __user *u, size_t n, loff_t *o)
++{
++	u8 v[4] = { pb_op, pb_kek, pb_desc_mode, pb_key_mode };
++
++	if (*o != 0)
++		return 0;
++	if (n > sizeof(v))
++		n = sizeof(v);
++	if (copy_to_user(u, v, n))
++		return -EFAULT;
++	*o += n;
++	return n;
++}
++
++static const struct file_operations pbctl_fops = {
++	.owner = THIS_MODULE, .write = pbctl_write, .read = pbctl_read,
++};
++static struct miscdevice pbctl_misc = {
++	.minor = MISC_DYNAMIC_MINOR, .name = "pbctl", .fops = &pbctl_fops,
++};
++
++/*
++ * The known-pair test: unseal the captured media bytes of block 0x43 and
++ * compare with the plaintext captured from QNX's page buffer, then seal the
++ * plaintext and compare with the media.  This is the gate from report 144 §5:
++ * if the seal reproduces the device's bytes, the ABI, the key and the framing
++ * are all right.  The /dev/pbkey knob makes it a key candidate sweep.
++ */
++static int pb_pair(char *rep, size_t sz)
++{
++	u8 out[PBMON_LEN];
++	int u, s, uok, sok;
++
++	u = pb_xform(pb_c67, out, 0);
++	uok = (u == 0 && !memcmp(out, pb_p67, PBMON_LEN));
++	s = pb_xform(pb_p67, out, 1);
++	sok = (s == 0 && !memcmp(out, pb_c67, PBMON_LEN));
++	scnprintf(rep, sz, "pair: unseal=%d/%s seal=%d/%s\n",
++		  u, uok ? "OK" : "DIFF", s, sok ? "OK" : "DIFF");
++	return (uok && sok) ? 0 : 1;
++}
++
++/*
++ * /dev/pbwsweep: try every 16-byte window of the captured QNX page as the 0x33
++ * key and ask whether any of them unseals the known ciphertext into the known
++ * plaintext.  That is the "is the transform key anywhere in the page" question,
++ * answered in one boot; both descriptor address conventions are tried.
++ */
++static int pb_wsweep(char *rep, size_t sz)
++{
++	u8 out[PBMON_LEN], key_saved[16];
++	u8 dm_saved = pb_desc_mode;
++	int i, mode, hits = 0, ok = 0;
++	size_t n = 0;
++
++	memcpy(key_saved, pb_xf_key, sizeof(key_saved));
++	for (mode = 0; mode < 2 && !hits; mode++) {
++		pb_desc_mode = (u8)mode;
++		for (i = 0; i + 16 <= (int)sizeof(pb_page); i += 16) {
++			memcpy(pb_xf_key, pb_page + i, 16);
++			if (pb_xform(pb_c67, out, 0))
++				continue;
++			ok++;
++			if (!memcmp(out, pb_p67, PBMON_LEN)) {
++				n += scnprintf(rep + n, sz - n,
++					       "wsweep: HIT desc=%d off=0x%x unseal=OK\n",
++					       mode, i);
++				hits++;
++				break;
++			}
++		}
++	}
++	memcpy(pb_xf_key, key_saved, sizeof(key_saved));
++	pb_desc_mode = dm_saved;
++	if (!hits)
++		n += scnprintf(rep + n, sz - n,
++			       "wsweep: no window matched (%d transforms ok)\n",
++			       ok);
++	return hits ? 0 : 1;
++}
++
++static ssize_t pbwsweep_read(struct file *f, char __user *u, size_t n, loff_t *o)
++{
++	size_t len;
++
++	if (*o != 0)
++		return 0;
++	mutex_lock(&pb_lock);
++	pb_wsweep(pb_rep, sizeof(pb_rep));
++	mutex_unlock(&pb_lock);
++	len = strlen(pb_rep);
++	if (len > n)
++		len = n;
++	if (len && copy_to_user(u, pb_rep, len))
++		return -EFAULT;
++	*o += len;
++	return len;
++}
++
++static const struct file_operations pbwsweep_fops = {
++	.owner = THIS_MODULE, .read = pbwsweep_read,
++};
++static struct miscdevice pbwsweep_misc = {
++	.minor = MISC_DYNAMIC_MINOR, .name = "pbwsweep", .fops = &pbwsweep_fops,
++};
++
++static ssize_t pbpair_read(struct file *f, char __user *u, size_t n, loff_t *o)
++{
++	size_t len;
++
++	if (*o != 0)
++		return 0;
++	mutex_lock(&pb_lock);
++	pb_pair(pb_rep, sizeof(pb_rep));
++	mutex_unlock(&pb_lock);
++	len = strlen(pb_rep);
++	if (len > n)
++		len = n;
++	if (len && copy_to_user(u, pb_rep, len))
++		return -EFAULT;
++	*o += len;
++	return len;
++}
++
++static const struct file_operations pbpair_fops = {
++	.owner = THIS_MODULE, .read = pbpair_read,
++};
++static struct miscdevice pbpair_misc = {
++	.minor = MISC_DYNAMIC_MINOR, .name = "pbpair", .fops = &pbpair_fops,
++};
++
++/*
++ * /dev/pboracle: write a probe number ("1".."7") to run exactly one probe and
++ * read back its one-line report.  One probe per write keeps a hang from taking
++ * the rest of the sequence with it, and the report is in printk before the smc
++ * as well, so the fbcon keeps the last words.
++ */
++static size_t pb_rep_len;
++
++static ssize_t pboracle_write(struct file *f, const char __user *u, size_t n,
++			      loff_t *o)
++{
++	char buf[8];
++	unsigned id;
++
++	if (n == 0 || n >= sizeof(buf))
++		return -EINVAL;
++	if (copy_from_user(buf, u, n))
++		return -EFAULT;
++	buf[n] = '\0';
++	if (kstrtouint(buf, 0, &id) || id < 1 || id > PB_ORACLE_MAX)
++		return -EINVAL;
++
++	/* a failed probe is a result, not an I/O error: it is in the report */
++	mutex_lock(&pb_lock);
++	pb_oracle(id);
++	pb_rep_len = strlen(pb_rep);
++	mutex_unlock(&pb_lock);
++	return n;
++}
++
++static ssize_t pboracle_read(struct file *f, char __user *u, size_t n,
++			     loff_t *o)
++{
++	size_t len;
++
++	if (*o < 0)
++		return -EINVAL;
++	len = pb_rep_len > (size_t)*o ? pb_rep_len - (size_t)*o : 0;
++	if (len > n)
++		len = n;
++	if (len && copy_to_user(u, pb_rep + *o, len))
++		return -EFAULT;
++	*o += len;
++	return len;
++}
++
++static const struct file_operations pboracle_fops = {
++	.owner = THIS_MODULE, .write = pboracle_write, .read = pboracle_read,
++};
++static struct miscdevice pboracle_misc = {
++	.minor = MISC_DYNAMIC_MINOR, .name = "pboracle", .fops = &pboracle_fops,
++};
++
++static int pbmon_selftest = 0;
++module_param_named(selftest, pbmon_selftest, int, 0644);
++MODULE_PARM_DESC(selftest, "run the block-0x43 seal selftest at probe (default 0)");
++
++static int pbmon_probe(struct platform_device *pdev)
++{
++	int ret;
++
++	pb_dev = &pdev->dev;
++	dma_set_mask_and_coherent(pb_dev, DMA_BIT_MASK(32));
++	pb_buf = dma_alloc_coherent(pb_dev, PBMON_PAGE, &pb_pa, GFP_KERNEL);
++	if (!pb_buf)
++		return -ENOMEM;
++	cm2 = ioremap(CM2_PHYS, 0x1000);
++	cm1 = ioremap(CM1_PHYS, 0x1000);
++	if (!cm2 || !cm1)
++		return -ENOMEM;
++	/* the three reserved oracle pages are no-map: they have no linear alias */
++	pb_low = ioremap(PB_LOW_PA, PBMON_PAGE);
++	pb_shadow = ioremap(PB_SHADOW_PA, PBMON_PAGE);
++	pb_high = ioremap(PB_HIGH_PA, PBMON_PAGE);
++	if (!pb_low || !pb_shadow || !pb_high)
++		return -ENOMEM;
++	pr_err("pbmon: buffers at phys 0x%llx (monitor 0x%08x), CM2 at 0x%08x\n",
++		(unsigned long long)pb_pa, pb_mon_pa((u32)pb_pa), CM2_PHYS);
++	pb_domain_on();
++
++	/*
++	 * The smc may hang the non-secure world if the monitor rejects it.
++	 * Never run it automatically: userspace drives the test through the
++	 * misc nodes, so a hang costs one reboot of this image (not a flash).
++	 */
++	if (pbmon_selftest)
++		pb_selftest();
++
++	ret = misc_register(&pbseal_misc);
++	if (ret)
++		return ret;
++	ret = misc_register(&pbunseal_misc);
++	if (ret)
++		return ret;
++	ret = misc_register(&pbkey_misc);
++	if (ret)
++		return ret;
++	ret = misc_register(&pbctl_misc);
++	if (ret)
++		return ret;
++	ret = misc_register(&pbpair_misc);
++	if (ret)
++		return ret;
++	ret = misc_register(&pbwsweep_misc);
++	if (ret)
++		return ret;
++	return misc_register(&pboracle_misc);
++}
++
++static struct platform_driver pbmon_driver = {
++	.probe = pbmon_probe,
++	.driver = { .name = "pbmon" },
++};
++
++static int __init pbmon_init(void)
++{
++	int ret;
++
++	ret = platform_driver_register(&pbmon_driver);
++	if (ret)
++		return ret;
++	pb_pdev = platform_device_register_simple("pbmon", -1, NULL, 0);
++	return IS_ERR(pb_pdev) ? PTR_ERR(pb_pdev) : 0;
++}
++device_initcall(pbmon_init);
+--- a/drivers/misc/Makefile
++++ b/drivers/misc/Makefile
+@@ -74,3 +74,5 @@
+ lan966x-pci-objs		+= lan966x_pci.dtbo.o
+ obj-$(CONFIG_MCHP_LAN966X_PCI)	+= lan966x-pci.o
+ obj-y				+= keba/
++
++obj-y				+= pbmon.o

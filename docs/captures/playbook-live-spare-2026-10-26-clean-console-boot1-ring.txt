@@ -1,0 +1,1227 @@
+# count=0x162f6 (90870) index=0x64f6
+
+pm ok
+
+[    1.584655] PBS: 4809c000.target-module idle
+
+[    1.585937] PBR: 480ad000.target-module <- ti-sysc
+
+[    1.586181] PBS: 480ad000.target-module +
+
+[    1.586486] PBS: 480ad000.target-module rev read
+
+[    1.586639] PBS: 480ad000.target-module rev=40202301
+
+[    1.586822] PBS: 480ad000.target-module enable
+
+[    1.586975] PBS: 480ad000.target-module enable done
+
+[    1.587127] PBS: 480ad000.target-module reset
+
+[    1.587280] PBS: 480ad000.target-module reset done
+
+[    1.587432] PBS: 480ad000.target-module pm ok
+
+[    1.587585] PBS: 480ad000.target-module idle
+
+[    1.588714] PBR: 480b2000.target-module <- ti-sysc
+
+[    1.588958] PBS: 480b2000.target-module +
+
+[    1.589263] PBS: 480b2000.target-module rev read
+
+[    1.589416] PBS: 480b2000.target-module rev=00000006
+
+[    1.589599] PBS: 480b2000.target-module enable
+
+[    1.589752] PBS: 480b2000.target-module enable done
+
+[    1.589904] PBS: 480b2000.target-module pm ok
+
+[    1.590057] PBS: 480b2000.target-module idle
+
+[    1.592193] PBR: 480b4000.target-module <- ti-sysc
+
+[    1.592437] PBS: 480b4000.target-module +
+
+[    1.592773] PBS: 480b4000.target-module rev read
+
+[    1.592956] PBS: 480b4000.target-module rev=40202301
+
+[    1.593109] PBS: 480b4000.target-module enable
+
+[    1.593261] PBS: 480b4000.target-module enable done
+
+[    1.593414] PBS: 480b4000.target-module reset
+
+[    1.593566] PBS: 480b4000.target-module reset done
+
+[    1.593719] PBS: 480b4000.target-module pm ok
+
+[    1.593872] PBS: 480b4000.target-module idle
+
+[    1.596130] PBR: 480b8000.target-module <- ti-sysc
+
+[    1.596374] PBS: 480b8000.target-module +
+
+[    1.596679] PBS: 480b8000.target-module rev read
+
+[    1.596862] PBS: 480b8000.target-module rev=40300a0b
+
+[    1.597015] PBS: 480b8000.target-module enable
+
+[    1.597167] PBS: 480b8000.target-module enable done
+
+[    1.597351] PBS: 480b8000.target-module reset
+
+[    1.597473] PBS: 480b8000.target-module reset done
+
+[    1.597656] PBS: 480b8000.target-module pm ok
+
+[    1.597808] PBS: 480b8000.target-module idle
+
+[    1.598815] PBR: 480ba000.target-module <- ti-sysc
+
+[    1.599060] PBS: 480ba000.target-module +
+
+[    1.599365] PBS: 480ba000.target-module rev read
+
+[    1.599548] PBS: 480ba000.target-module rev=40300a0b
+
+[    1.599700] PBS: 480ba000.target-module enable
+
+[    1.599853] PBS: 480ba000.target-module enable done
+
+[    1.600006] PBS: 480ba000.target-module reset
+
+[    1.600158] PBS: 480ba000.target-module reset done
+
+[    1.600341] PBS: 480ba000.target-module pm ok
+
+[    1.600463] PBS: 480ba000.target-module idle
+
+[    1.601501] PBR: 480d1000.target-module <- ti-sysc
+
+[    1.601745] PBS: 480d1000.target-module +
+
+[    1.602050] PBS: 480d1000.target-module rev read
+
+[    1.602203] PBS: 480d1000.target-module rev=40202301
+
+[    1.602386] PBS: 480d1000.target-module enable
+
+[    1.602539] PBS: 480d1000.target-module enable done
+
+[    1.602691] PBS: 480d1000.target-module reset
+
+[    1.602813] PBS: 480d1000.target-module reset done
+
+[    1.602996] PBS: 480d1000.target-module pm ok
+
+[    1.603149] PBS: 480d1000.target-module idle
+
+[    1.604187] PBR: 480d5000.target-module <- ti-sysc
+
+[    1.604400] PBS: 480d5000.target-module +
+
+[    1.604766] PBS: 480d5000.target-module rev read
+
+[    1.604919] PBS: 480d5000.target-module rev=40202301
+
+[    1.605102] PBS: 480d5000.target-module enable
+
+[    1.605255] PBS: 480d5000.target-module enable done
+
+[    1.605407] PBS: 480d5000.target-module reset
+
+[    1.605560] PBS: 480d5000.target-module reset done
+
+[    1.605712] PBS: 480d5000.target-module pm ok
+
+[    1.605865] PBS: 480d5000.target-module idle
+
+[    1.607147] PBR: 48000000.interconnect:segment@200000 <- simple-pm-bus
+
+[    1.608215] PBR: 48350000.target-module <- ti-sysc
+
+[    1.608459] PBS: 48350000.target-module +
+
+[    1.608764] PBS: 48350000.target-module rev read
+
+[    1.608917] PBS: 48350000.target-module rev=5040000a
+
+[    1.609100] PBS: 48350000.target-module enable
+
+[    1.609222] PBS: 48350000.target-module enable done
+
+[    1.609405] PBS: 48350000.target-module reset
+
+[    1.609527] PBS: 48350000.target-module reset done
+
+[    1.609710] PBS: 48350000.target-module pm ok
+
+[    1.609863] PBS: 48350000.target-module idle
+
+[    1.610656] PBR: 48350000.i2c <- omap_i2c
+
+[    1.611999] PBR: 480b4000.mmc <- omap_hsmmc
+
+[    1.612243] PBM: 480b4000.mmc probe
+
+[    1.612731] omap_hsmmc 480b4000.mmc: using DT '/ocp/interconnect@48000000/segment@0/target-module@b4000/mmc@0' for 'cd' GPIO lookup
+
+[    1.613128] of_get_named_gpiod_flags: can't parse 'cd-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@b4000/mmc@0[0]'
+
+[    1.613555] of_get_named_gpiod_flags: can't parse 'cd-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@b4000/mmc@0[0]'
+
+[    1.613983] omap_hsmmc 480b4000.mmc: using lookup tables for GPIO lookup
+
+[    1.614196] omap_hsmmc 480b4000.mmc: No GPIO consumer cd found
+
+[    1.614379] omap_hsmmc 480b4000.mmc: using DT '/ocp/interconnect@48000000/segment@0/target-module@b4000/mmc@0' for 'wp' GPIO lookup
+
+[    1.614898] of_get_named_gpiod_flags: can't parse 'wp-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@b4000/mmc@0[0]'
+
+[    1.615325] of_get_named_gpiod_flags: can't parse 'wp-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@b4000/mmc@0[0]'
+
+[    1.615753] omap_hsmmc 480b4000.mmc: using lookup tables for GPIO lookup
+
+[    1.615966] omap_hsmmc 480b4000.mmc: No GPIO consumer wp found
+
+[    1.616180] PBM: 480b4000.mmc of_parse
+
+[    1.616424] PBM: 480b4000.mmc fclk
+
+[    1.616912] PBM: 480b4000.mmc parent=480b4000.target-module link=1
+
+[    1.617126] PBM: 480b4000.mmc pm_get
+
+[    1.617279] PBM: 480b4000.mmc pm_get done
+
+[    1.617401] PBX: mmc1 probe-pm fck=96000000 pclk=96000000 mm=2 idlest=0 stby=0 sel=1 clkst=2
+
+[    1.617706] PBX: mmc1 probe-pm sysc=00000014 midle=1 sidle=1
+
+[    1.617889] PBM: 480b4000.mmc ctx_save
+
+[    1.618072] PBM: 480b4000.mmc bus_power
+
+[    1.618225] PBM: 480b4000.mmc bus_power done
+
+[    1.618347] PBM: 480b4000.mmc rx dma
+
+[    1.618560] PBM: 480b4000.mmc rx dma done
+
+[    1.618713] PBM: 480b4000.mmc tx dma
+
+[    1.618865] PBM: 480b4000.mmc tx dma done
+
+[    1.619049] PBM: 480b4000.mmc reg_get
+
+[    1.619476] PBM: 480b4000.mmc reg_get done
+
+[    1.619628] PBM: 480b4000.mmc add_host
+
+[    1.619873] PBC: mmc1 device_add done
+
+[    1.620056] PBC: mmc1 start_host
+
+[    1.620178] PBC: mmc1 power_up
+
+[    1.620300] PBSIO: mmc1 enter pm=1 clk=0 bw=0
+
+[    1.620483] PBSIO: mmc1 power done
+
+[    1.620574] PBSIO: mmc1 width done
+
+[    1.620697] PBSIO: mmc1 clock
+
+[    1.620819] PBCLK: mmc1 enter 0Hz
+
+[    1.620941] PBCLK: mmc1 stopped
+
+[    1.621032] PBCLK: mmc1 ics poll
+
+[    1.621154] PBCLK: mmc1 ics done
+
+[    1.621276] PBCLK: mmc1 done
+
+[    1.621368] PBSIO: mmc1 clock done
+
+[    1.621490] PBSIO: mmc1 done
+
+[    1.621582] PBC: mmc1 initial_voltage
+
+[    1.621704] PBC: mmc1 delay1 10ms
+
+[    1.660858] PBC: mmc1 delay1 done
+
+[    1.661010] PBC: mmc1 post_pwrseq
+
+[    1.661132] PBSIO: mmc1 enter pm=2 clk=400000 bw=0
+
+[    1.661285] PBSIO: mmc1 power done
+
+[    1.661407] PBSIO: mmc1 width done
+
+[    1.661529] PBSIO: mmc1 clock
+
+[    1.661621] PBCLK: mmc1 enter 400000Hz
+
+[    1.661773] PBCLK: mmc1 stopped
+
+[    1.661865] PBCLK: mmc1 ics poll
+
+[    1.661987] PBCLK: mmc1 ics done
+
+[    1.662109] PBCLK: mmc1 done
+
+[    1.662200] PBSIO: mmc1 clock done
+
+[    1.662322] PBSIO: mmc1 init_stream
+
+[    1.662445] PBINI: mmc1 enter
+
+[    1.662567] PBINI: mmc1 cmd sent
+
+[    1.662658] PBINI: mmc1 first read
+
+[    1.662780] PBINI: mmc1 stat=00000001
+
+[    1.662902] PBINI: mmc1 cc=1
+
+[    1.663024] PBSIO: mmc1 init_stream done
+
+[    1.663146] PBSIO: mmc1 done
+
+[    1.663269] PBC: mmc1 power_on ios done
+
+[    1.663391] PBC: mmc1 power_on delay 10ms
+
+[    1.680145] PBC: mmc1 power_on delay done
+
+[    1.680297] PBC: mmc1 power_up done
+
+[    1.680419] PBC: mmc1 detect_change
+
+[    1.680572] PBC: mmc1 detect_change done
+
+[    1.680694] PBC: mmc1 start_host done
+
+[    1.680816] PBM: 480b4000.mmc add_host done
+
+[    1.681518] PBC: mmc1 rescan
+
+[    1.681640] PBC: mmc1 claimed
+
+[    1.681762] PBC: mmc1 try 400000Hz
+
+[    1.681884] PBC: mmc1 hw_reset
+
+[    1.682006] PBC: mmc1 hw_reset done
+
+[    1.682128] PBC: mmc1 go_idle
+
+[    1.682220] PBC: mmc1 go_idle cs_high
+
+[    1.682342] PBSIO: mmc1 enter pm=2 clk=400000 bw=0
+
+[    1.682495] PBSIO: mmc1 power done
+
+[    1.682617] PBSIO: mmc1 width done
+
+[    1.682739] PBSIO: mmc1 clock
+
+[    1.682861] PBCLK: mmc1 enter 400000Hz
+
+[    1.682983] PBCLK: mmc1 stopped
+
+[    1.683074] PBCLK: mmc1 ics poll
+
+[    1.683197] PBCLK: mmc1 ics done
+
+[    1.683319] PBCLK: mmc1 done
+
+[    1.683410] PBSIO: mmc1 clock done
+
+[    1.683532] PBSIO: mmc1 done
+
+[    1.683624] PBC: mmc1 go_idle cs_high done
+
+[    1.699676] PBC: mmc1 go_idle delay done
+
+[    1.699859] PBC: mmc1 go_idle core
+
+[    1.699981] PBC: mmc1 __go wait
+
+[    1.700073] PBREQ: mmc1 CMD0 arg=00000000
+
+[    1.700378] PBIRQ: mmc1 enter
+
+[    1.700500] PBIRQ: mmc1 stat=00000001 req=1
+
+[    1.716461] PBC: mmc1 __go wait done
+
+[    1.718109] PBC: mmc1 go_idle core done
+
+[    1.718261] PBSIO: mmc1 enter pm=2 clk=400000 bw=0
+
+[    1.718414] PBSIO: mmc1 power done
+
+[    1.718536] PBSIO: mmc1 width done
+
+[    1.718658] PBSIO: mmc1 clock
+
+[    1.718780] PBCLK: mmc1 enter 400000Hz
+
+[    1.718902] PBCLK: mmc1 stopped
+
+[    1.718994] PBCLK: mmc1 ics poll
+
+[    1.719116] PBCLK: mmc1 ics done
+
+[    1.719238] PBCLK: mmc1 done
+
+[    1.719329] PBSIO: mmc1 clock done
+
+[    1.719451] PBSIO: mmc1 done
+
+[    1.719726] i2c i2c-3: using DT '/ocp/interconnect@48000000/segment@200000/target-module@150000/i2c@0' for 'scl' GPIO lookup
+
+[    1.720123] of_get_named_gpiod_flags: can't parse 'scl-gpios' property of node '/ocp/interconnect@48000000/segment@200000/target-module@150000/i2c@0[0]'
+
+[    1.720581] of_get_named_gpiod_flags: can't parse 'scl-gpio' property of node '/ocp/interconnect@48000000/segment@200000/target-module@150000/i2c@0[0]'
+
+[    1.721008] i2c i2c-3: using lookup tables for GPIO lookup
+
+[    1.721221] i2c i2c-3: No GPIO consumer scl found
+
+[    1.721374] i2c i2c-3: using DT '/ocp/interconnect@48000000/segment@200000/target-module@150000/i2c@0' for 'sda' GPIO lookup
+
+[    1.721771] of_get_named_gpiod_flags: can't parse 'sda-gpios' property of node '/ocp/interconnect@48000000/segment@200000/target-module@150000/i2c@0[0]'
+
+[    1.722198] of_get_named_gpiod_flags: can't parse 'sda-gpio' property of node '/ocp/interconnect@48000000/segment@200000/target-module@150000/i2c@0[0]'
+
+[    1.722625] i2c i2c-3: using lookup tables for GPIO lookup
+
+[    1.722808] i2c i2c-3: No GPIO consumer sda found
+
+[    1.722991] omap_i2c 48350000.i2c: bus 3 rev0.10 at 100 kHz
+
+[    1.724578] PBR: ocp:target-module@48210000 <- ti-sysc
+
+[    1.724914] PBS: ocp:target-module@48210000 +
+
+[    1.725250] PBS: ocp:target-module@48210000 rev read
+
+[    1.725433] PBS: ocp:target-module@48210000 rev=00000000
+
+[    1.725616] PBS: ocp:target-module@48210000 enable
+
+[    1.725769] PBS: ocp:target-module@48210000 enable done
+
+[    1.725921] PBS: ocp:target-module@48210000 reset
+
+[    1.726074] PBS: ocp:target-module@48210000 reset done
+
+[    1.726257] PBS: ocp:target-module@48210000 pm ok
+
+[    1.726409] PBS: ocp:target-module@48210000 idle
+
+[    1.726867] ocp:target-module@48210000:mpu:fck: device ID is greater than 24
+
+[    1.728576] PBR: 50000000.target-module <- ti-sysc
+
+[    1.728820] PBS: 50000000.target-module +
+
+[    1.729156] PBS: 50000000.target-module rev read
+
+[    1.729309] PBS: 50000000.target-module rev=00000060
+
+[    1.729492] PBS: 50000000.target-module enable
+
+[    1.729644] PBS: 50000000.target-module enable done
+
+[    1.729797] PBS: 50000000.target-module reset
+
+[    1.729949] PBS: 50000000.target-module reset done
+
+[    1.730102] PBS: 50000000.target-module pm ok
+
+[    1.730255] PBS: 50000000.target-module idle
+
+[    1.731201] PBR: 50000000.gpmc <- omap-gpmc
+
+[    1.731658] omap-gpmc 50000000.gpmc: GPMC revision 6.0
+
+[    1.731842] gpmc_mem_init: disabling cs 0 mapped at 0x0-0x1000000
+
+[    1.732086] gpiochip_find_base_unlocked: found new base at 704
+
+[    1.732696] PBC: mmc1 go_idle done
+
+[    1.732818] PBC: mmc1 attach_mmc
+
+[    1.732940] PBSIO: mmc1 enter pm=2 clk=400000 bw=0
+
+[    1.733123] PBSIO: mmc1 power done
+
+[    1.733245] PBSIO: mmc1 width done
+
+[    1.733337] PBSIO: mmc1 clock
+
+[    1.733459] PBCLK: mmc1 enter 400000Hz
+
+[    1.733581] PBCLK: mmc1 stopped
+
+[    1.733703] PBCLK: mmc1 ics poll
+
+[    1.733795] PBCLK: mmc1 ics done
+
+[    1.733917] PBCLK: mmc1 done
+
+[    1.734008] PBSIO: mmc1 clock done
+
+[    1.734130] PBSIO: mmc1 done
+
+[    1.734252] PBREQ: mmc1 CMD1 arg=00000000
+
+[    1.734680] PBIRQ: mmc1 enter
+
+[    1.734802] PBIRQ: mmc1 stat=00000001 req=1
+
+[    1.759613] PBOCR: arg=00000000 resp=40ff8080 host_avail=00300000 busy
+
+[    1.759918] gpio gpiochip6: (omap-gpmc): added GPIO chardev (254:6)
+
+[    1.760284] gpio gpiochip6: registered GPIOs 704 to 707 on omap-gpmc
+
+[    1.761474] PBR: 52000000.target-module <- ti-sysc
+
+[    1.761749] PBS: 52000000.target-module +
+
+[    1.762084] PBS: 52000000.target-module rev read
+
+[    1.762237] PBS: 52000000.target-module rev=40000101
+
+[    1.762420] PBS: 52000000.target-module enable
+
+[    1.762573] PBS: 52000000.target-module enable done
+
+[    1.762725] PBS: 52000000.target-module reset
+
+[    1.762878] PBS: 52000000.target-module reset done
+
+[    1.763031] PBS: 52000000.target-module pm ok
+
+[    1.763183] PBS: 52000000.target-module idle
+
+[    1.764068] PBR: ocp:target-module@54000000 <- ti-sysc
+
+[    1.764343] PBS: ocp:target-module@54000000 +
+
+[    1.764648] PBS: ocp:target-module@54000000 rev read
+
+[    1.764892] PBS: ocp:target-module@54000000 rev=00000000
+
+[    1.765075] PBS: ocp:target-module@54000000 enable
+
+[    1.765258] PBS: ocp:target-module@54000000 enable done
+
+[    1.765411] PBS: ocp:target-module@54000000 reset
+
+[    1.765563] PBS: ocp:target-module@54000000 reset done
+
+[    1.765747] PBS: ocp:target-module@54000000 pm ok
+
+[    1.765899] PBS: ocp:target-module@54000000 idle
+
+[    1.766357] ocp:target-module@54000000:pmu:fck: device ID is greater than 24
+
+[    1.767059] PBR: ocp:target-module@54000000:pmu <- armv7-pmu
+
+[    1.767333] armv7-pmu ocp:target-module@54000000:pmu: hw perfevents: no irqs for PMU, sampling events not supported
+
+[    1.767944] hw perfevents: enabled with armv7_cortex_a9 PMU driver, 7 (8000003f) counters available
+
+[    1.769195] PBR: 55082000.target-module <- ti-sysc
+
+[    1.769439] PBS: 55082000.target-module +
+
+[    1.769744] PBS: 55082000.target-module rev read
+
+[    1.769927] PBS: 55082000.target-module rev=00000021
+
+[    1.770080] PBS: 55082000.target-module enable
+
+[    1.770233] PBS: 55082000.target-module enable done
+
+[    1.770385] PBS: 55082000.target-module reset
+
+[    1.770538] PBS: 55082000.target-module reset done
+
+[    1.770721] PBS: 55082000.target-module pm ok
+
+[    1.770874] PBS: 55082000.target-module idle
+
+[    1.771575] PBR: 55082000.mmu <- omap-iommu
+
+[    1.773529] omap-iommu 55082000.mmu: 55082000.mmu registered
+
+[    1.774505] PBR: 4012c000.target-module <- ti-sysc
+
+[    1.774810] PBS: 4012c000.target-module +
+
+[    1.775939] PBS: 4012c000.target-module rev read
+
+[    1.776123] PBS: 4012c000.target-module rev=40000902
+
+[    1.776275] PBS: 4012c000.target-module enable
+
+[    1.776428] PBS: 4012c000.target-module enable done
+
+[    1.776580] PBS: 4012c000.target-module reset
+
+[    1.776733] PBS: 4012c000.target-module reset done
+
+[    1.776916] PBS: 4012c000.target-module pm ok
+
+[    1.777069] PBS: 4012c000.target-module idle
+
+[    1.777893] PBR: 4e000000.target-module <- ti-sysc
+
+[    1.778106] PBS: 4e000000.target-module +
+
+[    1.778381] PBS: 4e000000.target-module rev read
+
+[    1.778533] PBS: 4e000000.target-module rev=40000008
+
+[    1.778717] PBS: 4e000000.target-module enable
+
+[    1.778869] PBS: 4e000000.target-module enable done
+
+[    1.779022] PBS: 4e000000.target-module reset
+
+[    1.779144] PBS: 4e000000.target-module reset done
+
+[    1.779327] PBS: 4e000000.target-module pm ok
+
+[    1.779479] PBS: 4e000000.target-module idle
+
+[    1.782653] PBR: 58000000.target-module <- ti-sysc
+
+[    1.782928] PBS: 58000000.target-module +
+
+[    1.783325] PBS: 58000000.target-module rev read
+
+[    1.783477] PBS: 58000000.target-module rev=00000040
+
+[    1.783660] PBS: 58000000.target-module enable
+
+[    1.783813] PBS: 58000000.target-module enable done
+
+[    1.783966] PBS: 58000000.target-module pm ok
+
+[    1.784118] PBS: 58000000.target-module idle
+
+[    1.785339] PBR: 4a002260.bandgap <- ti-soc-thermal
+
+[    1.789520] PBR: 4a0ab000.usb_otg_hs <- musb-omap2430
+
+[    1.790161] PBR: musb-hdrc.0.auto <- musb-hdrc
+
+[    1.792022] PBR: 48070000.i2c:twl@48:usb-comparator <- twl6030_usb
+
+[    1.792785] PBREQ: mmc1 CMD1 arg=40ff8080
+
+[    1.793243] PBIRQ: mmc1 enter
+
+[    1.793365] PBIRQ: mmc1 stat=00000001 req=1
+
+[    1.793640] PBR: 4a307bd0.regulator-abb-mpu <- ti_abb
+
+[    1.794525] PBOCR: arg=40ff8080 resp=40ff8080 host_avail=00300000 busy
+
+[    1.812774] PBREQ: mmc1 CMD1 arg=40ff8080
+
+[    1.813201] PBIRQ: mmc1 enter
+
+[    1.813354] PBIRQ: mmc1 stat=00000001 req=1
+
+[    1.813537] PBOCR: arg=40ff8080 resp=c0ff8080 host_avail=00300000
+
+[    1.813751] PBVOLT: card_ocr=c0ff8080 host_avail=00300000
+
+[    1.813903] PBSIO: mmc1 enter pm=2 clk=400000 bw=0
+
+[    1.814086] PBSIO: mmc1 power done
+
+[    1.814208] PBSIO: mmc1 width done
+
+[    1.814331] PBSIO: mmc1 clock
+
+[    1.814422] PBCLK: mmc1 enter 400000Hz
+
+[    1.814544] PBCLK: mmc1 stopped
+
+[    1.814666] PBCLK: mmc1 ics poll
+
+[    1.814819] PBCLK: mmc1 ics done
+
+[    1.814941] PBCLK: mmc1 done
+
+[    1.815032] PBSIO: mmc1 clock done
+
+[    1.815155] PBSIO: mmc1 done
+
+[    1.815246] PBC: mmc1 go_idle cs_high
+
+[    1.815399] PBSIO: mmc1 enter pm=2 clk=400000 bw=0
+
+[    1.815551] PBSIO: mmc1 power done
+
+[    1.815673] PBSIO: mmc1 width done
+
+[    1.815795] PBSIO: mmc1 clock
+
+[    1.815887] PBCLK: mmc1 enter 400000Hz
+
+[    1.816009] PBCLK: mmc1 stopped
+
+[    1.816131] PBCLK: mmc1 ics poll
+
+[    1.816253] PBCLK: mmc1 ics done
+
+[    1.816345] PBCLK: mmc1 done
+
+[    1.816467] PBSIO: mmc1 clock done
+
+[    1.816558] PBSIO: mmc1 done
+
+[    1.816680] PBC: mmc1 go_idle cs_high done
+
+[    1.834960] PBC: mmc1 go_idle delay done
+
+[    1.835113] PBC: mmc1 go_idle core
+
+[    1.835235] PBC: mmc1 __go wait
+
+[    1.835327] PBREQ: mmc1 CMD0 arg=00000000
+
+[    1.835632] PBIRQ: mmc1 enter
+
+[    1.835754] PBIRQ: mmc1 stat=00000001 req=1
+
+[    1.835937] PBC: mmc1 __go wait done
+
+[    1.858703] PBC: mmc1 go_idle core done
+
+[    1.858825] PBSIO: mmc1 enter pm=2 clk=400000 bw=0
+
+[    1.859008] PBSIO: mmc1 power done
+
+[    1.859130] PBSIO: mmc1 width done
+
+[    1.859252] PBSIO: mmc1 clock
+
+[    1.859344] PBCLK: mmc1 enter 400000Hz
+
+[    1.859466] PBCLK: mmc1 stopped
+
+[    1.859588] PBCLK: mmc1 ics poll
+
+[    1.859710] PBCLK: mmc1 ics done
+
+[    1.859802] PBCLK: mmc1 done
+
+[    1.859924] PBSIO: mmc1 clock done
+
+[    1.860046] PBSIO: mmc1 done
+
+[    1.883148] PBREQ: mmc1 CMD1 arg=40300000
+
+[    1.883605] PBIRQ: mmc1 enter
+
+[    1.883728] PBIRQ: mmc1 stat=00000001 req=1
+
+[    1.883911] PBOCR: arg=40300000 resp=40ff8080 host_avail=00300000 busy
+
+[    1.900390] PBREQ: mmc1 CMD1 arg=40300000
+
+[    1.900848] PBIRQ: mmc1 enter
+
+[    1.900970] PBIRQ: mmc1 stat=00000001 req=1
+
+[    1.922363] PBOCR: arg=40300000 resp=c0ff8080 host_avail=00300000
+
+[    1.922607] PBREQ: mmc1 CMD2 arg=00000000
+
+[    1.923248] PBIRQ: mmc1 enter
+
+[    1.923370] PBIRQ: mmc1 stat=00000001 req=1
+
+[    1.937988] PBREQ: mmc1 CMD3 arg=00010000
+
+[    1.938446] PBIRQ: mmc1 enter
+
+[    1.938568] PBIRQ: mmc1 stat=00000001 req=1
+
+[    1.953308] PBSIO: mmc1 enter pm=2 clk=400000 bw=0
+
+[    1.953491] PBSIO: mmc1 power done
+
+[    1.953613] PBSIO: mmc1 width done
+
+[    1.953735] PBSIO: mmc1 clock
+
+[    1.953826] PBCLK: mmc1 enter 400000Hz
+
+[    1.953979] PBCLK: mmc1 stopped
+
+[    1.954071] PBCLK: mmc1 ics poll
+
+[    1.954193] PBCLK: mmc1 ics done
+
+[    1.954315] PBCLK: mmc1 done
+
+[    1.954406] PBSIO: mmc1 clock done
+
+[    1.954528] PBSIO: mmc1 done
+
+[    1.954620] PBREQ: mmc1 CMD9 arg=00010000
+
+[    1.955322] PBIRQ: mmc1 enter
+
+[    1.955444] PBIRQ: mmc1 stat=00000001 req=1
+
+[    1.969909] PBREQ: mmc1 CMD7 arg=00010000
+
+[    1.970367] PBIRQ: mmc1 enter
+
+[    1.970489] PBIRQ: mmc1 stat=00000001 req=1
+
+[    1.994140] PBREQ: mmc1 CMD8 arg=00000000
+
+[    1.994628] PBIRQ: mmc1 enter
+
+[    1.994750] PBIRQ: mmc1 stat=00000001 req=1
+
+[    2.004974] PBIRQ: mmc1 enter
+
+[    2.005096] PBIRQ: mmc1 stat=00000002 req=1
+
+[    2.018707] PBREQ: mmc1 CMD6 arg=03af0101
+
+[    2.019195] PBIRQ: mmc1 enter
+
+[    2.019317] PBIRQ: mmc1 stat=00000003 req=1
+
+[    2.042510] PBREQ: mmc1 CMD13 arg=00010000
+
+[    2.042724] twl6030_usb 48070000.i2c:twl@48:usb-comparator: Initialized TWL6030 USB module
+
+[    2.042968] PBIRQ: mmc1 enter
+
+[    2.042999] PBIRQ: mmc1 stat=00000001 req=1
+
+[    2.043457] PBREQ: mmc1 CMD6 arg=03b90101
+
+[    2.043914] PBIRQ: mmc1 enter
+
+[    2.044036] PBIRQ: mmc1 stat=00000003 req=1
+
+[    2.048004] PBSIO: mmc1 enter pm=2 clk=400000 bw=0
+
+[    2.048217] PBSIO: mmc1 power done
+
+[    2.048339] PBSIO: mmc1 width done
+
+[    2.048431] PBSIO: mmc1 clock
+
+[    2.048553] PBCLK: mmc1 enter 400000Hz
+
+[    2.048675] PBCLK: mmc1 stopped
+
+[    2.048797] PBCLK: mmc1 ics poll
+
+[    2.048919] PBCLK: mmc1 ics done
+
+[    2.049011] PBCLK: mmc1 done
+
+[    2.049133] PBSIO: mmc1 clock done
+
+[    2.049224] PBSIO: mmc1 done
+
+[    2.049346] PBREQ: mmc1 CMD13 arg=00010000
+
+[    2.049774] PBIRQ: mmc1 enter
+
+[    2.049896] PBIRQ: mmc1 stat=00000001 req=1
+
+[    2.050933] PBSIO: mmc1 enter pm=2 clk=52000000 bw=0
+
+[    2.051116] PBSIO: mmc1 power done
+
+[    2.051239] PBSIO: mmc1 width done
+
+[    2.051361] PBSIO: mmc1 clock
+
+[    2.051483] PBCLK: mmc1 enter 52000000Hz
+
+[    2.051605] PBCLK: mmc1 stopped
+
+[    2.051727] PBCLK: mmc1 ics poll
+
+[    2.051818] PBCLK: mmc1 ics done
+
+[    2.051940] PBCLK: mmc1 done
+
+[    2.052032] PBSIO: mmc1 clock done
+
+[    2.052154] PBSIO: mmc1 done
+
+[    2.052276] PBREQ: mmc1 CMD6 arg=03b70201
+
+[    2.052429] PBIRQ: mmc1 enter
+
+[    2.052551] PBIRQ: mmc1 stat=00000003 req=1
+
+[    2.052703] PBREQ: mmc1 CMD13 arg=00010000
+
+[    2.052886] PBIRQ: mmc1 enter
+
+[    2.052978] PBIRQ: mmc1 stat=00000001 req=1
+
+[    2.053161] PBSIO: mmc1 enter pm=2 clk=52000000 bw=3
+
+[    2.053314] PBSIO: mmc1 power done
+
+[    2.053436] PBSIO: mmc1 width done
+
+[    2.053558] PBSIO: mmc1 clock
+
+[    2.053680] PBCLK: mmc1 enter 52000000Hz
+
+[    2.053802] PBCLK: mmc1 stopped
+
+[    2.053924] PBCLK: mmc1 ics poll
+
+[    2.054016] PBCLK: mmc1 ics done
+
+[    2.054138] PBCLK: mmc1 done
+
+[    2.054229] PBSIO: mmc1 clock done
+
+[    2.054351] PBSIO: mmc1 done
+
+[    2.054473] PBREQ: mmc1 CMD8 arg=00000000
+
+[    2.054656] PBIRQ: mmc1 enter
+
+[    2.054748] PBIRQ: mmc1 stat=00000003 req=1
+
+[    2.054992] PBREQ: mmc1 CMD6 arg=03a10101
+
+[    2.055145] PBIRQ: mmc1 enter
+
+[    2.055267] PBIRQ: mmc1 stat=00000003 req=1
+
+[    2.055419] PBREQ: mmc1 CMD13 arg=00010000
+
+[    2.055603] PBIRQ: mmc1 enter
+
+[    2.055694] PBIRQ: mmc1 stat=00000001 req=1
+
+[    2.055877] mmc1: new high speed MMC card at address 0001
+
+[    2.056396] PBR: mmc1:0001 <- mmcblk
+
+[    2.057281] mmcblk1: mmc1:0001 MCGAFA 59.4 GiB
+
+[    2.059387] PBREQ: mmc1 CMD18 arg=00000000
+
+[    2.059600] PBIRQ: mmc1 enter
+
+[    2.059692] PBIRQ: mmc1 stat=00000001 req=1
+
+[    2.059875] PBIRQ: mmc1 enter
+
+[    2.059967] PBIRQ: mmc1 stat=00000001 req=1
+
+[    2.060363] PBIRQ: mmc1 stat=00000002 req=1
+
+[    2.062286] mmcblk1boot0: mmc1:0001 MCGAFA 512 KiB
+
+[    2.064483] mmcblk1boot1: mmc1:0001 MCGAFA 512 KiB
+
+[    2.078369] mmcblk1rpmb: mmc1:0001 MCGAFA 128 KiB, chardev (249:0)
+
+[    2.559997] clk: Not disabling unused clocks
+
+[    2.560180] PM: genpd: Disabling unused power domains
+
+[    2.560455] Warning: unable to open an initial console.
+
+[    2.562622] Freeing unused kernel image (initmem) memory: 1024K
+
+[    2.563232] Run /init as init process
+
+[    2.563385]   with arguments:
+
+[    2.563476]     /init
+
+[    2.563568]   with environment:
+
+[    2.563659]     HOME=/
+
+[    2.563751]     TERM=linux
+
+[    2.563873]     maxcpus=1
+
+[    2.567474] PLAYBOOK: /init running as PID 1, no rootfs, no media access
+
+[    2.568023] PLAYBOOK: ===== /proc/version =====
+
+[    2.568237] Linux version 6.15.11 (psyden@psyden-desktop) (arm-linux-gcc.br_real (Buildroot 2021.11-18033-g83947c7bb6) 14.3.0, GNU ld (GNU Binutils) 2.43.1) #67 Tue Oct 27 03:33:59 -03 2026
+
+[    2.568237] 
+
+[    2.568878] PLAYBOOK: ===== /proc/interrupts =====
+
+[    2.569305]            CPU0       
+
+[    2.569305]  16:        340 GIC-0  29 Edge      twd
+
+[    2.569305]  17:          0    WUGEN  37 Level     clockevent
+
+[    2.569305]  28:          0     PRCM     Edge      pinctrl, pinctrl
+
+[    2.569305]  83:          0    WUGEN   9 Level     l3-dbg-irq
+
+[    2.569305]  84:          0    WUGEN  10 Level     l3-app-irq
+
+[    2.569305]  85:          0    WUGEN  29 Level     4a310000.gpio
+
+[    2.569305]  86:          3    WUGEN  13 Level     omap-dma-engine
+
+[    2.569305]  87:          0    WUGEN  28 Level     4a066000.mmu
+
+[    2.569305]  91:          0    WUGEN  74 Level     48020000.serial
+
+[    2.569305]  96:          0    WUGEN  30 Level     48055000.gpio
+
+[    2.569305]  97:          0    WUGEN  31 Level     48057000.gpio
+
+[    2.569305]  98:          0    WUGEN  32 Level     48059000.gpio
+
+[    2.569305]  99:          0    WUGEN  33 Level     4805b000.gpio
+
+[    2.569305] 100:          0    WUGEN  34 Level     4805d000.gpio
+
+[    2.569305] 101:          0    WUGEN  61 Level     48060000.i2c
+
+[    2.569305] 102:          0    WUGEN  72 Level     4806a000.serial
+
+[    2.569305] 103:          0    WUGEN  73 Level     4806c
+
+[    2.572357] 000.serial
+
+[    2.572357] 104:          0    WUGEN  70 Level     4806e000.serial
+
+[    2.572357] 105:         94    WUGEN  56 Level     48070000.i2c
+
+[    2.572357] 106:          0    WUGEN   7 Level     TWL6030-PIH
+
+[    2.572357] 107:          0    WUGEN  57 Level     48072000.i2c
+
+[    2.572357] 110:          0    WUGEN  62 Level     48350000.i2c
+
+[    2.572357] 111:         25    WUGEN  86 Level     mmc1
+
+[    2.572357] 112:          0    WUGEN  20 Level     gpmc
+
+[    2.572357] 113:          0    WUGEN 100 Level     55082000.mmu
+
+[    2.572357] 114:          0    WUGEN  92 Level     musb-hdrc.0.auto
+
+[    2.572357] 115:          0    WUGEN  93 Level     musb-hdrc.0.auto
+
+[    2.572357] 116:          0  twl6030   4 Edge      twl6030_usb
+
+[    2.572357] 117:          0  twl6030  10 Edge      twl6030_usb
+
+[    2.572357] Err:          0
+
+[    2.572357] 
+PB: ---- userspace probe begin (ring logger, printk bypassed) ----
+PB: UDC = musb-hdrc.0.auto, binding gadget
+r[    2.805053] PBR: gadget.0 <- configfs-gadget.g1
+
+[    2.805297] udc musb-hdrc.0.auto: binding gadget driver [g1]
+
+[    2.805511] configfs-gadget.g1 gadget.0: adding 'acm'/(ptrval) to config 'c'/(ptrval)
+
+[    2.805816] configfs-gadget.g1 gadget.0: acm ttyGS0: IN/ep1in OUT/ep1out NOTIFY/ep2in
+PB: gadget bound (idVendor 0fca idProduct 8010)
+<[    2.806854] PLAYBOOK: ===== /sys/class/udc/musb-hdrc.0.auto/state =====
+
+[    2.807128] not attached
+
+[    2.807128] 
+
+[    2.807403] PLAYBOOK: ===== /sys/class/udc/musb-hdrc.0.auto/function =====
+
+[    2.807647] g1
+
+[    2.807647] 
+
+[    2.812011] gs_open: ttyGS0 ((ptrval),(ptrval))
+PB: console: host connected on ttyGS0
+PB: console started as pid 53
+PB: PEEK DSS_REVISION           48040000 = 00000040
+PB: PEEK DISPC_REVISION         48041000 = 00000040
+PB: PEEK DISPC_SYSSTATUS        48041014 = 00000001
+PB: PEEK DISPC_CONTROL          48041040 = 00000000
+PB: PEEK CM_DSS_CLKSTCTRL       4a009100 = 00000f02
+PB: PEEK CM_DSS_CLKCTRL         4a009120 = 00040f02
+PB: PEEK CM_L3INIT_CLKSTCTRL    4a009300 = 02077302
+PB: PEEK L3INIT_USBOTGHS        4a009358 = 00000002
+PB: PEEK L3INIT_USBHOSTHS       4a009360 = 00000101
+PB: PEEK L3INIT_USBTLL          4a009368 = 00000001
+PB: PEEK DPLL_USB mode          4a008180 = 00000007
+PB: PEEK MUSB_DEVCTL before     4a0ab060 = 07070080
+PB: PEEK USBOTGHS_CONTROL       4a00233c = 00000018
+PB: POKE USBOTGHS_CONTROL = 0x15 (AVALID|VBUSVALID|IDDIG)
+PB: PEEK USBOTGHS_CONTROL       4a00233c = 00000035
+PB: PEEK MUSB_DEVCTL after      4a0ab060 = 07070098
+PB: PROBE1 DONE (display-safe + USB)
+PB: probe child exit 0
+PB: PROBE2 start (DSI1)
+PB: PEEK DSI1_REVISION          48044000 = 00000030
+PB: PEEK DSI1_SYSSTATUS         48044014 = 00000001
+PB: PEEK DSI1_COMPLEXIO_CFG1    48044048 = 00000000
+0[    2.836822] 8<--- cut here ---
+
+[    2.836975] Unhandled fault: external abort on non-linefetch (0x1018) at 0xb6f4f200
+
+[    2.837219] [b6f4f200] *pgd=b0272831
+
+[    2.837402] ------------[ cut here ]------------
+
+[    2.837554] WARNING: CPU: 0 PID: 55 at drivers/bus/omap_l3_noc.c:133 l3_interrupt_handler+0x230/0x354
+
+[    2.837890] 44000000.l3-noc:L3 Custom Error: MASTER MPU TARGET L4PER2 (Read): Data Access in User mode during Functional access
+
+[    2.838256] Modules linked in:
+
+[    2.838378] CPU: 0 UID: 0 PID: 55 Comm: init Tainted: G        W           6.15.11 #67 NONE 
+
+[    2.838653] Tainted: [W]=WARN
+
+[    2.838775] Hardware name: Generic OMAP4 (Flattened Device Tree)
+
+[    2.838958] Call trace: 
+
+[    2.838989]  unwind_backtrace from show_stack+0x10/0x14
+
+[    2.839294]  show_stack from dump_stack_lvl+0x38/0x48
+
+[    2.839508]  dump_stack_lvl from __warn+0x7c/0x114
+
+[    2.839721]  __warn from warn_slowpath_fmt+0x94/0xcc
+
+[    2.839935]  warn_slowpath_fmt from l3_interrupt_handler+0x230/0x354
+
+[    2.840179]  l3_interrupt_handler from __handle_irq_event_percpu+0x58/0x17c
+
+[    2.840454]  __handle_irq_event_percpu from handle_irq_event+0x28/0x68
+
+[    2.840667]  handle_irq_event from handle_fasteoi_irq+0x80/0x21c
+
+[    2.840911]  handle_fasteoi_irq from handle_irq_desc+0x54/0x8c
+
+[    2.841125]  handle_irq_desc from gic_handle_irq+0x23c/0x308
+
+[    2.841339]  gic_handle_irq from generic_handle_arch_irq+0x28/0x3c
+
+[    2.841583]  generic_handle_arch_irq from call_with_stack+0x18/0x20
+
+[    2.841857]  call_with_stack from __irq_svc+0x98/0xb4
+
+[    2.842041] Exception stack(0xf03ddef8 to 0xf03ddf40)
+
+[    2.842224] dee0:                                                       f03ddfb0 800f0010
+
+[    2.842498] df00: 00000000 00010000 c1b71280 00000000 f03ddfb0 00000000 00000000 c1b71280
+
+[    2.842742] df20: 00000002 00081988 c1c5302c f03ddf48 c01000e0 c011fd5c 400f0113 ffffffff
+
+[    2.843017]  __irq_svc from do_work_pending+0x60/0x56c
+
+[    2.843200]  do_work_pending from slow_work_pending+0xc/0x24
+
+[    2.843414] Exception stack(0xf03ddfb0 to 0xf03ddff8)
+
+[    2.843597] dfa0:                                     b6f4f000 00001000 000031c4 00000200
+
+[    2.843841] dfc0: 48044200 00010f28 0006322c 000639e8 bea6cefc 0007ddc4 00000002 00081988
+
+[    2.844116] dfe0: 00000000 bea6cba8 00010e8c 00010ea0 800f0010 ffffffff
+
+[    2.844329] ---[ end trace 0000000000000000 ]---
+PB: probe child died on signal 7
+PB: console up; auto-reboot in 180 s
+t[    3.268676] configfs-gadget.g1 gadget.0: high-speed config #1: c
+
+[    3.268951] configfs-gadget.g1 gadget.0: reset acm ttyGS0
+
+[    3.269134] configfs-gadget.g1 gadget.0: activate acm ttyGS0
+
+[    3.269317] gserial_connect: start ttyGS0
+
+[    3.269592] configfs-gadget.g1 gadget.0: acm ttyGS0 serial state 0003
+
+[    3.270416] configfs-gadget.g1 gadget.0: acm ttyGS0 req21.20 v0000 i0000 l7
+
+[   31.850036] l3-dss-clkctrl:0000:0: failed to disable
+
+[   33.126373] VAUX1_6030: disabling
+
+[   33.132080] omap_i2c 48070000.i2c: Arbitration lost
+
+[   33.152313] twl: Read failed (mod 4, reg 0x58 count 1)
+
+[   34.184967] twl: Read failed (mod 4, reg 0x5c count 1)
+
+[   34.210174] omap_i2c 48070000.i2c: Arbitration lost
+
+[   34.224945] twl: Read failed (mod 4, reg 0x64 count 1)
+
+[   35.304992] twl: Read failed (mod 4, reg 0x50 count 1)
+
+[   35.330169] omap_i2c 48070000.i2c: Arbitration lost
+
+[   35.344940] twl: Read failed (mod 4, reg 0x68 count 1)
+
+[   36.424987] twl: Read failed (mod 4, reg 0x6c count 1)
+
+[   36.450195] omap_i2c 48070000.i2c: Arbitration lost
+
+[   36.464996] twl: Read failed (mod 4, reg 0x74 count 1)
+PB: reboot now (lifetime expired)
++[  182.125854] PLAYBOOK: rebooting now
+
+[  182.126403] PBREQ: mmc1 CMD7 arg=00000000
+
+[  182.126403] PBIRQ: mmc1 stat=00000001 req=1
+
+[  182.126770] PBREQ: mmc1 CMD5 arg=00018000
+
+[  182.126770] PBIRQ: mmc1 stat=00000001 req=1
+
+[  182.214385] PBIRQ: mmc1 stat=00108000 req=1
+
+[  182.214630] mmc1: error -110 during shutdown
+
+[  182.216033] reboot: Restarting system
+

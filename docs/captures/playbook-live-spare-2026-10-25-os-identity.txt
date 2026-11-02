@@ -1,0 +1,31 @@
+air
+authorization
+bookmarks
+buttons
+development
+dtm
+ema
+filebrowser
+installer
+keyboard
+launcher_priority
+navigator
+nvram
+ota
+perimeter
+power
+ppsnetd
+printd
+quincy
+quip
+sapphire
+scoreloop
+settings
+splash
+---
+deviceinfo
+osregion
+---
+sh: head: cannot execute - No such file or directory
+---
+/proc/version: No such file or directory

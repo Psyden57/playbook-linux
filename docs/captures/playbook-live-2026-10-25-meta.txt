@@ -1,0 +1,16 @@
+QNX localhost 6.6.0 2011/11/11-16:00:16EST OMAP4430_Winchester_ES2.2_HS_PVT4_Rev:07 armle
+---
+/dev/hd3 on / type qnx6 
+none on /BlackBerry type BB_WEBDAV 
+/dev/hd1t179 on /base type qnx6 
+---
+/dev/hd3                61095920   2485468  58610452       5%  /               
+/BlackBerry                    0         0         0     100%                  
+/dev/hd1t179              511984    415412     96572      82%  /base/          
+/dev/hd6                     128       128         0     100%                  
+/dev/hd5                     512       512         0     100%                  
+/dev/hd4                     512       512         0     100%                  
+/dev/hd2                  512000    512000         0     100%  /dev/hd2t179    
+/dev/hd2                  524288    524288         0     100%                  
+/dev/hd1                  524288    524288         0     100%                  
+/dev/hd0                62291968  62291968         0     100%                  

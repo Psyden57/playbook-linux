@@ -1,0 +1,1084 @@
+# count=0xff08 (65288) index=0x108
+
+serial@0[0]'
+
+[    1.044555] omap8250 48020000.serial: using lookup tables for GPIO lookup
+
+[    1.044769] omap8250 48020000.serial: No GPIO consumer rs485-rx-during-tx found
+
+[    1.045196] PBR: 48020000.serial:0 <- ctrl
+
+[    1.045593] PBR: 48020000.serial:0.0 <- port
+
+[    1.045837] 48020000.serial: ttyS2 at MMIO 0x48020000 (irq = 91, base_baud = 3000000) is a 8250
+
+[    1.048278] PBR: 48032000.target-module <- ti-sysc
+
+[    1.048522] PBS: 48032000.target-module +
+
+[    1.048858] PBS: 48032000.target-module rev read
+
+[    1.049041] PBS: 48032000.target-module rev=00000015
+
+[    1.049194] PBS: 48032000.target-module enable
+
+[    1.049346] PBS: 48032000.target-module enable done
+
+[    1.049530] PBS: 48032000.target-module reset
+
+[    1.049652] PBS: 48032000.target-module reset done
+
+[    1.049835] PBS: 48032000.target-module pm ok
+
+[    1.049987] PBS: 48032000.target-module idle
+
+[    1.051177] PBR: 48032000.timer <- omap_timer
+
+[    1.052764] PBR: 48034000.target-module <- ti-sysc
+
+[    1.053009] PBS: 48034000.target-module +
+
+[    1.053314] PBS: 48034000.target-module rev read
+
+[    1.053497] PBS: 48034000.target-module rev=4fff1301
+
+[    1.053649] PBS: 48034000.target-module enable
+
+[    1.053802] PBS: 48034000.target-module enable done
+
+[    1.053955] PBS: 48034000.target-module reset
+
+[    1.054107] PBS: 48034000.target-module reset done
+
+[    1.054290] PBS: 48034000.target-module pm ok
+
+[    1.054443] PBS: 48034000.target-module idle
+
+[    1.055511] PBR: 48034000.timer <- omap_timer
+
+[    1.057098] PBR: 48036000.target-module <- ti-sysc
+
+[    1.057342] PBS: 48036000.target-module +
+
+[    1.057647] PBS: 48036000.target-module rev read
+
+[    1.057800] PBS: 48036000.target-module rev=4fff1301
+
+[    1.057983] PBS: 48036000.target-module enable
+
+[    1.058135] PBS: 48036000.target-module enable done
+
+[    1.058288] PBS: 48036000.target-module reset
+
+[    1.058441] PBS: 48036000.target-module reset done
+
+[    1.058593] PBS: 48036000.target-module pm ok
+
+[    1.058746] PBS: 48036000.target-module idle
+
+[    1.059814] PBR: 48036000.timer <- omap_timer
+
+[    1.061401] PBR: 4803e000.target-module <- ti-sysc
+
+[    1.061645] PBS: 4803e000.target-module +
+
+[    1.061950] PBS: 4803e000.target-module rev read
+
+[    1.062103] PBS: 4803e000.target-module rev=4fff1301
+
+[    1.062286] PBS: 4803e000.target-module enable
+
+[    1.062438] PBS: 4803e000.target-module enable done
+
+[    1.062591] PBS: 4803e000.target-module reset
+
+[    1.062744] PBS: 4803e000.target-module reset done
+
+[    1.062896] PBS: 4803e000.target-module pm ok
+
+[    1.063049] PBS: 4803e000.target-module idle
+
+[    1.064117] PBR: 4803e000.timer <- omap_timer
+
+[    1.065643] PBR: 48055000.target-module <- ti-sysc
+
+[    1.065887] PBS: 48055000.target-module +
+
+[    1.066223] PBS: 48055000.target-module rev read
+
+[    1.066375] PBS: 48055000.target-module rev=50600801
+
+[    1.066558] PBS: 48055000.target-module enable
+
+[    1.066711] PBS: 48055000.target-module enable done
+
+[    1.066864] PBS: 48055000.target-module reset
+
+[    1.067108] PBS: 48055000.target-module reset done
+
+[    1.067260] PBS: 48055000.target-module pm ok
+
+[    1.067413] PBS: 48055000.target-module idle
+
+[    1.068206] PBR: 48055000.gpio <- omap_gpio
+
+[    1.068420] PBG: 48055000.gpio probe
+
+[    1.068786] PBG: 48055000.gpio pm_get
+
+[    1.068939] PBG: 48055000.gpio pm_get done
+
+[    1.069091] PBG: 48055000.gpio mod_init done
+
+[    1.069244] gpiochip_find_base_unlocked: found new base at 544
+
+[    1.096221] gpio gpiochip1: (gpio-32-63): added GPIO chardev (254:1)
+
+[    1.096557] gpio gpiochip1: registered GPIOs 544 to 575 on gpio-32-63
+
+[    1.096832] PBG: 48055000.gpio chip_init done
+
+[    1.096984] PBG: 48055000.gpio ok
+
+[    1.098114] PBR: 48057000.target-module <- ti-sysc
+
+[    1.098327] PBS: 48057000.target-module +
+
+[    1.098693] PBS: 48057000.target-module rev read
+
+[    1.098846] PBS: 48057000.target-module rev=50600801
+
+[    1.099029] PBS: 48057000.target-module enable
+
+[    1.099182] PBS: 48057000.target-module enable done
+
+[    1.099334] PBS: 48057000.target-module reset
+
+[    1.099578] PBS: 48057000.target-module reset done
+
+[    1.099731] PBS: 48057000.target-module pm ok
+
+[    1.099884] PBS: 48057000.target-module idle
+
+[    1.100677] PBR: 48057000.gpio <- omap_gpio
+
+[    1.100891] PBG: 48057000.gpio probe
+
+[    1.101257] PBG: 48057000.gpio pm_get
+
+[    1.101409] PBG: 48057000.gpio pm_get done
+
+[    1.101531] PBG: 48057000.gpio mod_init done
+
+[    1.101715] gpiochip_find_base_unlocked: found new base at 576
+
+[    1.102325] gpio gpiochip2: (gpio-64-95): added GPIO chardev (254:2)
+
+[    1.102691] gpio gpiochip2: registered GPIOs 576 to 607 on gpio-64-95
+
+[    1.102935] PBG: 48057000.gpio chip_init done
+
+[    1.103088] PBG: 48057000.gpio ok
+
+[    1.104217] PBR: 48059000.target-module <- ti-sysc
+
+[    1.104461] PBS: 48059000.target-module +
+
+[    1.104797] PBS: 48059000.target-module rev read
+
+[    1.104980] PBS: 48059000.target-module rev=50600801
+
+[    1.105133] PBS: 48059000.target-module enable
+
+[    1.105285] PBS: 48059000.target-module enable done
+
+[    1.105438] PBS: 48059000.target-module reset
+
+[    1.105682] PBS: 48059000.target-module reset done
+
+[    1.105865] PBS: 48059000.target-module pm ok
+
+[    1.106018] PBS: 48059000.target-module idle
+
+[    1.106750] PBR: 48059000.gpio <- omap_gpio
+
+[    1.106964] PBG: 48059000.gpio probe
+
+[    1.107330] PBG: 48059000.gpio pm_get
+
+[    1.107482] PBG: 48059000.gpio pm_get done
+
+[    1.107604] PBG: 48059000.gpio mod_init done
+
+[    1.107788] gpiochip_find_base_unlocked: found new base at 608
+
+[    1.108398] gpio gpiochip3: (gpio-96-127): added GPIO chardev (254:3)
+
+[    1.108764] gpio gpiochip3: registered GPIOs 608 to 639 on gpio-96-127
+
+[    1.109008] PBG: 48059000.gpio chip_init done
+
+[    1.109161] PBG: 48059000.gpio ok
+
+[    1.110321] PBR: 4805b000.target-module <- ti-sysc
+
+[    1.110534] PBS: 4805b000.target-module +
+
+[    1.110900] PBS: 4805b000.target-module rev read
+
+[    1.111053] PBS: 4805b000.target-module rev=50600801
+
+[    1.111206] PBS: 4805b000.target-module enable
+
+[    1.111358] PBS: 4805b000.target-module enable done
+
+[    1.111541] PBS: 4805b000.target-module reset
+
+[    1.111785] PBS: 4805b000.target-module reset done
+
+[    1.111938] PBS: 4805b000.target-module pm ok
+
+[    1.112091] PBS: 4805b000.target-module idle
+
+[    1.112823] PBR: 4805b000.gpio <- omap_gpio
+
+[    1.113037] PBG: 4805b000.gpio probe
+
+[    1.113403] PBG: 4805b000.gpio pm_get
+
+[    1.113555] PBG: 4805b000.gpio pm_get done
+
+[    1.113677] PBG: 4805b000.gpio mod_init done
+
+[    1.113861] gpiochip_find_base_unlocked: found new base at 640
+
+[    1.120574] gpio gpiochip4: (gpio-128-159): added GPIO chardev (254:4)
+
+[    1.120941] gpio gpiochip4: registered GPIOs 640 to 671 on gpio-128-159
+
+[    1.121215] PBG: 4805b000.gpio chip_init done
+
+[    1.121368] PBG: 4805b000.gpio ok
+
+[    1.122467] PBR: 4805d000.target-module <- ti-sysc
+
+[    1.122711] PBS: 4805d000.target-module +
+
+[    1.123046] PBS: 4805d000.target-module rev read
+
+[    1.123229] PBS: 4805d000.target-module rev=50600801
+
+[    1.123382] PBS: 4805d000.target-module enable
+
+[    1.123535] PBS: 4805d000.target-module enable done
+
+[    1.123687] PBS: 4805d000.target-module reset
+
+[    1.123931] PBS: 4805d000.target-module reset done
+
+[    1.124114] PBS: 4805d000.target-module pm ok
+
+[    1.124267] PBS: 4805d000.target-module idle
+
+[    1.124999] PBR: 4805d000.gpio <- omap_gpio
+
+[    1.125213] PBG: 4805d000.gpio probe
+
+[    1.125579] PBG: 4805d000.gpio pm_get
+
+[    1.125732] PBG: 4805d000.gpio pm_get done
+
+[    1.125854] PBG: 4805d000.gpio mod_init done
+
+[    1.126037] gpiochip_find_base_unlocked: found new base at 672
+
+[    1.150939] gpio gpiochip5: (gpio-160-191): added GPIO chardev (254:5)
+
+[    1.151306] gpio gpiochip5: registered GPIOs 672 to 703 on gpio-160-191
+
+[    1.151550] PBG: 4805d000.gpio chip_init done
+
+[    1.151733] PBG: 4805d000.gpio ok
+
+[    1.152832] PBR: 48060000.target-module <- ti-sysc
+
+[    1.153076] PBS: 48060000.target-module +
+
+[    1.153381] PBS: 48060000.target-module rev read
+
+[    1.153533] PBS: 48060000.target-module rev=5040000a
+
+[    1.153717] PBS: 48060000.target-module enable
+
+[    1.153839] PBS: 48060000.target-module enable done
+
+[    1.154022] PBS: 48060000.target-module reset
+
+[    1.154144] PBS: 48060000.target-module reset done
+
+[    1.154327] PBS: 48060000.target-module pm ok
+
+[    1.154479] PBS: 48060000.target-module idle
+
+[    1.155242] PBR: 48060000.i2c <- omap_i2c
+
+[    1.156555] i2c i2c-2: using DT '/ocp/interconnect@48000000/segment@0/target-module@60000/i2c@0' for 'scl' GPIO lookup
+
+[    1.156951] of_get_named_gpiod_flags: can't parse 'scl-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@60000/i2c@0[0]'
+
+[    1.157379] of_get_named_gpiod_flags: can't parse 'scl-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@60000/i2c@0[0]'
+
+[    1.157806] i2c i2c-2: using lookup tables for GPIO lookup
+
+[    1.157989] i2c i2c-2: No GPIO consumer scl found
+
+[    1.158142] i2c i2c-2: using DT '/ocp/interconnect@48000000/segment@0/target-module@60000/i2c@0' for 'sda' GPIO lookup
+
+[    1.158508] of_get_named_gpiod_flags: can't parse 'sda-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@60000/i2c@0[0]'
+
+[    1.158935] of_get_named_gpiod_flags: can't parse 'sda-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@60000/i2c@0[0]'
+
+[    1.159332] i2c i2c-2: using lookup tables for GPIO lookup
+
+[    1.159515] i2c i2c-2: No GPIO consumer sda found
+
+[    1.159698] omap_i2c 48060000.i2c: bus 2 rev0.10 at 100 kHz
+
+[    1.160919] PBR: 4806a050.target-module <- ti-sysc
+
+[    1.161163] PBS: 4806a050.target-module +
+
+[    1.161468] PBS: 4806a050.target-module rev read
+
+[    1.161651] PBS: 4806a050.target-module rev=50411e03
+
+[    1.161804] PBS: 4806a050.target-module enable
+
+[    1.161956] PBS: 4806a050.target-module enable done
+
+[    1.162109] PBS: 4806a050.target-module reset
+
+[    1.162261] PBS: 4806a050.target-module reset done
+
+[    1.162445] PBS: 4806a050.target-module pm ok
+
+[    1.162567] PBS: 4806a050.target-module idle
+
+[    1.163543] PBR: 4806a000.serial <- omap8250
+
+[    1.186828] omap8250 4806a000.serial: using DT '/ocp/interconnect@48000000/segment@0/target-module@6a000/serial@0' for 'rs485-term' GPIO lookup
+
+[    1.187286] of_get_named_gpiod_flags: can't parse 'rs485-term-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@6a000/serial@0[0]'
+
+[    1.187713] of_get_named_gpiod_flags: can't parse 'rs485-term-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@6a000/serial@0[0]'
+
+[    1.188171] omap8250 4806a000.serial: using lookup tables for GPIO lookup
+
+[    1.188385] omap8250 4806a000.serial: No GPIO consumer rs485-term found
+
+[    1.188598] omap8250 4806a000.serial: using DT '/ocp/interconnect@48000000/segment@0/target-module@6a000/serial@0' for 'rs485-rx-during-tx' GPIO lookup
+
+[    1.189025] of_get_named_gpiod_flags: can't parse 'rs485-rx-during-tx-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@6a000/serial@0[0]'
+
+[    1.189483] of_get_named_gpiod_flags: can't parse 'rs485-rx-during-tx-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@6a000/serial@0[0]'
+
+[    1.189941] omap8250 4806a000.serial: using lookup tables for GPIO lookup
+
+[    1.190216] omap8250 4806a000.serial: No GPIO consumer rs485-rx-during-tx found
+
+[    1.190612] PBR: 4806a000.serial:0 <- ctrl
+
+[    1.191009] PBR: 4806a000.serial:0.0 <- port
+
+[    1.191253] 4806a000.serial: ttyS0 at MMIO 0x4806a000 (irq = 102, base_baud = 3000000) is a 8250
+
+[    1.193328] PBR: 4806c050.target-module <- ti-sysc
+
+[    1.193572] PBS: 4806c050.target-module +
+
+[    1.193878] PBS: 4806c050.target-module rev read
+
+[    1.194061] PBS: 4806c050.target-module rev=50411e03
+
+[    1.194213] PBS: 4806c050.target-module enable
+
+[    1.194366] PBS: 4806c050.target-module enable done
+
+[    1.194519] PBS: 4806c050.target-module reset
+
+[    1.194671] PBS: 4806c050.target-module reset done
+
+[    1.194824] PBS: 4806c050.target-module pm ok
+
+[    1.194976] PBS: 4806c050.target-module idle
+
+[    1.195922] PBR: 4806c000.serial <- omap8250
+
+[    1.197082] omap8250 4806c000.serial: using DT '/ocp/interconnect@48000000/segment@0/target-module@6c000/serial@0' for 'rs485-term' GPIO lookup
+
+[    1.197540] of_get_named_gpiod_flags: can't parse 'rs485-term-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@6c000/serial@0[0]'
+
+[    1.197998] of_get_named_gpiod_flags: can't parse 'rs485-term-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@6c000/serial@0[0]'
+
+[    1.198425] omap8250 4806c000.serial: using lookup tables for GPIO lookup
+
+[    1.198638] omap8250 4806c000.serial: No GPIO consumer rs485-term found
+
+[    1.198852] omap8250 4806c000.serial: using DT '/ocp/interconnect@48000000/segment@0/target-module@6c000/serial@0' for 'rs485-rx-during-tx' GPIO lookup
+
+[    1.199310] of_get_named_gpiod_flags: can't parse 'rs485-rx-during-tx-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@6c000/serial@0[0]'
+
+[    1.199768] of_get_named_gpiod_flags: can't parse 'rs485-rx-during-tx-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@6c000/serial@0[0]'
+
+[    1.200256] omap8250 4806c000.serial: using lookup tables for GPIO lookup
+
+[    1.200469] omap8250 4806c000.serial: No GPIO consumer rs485-rx-during-tx found
+
+[    1.200897] PBR: 4806c000.serial:0 <- ctrl
+
+[    1.201263] PBR: 4806c000.serial:0.0 <- port
+
+[    1.201538] 4806c000.serial: ttyS1 at MMIO 0x4806c000 (irq = 103, base_baud = 3000000) is a 8250
+
+[    1.203521] PBR: 4806e050.target-module <- ti-sysc
+
+[    1.203765] PBS: 4806e050.target-module +
+
+[    1.204071] PBS: 4806e050.target-module rev read
+
+[    1.204223] PBS: 4806e050.target-module rev=50411e03
+
+[    1.204406] PBS: 4806e050.target-module enable
+
+[    1.204559] PBS: 4806e050.target-module enable done
+
+[    1.204711] PBS: 4806e050.target-module reset
+
+[    1.204864] PBS: 4806e050.target-module reset done
+
+[    1.205017] PBS: 4806e050.target-module pm ok
+
+[    1.205169] PBS: 4806e050.target-module idle
+
+[    1.206085] PBR: 4806e000.serial <- omap8250
+
+[    1.222595] omap8250 4806e000.serial: using DT '/ocp/interconnect@48000000/segment@0/target-module@6e000/serial@0' for 'rs485-term' GPIO lookup
+
+[    1.223052] of_get_named_gpiod_flags: can't parse 'rs485-term-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@6e000/serial@0[0]'
+
+[    1.223480] of_get_named_gpiod_flags: can't parse 'rs485-term-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@6e000/serial@0[0]'
+
+[    1.223937] omap8250 4806e000.serial: using lookup tables for GPIO lookup
+
+[    1.224151] omap8250 4806e000.serial: No GPIO consumer rs485-term found
+
+[    1.224365] omap8250 4806e000.serial: using DT '/ocp/interconnect@48000000/segment@0/target-module@6e000/serial@0' for 'rs485-rx-during-tx' GPIO lookup
+
+[    1.224792] of_get_named_gpiod_flags: can't parse 'rs485-rx-during-tx-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@6e000/serial@0[0]'
+
+[    1.225250] of_get_named_gpiod_flags: can't parse 'rs485-rx-during-tx-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@6e000/serial@0[0]'
+
+[    1.225708] omap8250 4806e000.serial: using lookup tables for GPIO lookup
+
+[    1.225921] omap8250 4806e000.serial: No GPIO consumer rs485-rx-during-tx found
+
+[    1.226348] PBR: 4806e000.serial:0 <- ctrl
+
+[    1.226715] PBR: 4806e000.serial:0.0 <- port
+
+[    1.226959] 4806e000.serial: ttyS3 at MMIO 0x4806e000 (irq = 104, base_baud = 3000000) is a 8250
+
+[    1.229370] PBR: 48070000.target-module <- ti-sysc
+
+[    1.229614] PBS: 48070000.target-module +
+
+[    1.229919] PBS: 48070000.target-module rev read
+
+[    1.230133] PBS: 48070000.target-module rev=5040000a
+
+[    1.230316] PBS: 48070000.target-module enable
+
+[    1.230438] PBS: 48070000.target-module enable done
+
+[    1.230621] PBS: 48070000.target-module reset
+
+[    1.230743] PBS: 48070000.target-module reset done
+
+[    1.230926] PBS: 48070000.target-module pm ok
+
+[    1.231079] PBS: 48070000.target-module idle
+
+[    1.232238] PBR: 48070000.i2c <- omap_i2c
+
+[    1.233489] i2c i2c-0: using DT '/ocp/interconnect@48000000/segment@0/target-module@70000/i2c@0' for 'scl' GPIO lookup
+
+[    1.233886] of_get_named_gpiod_flags: can't parse 'scl-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@70000/i2c@0[0]'
+
+[    1.234313] of_get_named_gpiod_flags: can't parse 'scl-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@70000/i2c@0[0]'
+
+[    1.234741] i2c i2c-0: using lookup tables for GPIO lookup
+
+[    1.234924] i2c i2c-0: No GPIO consumer scl found
+
+[    1.235076] i2c i2c-0: using DT '/ocp/interconnect@48000000/segment@0/target-module@70000/i2c@0' for 'sda' GPIO lookup
+
+[    1.235443] of_get_named_gpiod_flags: can't parse 'sda-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@70000/i2c@0[0]'
+
+[    1.235870] of_get_named_gpiod_flags: can't parse 'sda-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@70000/i2c@0[0]'
+
+[    1.236267] i2c i2c-0: using lookup tables for GPIO lookup
+
+[    1.236450] i2c i2c-0: No GPIO consumer sda found
+
+[    1.237213] PBR: 0-0048 <- twl
+
+[    1.238067] PBR: 0-0049 <- dummy
+
+[    1.238464] PBR: 0-004a <- dummy
+
+[    1.238830] Skipping twl internal clock init and using bootloader value (unknown osc rate)
+
+[    1.315704] twl 0-0048: PIH (irq 106) nested IRQs
+
+[    1.328369] omap_i2c 48070000.i2c: bus 0 rev0.10 at 400 kHz
+
+[    1.329986] PBR: 48072000.target-module <- ti-sysc
+
+[    1.330261] PBS: 48072000.target-module +
+
+[    1.330596] PBS: 48072000.target-module rev read
+
+[    1.330780] PBS: 48072000.target-module rev=5040000a
+
+[    1.330932] PBS: 48072000.target-module enable
+
+[    1.331085] PBS: 48072000.target-module enable done
+
+[    1.331237] PBS: 48072000.target-module reset
+
+[    1.331390] PBS: 48072000.target-module reset done
+
+[    1.331573] PBS: 48072000.target-module pm ok
+
+[    1.331695] PBS: 48072000.target-module idle
+
+[    1.332519] PBR: 48072000.i2c <- omap_i2c
+
+[    1.333404] PBR: 48070000.i2c:twl@48:regulator-vaux1 <- twl6030_reg
+
+[    1.334930] PBR: 48070000.i2c:twl@48:regulator-vaux2 <- twl6030_reg
+
+[    1.335937] PBR: 48070000.i2c:twl@48:regulator-vaux3 <- twl6030_reg
+
+[    1.337036] PBR: 48070000.i2c:twl@48:regulator-vmmc <- twl6030_reg
+
+[    1.337768] PBR: 48070000.i2c:twl@48:regulator-vpp <- twl6030_reg
+
+[    1.338958] PBR: 48070000.i2c:twl@48:regulator-vusim <- twl6030_reg
+
+[    1.339843] PBR: 48070000.i2c:twl@48:regulator-vdac <- twl6030_reg
+
+[    1.340881] PBR: 48070000.i2c:twl@48:regulator-vana <- twl6030_reg
+
+[    1.341766] PBR: 48070000.i2c:twl@48:regulator-vcxio <- twl6030_reg
+
+[    1.365020] PBR: 48070000.i2c:twl@48:regulator-vusb <- twl6030_reg
+
+[    1.365875] PBR: 48070000.i2c:twl@48:regulator-v1v8 <- twl6030_reg
+
+[    1.366485] PBR: 48070000.i2c:twl@48:regulator-v2v1 <- twl6030_reg
+
+[    1.367980] i2c i2c-1: using DT '/ocp/interconnect@48000000/segment@0/target-module@72000/i2c@0' for 'scl' GPIO lookup
+
+[    1.368377] of_get_named_gpiod_flags: can't parse 'scl-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@72000/i2c@0[0]'
+
+[    1.368804] of_get_named_gpiod_flags: can't parse 'scl-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@72000/i2c@0[0]'
+
+[    1.369201] i2c i2c-1: using lookup tables for GPIO lookup
+
+[    1.369384] i2c i2c-1: No GPIO consumer scl found
+
+[    1.369567] i2c i2c-1: using DT '/ocp/interconnect@48000000/segment@0/target-module@72000/i2c@0' for 'sda' GPIO lookup
+
+[    1.369934] of_get_named_gpiod_flags: can't parse 'sda-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@72000/i2c@0[0]'
+
+[    1.370391] of_get_named_gpiod_flags: can't parse 'sda-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@72000/i2c@0[0]'
+
+[    1.370819] i2c i2c-1: using lookup tables for GPIO lookup
+
+[    1.371002] i2c i2c-1: No GPIO consumer sda found
+
+[    1.371185] omap_i2c 48072000.i2c: bus 1 rev0.10 at 100 kHz
+
+[    1.372314] PBR: 48076000.target-module <- ti-sysc
+
+[    1.372558] PBS: 48076000.target-module +
+
+[    1.372894] PBS: 48076000.target-module rev read
+
+[    1.373077] PBS: 48076000.target-module rev=40002903
+
+[    1.373229] PBS: 48076000.target-module enable
+
+[    1.373382] PBS: 48076000.target-module enable done
+
+[    1.373535] PBS: 48076000.target-module reset
+
+[    1.373687] PBS: 48076000.target-module reset done
+
+[    1.373870] PBS: 48076000.target-module pm ok
+
+[    1.373992] PBS: 48076000.target-module idle
+
+[    1.375030] PBR: 48078000.target-module <- ti-sysc
+
+[    1.375274] PBS: 48078000.target-module +
+
+[    1.375579] PBS: 48078000.target-module rev read
+
+[    1.375762] PBS: 48078000.target-module rev=00000020
+
+[    1.375915] PBS: 48078000.target-module enable
+
+[    1.376068] PBS: 48078000.target-module enable done
+
+[    1.376220] PBS: 48078000.target-module reset
+
+[    1.376373] PBS: 48078000.target-module reset done
+
+[    1.376525] PBS: 48078000.target-module pm ok
+
+[    1.376678] PBS: 48078000.target-module idle
+
+[    1.377929] PBR: 48086000.target-module <- ti-sysc
+
+[    1.378173] PBS: 48086000.target-module +
+
+[    1.378509] PBS: 48086000.target-module rev read
+
+[    1.378662] PBS: 48086000.target-module rev=00000015
+
+[    1.378845] PBS: 48086000.target-module enable
+
+[    1.378997] PBS: 48086000.target-module enable done
+
+[    1.379150] PBS: 48086000.target-module reset
+
+[    1.379272] PBS: 48086000.target-module reset done
+
+[    1.379455] PBS: 48086000.target-module pm ok
+
+[    1.379608] PBS: 48086000.target-module idle
+
+[    1.380767] PBR: 48086000.timer <- omap_timer
+
+[    1.382446] PBR: 48088000.target-module <- ti-sysc
+
+[    1.382690] PBS: 48088000.target-module +
+
+[    1.382995] PBS: 48088000.target-module rev read
+
+[    1.383148] PBS: 48088000.target-module rev=4fff1301
+
+[    1.383331] PBS: 48088000.target-module enable
+
+[    1.383483] PBS: 48088000.target-module enable done
+
+[    1.383636] PBS: 48088000.target-module reset
+
+[    1.383789] PBS: 48088000.target-module reset done
+
+[    1.383941] PBS: 48088000.target-module pm ok
+
+[    1.384094] PBS: 48088000.target-module idle
+
+[    1.385162] PBR: 48088000.timer <- omap_timer
+
+[    1.386627] PBR: 4809608c.target-module <- ti-sysc
+
+[    1.386871] PBS: 4809608c.target-module +
+
+[    1.387176] PBS: 4809608c.target-module rev read
+
+[    1.387359] PBS: 4809608c.target-module rev=00000000
+
+[    1.387512] PBS: 4809608c.target-module enable
+
+[    1.387664] PBS: 4809608c.target-module enable done
+
+[    1.387817] PBS: 4809608c.target-module reset
+
+[    1.387969] PBS: 4809608c.target-module reset done
+
+[    1.388122] PBS: 4809608c.target-module pm ok
+
+[    1.388275] PBS: 4809608c.target-module idle
+
+[    1.389251] PBR: 48098000.target-module <- ti-sysc
+
+[    1.389495] PBS: 48098000.target-module +
+
+[    1.389801] PBS: 48098000.target-module rev read
+
+[    1.389984] PBS: 48098000.target-module rev=40300a0b
+
+[    1.390197] PBS: 48098000.target-module enable
+
+[    1.390350] PBS: 48098000.target-module enable done
+
+[    1.390502] PBS: 48098000.target-module reset
+
+[    1.390624] PBS: 48098000.target-module reset done
+
+[    1.390808] PBS: 48098000.target-module pm ok
+
+[    1.390960] PBS: 48098000.target-module idle
+
+[    1.391967] PBR: 4809a000.target-module <- ti-sysc
+
+[    1.392211] PBS: 4809a000.target-module +
+
+[    1.392517] PBS: 4809a000.target-module rev read
+
+[    1.392669] PBS: 4809a000.target-module rev=40300a0b
+
+[    1.392852] PBS: 4809a000.target-module enable
+
+[    1.392974] PBS: 4809a000.target-module enable done
+
+[    1.393157] PBS: 4809a000.target-module reset
+
+[    1.393280] PBS: 4809a000.target-module reset done
+
+[    1.393463] PBS: 4809a000.target-module pm ok
+
+[    1.393615] PBS: 4809a000.target-module idle
+
+[    1.394592] PBR: 4809c000.target-module <- ti-sysc
+
+[    1.394836] PBS: 4809c000.target-module +
+
+[    1.395141] PBS: 4809c000.target-module rev read
+
+[    1.395324] PBS: 4809c000.target-module rev=40202301
+
+[    1.395477] PBS: 4809c000.target-module enable
+
+[    1.395629] PBS: 4809c000.target-module enable done
+
+[    1.395782] PBS: 4809c000.target-module reset
+
+[    1.395935] PBS: 4809c000.target-module reset done
+
+[    1.396118] PBS: 4809c000.target-module pm ok
+
+[    1.396240] PBS: 4809c000.target-module idle
+
+[    1.397460] PBR: 480ad000.target-module <- ti-sysc
+
+[    1.397705] PBS: 480ad000.target-module +
+
+[    1.398040] PBS: 480ad000.target-module rev read
+
+[    1.398193] PBS: 480ad000.target-module rev=40202301
+
+[    1.398345] PBS: 480ad000.target-module enable
+
+[    1.398498] PBS: 480ad000.target-module enable done
+
+[    1.398651] PBS: 480ad000.target-module reset
+
+[    1.398803] PBS: 480ad000.target-module reset done
+
+[    1.398986] PBS: 480ad000.target-module pm ok
+
+[    1.399108] PBS: 480ad000.target-module idle
+
+[    1.400268] PBR: 480b2000.target-module <- ti-sysc
+
+[    1.400512] PBS: 480b2000.target-module +
+
+[    1.400817] PBS: 480b2000.target-module rev read
+
+[    1.401000] PBS: 480b2000.target-module rev=00000006
+
+[    1.401153] PBS: 480b2000.target-module enable
+
+[    1.401306] PBS: 480b2000.target-module enable done
+
+[    1.401489] PBS: 480b2000.target-module pm ok
+
+[    1.401611] PBS: 480b2000.target-module idle
+
+[    1.403594] PBR: 480b4000.target-module <- ti-sysc
+
+[    1.403839] PBS: 480b4000.target-module +
+
+[    1.404174] PBS: 480b4000.target-module rev read
+
+[    1.404327] PBS: 480b4000.target-module rev=40202301
+
+[    1.404510] PBS: 480b4000.target-module enable
+
+[    1.404663] PBS: 480b4000.target-module enable done
+
+[    1.404815] PBS: 480b4000.target-module reset
+
+[    1.404937] PBS: 480b4000.target-module reset done
+
+[    1.405120] PBS: 480b4000.target-module pm ok
+
+[    1.405273] PBS: 480b4000.target-module idle
+
+[    1.407196] PBR: 480b8000.target-module <- ti-sysc
+
+[    1.407440] PBS: 480b8000.target-module +
+
+[    1.407745] PBS: 480b8000.target-module rev read
+
+[    1.407897] PBS: 480b8000.target-module rev=40300a0b
+
+[    1.408081] PBS: 480b8000.target-module enable
+
+[    1.408233] PBS: 480b8000.target-module enable done
+
+[    1.408386] PBS: 480b8000.target-module reset
+
+[    1.408508] PBS: 480b8000.target-module reset done
+
+[    1.408691] PBS: 480b8000.target-module pm ok
+
+[    1.408843] PBS: 480b8000.target-module idle
+
+[    1.409851] PBR: 480ba000.target-module <- ti-sysc
+
+[    1.410125] PBS: 480ba000.target-module +
+
+[    1.410430] PBS: 480ba000.target-module rev read
+
+[    1.410614] PBS: 480ba000.target-module rev=40300a0b
+
+[    1.410766] PBS: 480ba000.target-module enable
+
+[    1.410919] PBS: 480ba000.target-module enable done
+
+[    1.411071] PBS: 480ba000.target-module reset
+
+[    1.411224] PBS: 480ba000.target-module reset done
+
+[    1.411376] PBS: 480ba000.target-module pm ok
+
+[    1.411529] PBS: 480ba000.target-module idle
+
+[    1.412536] PBR: 480d1000.target-module <- ti-sysc
+
+[    1.412780] PBS: 480d1000.target-module +
+
+[    1.413085] PBS: 480d1000.target-module rev read
+
+[    1.413238] PBS: 480d1000.target-module rev=40202301
+
+[    1.413421] PBS: 480d1000.target-module enable
+
+[    1.413574] PBS: 480d1000.target-module enable done
+
+[    1.413726] PBS: 480d1000.target-module reset
+
+[    1.413879] PBS: 480d1000.target-module reset done
+
+[    1.414031] PBS: 480d1000.target-module pm ok
+
+[    1.414184] PBS: 480d1000.target-module idle
+
+[    1.415191] PBR: 480d5000.target-module <- ti-sysc
+
+[    1.415435] PBS: 480d5000.target-module +
+
+[    1.415771] PBS: 480d5000.target-module rev read
+
+[    1.415924] PBS: 480d5000.target-module rev=40202301
+
+[    1.416076] PBS: 480d5000.target-module enable
+
+[    1.416229] PBS: 480d5000.target-module enable done
+
+[    1.416381] PBS: 480d5000.target-module reset
+
+[    1.416534] PBS: 480d5000.target-module reset done
+
+[    1.416717] PBS: 480d5000.target-module pm ok
+
+[    1.416839] PBS: 480d5000.target-module idle
+
+[    1.418060] PBR: 48000000.interconnect:segment@200000 <- simple-pm-bus
+
+[    1.419097] PBR: 48350000.target-module <- ti-sysc
+
+[    1.419342] PBS: 48350000.target-module +
+
+[    1.419647] PBS: 48350000.target-module rev read
+
+[    1.419830] PBS: 48350000.target-module rev=5040000a
+
+[    1.419982] PBS: 48350000.target-module enable
+
+[    1.420166] PBS: 48350000.target-module enable done
+
+[    1.420318] PBS: 48350000.target-module reset
+
+[    1.420471] PBS: 48350000.target-module reset done
+
+[    1.420654] PBS: 48350000.target-module pm ok
+
+[    1.420806] PBS: 48350000.target-module idle
+
+[    1.421569] PBR: 48350000.i2c <- omap_i2c
+
+[    1.423339] PBR: 480b4000.mmc <- omap_hsmmc
+
+[    1.423583] PBM: 480b4000.mmc probe
+
+[    1.424041] omap_hsmmc 480b4000.mmc: using DT '/ocp/interconnect@48000000/segment@0/target-module@b4000/mmc@0' for 'cd' GPIO lookup
+
+[    1.424468] of_get_named_gpiod_flags: can't parse 'cd-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@b4000/mmc@0[0]'
+
+[    1.424896] of_get_named_gpiod_flags: can't parse 'cd-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@b4000/mmc@0[0]'
+
+[    1.425292] omap_hsmmc 480b4000.mmc: using lookup tables for GPIO lookup
+
+[    1.425506] omap_hsmmc 480b4000.mmc: No GPIO consumer cd found
+
+[    1.425720] omap_hsmmc 480b4000.mmc: using DT '/ocp/interconnect@48000000/segment@0/target-module@b4000/mmc@0' for 'wp' GPIO lookup
+
+[    1.426086] of_get_named_gpiod_flags: can't parse 'wp-gpios' property of node '/ocp/interconnect@48000000/segment@0/target-module@b4000/mmc@0[0]'
+
+[    1.426513] of_get_named_gpiod_flags: can't parse 'wp-gpio' property of node '/ocp/interconnect@48000000/segment@0/target-module@b4000/mmc@0[0]'
+
+[    1.426910] omap_hsmmc 480b4000.mmc: using lookup tables for GPIO lookup
+
+[    1.427124] omap_hsmmc 480b4000.mmc: No GPIO consumer wp found
+
+[    1.427337] PBM: 480b4000.mmc of_parse
+
+[    1.427581] PBM: 480b4000.mmc fclk
+
+[    1.427978] PBM: 480b4000.mmc pm_get
+
+[    1.428100] PBM: 480b4000.mmc pm_get done
+
+[    1.428253] PBM: 480b4000.mmc ctx_save
+
+[    1.428436] PBM: 480b4000.mmc bus_power
+
+[    1.428588] PBM: 480b4000.mmc bus_power done
+
+[    1.428741] PBM: 480b4000.mmc rx dma
+
+[    1.428924] PBM: 480b4000.mmc rx dma done
+
+[    1.429077] PBM: 480b4000.mmc tx dma
+
+[    1.429229] PBM: 480b4000.mmc tx dma done
+
+[    1.429412] PBM: 480b4000.mmc reg_get
+
+[    1.429626] PBM: 480b4000.mmc reg_get done
+
+[    1.429748] PBM: 480b4000.mmc add_host
+
+[    1.429992] PBC: mmc1 device_add done
+
+[    1.430267] PBC: mmc1 start_host
+
+[    1.430389] PBC: mmc1 power_up
+
+[    1.430511] PBSIO: mmc1 enter pm=1 clk=0 bw=0
+
+[    1.430664] PBSIO: mmc1 power done
+
+[    1.430786] PBSIO: mmc1 width done
+
+[    1.430877] PBSIO: mmc1 clock
+
+[    1.430999] PBCLK: mmc1 enter 0Hz
+
+[    1.431121] PBCLK: mmc1 stopped
+
+[    1.431213] PBCLK: mmc1 ics poll
+
+[    1.431335] PBCLK: mmc1 ics done
+
+[    1.431427] PBCLK: mmc1 done
+
+[    1.431549] PBSIO: mmc1 clock done
+
+[    1.431671] PBSIO: mmc1 done
+
+[    1.431762] PBC: mmc1 initial_voltage
+
+[    1.431884] PBC: mmc1 delay1 10ms
+
+[    1.477691] PBC: mmc1 delay1 done
+
+[    1.477844] PBC: mmc1 post_pwrseq
+
+[    1.477966] PBSIO: mmc1 enter pm=2 clk=400000 bw=0
+
+[    1.478118] PBSIO: mmc1 power done
+
+[    1.478240] PBSIO: mmc1 width done
+
+[    1.478363] PBSIO: mmc1 clock
+
+[    1.478454] PBCLK: mmc1 enter 400000Hz
+
+[    1.478607] PBCLK: mmc1 stopped
+
+[    1.478698] PBCLK: mmc1 ics poll
+
+[    1.478820] PBCLK: mmc1 ics done
+
+[    1.478942] PBCLK: mmc1 done
+
+[    1.479034] PBSIO: mmc1 clock done
+
+[    1.479156] PBSIO: mmc1 init_stream
+
+[    1.479278] PBINI: mmc1 enter
+
+[    1.479370] PBINI: mmc1 cmd sent
+
+[    1.479583] PBINI: mmc1 cc=1
+
+[    1.479675] PBSIO: mmc1 init_stream done
+
+[    1.479827] PBSIO: mmc1 done
+
+[    1.479919] PBC: mmc1 power_on ios done
+
+[    1.480041] PBC: mmc1 power_on delay 10ms
+
+[    1.496093] PBC: mmc1 power_on delay done
+
+[    1.496276] PBC: mmc1 power_up done
+
+[    1.496398] PBC: mmc1 detect_change
+
+[    1.496520] PBC: mmc1 detect_change done
+
+[    1.496643] PBC: mmc1 start_host done
+
+[    1.496795] PBM: 480b4000.mmc add_host done
+
+[    1.497161] PBC: mmc1 rescan
+
+[    1.497314] PBC: mmc1 claimed
+
+[    1.497406] PBC: mmc1 try 400000Hz
+
+[    1.497528] PBC: mmc1 hw_reset
+
+[    1.497650] PBC: mmc1 hw_reset done
+
+[    1.497772] PBC: mmc1 sdio_reset
+

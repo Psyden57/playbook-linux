@@ -1,0 +1,95 @@
+# ---------------------------------------------------------------------------
+# local-only payload.  Never committed.
+#
+# local/ holds: the proprietary QNX/BlackBerry binaries dumped from the device
+# (local/proprietary), the TI TRM (ti OMAP4430, redistributed copy), device
+# images and the sealed IFS (local/images), the SSH key material
+# (local/secrets), third-party vendor tools (local/vendor), RE scratch
+# (local/research), the previous kexec project (local/legacy) and the kernel
+# build tree (local/kernel-tree, regenerable from the patch + config).
+# ---------------------------------------------------------------------------
+local/
+
+# --- secrets / key material -------------------------------------------------
+rsa
+rsa.pub
+*.ppk
+*.pem
+*.key
+
+# --- device images and other binaries --------------------------------------
+*.img
+*.sealed.bin
+ifs0.sealed.bin
+
+# --- reference documents (not ours to redistribute) -----------------
+# case-insensitive: TC358764XBG.PDF slipped past `*.pdf` once
+*.[Pp][Dd][Ff]
+# TRM extracts live in hardware/ but stay local; hardware/README.md is tracked
+hardware/*.txt
+hardware/*.[Pp][Dd][Ff]
+
+# --- build output -----------------------------------------------------------
+# the chainloader is assembled on every image build; only its sources are tracked
+# host-side build of the QNX6 parser (the ARM tools/qnx6-usage is tracked, like pbdsi)
+tools/qnx6-usage-host
+boot/chainloader/chainloader_kernel.bin
+boot/chainloader/chainloader_kernel.elf
+*.o
+*.a
+*.d
+*.i
+*.su
+*.cmd
+.*.cmd
+*.ko
+*.mod
+*.mod.c
+*.symtypes
+*.order
+*.dtb
+*.dtbo
+*.dwo
+Module.symvers
+modules.builtin*
+vmlinux*
+System.map
+Image
+zImage
+*.cpio
+*.cpio.*
+.tmp_*
+*.rej
+*.orig
+
+# --- editor / OS / tooling --------------------------------------------------
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- personal / local working notes ---------------------------------------
+# Command Code's learned-preference notes are not project content.
+.commandcode/
+
+# --- host-built binaries whose source is tracked --------------------------
+# qnx6-usage embeds the build machine's paths; rebuild it from the .c file.
+tools/qnx6-usage
+
+# --- one-off backups -------------------------------------------------------
+bench/*.orig-*
+
+# --- built initramfs binaries (sources are tracked) -------------------------
+initramfs/root/init
+initramfs/root/console
+initramfs/root/pbrpmb
+
+# --- third-party QNX documentation kept for reference, not redistributable ---
+docs/history/optimized-docs/
+
+# --- logs and scratch -------------------------------------------------------
+*.log
+/tmp/

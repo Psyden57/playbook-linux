@@ -1,0 +1,52 @@
+magic=50424556 (PBEV)  count=1854
+heartbeat: last tick at 2420 ms (jiffies low16 0x8bc2, INITIAL_JIFFIES 0x8ad0)
+ptr(+0x04, last initcall / async func) = 0xc0e34f44 of_platform_sync_state_init+0x0
+epoch block: EPCH status=0x118 [NO-TIMEBASE] [INCOMPLETE] [sampled] [delay-build] target=0 ticks (0 ms)
+epoch block: 32k=000efaf6 (29960 ms after power-on epoch)
+mpu state: 335 samples, 178 changed, last change jiffies 0x8b71
+mpu state: CM_MPU_CLKSTCTRL   first=00000102 last=00000102
+mpu state: CM_MPU_MPU_CLKCTRL first=00000001 last=00000001
+mpu state: PM_MPU_PWRSTST     first=000003f7 last=000003f7
+mpu state: CM_IDLEST_DPLL_MPU first=00000000 last=00000000
+mpu state: 32k first=31492 ms last=33916 ms  -> last heartbeat at 33916 ms after the boot epoch
+epoch block: LDR=fffc1800 period=7812 ms  cl-entry=fffc18ec  handover=7 ms
+epoch block: CRR-at-entry=fffd7ad0  pre-kernel=2771 ms  (this loader=2764 ms)
+smc probe: magic PSMC, completed mask=0xf
+smc probe: 300ms   fired at 300 ms, select_kek ret=4294967295 (0xffffffff), returned at 300 ms
+smc probe: 800ms   fired at 800 ms, select_kek ret=4294967295 (0xffffffff), returned at 800 ms
+smc probe: 1300ms  fired at 1300 ms, select_kek ret=4294967295 (0xffffffff), returned at 1300 ms
+smc probe: 2000ms  fired at 2000 ms, select_kek ret=4294967295 (0xffffffff), returned at 2000 ms
+gic census: CTLR=00000001 TYPER=0000fc24 (max IRQ 160)
+gic census: IGROUPR=00000000 00000000 00000000 00000000  (0 bits set; 1=Group0/secure)
+gic census: ISENABLER=0000ffff 00000000 00000000 00000000
+gic census: ISACTIVER0=00000000 ISPENDR0=00000000
+l4sec prep: CLKSTCTRL=00000103  CM_MPU_STATICDEP=00004000
+last 28 events:
+    1890 ms  rpm_suspend: after rpm_idle(parent)
+    1890 ms  rpm_suspend: before suspend_suppliers  (+0 ms)
+    1890 ms  rpm_suspend: after suspend_suppliers  (+0 ms)
+    1890 ms  rpm_suspend: out  (+0 ms)
+    2420 ms  rpm_suspend: out  (+530 ms)
+    2420 ms  rpm_callback: before cb  (+0 ms)
+    2420 ms  rpm_callback: after cb  (+0 ms)
+    2420 ms  rpm_callback: before lock_irq  (+0 ms)
+    2420 ms  rpm_callback: lock_irq done  (+0 ms)
+    2420 ms  rpm_suspend: callback returned  (+0 ms)
+    2420 ms  rpm_suspend: before rpm_idle(parent)  (+0 ms)
+    2420 ms  rpm_suspend: after rpm_idle(parent)  (+0 ms)
+    2420 ms  rpm_suspend: out  (+0 ms)
+    2420 ms  initcall  (+0 ms)
+    2420 ms  initcall  (+0 ms)
+    2430 ms  initcall  (+10 ms)
+    2430 ms  initcall  (+0 ms)
+    2430 ms  initcall  (+0 ms)
+    2430 ms  initcall level 7 end  (+0 ms)
+    2430 ms  prepare_namespace: entry  (+0 ms)
+    2430 ms  wait_for_device_probe: entry  (+0 ms)
+    2430 ms  wait_for_device_probe: after deferred flush  (+0 ms)
+    2430 ms  wait_for_device_probe: after probe_count wait  (+0 ms)
+    2430 ms  async_synchronize_full: entry  (+0 ms)
+    2430 ms  async pending count=0  (+0 ms)
+    2430 ms  async_synchronize_full: exit  (+0 ms)
+    2430 ms  wait_for_device_probe: after async sync  (+0 ms)
+    2430 ms  prepare_namespace: after wait_for_device_probe  (+0 ms)

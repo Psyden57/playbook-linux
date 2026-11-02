@@ -1,0 +1,48 @@
+PlayBook Linux — provenance and component licences
+
+Copyright (C) 2026 the PlayBook Linux contributors.
+
+The project's own code and documentation are licensed under the GNU General
+Public License, version 3 or (at your option) any later version
+(GPL-3.0-or-later).  The canonical text is in `LICENSE`.
+
+Component exceptions and provenance
+-----------------------------------
+
+1. kernel/clean-kernel-6.15.11-changes.patch,
+   kernel/patches/0001-playbook-winchester-6.15.11.patch,
+   kernel/patches/winchester.config and the files under kernel/source/
+   are derived from Linux 6.15.11 and remain licensed under GPL-2.0-only.
+   They are aggregated with, not relicensed by, the GPL-3.0-or-later project
+   code.
+
+2. tools/bbusb.py is a Python port of bb10mt's bbusb.pas and ucrypto.pas
+   (including the 560-byte QNXH signature constant).  bb10mt is GPL-3.0, so
+   this file is a GPL-3.0 derivative and is distributed here under
+   GPL-3.0-or-later.  The bb10mt source itself is NOT included in this
+   repository.
+
+3. tools/pre_os_ifs_flash.py reads the `signature_data` constant from a
+   user-supplied bb10mt checkout (`qcfm.pas`).  The bb10mt source is not
+   included; users must obtain it themselves, or use `tools/bbusb.py flash`,
+   which carries the constant.
+
+4. tools/BerryShell-V4.py is derived from the author's own earlier
+   BerryShell-V3.py, not from a third-party project.  Its qconn protocol layer
+   was reverse-engineered by the author.
+
+5. The protocol and format facts, register values, disassembly notes and
+   measurements in docs/ are the project's own analysis.  They may reference
+   proprietary systems, but no proprietary binary, datasheet, TRM or device
+   image is included.
+
+Not included in this repository
+-------------------------------
+
+The proprietary QNX/BlackBerry binaries and device dumps, the TI OMAP4430 TRM
+and TWL6030 datasheet, the Toshiba TC358764 datasheet, the BlackBerry vendor
+images (IFS/RCFS/UFS), the sealed IFS, the SSH keys, the ramloader blobs and the
+bb10mt source are deliberately excluded.  See `docs/project/DECISIONS.md` and
+`.gitignore` for the current policy.
+
+There is no warranty.  Flashing a boot image can permanently brick a device.

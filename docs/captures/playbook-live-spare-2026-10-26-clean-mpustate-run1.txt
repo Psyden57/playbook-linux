@@ -1,0 +1,42 @@
+magic=50424556 (PBEV)  count=1867
+heartbeat: last tick at 2250 ms (jiffies low16 0x8bb1, INITIAL_JIFFIES 0x8ad0)
+ptr(+0x04, last initcall / async func) = 0xc0e34df4 of_platform_sync_state_init+0x0
+epoch block: EPCH status=0x118 [NO-TIMEBASE] [INCOMPLETE] [sampled] [delay-build] target=0 ticks (0 ms)
+epoch block: 32k=000ee9c5 (29826 ms after power-on epoch)
+mpu state: 290 samples, 121 changed, last change jiffies 0x8b52
+mpu state: CM_MPU_CLKSTCTRL   first=00000102 last=00000102
+mpu state: CM_MPU_MPU_CLKCTRL first=00000001 last=00000001
+mpu state: PM_MPU_PWRSTST     first=000003f7 last=000003f7
+mpu state: CM_IDLEST_DPLL_MPU first=00000000 last=00000000
+mpu state: 32k first=31345 ms last=33596 ms  -> last heartbeat at 33596 ms after the boot epoch
+epoch block: LDR=fffc1800 period=7812 ms  cl-entry=fffc18ee  handover=7 ms
+epoch block: CRR-at-entry=fffd7ac3  pre-kernel=2771 ms  (this loader=2764 ms)
+last 28 events:
+    1650 ms  rpm_suspend: callback returned
+    1650 ms  rpm_suspend: before rpm_idle(parent)  (+0 ms)
+    1650 ms  rpm_suspend: after rpm_idle(parent)  (+0 ms)
+    1650 ms  rpm_suspend: out  (+0 ms)
+    2230 ms  rpm_suspend: out  (+580 ms)
+    2230 ms  rpm_callback: before cb  (+0 ms)
+    2230 ms  rpm_callback: after cb  (+0 ms)
+    2230 ms  rpm_callback: before lock_irq  (+0 ms)
+    2230 ms  rpm_callback: lock_irq done  (+0 ms)
+    2230 ms  rpm_suspend: callback returned  (+0 ms)
+    2230 ms  rpm_suspend: before rpm_idle(parent)  (+0 ms)
+    2230 ms  rpm_suspend: after rpm_idle(parent)  (+0 ms)
+    2230 ms  rpm_suspend: out  (+0 ms)
+    2250 ms  initcall  (+20 ms)
+    2250 ms  initcall  (+0 ms)
+    2250 ms  initcall  (+0 ms)
+    2250 ms  initcall  (+0 ms)
+    2250 ms  initcall  (+0 ms)
+    2250 ms  initcall level 7 end  (+0 ms)
+    2250 ms  prepare_namespace: entry  (+0 ms)
+    2250 ms  wait_for_device_probe: entry  (+0 ms)
+    2250 ms  wait_for_device_probe: after deferred flush  (+0 ms)
+    2250 ms  wait_for_device_probe: after probe_count wait  (+0 ms)
+    2250 ms  async_synchronize_full: entry  (+0 ms)
+    2250 ms  async pending count=0  (+0 ms)
+    2250 ms  async_synchronize_full: exit  (+0 ms)
+    2250 ms  wait_for_device_probe: after async sync  (+0 ms)
+    2250 ms  prepare_namespace: after wait_for_device_probe  (+0 ms)

@@ -1,0 +1,3 @@
+
+Process 719597682 (memdump3) terminated SIGBUS code=3 fltno=5 ip=08048ba4(/tmp/memdump3@main+0x10f) ref=28537f28
+Bus error (core dumped) 

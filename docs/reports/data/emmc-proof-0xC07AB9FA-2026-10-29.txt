@@ -1,0 +1,79 @@
+eMMC storage proof under the DSS clock regime — session 16 (absolute), 2026-10-29
+Image: 0xC07AB9FA (0xAA2AC0 = 11 152 064 bytes, 0xAB = 171 x 64 KiB blocks)
+Method: read-only.  No write to the eMMC from Linux.
+
+NB (session 17, report 138): the FS-partition offsets in this capture
+(0x48f00000 / LBA 0x247800) are 1 MiB low.  Writing an image to /dev/hd3 and
+reading it back put its first sector at raw 0x49000000 (superblock 0x49002000).
+The region-0/IFS/region-1 offsets below are unchanged.
+
+1. Clock (from /sys/kernel/debug/clk/clk_summary on the running image)
+
+  dpll_per_ck              192000000
+  dpll_per_x2_ck           384000000
+  dpll_per_m2x2_ck         192000000      (DPLL_PER M2, unchanged by the DSS fix)
+  func_96m_fclk             96000000      (dpll_per_m2x2 / 2)
+  func_64m_fclk             64000000      (dpll_per_m4x2 / 2)
+  l3-init-clkctrl:0010:0    96000000      consumer 480b4000.mmc fck  <- MMC2 functional clock
+  dpll_per_m5x2_ck          96000000      (the DSS fck)
+  l3-dss-clkctrl:0000:8     96000000      consumers 58000000.dss fck, 58004000.encoder fck
+
+  The MMC2 functional clock reads 96 MHz, matching the func_96m_fclk branch
+  (DPLL_PER M2, 192 MHz) rather than func_64m_fclk (64 MHz, M4-derived).  The mux
+  selection bit itself was not read.  M2 did not move when dss_probe() asked for
+  100.8 MHz (report 133 §3), and the read-back proof confirms the storage path.
+
+2. Read-back proof (FNV-1a64; h = 0xcbf29ce484222325, h ^= b, h *= 0x100000001b3)
+
+  host  image (boot/chainloader/kernel.img, 11 152 064 B)   8308f0ff29452390
+  dev   blk sumb 0x8100000 11152064                          8308f0ff29452390   MATCH
+        -> the loader writes the bare payload at raw 0x8100000 (it strips the
+           mfcp/qcfp container header)
+
+  host  payload padded to 0xAB0000                           8615f45509bff390
+  dev   blk sum 0x40800 21888                                8615f45509bff390   MATCH
+        (0x40800 LBA = raw 0x8100000; 21 888 sectors = 0xAB0000 bytes)
+
+  pre-flash reference, read on TabletOS (hd0 offset 0x8000000, 64 KiB):
+    sha256 429beab37931b853c0e07af712b158e903ec0fc4cfee01d227eb344e751211c9
+    fnv64  c4feeffb5dbcdfb0
+  dev   blk sum 0x40000 128 (raw 0x8000000, region-0 sector 0)  c4feeffb5dbcdfb0  MATCH
+
+  pre-flash reference, read on TabletOS (hd0 offset 0, 1 MiB):
+    sha256 bd08f31d07c97db7df65564cb1a62c98f6ac58295cb54f5cc010221c0d224ca3
+    fnv64 (first 64 KiB) 41b9c0a35a996242
+  dev   blk sum 0x0 128 (LBA 0)                                 41b9c0a35a996242  MATCH
+        -> mmcblk1 byte 0 is the same byte as QNX hd0 byte 0
+
+  Region 1 start (raw 0x28000000, LBA 0x140000) reads a QNX boot sector with a
+  partition table, byte-identical in its first 64 KiB to region 0's
+  (fnv64 c4feeffb5dbcdfb0).  Reading at a 640 MiB offset works.
+
+3. Measured MCT/loader-block -> raw offset map
+
+  Rule (five verified points): raw = (block - 0x15) * 0x10000
+  (0x15 blocks = 0x150000 = 1 310 720 B = 1.3125 MiB)
+
+    MBR 0x34          blocks 0x805..0x814  -> raw 0x07f00000..0x08000000  (1 MiB)
+    OS Fixed 0x1B     blocks 0x815..0x4804 -> raw 0x08000000..0x47f00000  (1023 MiB)
+    NVRAM 0x1E        blocks 0x4805..0x4844-> raw 0x47f00000..0x48300000  (4 MiB)
+    0x36              blocks 0x4845..0x4904-> raw 0x48300000..0x48f00000  (12 MiB)
+    FS Fixed 0x1C     blocks 0x4905..0xfffff-> raw 0x48f00000..0xfffeb0000
+    region0 0x35/0    blocks 0x815..0x2804 -> raw 0x08000000..0x27f00000  (511 MiB)
+    region1 0x35/1    blocks 0x2815..0x4804-> raw 0x28000000..0x47f00000  (511 MiB)
+
+  Named points (raw = mmcblk1 = hd0 byte offset):
+    region 0 start    block 0x0815 -> raw 0x08000000 -> LBA 0x040000
+    region-0 IFS      block 0x0825 -> raw 0x08100000 -> LBA 0x040800  (our image)
+    region-0 RFS tbl  block 0x08d5 -> raw 0x08c00000 -> LBA 0x046000
+    region 1 start    block 0x2815 -> raw 0x28000000 -> LBA 0x140000
+    FS Fixed 0x1C     block 0x4905 -> raw 0x48f00000 -> LBA 0x247800
+
+  The MBR TLV range (raw 0x7F00000..0x8000000) reads all zero on this unit.
+
+4. Console commands used (new on this image)
+  blk info
+  blk sum <lba-hex> <sectors-decimal>
+  blk sumb <byteoff-hex> <len-decimal>
+  blk rd <lba-hex> [sectors]
+  grep <substr> <path>

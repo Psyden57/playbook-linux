@@ -1,0 +1,174 @@
+D:\Playbook>CFP help
+RIM Wireless Device Command-Line Programmer Version 3.10.0.22 (Win32) [Feb 20 2013 14:48:26]
+Copyright 2012 Research In Motion Limited
+
+CFP Usage
+=========
+    CFP [-u<port>] [-g<GUID>] [-IG] [-W<password>] [-NP] [-FS] [-V<verbosity>] [-T <max connect timeout>] [-C <max command timeout>]        <command>
+
+-U<port>     specifies the USB port (e.g. -U4 specifies USB port 4)
+             Configuration with USBPortMapper.exe is required.
+-G<GUID>     specifies the device GUID. Cannot be combined with -U
+-IG          specifies that cfp will ignore the device GUID when connecting
+             to a device. Cannot be used with -U or -G options.
+-W<password> specifies the device password. If a password is required, but
+             not provided, the user will be prompted to enter the password.
+-NP          specifies that the operation should only procede if there is NO
+             password.  The operation will abort if a password is set.
+-FS          specifies that only a full speed RAMImage may be uploaded.
+-V<verbosity> specifies the level of information chatter. If ,<filename> is
+             specified, all output other than the progress will be sent to the
+             specified file.
+-SP          turns off all progress notifications.
+-T<max connect timeout> specifies a maximum conection timeout in ms.
+-C<max command timeout> specifies a maximum command timeout in ms.
+
+All of the above are optional.
+
+<command> is one of HELP, INFO, FLASHINFO, FILEINFO, LOAD, SAVEFS, CSAVEFS,
+WIPE, ERASE, READ, CREAD, WRITE, USBMS, NUKE, FRESH, HASHBOOTROM, PATRIOT,
+GETLOG, READVERIFY.
+
+
+
+Where:
+------
+The CFP command is used to load firmware and
+assist RIM internal developers.
+
+Use CFP HELP <command> for more information.
+
+
+
+D:\Playbook>CFP info
+RIM Wireless Device Command-Line Programmer Version 3.10.0.22 (Win32) [Feb 20 2013 14:48:26]
+Copyright 2012 Research In Motion Limited
+
+Connecting to Bootrom:
+Resetting Device:
+Enter password (10 left): ****
+Connected
+
+[       Uploading RAM Image 0x80139230 ] [############## 100 ##############]
+
+
+QNX Device Info:
+    PIN:               50175127
+    BSN:               1063035517
+
+Bootrom Version:       5.27.0.20
+    Hardware ID:       0x06001A06 RIM BlackBerry Device
+    HW ID Override:    None
+    Hardware OS ID:    None
+    BR ID:             0xFF000000
+    Metrics Version:   6.24
+    Build Date:        Mar 24 2011
+    Build Time:        15:31:02
+    Build User:        ec_agent
+    Security:          Enabled
+    Supported Options: 0x00000009
+    Drivers:           0x00000010
+    Processor:         0x00000020
+    FlashID:           0x00000000
+    LDR Blocks:        0x80014674
+    Bootrom Size:      0x00020000
+    External MCT/HWV:  Enabled
+    Boot Mode:         Factory (Remaining boot count: 50)
+    Boot OS Count:     383,0,0 (Region0,Region1,Max)
+                       3,0,0 (Version,Requested Region,Actual Region)
+    JTAG SW Support:   Unknown
+    RPMB Support:      Unknown
+    WP Mode:           Unknown
+    Slack Mode:        Unknown
+    OS Blocking by Date:        Not supported
+
+    HWV:
+        Board Revision       0x01 - 0x01
+        CPU Version          0x02 - 0x74
+        SW Compatibility     0x03 - 0x01
+        POP Revision         0x04 - 0x01
+        Power Mgt Hardware   0x07 - 0x3E
+        POP Security         0x0B - 0x02
+        RAMImage Compat      0x0E - 0x01
+
+
+    Mem Config Table (ver 1.24):
+        Flash Chip:   blocks 0-1048575, Chip 0, Sub 0
+        Boot0 MMC:    blocks 0-0, total = 1, flags = 0x0001
+        Boot1 MMC:    blocks 1-4, total = 4, flags = 0x0001
+        User MMC:     blocks 5-1048575, total = 1048571, flags = 0x0001
+        MCT:          block 0
+        MFG Data:     blocks 1-4, total = 4
+        Bootrom:      blocks 5-12
+        MBR:          blocks 2053-2068
+        OS Fixed:     blocks 2069-18436
+        OS NV:        blocks 18437-18500, total 64
+        Branding:     blocks 18501-18692
+        FS Fixed:     blocks 18693-1048575, total = 1029883
+        MMC Enhanced: blocks 5-2052, total 2048
+        QNX region 0: blocks 2069-10244, total = 8176
+        QNX region 1: blocks 10261-18436, total = 8176
+        RAM Chip:     0x80000000-9FFFFFFF, Bank Size 67108864
+        RAM Chip:     0xA0000000-BFFFFFFF, Bank Size 67108864
+        NAND Config:  type 0, data 0x00001000 0x00010000
+        NAND Config:  type 1, data 0x15180003 0x00000000
+        CRC:          0x202C0AE2
+
+Flash:
+    Number of chips:       1
+    Flash ID:              NAND blocks 0-973316
+    Device ID:             0x40
+    Vendor ID:             0x15
+    Manufacturer Name:     Samsung
+    OEM/Application ID:    0x100
+    Product Name:          MCGAFA
+    Product Revision:      0x10
+    Product Serial Number: 0xA81DE12B
+    Manufacturing Date:    Year 2011, Month 3
+    MMC Partition Info:
+        Boot0:             512 KB (enhanced)
+        Boot1:             512 KB (enhanced)
+        User:              131072 KB (enhanced)
+        User:              62160896 KB
+    Total Size:            60832 MB
+
+DRAM:
+    Size:              1024 MB
+    VendorID:          0x3
+    Vendor Name:       Elpida
+    Revision:          0x100
+
+Memory Map:
+    NAND Blocks:       973317 * 64 Kb
+    RAM Base:          0x80000000
+    IRAM Base:         0x40304000
+    OS Range:          2069 - 2112
+
+File System:
+    Memory Map:
+                       18693 - 973316
+    Sectors:           954624
+
+Branding:
+    VendorID:          504
+
+OS Version:            2.0.0.4869 DEV
+    Hardware ID:       0x06001A06 RIM BlackBerry Device
+    Metrics Version:   3.18
+    FS Code Version:   0.0.0.0
+    Package Version:   *not supported*
+    Build Date:        Nov 15 2011
+    Build Time:        14:51:36
+    Build User:        cfp
+    OS Address:        0x800FF800-0x803BF60F
+
+    RAM usage:         0x00000000-0x00000000
+    IRAM End:          0x00000000
+    OS Extended Addr:  0x00000000
+
+    STP Protocol Ver:  0.0.4 (release OS)
+    Version Table:
+
+
+
+Done.

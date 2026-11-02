@@ -1,0 +1,4 @@
+06:17:46 template container: 2949160 bytes, rrcq at 0xA8, offset 0x20, count 44
+06:17:46 gate: block 0x825..0x850 (raw 0x8100000..0x83BFFFF) vs 0x1B 0x815..0x4804 -> OK
+06:17:46 plan: region 0 (hd1), block 0x825 (raw 0x8100000), 44 blocks, container 2949160 bytes
+06:17:46 waiting for bootrom ...

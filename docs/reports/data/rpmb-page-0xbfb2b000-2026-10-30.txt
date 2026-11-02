@@ -1,0 +1,73 @@
+rpmb-omap4 page dump — session 19, 2026-10-30
+Unit: TabletOS, pid 49168 (post-reboot), spare
+
+DCMD_PROC_MAPINFO (RpmbInit page is the MAP_ANON|MAP_PHYS|MAP_PRIVATE + RW|NOCACHE mapping):
+  vaddr 786f7000 size 00001000 flags 1090b02 paddr 00000000
+DCMD_PROC_PTINFO 786f7000:
+  vaddr 786f7000 size 00001000 flags 00010b00 paddr bfb2b000
+
+memdump3 bfb2b000 1000 (excerpt 0x400..0x4ff; u32 little-endian):
+bfb2b400: 00000002
+bfb2b404: bfb2b600
+bfb2b408: 00000000
+bfb2b40c: 00000000
+bfb2b410: 00000000
+bfb2b414: 00000000
+bfb2b418: 00000000
+bfb2b41c: 00000000
+bfb2b420: e10066da
+bfb2b424: e5b66f04
+bfb2b428: 8e94fb36
+bfb2b42c: dbb62789
+bfb2b430: 492f0eea
+bfb2b434: befff11a
+bfb2b438: ebbb2ec5
+bfb2b43c: 60601ed5
+bfb2b440: 01000015
+bfb2b444: 4147434d
+bfb2b448: 00104146
+bfb2b44c: b4012846
+bfb2b450: 0000003e
+bfb2b454: 20676e69
+bfb2b458: 74206e69
+bfb2b45c: 6f206568
+bfb2b460: cec0eedf
+bfb2b464: c2992839
+bfb2b468: 012ae174
+bfb2b46c: 6f3db3c8
+bfb2b470: 85f5eef0
+bfb2b474: 0b9a6f1a
+bfb2b478: 0afd4ab2
+bfb2b47c: 74225e1c
+bfb2b480: 04000001
+bfb2b484: 00000001
+bfb2b488: 00000000
+bfb2b48c: 000000e0
+bfb2b490: 004017c8
+bfb2b494: 00000000
+bfb2b498: afb2b700
+bfb2b49c: 000000e0
+bfb2b4a0: afb880e4
+bfb2b4a4: 000000e0
+bfb2b4a8: afffffff
+bfb2b4ac: 00000010
+bfb2b4b0: 00000000
+bfb2b4b4: 00000000
+bfb2b4b8: 00000000
+bfb2b4bc: afb2b7e0
+bfb2b4c0: 00000000
+bfb2b4c4: afb881c4
+bfb2b4c8: 00000000
+bfb2b4cc: 00000000
+bfb2b4d0: 00000000
+bfb2b4d4: 00000000
+bfb2b4d8: 00000000
+bfb2b4dc: 00000000
+bfb2b4e0: 00000000
+bfb2b4e4: 00000000
+bfb2b4e8: 00000000
+bfb2b4ec: 00000000
+bfb2b4f0: 00000000
+bfb2b4f4: 00000000
+bfb2b4f8: 00000000
+bfb2b4fc: 00000000

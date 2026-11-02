@@ -1,0 +1,116 @@
+total 113
+-rw-r-----   1 root      drm_license        32 Sep 24 11:54 BSIS_AUTHKEY
+-rw-r-----   1 root      drm_license       168 Sep 24 12:06 BSIS_PRIV
+-rw-r-----   1 root      drm_license       136 Sep 24 12:06 BSIS_PUBL
+-rw-r-----   1 root      drm_license         4 Sep 24 11:54 FS_DIRTY
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 bdevcert_dat 
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 bdevcert_dat 1
+-rw-r-----   1 root      drm_license       104 Sep 24 11:54 bdevcert_dat 10
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 bdevcert_dat 2
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 bdevcert_dat 3
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 bdevcert_dat 4
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 bdevcert_dat 5
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 bdevcert_dat 6
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 bdevcert_dat 7
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 bdevcert_dat 8
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 bdevcert_dat 9
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 bgroupcrt_dat
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 bgroupcrt_dat1
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 bgroupcrt_dat2
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 bgroupcrt_dat3
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 bgroupcrt_dat4
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 bgroupcrt_dat5
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 bgroupcrt_dat6
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 bgroupcrt_dat7
+-rw-r-----   1 root      drm_license        44 Sep 24 12:06 bgroupcrt_dat8
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  1
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  10
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  11
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  12
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  13
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  14
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  15
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  16
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  17
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  18
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  19
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  2
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  20
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  21
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  22
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  23
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  24
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  25
+-rw-r-----   1 root      drm_license       196 Sep 24 11:54 devcert_dat  26
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  3
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  4
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  5
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  6
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  7
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  8
+-rw-r-----   1 root      drm_license       200 Sep 24 11:54 devcert_dat  9
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 1
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 10
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 11
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 12
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 13
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 14
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 15
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 16
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 17
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 18
+-rw-r-----   1 root      drm_license       148 Sep 24 12:06 devcertt_dat 19
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 3
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 4
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 5
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 6
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 7
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 8
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 devcertt_dat 9
+-rw-r-----   1 root      drm_license        32 Sep 24 12:06 drmclock.cfg
+-rw-r-----   1 root      drm_license        32 Jan 01  1970 fsecsyskey
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat1
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat10
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat11
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat12
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat13
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat14
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat15
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat16
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat17
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat18
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat19
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat2
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat20
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat21
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat22
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat23
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat24
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat25
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat26
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat27
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat28
+-rw-r-----   1 root      drm_license        68 Sep 24 12:06 ndrcrttmp_dat29
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat3
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat4
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat5
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat6
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat7
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat8
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrcrttmp_dat9
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrgpriv_dat 
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrgpriv_dat 1
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrgpriv_dat 2
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrgpriv_dat 3
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrgpriv_dat 4
+-rw-r-----   1 root      drm_license       200 Sep 24 12:06 ndrgpriv_dat 5
+-rw-r-----   1 root      drm_license       168 Sep 24 12:06 ndrgpriv_dat 6
+-rw-r-----   1 root      drm_license        44 Sep 24 11:54 priv_dat     
+-rw-r-----   1 root      drm_license        24 Sep 24 11:54 storeseed_dat
+-rw-r-----   1 root      drm_license        36 Sep 24 12:06 zgpriv_dat   
+-rw-r-----   1 root      drm_license        36 Sep 24 11:54 zprivencr_dat
+-rw-r-----   1 root      drm_license        36 Sep 24 11:54 zprivsig_dat 
+---
+NO_BOOTCTR

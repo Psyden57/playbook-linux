@@ -1,0 +1,51 @@
+magic=50424556 (PBEV)  count=412
+heartbeat: last tick at 300 ms (jiffies low16 0x8aee, INITIAL_JIFFIES 0x8ad0)
+ptr(+0x04, last initcall / async func) = 0xc0e2f6b4 serial8250_init+0x0
+epoch block: EPCH status=0x118 [NO-TIMEBASE] [INCOMPLETE] [sampled] [delay-build] target=0 ticks (0 ms)
+epoch block: 32k=000efee9 (29991 ms after power-on epoch)
+mpu state: 35 samples, 0 changed, last change jiffies 0x0000
+mpu state: CM_MPU_CLKSTCTRL   first=00000102 last=00000102
+mpu state: CM_MPU_MPU_CLKCTRL first=00000001 last=00000001
+mpu state: PM_MPU_PWRSTST     first=000003f7 last=000003f7
+mpu state: CM_IDLEST_DPLL_MPU first=00000000 last=00000000
+mpu state: 32k first=31525 ms last=31830 ms  -> last heartbeat at 31830 ms after the boot epoch
+epoch block: LDR=fffc1800 period=7812 ms  cl-entry=fffc18ef  handover=7 ms
+epoch block: CRR-at-entry=fffd7be7  pre-kernel=2780 ms  (this loader=2773 ms)
+smc probe: magic PSMC, completed mask=0x0
+smc probe: 300ms   fired at 300 ms -> NEVER RETURNED (CPU died in the SMC)
+smc probe: 800ms   not attempted
+smc probe: 1300ms  not attempted
+smc probe: 2000ms  not attempted
+gic census: CTLR=00000001 TYPER=0000fc24 (max IRQ 160)
+gic census: IGROUPR=00000000 00000000 00000000 00000000  (0 bits set; 1=Group0/secure)
+gic census: ISENABLER=0000ffff 00000000 00000000 00000000
+gic census: ISACTIVER0=00000000 ISPENDR0=00000000
+last 28 events:
+     280 ms  initcall
+     280 ms  initcall  (+0 ms)
+     280 ms  initcall  (+0 ms)
+     280 ms  initcall  (+0 ms)
+     280 ms  initcall  (+0 ms)
+     280 ms  initcall  (+0 ms)
+     280 ms  initcall  (+0 ms)
+     280 ms  initcall  (+0 ms)
+     280 ms  initcall  (+0 ms)
+     280 ms  initcall  (+0 ms)
+     280 ms  initcall  (+0 ms)
+     280 ms  initcall  (+0 ms)
+     280 ms  initcall  (+0 ms)
+     300 ms  initcall  (+20 ms)
+     300 ms  initcall  (+0 ms)
+     300 ms  rpm_callback: before lock_irq  (+0 ms)
+     300 ms  rpm_callback: lock_irq done  (+0 ms)
+     300 ms  rpm_suspend: out  (+0 ms)
+     300 ms  rpm_callback: before cb  (+0 ms)
+     300 ms  rpm_callback: after cb  (+0 ms)
+     300 ms  rpm_callback: before lock_irq  (+0 ms)
+     300 ms  rpm_callback: lock_irq done  (+0 ms)
+     300 ms  rpm_suspend: out  (+0 ms)
+     300 ms  rpm_callback: before cb  (+0 ms)
+     300 ms  rpm_callback: after cb  (+0 ms)
+     300 ms  rpm_callback: before lock_irq  (+0 ms)
+     300 ms  rpm_callback: lock_irq done  (+0 ms)
+     300 ms  rpm_suspend: out  (+0 ms)

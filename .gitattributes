@@ -1,0 +1,8 @@
+* text=auto eol=lf
+
+# Device captures and other binary evidence
+*.bin binary
+*.img binary
+*.pdf binary
+*.PDF binary
+docs/reports/data/** binary

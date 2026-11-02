@@ -1,0 +1,19 @@
+RPMB block 2 — genuine sealed block captured from the device, with TEST_PAD
+Session 20, 2026-10-31.  TabletOS, rpmb-omap4 pid 49168, RpmbInit page
+paddr 0xbf0dc000; the media bytes below are the data field of a read response
+for address 0x0002 (req_resp 0x0400, result 0) whose nonce matched page+0x420.
+
+The block holds TWO records, both parsed from the live plaintext at page+0x700:
+  BOOTCTR_FCTRY  block 2  next 2  len 4  value 32 00 00 00
+  TEST_PAD       block 2  next 2  len 4  value de ad be ef
+(TEST_PAD is this session's sacrificial rehearsal record; the OS normalises the
+name to 14 bytes.)
+
+DATA FIELD (256 B, the media content of block 2):
+3e4f848ee5c8067d08d8bedad77a8734cf56afbaf2478ec49ce60e2367583eada0bc021ab2df5d81524999217e574f46fa5a641d1bb2213c8a7e46ecb23935a0608c40a649bb6c8b3d1d4bb40e69ce42608c40a649bb6c8b3d1d4bb40e69ce42608c40a649bb6c8b3d1d4bb40e69ce42608c40a649bb6c8b3d1d4bb40e69ce42608c40a649bb6c8b3d1d4bb40e69ce42608c40a649bb6c8b3d1d4bb40e69ce42608c40a649bb6c8b3d1d4bb40e69ce42608c40a649bb6c8b3d1d4bb40e69ce42608c40a649bb6c8b3d1d4bb40e69ce42608c40a649bb6c8b3d1d4bb40e69ce42ab0e9d2a2b10802f11f65ee10e6ab3d255eeef669ff29599998e481bb3935199
+
+PLAINTEXT (224 B, page+0x700):
+2dbc8359424f4f544354525f464354525900020002000400320000002dbc8359544553545f504144000000000000020002000400deadbeef000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+
+An earlier capture of this block (before TEST_PAD existed) is in this file's
+git history; it had only the BOOTCTR record and a shorter zero tail.

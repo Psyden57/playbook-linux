@@ -1,0 +1,38 @@
+magic=4b45524e (NOT INITIALISED)  count=1358954498
+heartbeat: no tick recorded (4c424b43)
+ptr(+0x04, last initcall / async func) = 0x00000003 
+epoch block: EPCH status=0x11d [timebase] [done] [sampled] [delay-build] target=131072 ticks (4000 ms)
+epoch block: 32k=000ef627 (29923 ms after power-on epoch)
+epoch block: LDR=fffc1800 period=7812 ms  cl-entry=fffc18ef  handover=7 ms
+epoch block: CRR-at-entry=fffd7be2  pre-kernel=2780 ms  (this loader=2773 ms)
+epoch block: loop start=fffd7be2 last=ffff7be2 elapsed=131072 ticks (4000 ms) iters=307504
+epoch block: delay completed; kernel entered 4000 ms after loop start
+last 28 events:
+  300080 ms  code 0x5100
+  300000 ms  code 0x0000  (+-80 ms)
+  382240 ms  code 0x8022  (+82240 ms)
+  627680 ms  initcall  (+245440 ms)
+  101440 ms  code 0x846b  (+-526240 ms)
+  101440 ms  code 0x846c  (+0 ms)
+  185500 ms  code 0x0069  (+84060 ms)
+  306210 ms  code 0x8888  (+120710 ms)
+   74800 ms  code 0xa800  (+-231410 ms)
+  320820 ms  code 0x2a08  (+246020 ms)
+  131460 ms  code 0x844a  (+-189360 ms)
+    7760 ms  code 0xafbe  (+-123700 ms)
+   83120 ms  code 0xa42b  (+75360 ms)
+   79860 ms  code 0xa800  (+-3260 ms)
+  414340 ms  code 0xaaaa  (+334480 ms)
+   61060 ms  code 0xaaaa  (+-353280 ms)
+   81540 ms  code 0xaa2a  (+20480 ms)
+   81220 ms  code 0xaaaa  (+-320 ms)
+   81460 ms  code 0xaaaa  (+240 ms)
+  122500 ms  code 0xaaa8  (+41040 ms)
+   63300 ms  code 0xaaaa  (+-59200 ms)
+   81220 ms  code 0xaaaa  (+17920 ms)
+  300030 ms  code 0x5108  (+218810 ms)
+  300010 ms  code 0x5100  (+-20 ms)
+  300040 ms  code 0x5100  (+30 ms)
+  300050 ms  code 0x5100  (+10 ms)
+  300060 ms  code 0x5100  (+10 ms)
+  518140 ms  code 0x55c7  (+218080 ms)
