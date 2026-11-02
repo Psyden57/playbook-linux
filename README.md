@@ -21,18 +21,48 @@ only there**; this page does not restate it. The next experiment is in
 [`docs/project/HANDOFF.md`](docs/project/HANDOFF.md), and the active image work
 is in [`docs/project/IFS-REBUILD.md`](docs/project/IFS-REBUILD.md).
 
-## How it works, in one paragraph
+## How it works
 
-The eMMC holds a CRC-signed IFS image in region 0. We replace that image with a
-chainloader: a small ARM stub at `0x800` that copies `zImage` and the DTB to
-high DRAM and jumps. The kernel is a pristine 6.15.11 plus one patch set
+The hard part is not Linux; it is getting the bootloader to run an image we
+built.  The PlayBook is a secure-boot device: with no factory record, RIM's
+second-stage loader verifies region 0 by SHA-512 + ECDSA against RIM's key, so a
+self-built image cannot pass.  The enabling discovery is the loader's
+**factory/CRC path**.  The loader reads a 4-byte RPMB record,
+`BOOTCTR_FCTRY`.  When the record is present with a value in `1..0x32`, it
+verifies region 0 by **CRC-32** instead — provided the image's `os_type` byte is
+`6`.  That is the gate that makes our images bootable.  The record is a budget:
+every successful factory boot decrements it, and only a booted stock OS (our
+`devuser` startup script) puts it back.  A unit must be armed — the record
+created from a booted OS — before a CRC-sealed image will boot; see
+`docs/project/SAFETY.md` and `docs/project/FACTORY-PATH.md`.
+
+Our image is a **replacement for the region-0 IFS**, not an extra file: RIM's
+startup prefix is kept and the imagefs is rebuilt behind it.  A small ARM
+chainloader at image offset `0x800` copies the 6.15.11 `zImage` and the board
+DTB to high DRAM, checks the DTB magic, and jumps with the ARM boot protocol.
+The kernel is pristine Linux 6.15.11 plus one patch set
 (`kernel/clean-kernel-6.15.11-changes.patch`, 34 files) carrying the
-`omap4-winchester` board DTS and the board quirks. The initramfs contains a
+`omap4-winchester` board DTS and the board quirks.  The initramfs contains a
 static PID 1 and a purpose-built console (no busybox, no shell) whose commands
 read and write device registers and buses directly, with every hardware access
-performed in a forked worker so a bus abort cannot wedge the console.
+performed in a forked worker so a bus abort cannot wedge the console.  A 32 MiB
+ext4 root in media region 1 can be loop-mounted read-only; the longer-term
+direction is postmarketOS/nura.
+
+Everything the chain needed — the loader's selector, the RPMB record format, the
+verifier's field offsets, the display and PMIC behaviour — came from live
+measurements on the device's own QNX 6.6 OS and static RE of its binaries.
+Those notes are in `docs/reports/`; the canonical summary is `docs/project/`.
 
 ## Quick start
+
+**Prerequisites.** The two cross-toolchains and the kernel build tree live in
+the gitignored `local/` payload and are not part of a clone;
+[`docs/project/SETUP.md`](docs/project/SETUP.md) explains how to populate them,
+or point `CROSS_COMPILE` / `KSRC` at your own.  The commands below assume
+`local/toolchains` and `local/kernel-tree` exist.  Flashing is
+hardware-specific: read [`docs/project/DEVELOPMENT.md`](docs/project/DEVELOPMENT.md)
+and [`docs/project/SAFETY.md`](docs/project/SAFETY.md) before writing anything.
 
 ```bash
 # both cross-toolchains live in the workspace payload (local/toolchains/);
@@ -64,8 +94,8 @@ docs/reports/     the analysis reports this work is built on (numbered)
 docs/sessions/    per-session notes (one file per session; the backfill trail)
 docs/captures/    live text captures (register dumps, ring buffers)
 docs/contradictions/  recorded disagreements between sources, left unresolved
-docs/history/     placeholder only — the abandoned kexec project is not in the
-                  public snapshot (kept in the private working history)
+docs/history/     a separate, abandoned kexec project + this project's
+                  early planning docs — prior art only, not this history
 kernel/           patch set, kernel config, board DTS + modified driver copies
 boot/             chainloader source and image builder
 initramfs/        PID 1 (init.c) and the bench console (console.c)
@@ -77,19 +107,22 @@ local/            GITIGNORED payload: device dumps, images, keys, vendor tools
 
 ## Safety notes
 
-**Full detail: [`docs/project/SAFETY.md`](docs/project/SAFETY.md).**  In short —
-this device is a **secure-boot PlayBook**, not a development board:
+**Full detail: [`docs/project/SAFETY.md`](docs/project/SAFETY.md).**  This is a
+secure-boot PlayBook, not a development board; the stores and the boot budget
+are unforgiving:
 
-* **An agent never writes RPMB.** `BOOTCTR_FCTRY` is an RPMB record; `0` or
-  `> 0x32` hard-locks the unit and recovery means desoldering the eMMC. The
-  top-up is the operator's, from a booted OS, with a readback.
-* **NVRAM and the MCT are read-only, always.** Read-only eMMC/QNX6 mounts are
-  allowed; writable eMMC is allowed only for **our own** data (region 1, and
-  `hd3` once repurposed).
-* **Never flash the image with CRC `0x3B04298E`** (an early LM3532 build that
-  wedged before the backlight enable line was understood).
-* Restore the sealed IFS (`local/images/ifs0.sealed.bin`, sha256 `c72b0530…`)
-  after test images and verify the hash.
+* **The factory boot record is a budget, not a flag.** `BOOTCTR_FCTRY` is a
+  4-byte RPMB record; `0` or `> 0x32` hard-locks the unit, and the documented
+  recovery is desoldering the eMMC.  Creating or writing the record is an
+  operator decision, made from a booted OS with a readback — do not write it
+  casually.
+* **NVRAM and the MCT are read-only.** Read-only eMMC/QNX6 mounts are fine;
+  writable eMMC is only for your own data (region 1, and `hd3` once repurposed).
+* **Flashing can brick the unit.** The pre-OS path is the recovery net; read
+  `docs/project/DEVELOPMENT.md` and `docs/project/SAFETY.md` before writing
+  anything, and keep the vendor images you need to get back.
+* There is no warranty.  If you are not prepared to lose the device, do not
+  flash it.
 
 ## License and publication
 
