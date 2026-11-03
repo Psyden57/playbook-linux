@@ -1,7 +1,5 @@
 # Current state
 
-Verified at session 23 (2026-11-02).
-
 ## Current state — 2026-11-02
 
 **One working unit remains: the reference (`0x50175127`), armed AND sealed.**

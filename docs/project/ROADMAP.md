@@ -1,7 +1,5 @@
 # Roadmap
 
-Verified at session 23 (2026-11-02).
-
 Ordered. Each item states the evidence that would close it, so "done" is not a
 matter of opinion. Items 1–3 and 3a–3d are closed (the display works). **The
 active item is 0, the modified 2.1.0.1917 IFS + RCFS**; item 5's region-1 half

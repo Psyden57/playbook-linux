@@ -1,7 +1,5 @@
 # Host setup
 
-Verified at session 23 (2026-11-02).
-
 The host is an x86_64 Linux box (Arch) with the unit on USB. Nothing in this
 project is installed system-wide. The tools resolve their own files from the
 repository root, and **both cross-toolchains live in the gitignored payload**

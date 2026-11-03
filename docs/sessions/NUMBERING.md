@@ -1,7 +1,5 @@
 # Session numbering
 
-Verified at session 23 (2026-11-02).
-
 The project spans **twenty-three sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 

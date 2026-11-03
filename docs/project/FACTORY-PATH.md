@@ -1,7 +1,5 @@
 # The factory/CRC path: what it is, and how a unit gets switched to it
 
-Verified at session 23 (2026-11-02).
-
 **Read `SAFETY.md` first.**  This page explains the mechanism and the *operator-only*
 procedure.  **An agent must never perform the writes described here** — `SAFETY.md` §6
 allows an agent to read everything and flash region-0 images, and nothing else; the

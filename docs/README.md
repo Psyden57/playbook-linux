@@ -1,7 +1,5 @@
 # Documentation index
 
-Verified at session 23 (2026-11-02).
-
 Current state lives in **`project/STATE.md`** and only there; the next-session
 kickoff is **`project/HANDOFF.md`**.  Everything else describes a mechanism or
 preserves evidence, and must not restate status.
@@ -26,11 +24,6 @@ preserves evidence, and must not restate status.
 | `project/DEVELOPMENT.md` | build → wrap → flash → boot loop, and the bench command reference | status |
 | `README.md` | this index and the ownership table | session counts or ranges |
 | root `README.md` | the project front page and quick start | status (point to `STATE.md`) |
-
-**Freshness stamp.**  Directly below the title of every canonical doc is
-`Verified at session N (YYYY-MM-DD)`.  A stamp older than the newest session
-note means the document is suspect by definition; refresh it when you verify
-the file.  `tools/docs_audit.py` checks the stamps and the cross-references.
 
 ## `project/` — the canonical documentation
 

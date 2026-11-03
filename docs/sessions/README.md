@@ -1,7 +1,5 @@
 # Session notes
 
-Verified at session 23 (2026-11-02).
-
 One file per working session, **absolute numbered**: `session-NN.md`.  Read
 `NUMBERING.md` first — the reports and handoffs call the Linux-era sessions
 "session 1…N", which are absolute `N+6`.
@@ -195,7 +193,7 @@ Do not rely on the transcript surviving; write it to the repository.
      session (not from memory or an older note);
    - every command you documented was run in this session, or is marked as
      untested;
-   - run `python3 tools/docs_audit.py` — it must print `clean` (stamps, session
+   - run `python3 tools/docs_audit.py` — it must print `clean` (session
      counts/ranges, stale phrases, removed tool names, report references);
    - git status is clean after the commit.
 

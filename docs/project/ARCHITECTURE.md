@@ -1,7 +1,5 @@
 # Architecture — components and how they interact
 
-Verified at session 23 (2026-11-02).
-
 Two halves: what we build and boot on the unit, and the QNX reference we mine
 for facts. Neither shares code with the other.
 
@@ -68,7 +66,6 @@ is no `0x39` entry. The IFS is the raw region at **region-0 offset `0x100000`**
 The factory path verifies **region 0 only, once**, and never reads region 1 or the
 NVRAM A/B record `0x2074` (reports 94 §0, 95 §5, 97 §0). Region 1 is therefore
 not a fallback image; the fallback is the pre-OS `0xF7` reflash.
-
 
 ## 2. Kernel and DTB placement
 

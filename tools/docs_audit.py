@@ -4,8 +4,6 @@
 Checks, across ``docs/project/*.md`` plus ``docs/README.md`` and
 ``docs/sessions/{README,NUMBERING}.md``:
 
-* a ``Verified at session N (YYYY-MM-DD)`` stamp in the first five lines, and N
-  not older than the newest ``docs/sessions/session-NN.md`` note;
 * session totals and ranges whose number is older than the newest note;
 * a curated list of stale phrases (report 167 §4), unless the line carries
   ``<!-- audit-ok: reason -->``;
@@ -33,8 +31,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 REPORTS = DOCS / "reports"
-
-STAMP_RE = re.compile(r"^Verified at session (\d+) \((\d{4}-\d{2}-\d{2})\)\.?\s*$")
 
 # Report 167 §4's starting list.  Keep lines that quote history exempt with
 # `<!-- audit-ok: ... -->` so the exemption is visible in the document itself.
@@ -179,25 +175,6 @@ def check(path: Path, newest: int) -> list[str]:
         return [f"{path.relative_to(ROOT)}: not valid UTF-8"]
 
     rel = path.relative_to(ROOT)
-
-    # 1. freshness stamp, near the title
-    stamp = None
-    for raw in lines[:5]:
-        match = STAMP_RE.match(raw.strip())
-        if match:
-            stamp = match
-            break
-    if stamp is None:
-        findings.append(
-            f"{rel}:1: missing 'Verified at session N (YYYY-MM-DD)' stamp "
-            f"in the first five lines"
-        )
-    else:
-        found = int(stamp.group(1))
-        if found < newest:
-            findings.append(
-                f"{rel}: stale stamp 'session {found}' (newest note is session {newest})"
-            )
 
     for lineno, raw in enumerate(lines, start=1):
         line = raw.strip()

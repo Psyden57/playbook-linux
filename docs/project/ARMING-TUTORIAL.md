@@ -1,7 +1,5 @@
 # Arming a PlayBook: the ECDSA (product) → CRC (factory) switch, step by step
 
-Verified at session 23 (2026-11-02).
-
 **Who may run this: the operator, on a unit you can afford to lose.**  An agent
 must never create or write the RPMB record (`SAFETY.md` §6).  Read `SAFETY.md`
 §2–§4 and `FACTORY-PATH.md` first; this page is the *procedure*.

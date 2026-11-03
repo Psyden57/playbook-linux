@@ -1,7 +1,5 @@
 # Known issues
 
-Verified at session 23 (2026-11-02).
-
 ## 1. The display works
 
 **Resolved 2026-10-29 (session 15, report 133).**  The panel shows a clean,

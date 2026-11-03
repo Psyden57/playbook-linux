@@ -1,7 +1,5 @@
 # Development loop
 
-Verified at session 23 (2026-11-02).
-
 The bench loop is: **build → wrap into the chainloader image → flash → boot →
 console → restore the sealed IFS**. The commands below are the Linux-era
 session 6 (absolute 12) handoff §4 loop restated against **this** tree: paths now

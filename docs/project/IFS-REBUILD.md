@@ -1,7 +1,5 @@
 # IFS rebuild — working notes for the 2.1.0.1917 boot image
 
-Verified at session 23 (2026-11-02).
-
 Everything a session needs to build a **modified** 2.1.0.1917 IFS.  Written
 at the end of session 20 (absolute) after establishing feasibility; nothing here
 has been built or flashed yet.

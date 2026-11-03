@@ -1,7 +1,5 @@
 # PlayBook Linux — clean Linux on a BlackBerry PlayBook (OMAP4430)
 
-Verified at session 23 (2026-11-02).
-
 A from-scratch, upstream-kernel port to a **BlackBerry PlayBook**: TI
 **OMAP4430 ES2.2 "winchester"**, secure device, 1 GB RAM, 1024×600 panel behind a
 **TC358764** DSI→LVDS bridge, with a **Hitachi** panel and an **LM3532**

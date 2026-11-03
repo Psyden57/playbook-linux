@@ -1,7 +1,5 @@
 # The boot chain, stage by stage
 
-Verified at session 23 (2026-11-02).
-
 **Read `SAFETY.md` before acting on anything here.**  This page exists because
 session 20 stopped a unit dead and the project now has **one working unit
 left**: every claim below is marked with how it is known, and every proposed

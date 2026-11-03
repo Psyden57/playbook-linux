@@ -1,7 +1,5 @@
 # Safety rules — the two stores, the boot budget, and what may be written
 
-Verified at session 23 (2026-11-02).
-
 Read this before any write to the unit. It consolidates rules that were spread
 over the README, `DECISIONS.md` §8, `KNOWN-ISSUES.md` §2 and `ROADMAP.md`, and it
 carries the device facts those summaries left out. Authorities: reports `71`

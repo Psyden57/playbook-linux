@@ -1,7 +1,5 @@
 # Project overview — mainline Linux on a BlackBerry PlayBook
 
-Verified at session 23 (2026-11-02).
-
 A from-scratch port of **unmodified-upstream Linux 6.15.11** to a
 **BlackBerry PlayBook** (TI OMAP4430 ES2.2, RIM codename "winchester"). For the
 Linux image, no RIM kernel, bootloader, driver or filesystem is reused: the unit

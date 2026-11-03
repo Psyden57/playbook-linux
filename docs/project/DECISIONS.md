@@ -1,7 +1,5 @@
 # Decisions
 
-Verified at session 23 (2026-11-02).
-
 Each entry records a decision, why it was taken, and the evidence that forced it.
 Where a decision was taken for a weaker reason than evidence (timing, cost, or
 "it cannot hurt"), that is stated.

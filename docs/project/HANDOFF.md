@@ -1,7 +1,5 @@
 # Handoff — session 23 (absolute)
 
-Verified at session 23 (2026-11-02).
-
 Self-contained.  **A paste-ready kickoff prompt is at the end (§5).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
 `N+6` — the reports written in absolute 18 are Linux-era "session 12";
