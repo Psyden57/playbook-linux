@@ -411,6 +411,7 @@ wired**.
 | image under test and the sealed IFS | `local/images/` (gitignored) |
 | QNX boot set for RE | `local/proprietary/dumped4869ifs/proc/boot/` (gitignored) |
 | OMAP4430 TRM (text) | `hardware/swpu231ap.pdf.txt` (`hardware/README.md`) |
+| **private/public repository management** | `docs/project/REPO-MANAGEMENT.md`, `tools/publish_public.sh` |
 
 ## 4. Working rules
 
@@ -432,6 +433,10 @@ wired**.
   every real defect in the display chain; so did asking the operator what the
   panel shows before building a theory.
 * **Update the docs as you go.** `STATE.md` and `KNOWN-ISSUES.md` go stale first.
+* **Publishing is a separate step.**  The public repository is a curated
+  snapshot, not the private history.  Follow `docs/project/REPO-MANAGEMENT.md`
+  and use `tools/publish_public.sh` (dry run, then `--apply`).  Never push the
+  private history, and never force-push the public repo without the operator.
 
 ## 5. Paste-ready kickoff prompt
 
@@ -484,9 +489,9 @@ TOOLS THAT EXIST NOW (session 22; see docs/project/DEVELOPMENT.md §10-§14):
   write commands (`0xC0` COMPLETE, `0xEE` erase, `0xE8`, `0xF3`) share the range.
 
 SECOND TASK — **DONE this session.**  Report 167's audit was executed: findings
-#1–#14, the ownership model in `docs/README.md`, the freshness stamps,
-`tools/docs_audit.py` and the "superseded" banners on reports 90/92 (plus
-pointers on report 160 and `session-21.md`).  The two §6 decisions were:
+#1–#14, the ownership model in `docs/README.md`, `tools/docs_audit.py` and the
+"superseded" banners on reports 90/92 (plus pointers on report 160 and
+`session-21.md`).  The two §6 decisions were:
 rewrite `OVERVIEW.md` as a timeless page, and add the banners.  Run
 `python3 tools/docs_audit.py` at wrap-up and keep it green.
 

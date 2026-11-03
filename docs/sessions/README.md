@@ -195,6 +195,9 @@ Do not rely on the transcript surviving; write it to the repository.
      untested;
    - run `python3 tools/docs_audit.py` — it must print `clean` (session
      counts/ranges, stale phrases, removed tool names, report references);
+   - if the public snapshot is being updated, follow
+     `docs/project/REPO-MANAGEMENT.md`: run `tools/publish_public.sh` as a dry
+     run, then `--apply`, check the public tree, and commit/push there;
    - git status is clean after the commit.
 
 6. COMMIT: `docs: session NN wrap-up` (session note + doc updates).

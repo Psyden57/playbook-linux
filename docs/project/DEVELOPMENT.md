@@ -599,10 +599,9 @@ stripped from the payload and sent as the signature, exactly as FlashFile does.
 `tools/pre_os_ifs_flash.py` remains the proven IFS route (it clones a vendor
 template and has done every write on this unit so far); `bbusb.py flash` removes the
 template dependency and adds whole-container flashing.  They send the same frames.
-**Public-snapshot caveat:** `pre_os_ifs_flash.py` reads the 560-byte
-`signature_data` constant from bb10mt's `qcfm.pas`, which is not included here;
-supply your own bb10mt checkout, or use `bbusb.py flash` (which carries the
-constant but has not been run on hardware).
+**It reads the 560-byte `signature_data` constant from bb10mt's `qcfm.pas`**,
+which is not in this tree; supply your own bb10mt checkout, or use `bbusb.py
+flash` (which carries the constant but has not been run on hardware).
 
 ## 13. `bbusb.py reset-osregion` — clearing the OSREGION marker without Windows
 
