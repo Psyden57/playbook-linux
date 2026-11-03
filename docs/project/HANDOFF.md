@@ -129,22 +129,20 @@ Linux-era 17.**  See `docs/sessions/NUMBERING.md`.
    the format structs and the four milestones with acceptance tests.  Its
    evidence is reports **159** (feasibility / why `mkifs` fails) and **158**
    (`rfs_validator`, the `/base` mount and the signature block).
-3. **Report 167** — the docs audit and its execution record (the ownership model,
-   `tools/docs_audit.py`, and the two extra stale statements it found).
-4. **Reports 147, 148, 156 and 157** — the RPMB state: caller/address solved
+3. **Reports 147, 148, 156 and 157** — the RPMB state: caller/address solved
    (147), transform not reproduced (148), a genuine same-boot pair with both
    MACs verified (156), trustzone shortcut blocked (157).  Report **154** is the
    `0x5B`/record-format correction; **149** is the incident.
-5. **Reports 160 and 161** — the measured armed state (pre-flash, report 160)
+4. **Reports 160 and 161** — the measured armed state (pre-flash, report 160)
    and CFP's corroborating `info` (report 161, raw data in
    `docs/reports/data/cfp-2026-11-01/`).
-6. **Reports 162–166** — the tooling RE: CFP's `info` opcodes, `RESETQNXOSREGION`,
+5. **Reports 162–166** — the tooling RE: CFP's `info` opcodes, `RESETQNXOSREGION`,
    LDR_01's opcode map, and the action log (`0xB3`) vs the crash log (`0xB0`).
-7. **Storage and the boot log**: report **134** (eMMC reads proven; the
+6. **Storage and the boot log**: report **134** (eMMC reads proven; the
    `(block−0x15)·0x10000` offset correction), **136** (write path and the ACM
    limit), **138** (the hd3 reseed), **140** (the region-1 root) and **142**
    (the clean boot log).
-8. **The display, if you need it**: **133** (the DSS core clock — the last
+7. **The display, if you need it**: **133** (the DSS core clock — the last
    defect), then **132** (the QNX oracle and the porch fix).  Then
    `docs/sessions/session-22.md` for the most recent session note, and
    `docs/contradictions/README.md` for the open disagreements.
@@ -219,10 +217,7 @@ is reseeded at boot).
 
 ## 1. The one thing to do next
 
-**Two threads; the active one is the IFS rebuild.**  The documentation audit
-(report 167) is **done this session** — the ownership model, the freshness
-stamps, the banners and `tools/docs_audit.py` are in place; keep the guard green
-at wrap-up.
+**The active work is the IFS rebuild.**
 
 **ACTIVE: a modified 2.1.0.1917 boot image.**  The operator needs `/base`
 modifiable (bloatware removal, and later PlayBook OS image porting), and the validator
@@ -488,14 +483,7 @@ TOOLS THAT EXIST NOW (session 22; see docs/project/DEVELOPMENT.md §10-§14):
   blocked-radio tables (relevant to moving to 2.1.0.1917).  Do **not** sweep opcodes:
   write commands (`0xC0` COMPLETE, `0xEE` erase, `0xE8`, `0xF3`) share the range.
 
-SECOND TASK — **DONE this session.**  Report 167's audit was executed: findings
-#1–#14, the ownership model in `docs/README.md`, `tools/docs_audit.py` and the
-"superseded" banners on reports 90/92 (plus pointers on report 160 and
-`session-21.md`).  The two §6 decisions were:
-rewrite `OVERVIEW.md` as a timeless page, and add the banners.  Run
-`python3 tools/docs_audit.py` at wrap-up and keep it green.
-
-FIRST TASK: docs/project/IFS-REBUILD.md §6 milestone 1 — write `tools/ifs_build.py`
+TASK: docs/project/IFS-REBUILD.md §6 milestone 1 — write `tools/ifs_build.py`
 (imagefs emitter: image_header + dirents + data + trailer, appended to RIM's unchanged
 0x0..0x44910 prefix) and pass its acceptance test: `dumpifs` must list the SAME 72
 entries with the same names, sizes and modes from our output, and print a
