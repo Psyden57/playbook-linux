@@ -586,39 +586,3 @@ so the cost of a second mistake is the whole project.
 **A failed write is not survivable**: the bootloader's write paths blink `0x2F`
 and never return (`KNOWN-ISSUES.md` trap 65).  So "we can always retry" is false.
 
-## 22. The modified-image set: matched IFS + edited RCFS + stock UFS (session 24)
-
-**Decision.**  The modified 2.1.0.1917 image is shipped as a **matched set**:
-
-* **IFS** — our uncompressed rebuild with the `rfs_validator` shim (report 169);
-* **RCFS (`/base`)** — the **same release's** vendor RCFS plus **one** guarded
-  hook in `scripts/startup.sh`:
-  `if [ -x /accounts/devuser/startup.sh ]; then /accounts/devuser/startup.sh & fi;`
-  after `start_runlevel FINAL`.  The image does **not** touch sshd, keys or the
-  root account;
-* **UFS** — the **stock** `PlayBook_2.1.0.1917.5.ufs` (`autorun::0`), not the
-  `PlayBook_2.1.0.1917_ROOT_V1.4.EXE` UFS.
-
-**Why the pair.**  A 1917 IFS over a 4869 `/base` mixes libraries and
-`startup.sh` generations; the operator asked for the version-matched RCFS.  The
-IFS change is the shim only; `/base` is the editable part.
-
-**Why the stock UFS.**  The ROOT V1.4 UFS boots but its `qconnDoor`/root kit
-never completes the BerryShell handshake, so SSH is unavailable (report 170 §3).
-The stock UFS authenticates, `devuser` works, and `autorun::0` skips the setup
-wizard.  The operator's startup script is added to `/accounts/devuser` after the
-flash; the hook is guarded so its absence is harmless.
-
-**Why root is not a `/base` edit.**  `/base/bin/qconnDoor` launches sshd with
-`-o AllowUsers=devuser -o DenyUsers=root`; root on this platform is a
-post-boot operator method (`root.sh` + watchdog).  Editing `sshd_config` or
-installing a `/root` key has no effect (report 170 §4, `KNOWN-ISSUES.md` trap 71).
-
-**How it is flashed.**  One container, `bbusb.py pack -v 1,2 -s`, then
-`bbusb.py flash --signed --from-bootrom --password 0000 --apply` **as the
-user** (the USB node has a user ACL; `pkexec` is wrong — trap 73).  The
-step-by-step is `IMAGE-REBUILD-GUIDE.md`.
-
-**Result.**  The unit boots 2.1.0.1917 with `/base` mounted, `devuser` SSH, and
-the operator's script tops `BOOTCTR_FCTRY` up (`0x2E → 0x32`, read back);
-reports 169/170.

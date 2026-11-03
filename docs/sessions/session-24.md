@@ -5,7 +5,7 @@
 
 Date / span: 2026-11-03
 Unit state at the end: **PlayBook OS 2.1.0.1917 running from our IFS, our
-edited `/base`, and the stock 1917 UFS.**  `/dev/hd1t179 on /base type qnx6`,
+edited `/base`, and the 1917 UFS with the operator's `autorun::0` change.**  `/dev/hd1t179 on /base type qnx6`,
 `/base/etc/os.version` = `2.1.0.1917`, `/proc/boot/rfs_validator` = 8,759 B,
 `/dev/hd3 on /` = stock `PlayBook_2.1.0.1917.5.ufs`; USB `0fca:8012`, login
 **`devuser`** (root denied by `qconnDoor`).  The operator's
@@ -27,7 +27,7 @@ stock 2.1.0.1917 image rebuilds; `dumpifs` reports the same 99 dirents and
 read-only on the reference.  The reseal sets the length and produces a
 CRC-verified image.  The operator chose to ship the **1917 IFS + 1917 RCFS**
 as a matched pair; the pair booted.  Then `/base` was edited (one guarded call
-to `/accounts/devuser/startup.sh`), the **stock** 1917 UFS was flashed (the
+to `/accounts/devuser/startup.sh`), the 1917 `.5.ufs` with the operator's `autorun::0` change was flashed (the
 ROOT V1.4 UFS was rejected for its door), and the operator's script ran at boot
 and topped the counter up.
 
@@ -125,7 +125,7 @@ and topped the counter up.
   (1,156,841,504 B, 70,694 frames, exit 0) and booted, but BerryShell never
   authenticated (`Handshake ended before authentication`), so SSH stayed
   closed.  Removing our script from it and reflashing (pair3) gave the same.
-* **The stock UFS works.**  `PlayBook_2.1.0.1917.5.ufs` (2,550,202,368 B,
+* **The `.5.ufs` with `autorun::0` works.**  `PlayBook_2.1.0.1917.5.ufs` (2,550,202,368 B,
   sha256 `0c0f7d77…`) flashed UFS-only (740,622,928-byte container, 45,259
   frames, exit 0); the door authenticated, the key uploaded, and `devuser` SSH
   worked.  `autorun::0` appears twice and `autorun::1` zero times.
@@ -138,7 +138,7 @@ and topped the counter up.
   `/accounts/devuser/startup.sh` (4,566 B, sha256 `8acf568f…`); the boot log
   has `bootctr: wrote 0x32, readback ok (was 0x2E (decimal 46))`.  The previous
   counter was 46, now 50.
-* **Final state:** `/dev/hd3 on /` (stock 1917 UFS), `/dev/hd1t179 on /base`
+* **Final state:** `/dev/hd3 on /` (the `.5.ufs` + `autorun::0`), `/dev/hd1t179 on /base`
   (edited 1917 RCFS, `os.version` 2.1.0.1917), `/proc/boot/rfs_validator`
   8,759 B (our IFS), `devuser` SSH.  No RPMB write by the agent.
 
@@ -209,7 +209,7 @@ and topped the counter up.
   are ignored.  Reverted (the diff is now only the devuser call).
 * **The ROOT V1.4 UFS was the wrong UFS.**  It boots, but its rooted
   `qconnDoor` never completes the door handshake; removing our script did not
-  help.  The stock `.5.ufs` works.
+  help.  The `.5.ufs` with `autorun::0` works.
 * **I lazy-unmounted the FUSE images** when a terminal/kate had their cwd
   inside; it left the FUSE daemons holding the images and later mounts failed.
   The rule (operator): wait for them to close, then `fusermount -u`.
@@ -279,14 +279,14 @@ and topped the counter up.
 * `docs/reports/168-ifs-format-internals-2026-11-03.md` — static RE of
   `dumpifs`/`mkifs` (checksums, parsing, layout, defaults).
 * `docs/reports/169-ifs-shim-boot-2026-11-03.md` — the flash and boot evidence.
-* `docs/reports/170-base-hook-ufs-swaps-stock-baseline-2026-11-03.md` — the
+* `docs/reports/170-base-hook-ufs-swaps-baseline-2026-11-03.md` — the
   `/base` hook, the UFS experiments, the door/root findings, the top-up.
 * `docs/project/IMAGE-REBUILD-GUIDE.md` — **the repeatable procedure for any
   `.ifs` + `/base` (+ UFS)**, the operator's requested runbook.
 * `docs/project/IFS-REBUILD.md` — §1 status, §2 sizes/endianness, §3 format
   facts, §4 unknowns, §5 as-built, §6 milestones 1–4 done.
 * `docs/project/STATE.md`, `docs/project/HANDOFF.md`, `ROADMAP.md`,
-  `KNOWN-ISSUES.md` (traps 71–77), `DECISIONS.md` §22 — the final state.
+  `KNOWN-ISSUES.md` (the new traps 72–75 and 77) — the final state.
 * `tools/README.md`, `docs/project/DEVELOPMENT.md` — the devuser login, the
   hardware-proven flasher, no-`pkexec` and the 10 s window.
 * Working files (gitignored, not artefacts): `local/work/ifs1917-tree/`,
@@ -294,7 +294,7 @@ and topped the counter up.
   (`dumpifs -vv`), `local/work/rebuilt.ifs`, `local/work/final.ifs`,
   `local/work/ifs-shim-sealed.ifs` (`0x788D84`, CRC `0x38EE7B46`),
   `local/work/rcfs-1917.rcfs` (edited RCFS), `local/work/pair2.signed`,
-  `local/work/pair3.signed`, `local/work/ufs-stock.signed`, and the extracted
+  `local/work/pair3.signed`, `local/work/ufs-vendor.signed`, and the extracted
   `local/work/ufs-root-v14/` + `local/work/ufs-orig/` UFS copies.
 * Device-side: `/tmp/rfs_validator_shim` was on the pre-flash OS; the running
   unit has the shim in the IFS.

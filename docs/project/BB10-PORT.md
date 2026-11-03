@@ -34,8 +34,7 @@ The PlayBook image chain is proven end to end (reports 169/170,
   `rfs_validator` shim; `os_type` 6, CRC, `LoadEnd` patched; `dumpifs`-clean.
 * RCFS (`/base`): a plain QNX6 filesystem at `0xC00000`, edited with
   `bb10mt qnx6 mount`; the shim mounts it without the signature gate.
-* UFS: stock `PlayBook_2.1.0.1917.5.ufs` at the UFS delta; `autorun::0` skips
-  setup.
+* UFS: `PlayBook_2.1.0.1917.5.ufs` **with the operator's `autorun::0` change** at the UFS delta; it skips setup.
 * Container/flash: `bbusb.py pack`/`parse`/`flash` (V1+V2, signature, gate);
   hardware-proven; the reference boots the set and `devuser` SSH works.
 * The reference is armed and sealed; `BOOTCTR_FCTRY` is topped up by the

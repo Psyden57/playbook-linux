@@ -9,11 +9,15 @@ that were actually run.
 (`tools/ifs_build.py`) and resealed for the factory/CRC path.  `/base` is the
 RCFS component; it is edited as a plain QNX6 filesystem and is no longer
 gated by `rfs_validator` because the IFS carries the mount shim.  The UFS is
-the root filesystem; it is normally the **stock** component.
+the root filesystem; it is normally the vendor component.  For 2.1.0.1917,
+`PlayBook_2.1.0.1917.5.ufs` is the vendor image **plus the operator's
+`autorun::0` change** — not an unmodified stock image.
 
-> **Never** change the descriptor, the RPMB, or the UFS as a shortcut.  One
-> variable per flash.  `SAFETY.md` comes first; this guide assumes it has been
-> read.
+> **One variable per flash**, and `SAFETY.md` comes first (this guide assumes it
+> has been read).  The only thing that should change the OS image's
+> **descriptor** — the `TOSMetrics` block at `image+0x2C`, whose
+> `LoadStart`/`LoadEnd`/`os_type` fields the bootloader reads — is the reseal
+> tool (`os_type` and `LoadEnd`).  Do not hand-edit it.
 
 ## 0. Inputs and deltas
 
@@ -102,25 +106,25 @@ Why here: `main()` starts runlevels 0..2 and `FINAL`; after that the OS is up
 and `/accounts` (on the UFS) is mounted.  The script is backgrounded because it
 waits for `/dev/rpmb` and the symlink overlay itself.
 
-**Do not** try to enable root SSH in `/base`.  The `qconnDoor` binary launches
-sshd with `-o AllowUsers=devuser -o DenyUsers=root`; root on this platform is a
-post-boot operator method (`/accounts/devuser/root.sh` + watchdog), and
-`/base`'s `tools_qconn_sshd` is only `waitfor … && /usr/sbin/sshd`.
+The boot-time login is `devuser`; do not add sshd or root-account changes to
+`/base`.
 
 Verify the edit by diffing against a pristine mount (mount the vendor RCFS in a
 second directory); the only hunk should be the block above.
 
 ## 3. Prepare the UFS
 
-Use the **stock** UFS for the release.  The `PlayBook_<version>_ROOT_V1.4.EXE`
-UFS is a rooted/branded image whose `qconnDoor` does not complete the door
-handshake on this platform — SSH stays closed (report 170 §3).  The stock
-`PlayBook_<version>.5.ufs` does authenticate.
+Use the **vendor UFS for the release**, with the operator's `autorun::0` change
+(for 2.1.0.1917 that is `PlayBook_2.1.0.1917.5.ufs`).  The
+`PlayBook_<version>_ROOT_V1.4.EXE` UFS is a rooted/branded image whose
+`qconnDoor` does not complete the door handshake on this platform — SSH stays
+closed (report 170 §3).  The vendor `PlayBook_<version>.5.ufs` does
+authenticate.
 
 Two things matter:
 
 1. **Skip the setup wizard**: the image must have `autorun::0` in its
-   provisioning files (the stock 2.1.0.1917 `.5.ufs` already does: two
+   provisioning files (the 2.1.0.1917 `.5.ufs` already carries that change: two
    occurrences of `autorun::0`, none of `autorun::1`).  Verify:
    ```bash
    grep -aoc 'autorun::0' PlayBook_<version>.5.ufs
@@ -242,8 +246,7 @@ python3 tools/bbusb.py flash --signed local/work/back.signed --from-bootrom --pa
 | `bbusb.py flash --from-bootrom` window | 10 s; arm the `lsusb` wait first |
 | `bb10mt qnx6 fsck` on the RCFS | it cannot open a QNX6 image with an MBR at `0x0`; verify by mounting |
 | UFS `fsck` warnings | the sparse extract has `0xFF` holes; pristine and edited report the same 140 lines |
-| `DenyUsers=root` | it is in `bin/qconnDoor`, not in `sshd_config`; root is post-boot |
-| setup wizard | `autorun::0`; prefer the stock `.5.ufs` over the ROOT V1.4 EXE |
+| setup wizard | `autorun::0`; use the vendor `.5.ufs` with that change, not the ROOT V1.4 EXE |
 | mixed IFS/RCFS versions | ship the matching pair; a 4869 `/base` under a 1917 IFS mixes libraries |
 | UFS plus IFS/RCFS in one flash | fine when they are one container (one PreFlash); do not chain separate PreFlashes and expect the first write to survive |
 
@@ -254,7 +257,7 @@ python3 tools/bbusb.py flash --signed local/work/back.signed --from-bootrom --pa
 3. `ifs_build.py build` (+ `--replace`) → `ifs_build.py check`
 4. `89-crc_tool.py reseal --length auto --append-os-trailer --type 6`
 5. copy the RCFS, `bb10mt qnx6 mount`, add the guarded `/accounts/devuser/startup.sh` call, `fusermount -u`
-6. stock UFS: `autorun::0`; add `/accounts/devuser/startup.sh` before or after
+6. vendor UFS: `autorun::0` (operator change); add `/accounts/devuser/startup.sh` before or after
 7. `bbusb.py pack -l … -c … -v 1,2 -s` → `parse` → dry-run
 8. arm the `0fca:0001` wait → `bbusb.py flash --signed … --from-bootrom --password 0000 --apply` (user, no `pkexec`)
 9. boot; `door-hold`; `PB_USER=devuser tools/pbssh.sh` checks; read `.bootctr.log`

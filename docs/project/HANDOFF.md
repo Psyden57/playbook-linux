@@ -166,7 +166,7 @@ Linux-era 15, absolute 22 is Linux-era 16 and absolute 23 is Linux-era 17.
 > **The `/base` hook and the UFS are done too (report 170).**  `/base` carries
 > exactly one change: a guarded `if [ -x /accounts/devuser/startup.sh ]; then
 > /accounts/devuser/startup.sh & fi;` after `start_runlevel FINAL`.  The UFS is
-> the **stock** `PlayBook_2.1.0.1917.5.ufs` (`autorun::0`; the ROOT V1.4 EXE
+> the `PlayBook_2.1.0.1917.5.ufs` **with the operator's `autorun::0` change** (the ROOT V1.4 EXE
 > UFS was rejected — its door never authenticates).  The operator added the
 > 4,566-byte startup script after the flash and **the top-up works**:
 > `bootctr: wrote 0x32, readback ok (was 0x2E (decimal 46))`.  Root SSH is not a
@@ -292,7 +292,7 @@ bootstrap and needs an ARM BSP this SDP does not have), so the route is
 * **RCFS (`/base`)** — the vendor `PlayBook_2.1.0.1917.1.rcfs` (sha256
   `8ccf518c…`) with one guarded hook in `scripts/startup.sh` that runs
   `/accounts/devuser/startup.sh &` after the final runlevel (report 170).
-* **UFS (`/`)** — the **stock** `PlayBook_2.1.0.1917.5.ufs` (sha256
+* **UFS (`/`)** — the `PlayBook_2.1.0.1917.5.ufs` **with the operator's `autorun::0` change** (sha256
   `0c0f7d77…`, `autorun::0`).  The ROOT V1.4 EXE UFS is **not** used: it boots
   but its door never authenticates, so SSH stays closed.
 * **`/accounts/devuser/startup.sh`** — operator's 4,566 B script; the top-up
@@ -312,7 +312,7 @@ do not flash until the operator approves the first variable (`ROADMAP.md` item
 8).
 
 The current way back is the **working 2.1.0.1917 set** (our IFS + edited RCFS +
-stock UFS); the 4869 set (sealed IFS + `PB-4869-root.0.1.rcfs` + 4869 UFS) is
+the `.5.ufs` with `autorun::0`); the 4869 set (sealed IFS + `PB-4869-root.0.1.rcfs` + 4869 UFS) is
 the deeper fallback.  **Any flash needs the operator's go-ahead; the unit is
 the only one.**
 

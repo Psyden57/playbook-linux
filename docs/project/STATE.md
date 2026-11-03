@@ -11,8 +11,7 @@ works.**  The unit runs PlayBook OS **2.1.0.1917** from:
   `PlayBook_2.1.0.1917.1.rcfs` (sha256 `8ccf518c…`) with one guarded call in
   `scripts/startup.sh` that runs `/accounts/devuser/startup.sh &` after the
   final runlevel (report 170);
-* the **stock 1917 UFS** (`PlayBook_2.1.0.1917.5.ufs`, 2,550,202,368 B,
-  sha256 `0c0f7d77…`, `autorun::0` — setup skipped).
+* the **1917 UFS** — the vendor `PlayBook_2.1.0.1917.5.ufs` **with the operator's `autorun::0` change** (2,550,202,368 B, sha256 `0c0f7d77…`).
 
 The operator added `/accounts/devuser/startup.sh` (4,566 B, sha256
 `8acf568f…`) after the flash, and it **works**: the boot log records
@@ -24,7 +23,7 @@ method, not a `/base` edit.  Evidence: `/dev/hd1t179 on /base type qnx6`,
 
 The `PlayBook_2.1.0.1917_ROOT_V1.4.EXE` UFS was **rejected**: it boots but its
 `qconnDoor`/root kit never completes the door handshake, so SSH stays closed.
-Use the stock `.5.ufs` (report 170 §3).
+Use the `.5.ufs` with `autorun::0` (report 170 §3).
 
 **The custom 1917 `/base` (bloatware removal) is no longer the operator's
 goal** (2026-11-03).  **The next goal is to edit a BB10 image to run on the
@@ -43,7 +42,7 @@ denied by `qconnDoor`.
 `rfs_validator`, CRC `0x38EE7B46`, sha256 `b52195bb…`, `0x788D84` bytes) at
 `0x100000`; the **edited 1917 RCFS** at `0xC00000` (vendor
 `PlayBook_2.1.0.1917.1.rcfs`, sha256 `8ccf518c…`, plus the guarded hook);
-and the **stock 1917 UFS** (`PlayBook_2.1.0.1917.5.ufs`, sha256 `0c0f7d77…`).
+and the **1917 UFS** (vendor `.5.ufs` + operator `autorun::0`, sha256 `0c0f7d77…`).
 The 4869 `.sig` block at `0xF0000` was left stock and is irrelevant with the
 shim.  The way back is the 4869 set: sealed IFS + `PB-4869-root.0.1.rcfs` +
 the 4869 UFS.
@@ -170,11 +169,11 @@ the I²C bus and resets the unit).
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
 | region-0 IFS on media | **ours**: the uncompressed 2.1.0.1917 IFS with the 8,759-byte `rfs_validator` shim, `0x788D84` bytes, `os_type` 6, CRC **`0x38EE7B46`**, sha256 `b52195bb…` (report 169).  Flashed 2026-11-03 with the 1917 RCFS.  The 4869 `.sig` block at `0xF0000` is stock/irrelevant.  **No chainloader/kernel image is on media** |
 | region-0 RCFS (`/base`) | **our edited vendor 2.1.0.1917**: `PlayBook_2.1.0.1917.1.rcfs`, sha256 `8ccf518c…`, written sparse at block 192, with one guarded hook in `scripts/startup.sh` (report 170).  Mounted at `/dev/hd1t179`, `/base/etc/os.version` = `2.1.0.1917` |
-| UFS (`/`) | **stock 2.1.0.1917**: `PlayBook_2.1.0.1917.5.ufs`, 2,550,202,368 B, sha256 `0c0f7d77…`, `autorun::0` (setup skipped).  The ROOT V1.4 EXE UFS was rejected — its door never authenticates (report 170 §3) |
+| UFS (`/`) | **vendor 2.1.0.1917 `.5.ufs` + operator `autorun::0`**: 2,550,202,368 B, sha256 `0c0f7d77…` (setup skipped).  The ROOT V1.4 EXE UFS was rejected — its door never authenticates (report 170 §3) |
 | `/accounts/devuser/startup.sh` | **operator's**, 4,566 B, sha256 `8acf568f…`, added after the flash; runs the top-up at boot (`.bootctr.log`) |
 | `BOOTCTR_FCTRY` | **`0x32` (50)**, written and read back by the startup script (`bootctr: wrote 0x32, readback ok (was 0x2E (decimal 46))`).  `devuser` cannot read `/dev/rpmb` directly |
 | region-1 Linux root | **present, read-only** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 32 MiB ext4, no journal, sha256 `0b87c29f…`, FNV-1a64 `c2e78e1f09b50208`.  Written through the pre-OS `0xF7` loop and read back byte-exactly; mounted read-only and its `/init` ran on `0xFB3A9F5D` (report 140).  **Left in place** |
-| TabletOS / OS | **PlayBook OS 2.1.0.1917 up** (`QNX localhost 6.6.0 2014/03/19… armle`), **stock 1917 UFS** (`/dev/hd3 on /`); USB `0fca:8012` "RIM Network Device", `169.254.0.1`, ports 22/4455/80/443.  Login **`devuser` only** (`PB_USER=devuser tools/pbssh.sh …`); root is denied by `qconnDoor` (`DenyUsers=root`) and is a post-boot operator method |
+| TabletOS / OS | **PlayBook OS 2.1.0.1917 up** (`QNX localhost 6.6.0 2014/03/19… armle`), **the `.5.ufs` with `autorun::0`** (`/dev/hd3 on /`); USB `0fca:8012` "RIM Network Device", `169.254.0.1`, ports 22/4455/80/443.  Login **`devuser` only** (`PB_USER=devuser tools/pbssh.sh …`); root is denied by `qconnDoor` (`DenyUsers=root`) and is a post-boot operator method |
 | device-side files | `tools/pbdsi` was pushed to `/tmp/pbdsi` and is **gone** (QNX `/tmp` is wiped by a reboot).  Re-push before use |
 
 The factory boot budget is real and one-way: every successful factory/CRC boot
@@ -197,13 +196,10 @@ writer**, `pbrpmb write` stays compiled blocked, and **no agent writes RPMB**
 
 ## What is next
 
-`ROADMAP.md` owns the ordered work list; **item 0, the modified 2.1.0.1917
-IFS + RCFS + UFS, is the active item**, and `IFS-REBUILD.md` is its working
-notes.  Milestones 1–4 are done, the image boots, and the `/base` hook runs the
-operator's startup script (reports 169/170).  **The custom 1917 `/base` is no
-longer the current goal** (operator, 2026-11-03); **the next goal is a BB10
-image on the PlayBook** (`ROADMAP.md` item 8, starting read-only).  The
-repeatable procedure is `IMAGE-REBUILD-GUIDE.md`.
+`ROADMAP.md` owns the ordered work list; the 1917 image work is complete
+(`IFS-REBUILD.md`, `IMAGE-REBUILD-GUIDE.md`), and **the next goal is item 8, a
+BB10 image on the PlayBook** (operator, 2026-11-03).  The custom 1917 `/base`
+is no longer the current goal; the next direction is the BB10 port.
 
 ## Workspace location
 

@@ -12,8 +12,8 @@ the image length, `os_type` and the CRC; and the set booted:
 `/proc/boot/rfs_validator` = 8,759 B (our shim), OS up with its web/qconn/SSH
 services.  Report 169 has the boot evidence.  `/base` carries one guarded hook
 that runs `/accounts/devuser/startup.sh`; the operator added the script and the
-`BOOTCTR_FCTRY` top-up works (report 170).  The UFS is the **stock** 1917
-`.5.ufs`; the ROOT V1.4 UFS was rejected (its door never authenticates).  The
+`BOOTCTR_FCTRY` top-up works (report 170).  The UFS is the vendor 1917
+`.5.ufs` **with the operator's `autorun::0` change**; the ROOT V1.4 UFS was rejected (its door never authenticates).  The
 1917 OS logs in as **`devuser`** only (`PB_USER=devuser tools/pbssh.sh …`).
 **The repeatable build/flash procedure for any image set is
 `docs/project/IMAGE-REBUILD-GUIDE.md`.**  Next: a custom 1917 `/base`
@@ -230,8 +230,8 @@ Not attempted here: compression (the output is uncompressed).
 5. **`/base` hook + UFS — DONE (2026-11-03).**  `/base` carries exactly one
    guarded call after `start_runlevel FINAL`:
    `if [ -x /accounts/devuser/startup.sh ]; then /accounts/devuser/startup.sh & fi;`
-   (pristine 61,238 B → edited 61,713 B; no other hunk).  The **stock** 1917
-   UFS (`PlayBook_2.1.0.1917.5.ufs`, `autorun::0`) replaced the ROOT V1.4 UFS,
+   (pristine 61,238 B → edited 61,713 B; no other hunk).  The 1917
+   `.5.ufs` **with the operator's `autorun::0` change** replaced the ROOT V1.4 UFS,
    whose `qconnDoor` never authenticates.  The operator added the 4,566-byte
    startup script and the top-up ran (`0x2E → 0x32`, read back).  Report 170.
 6. **The custom 1917 `/base` (bloatware removal) is no longer the goal**
