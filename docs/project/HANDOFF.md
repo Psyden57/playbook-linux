@@ -1,11 +1,12 @@
-# Handoff — session 23 (absolute)
+# Handoff — session 24 (absolute)
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§5).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
 `N+6` — the reports written in absolute 18 are Linux-era "session 12";
 absolute 19 is Linux-era 13, absolute 20 is Linux-era 14, absolute 21 is
-Linux-era 15 and absolute 22 is Linux-era 16.  **This handoff is for absolute 23 =
-Linux-era 17.**  See `docs/sessions/NUMBERING.md`.
+Linux-era 15, absolute 22 is Linux-era 16 and absolute 23 is Linux-era 17.
+**This handoff is for absolute 24 = Linux-era 18.**  See
+`docs/sessions/NUMBERING.md`.
 
 > **Session 18 result — superseded by the session-19 and session-20 updates below.**
 > The first task is **done**: a **32 MiB ext4 Linux root is in media region 1**
@@ -119,6 +120,17 @@ Linux-era 17.**  See `docs/sessions/NUMBERING.md`.
 > `docs/project/BOOT-CHAIN.md` (stage table, who writes the record, read-only
 > verification protocol, open questions).
 
+> **Session 23 result — documentation and publication; no bench work.**
+> Report 167's audit was executed and the canonical docs were re-read end to
+> end (the root README and the contradictions were the biggest misses).  The
+> public snapshot was built and pushed (`REPO-MANAGEMENT.md`), with GPL-3.0
+> licensing, a `NOTICE`, CI and a `publish_public.sh` helper.  The earlier-phase
+> document tree and `SECURITY.md` were deleted; the "UFS = region 1", "two
+> 32 GB units", "BB10 2.1.0.1917" and trap-41 errors were corrected; the per-doc
+> session stamps were dropped.  **No USB/device work was done; the unit state is
+> unchanged from the last measured state.**  The IFS writer (`tools/ifs_build.py`,
+> milestone 1) was **not** started.
+
 ## What to read first, in this order
 
 0. `docs/project/SAFETY.md` — the two stores, the boot budget, what may never be
@@ -144,7 +156,7 @@ Linux-era 17.**  See `docs/sessions/NUMBERING.md`.
    (the clean boot log).
 7. **The display, if you need it**: **133** (the DSS core clock — the last
    defect), then **132** (the QNX oracle and the porch fix).  Then
-   `docs/sessions/session-22.md` for the most recent session note, and
+   `docs/sessions/session-23.md` for the most recent session note, and
    `docs/contradictions/README.md` for the open disagreements.
 
 ## 0. The job, and where it stands
@@ -175,7 +187,7 @@ on 2026-11-01 so the unit would boot, which is why the unit boots today.  Sessio
 measured the *pre-flash* stock image (`75be24e8…`, `os_type` 4, report 160); **the exact
 asset on media has not been read back yet** (candidates: `local/images/ifs0.sealed.bin`
 `c72b0530…`, or `PB-4869-root.0.3-crc.ifs` `561e3fae…` — both `os_type` 6 / CRC
-`0x116B2562`).  Reading region 0 back is a cheap first check for session 23, and the
+`0x116B2562`).  Reading region 0 back is a cheap first check for session 24, and the
 loader's `0xDC` range hash or `0xC4` verify would do it without booting (report 164
 addendum 9).  Session
 20 flashed six diagnostic images — **`0x3116B6F8`** (oracle), **`0xC71BEF44`**
@@ -439,8 +451,8 @@ Start the next session in this repository root as the working directory, then
 paste this.  It is self-contained; the sections above are the long form.
 
 ```
-PlayBook (OMAP4430 "winchester") boot-image work — session 23
-(absolute numbering; the reports call it Linux-era "session 17").
+PlayBook (OMAP4430 "winchester") boot-image work — session 24
+(absolute numbering; the reports call it Linux-era "session 18").
 
 Workspace: this repository — a git checkout.  The earlier work tree
 `$HOME/rea-work` is READ-ONLY.  Map: docs/README.md.

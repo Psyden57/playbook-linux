@@ -34,7 +34,7 @@ So:
 | **20** | **14** | the monitor's **address view is pinned** with the `0x12` oracle — identity addresses, every page below `0xB0000000`, any domain (report 147, superseding 145/146's "global rejection" and the DRAM bias); the seal ABI is accepted end to end but the transform **does not reproduce** the device's block-0x43 pair with any key/framing/op variant (report 148) |
 | **21** | **15** | read-only boot-chain verification, the **same-boot RPMB pair**, the trustzone dead end (report 157), and the **measured armed state** — record-armed but carrying the stock type-4 image.  The operator flashed the sealed `os_type` 6 IFS on 2026-11-01, so the unit is now armed **and** sealed (report 160 is the pre-flash measurement) |
 | **22** | **16** | **tooling, mostly offline**: `tools/bbusb.py` with CFP-style subcommands (`info`, `flash`, `reset-osregion`, `pack`/`unpack`/`split`); static RE of CFP.exe and LDR_01 — the eight `info` opcodes, **`RESETQNXOSREGION` = `0xE8 {4}` = delete NVRAM `0x2074`**, and `0x39` shown to be the CREAD opcode so path 2 cannot resolve (`161`…`164`) |
-| **23** | **17** | the canonical-docs audit (report 167) executed: the ownership model, the freshness stamps and `tools/docs_audit.py`; the offline IFS rebuild work (`IFS-REBUILD.md`, reports 158/159) |
+| **23** | **17** | the canonical-docs audit (report 167) executed: the ownership model, the root README and contradictions, `tools/docs_audit.py`; the public GitHub snapshot and `publish_public.sh`; the docs/repo cleanup.  No bench work; the IFS writer was not started |
 
 ## Anchors (evidence for the mapping)
 
@@ -58,6 +58,7 @@ The Linux-era sessions are anchored by their own handoffs, all in `docs/reports/
 | `docs/sessions/session-20.md` | Linux session 14 (absolute 20) — written by the session |
 | `docs/sessions/session-21.md` | Linux session 15 (absolute 21) — written by the session |
 | `docs/sessions/session-22.md` | Linux session 16 (absolute 22) — written by the session |
+| `docs/sessions/session-23.md` | Linux session 17 (absolute 23) — written by the session |
 
 The pre-Linux phase (absolute 1…6) has these artefacts, in chronological order. <!-- audit-ok: pre-Linux phase range -->
 The exact assignment to 1…6 is **not** reconstructed here — the operator knows it,

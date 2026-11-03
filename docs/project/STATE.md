@@ -22,6 +22,8 @@ fixed version (`c265cfbb…`); the region-1 Linux root is present, read-only, an
 left in place.  The spare (`0x50176EC1`) is **down** — its red 1-2-2 blink is
 error `0x5B` (NV-record / RPMB subsystem unusable, report 153) and it presents
 no USB.  Two 32 GB units are bricked.  **No RPMB writes by an agent, ever.**
+Session 23 did no USB/bench work, so this is the last measured state, not a
+fresh reading.
 
 **The active work** is the modified 2.1.0.1917 IFS (`IFS-REBUILD.md`).  The
 persistent blocker is the **Linux `BOOTCTR_FCTRY` top-up**: the monitor's `0x2F`
@@ -177,6 +179,10 @@ until the operator is happy with the move.  It is stale from the moment of the
 move — do not work in it, and do not let anything (`CONFIG_INITRAMFS_SOURCE`,
 the door scripts) point at it.
 
+**Public snapshot:** `$HOME/SSDdrive/playbook-linux-public` (remote
+`git@github.com:Psyden57/playbook-linux.git`).  The private tree is the source
+of truth; publish with `tools/publish_public.sh` (see `REPO-MANAGEMENT.md`).
+
 **Both cross-toolchains are inside the workspace** in the gitignored payload:
 `local/toolchains/armv7-eabihf` (Buildroot gcc 14.3.0) and
 `local/toolchains/qnx660-master` (QNX SDP 6.6).  `. tools/env.sh` exports
@@ -190,7 +196,14 @@ validates them and prints the versions.
 Everything below this divider records what was true earlier.  It is kept for the
 evidence and the trail, **not** as current state.
 
-## Session recaps (20–22)
+## Session recaps (20–23)
+
+**Session 23 (documentation and publication; no bench).**  The docs audit in
+report 167 was executed and the canonical set corrected; the public GitHub
+snapshot was built and pushed (`REPO-MANAGEMENT.md`); the earlier-phase document
+tree and `SECURITY.md` were deleted; the per-doc session stamps were dropped.
+The IFS writer (`tools/ifs_build.py`) was not started.  No USB/device access;
+the unit state above is unchanged from the last measurement.
 
 **Session 20 snapshot and the incident (2026-10-31).**  Session 20 performed the
 first Linux RPMB write (a captured genuine `BOOTCTR_FCTRY = 0x32` block, with a
