@@ -1,8 +1,23 @@
 # IFS rebuild — working notes for the 2.1.0.1917 boot image
 
 Everything a session needs to build a **modified** 2.1.0.1917 IFS.  Written
-at the end of session 20 (absolute) after establishing feasibility; nothing here
-has been built or flashed yet.
+at the end of session 20 (absolute) after establishing feasibility.
+
+**Status (2026-11-03, session 24).**  **All four milestones are done, the image
+boots, and the `/base` hook works.**  `tools/ifs_build.py` rebuilds the stock
+uncompressed imagefs (dumpifs accepts 72 files + 26 symlinks and prints a
+`Checksums:` line); the `rfs_validator` shim mounts `/base`; the reseal sets
+the image length, `os_type` and the CRC; and the set booted:
+`/dev/hd1t179 on /base type qnx6`, `/base/etc/os.version` = `2.1.0.1917`,
+`/proc/boot/rfs_validator` = 8,759 B (our shim), OS up with its web/qconn/SSH
+services.  Report 169 has the boot evidence.  `/base` carries one guarded hook
+that runs `/accounts/devuser/startup.sh`; the operator added the script and the
+`BOOTCTR_FCTRY` top-up works (report 170).  The UFS is the **stock** 1917
+`.5.ufs`; the ROOT V1.4 UFS was rejected (its door never authenticates).  The
+1917 OS logs in as **`devuser`** only (`PB_USER=devuser tools/pbssh.sh …`).
+**The repeatable build/flash procedure for any image set is
+`docs/project/IMAGE-REBUILD-GUIDE.md`.**  Next: a custom 1917 `/base`
+(bloatware removal).
 
 **Goal.** Replace `proc/boot/rfs_validator` (or the `.script` line that runs it)
 so `/base` no longer has to be signed, then reseal the image for the factory
@@ -32,17 +47,24 @@ for later PlayBook OS image porting.
 
 ```
 0x000000  0x808    boot prefix      (mkifs bootfile output; unchanged)
-0x000808  0x100    Startup-header   big-endian, sig 0x00ff7eeb, ver 0x000d, flags1=0x0d
+0x000808  0x100    Startup-header   sig 0x00ff7eeb (LE), ver 1, flags1=0x0d
+                                    (VIRTUAL|COMPRESS_UCL), flags2=0
 0x000908  0x44008  startup.*        RIM's own: "rifsboot", "imagefs", ReadMCTData,
                                     ReadPCBNumber, get_omap_info
 0x044910  ...      imagefs          LZ-compressed: header + dirents + data + trailer
 ```
 
-* **The imagefs is one compressed stream** (`+compress`, type 3 via
-  `STARTUP_HDR_FLAGS1_COMPRESS_MASK`), which is why `dumpifs` prints *decompressed*
-  offsets (`0x785800` for a 3,280,000-byte file) and why **in-place patching is
-  impossible**.
-* Sizes: component 3,280,000 B; extracted tree 6,581,929 B.
+* **The imagefs is one compressed stream** (`+compress`, UCL via
+  `STARTUP_HDR_FLAGS1_COMPRESS_MASK` bits `0x0c` in `flags1` at `0x80e`), which
+  is why `dumpifs` prints *decompressed* offsets (`0x785800` for a
+  3,280,000-byte file) and why **in-place patching is impossible**.
+* Sizes (measured on the vendor `PlayBook_2.1.0.1917.4.ifs`, session 24):
+  component **3,276,800 B (0x320000)**; the imagefs is **`0x74446C`
+  (7,618,668 B)**, so the uncompressed container is **7,900,540 B**.  The
+  extracted tree is 6,581,929 B (72 files).  (`§2` previously said
+  "3,280,000 B" — that was 3,200 high.)
+* The imagefs `image_size` is the length from the header to the end of the
+  4-byte trailer; `hdr_dir_size` includes a 4-byte zero dirent terminator.
 
 ## 3. Format facts (from `sys/image.h`)
 
@@ -52,18 +74,50 @@ for later PlayBook OS image porting.
 `mountpoint` (flexary).  `IMAGE_FLAGS_*`: `0x01` big-endian, `0x02` read-only,
 `0x04` inode bits valid.
 
-Dirents (`union image_dirent`), all `unsigned long` = 4 bytes on ARM32:
+Dirents (`union image_dirent`), all `unsigned long` = 4 bytes on ARM32.  The
+common `image_attr` is **24 bytes** (u16 text size, u16 extattr, then ino, mode,
+gid, uid, mtime); the whole dirent is 4-byte aligned and `attr.size` is its
+full length:
 
 | kind | fields after `image_attr` |
 |---|---|
 | `image_attr` (common) | `size` (u16, size of the dirent), `extattr_offset` (u16), `ino`, `mode`, `gid`, `uid`, `mtime` |
 | file | `offset` (from header), `size`, then NUL-terminated path (no leading `/`) |
-| dir | path only |
-| symlink | `sym_offset` (u16), `sym_size` (u16), path, then the link text |
+| dir | path only (the root dirent has an empty path and is 28 bytes) |
+| symlink | `sym_offset` = `strlen(path)+1` (u16), `sym_size` = target length (u16), path, link text **+ NUL** (all included in the dirent size) |
 | device | `dev`, `rdev`, path |
 
-`struct image_trailer { cksum; }` — "checksum from start of header to start of
-trailer".
+The dirent list ends with a **4-byte zero word**; `hdr_dir_size` includes it.
+
+`struct image_trailer { cksum; }`.  The algorithm is now known (verified against
+both the stock imagefs and a `mkifs` image, and in report 168 §Q1):
+**`cksum` is the two's complement of the sum of the 32-bit little-endian words
+in `[header, trailer)`**; a trailing 1–3 bytes are dropped (mkifs folds whole
+words only).  Equivalently, `sum(all words including the trailer) == 0 mod 2^32`.
+The trailer sits at `image_size-4`, after the last file (padded to 4 bytes).
+
+* File data offsets in the stock imagefs are **absolute multiples of `0x800`**,
+  so relative to the image header at `0x44910` they are `0x...ef0`.  mkifs
+  aligns in the image's **address space** (`LoadStart + file offset` to
+  `max(page_align, 0x1000)`; report 168 §Q4), which is the same phase.  The
+  builder reproduces the reference offsets exactly, lets a **smaller**
+  replacement keep its slot (the freed bytes stay zero, so the imagefs size and
+  the startup fields do not change), and repacks on the same address-space rule
+  only when a file grows.
+* `dumpifs` selects decompression from `startup_header.flags1` at container
+  offset **`0x80e`** (mask `0x1c`).  An uncompressed imagefs **must** clear
+  those bits, or `dumpifs` tries to UCL-decompress it and segfaults.  The
+  builder writes `flags1 = 0x01` (VIRTUAL) by default (`--keep-compress-flag`
+  keeps the stock value).
+* The **startup checksum** that `dumpifs` prints as `startup=...` is a *stored*
+  word at `startup_off + startup_size - 4` (for this image `0x4490c`), and it
+  is the same two's-complement word sum over `[startup_off, checksum)`.
+  `mkifs` writes it; nothing recomputes it, so clearing `flags1` invalidates it.
+  The builder **recomputes it** after the flag change.  (Report 168 §Q2.)
+* `dumpifs` locates the imagefs by seeking to `startup_off + startup_size` and
+  scanning for `"imagefs"`; it does not use `imagefs_paddr`/`imagefs_size` and
+  does not validate `image_size`.  It prints the checksum words without
+  computing them (report 168 §Q1/§Q3).
 
 `struct startup_header` (`sys/startup.h`) marks each field `I` (IPL sets), `S`
 (startup sets) or `IS`.  Useful: `imagefs_paddr` is `IS` ("Set by IPL to where the
@@ -75,10 +129,18 @@ the prefix**.
 
 | unknown | note |
 |---|---|
-| **checksum algorithms** | `dumpifs` prints two: `startup=0x90310cb3` over the startup block (`0x808..0x44910`) and `image=0x4278436d` for the imagefs trailer.  Neither algorithm is documented; sum32, sum+fold, byte sum, BE sum, zlib crc32 and crc32c all fail to reproduce the **startup** value.  Our writer computes its own image trailer, so a self-consistent value may be enough — **[U] whether anything enforces either** |
-| **whether the bootloader needs a compressed image** | the stock image is compressed; an uncompressed one is legal per the format, but RIM's `rifsboot` may assume compression — settles with one boot |
-| **the descriptor's image length** | the CRC/factory path takes the length from the image descriptor, not the trailer; a bigger image needs `89-crc_tool.py` (or a successor) to set it as well as `os_type` and the CRC |
+| **does anything enforce the startup checksum?** | the value is a stored word at `startup_off+startup_size-4` (report 168 §Q2).  The builder recomputes it after changing `flags1`, and the boot with that image succeeded — so either it is not enforced or our recompute is right.  **[U]** which |
+| **whether the bootloader needs a compressed image** | **answered: no.**  The uncompressed image (`flags1 = 0x01`) booted on the factory path (report 169) |
+| **`stored_size` on an uncompressed image** | **did not block.**  The stock compressed value (`0x3150c0`) was left in place and the image booted; the IPL overwrites it or does not use it here |
+| **the descriptor's image length** | **solved and booted** (milestone 3/4): `89-crc_tool.py reseal --length auto` patches `LoadEnd` (`image+0x08`) and writes the OS trailer; the loader accepted `0x788D84` |
 | `mkifs` route | **blocked**, see below |
+
+The **image trailer checksum is settled** (see §3): two's complement of the
+32-bit LE word sum.  The stock root dirent also contains three non-zero bytes of
+padding (`2d 57 6c`, mkifs junk between the empty root path and the next
+dirent); the builder writes zeros there, so the output matches the stock
+uncompressed image byte-for-byte except for those 3 bytes, the imagefs trailer,
+`flags1`, and the startup checksum it invalidates.
 
 **`mkifs` cannot build this image here** [M]: it links every bootstrap with
 `qcc -bootstrap …` and fails on RIM's flattened startup in all four bootfile
@@ -88,39 +150,95 @@ startup binaries; there is no ARM BSP, and RIM's startup exists only as a flat
 blob.  A QNX OMAP4430 **PandaBoard** BSP exists upstream but is an EVM startup
 (MCT/PCB/DDR handling differs) and cannot replace RIM's.
 
-## 5. Design of `tools/ifs_build.py`
+## 5. `tools/ifs_build.py` — as built (session 24)
 
-Inputs: the `tools/ifs_extract.sh` tree, the stock `.ifs` (for the `0x0..0x44910`
-prefix), the `dumpifs` listing (for symlinks — see gap below), and an optional
-replacement file (e.g. a `rfs_validator` shim).
+```
+ifs_build.py listing STOCK.ifs --out stock.lst     # dumpifs -vv wrapper
+ifs_build.py build --tree TREE --listing stock.lst --stock STOCK.ifs \
+                   --out OUT.ifs [--replace NAME=PATH]... [--repack]
+ifs_build.py check --image OUT.ifs --listing stock.lst
+ifs_build.py selftest
+```
 
-Steps:
-1. Walk the tree; build the entry list: dirs, files, symlinks (from the listing),
-   plus the two implicit entries (`Root-dirent`, and the `.script`/bootstrap
-   inode references).
-2. Assign inodes; write `image_header` (mountpoint `/`) + dirents; align file data
-   (executables page-aligned); write `image_trailer` with our checksum.
-3. Concatenate `prefix + imagefs`.
-4. Reseal (`os_type 4→6`, CRC over `[image, end−4)`, **and the descriptor length**).
+Inputs: the `tools/ifs_extract.sh` tree (file data), a **`dumpifs -vv`**
+listing (dirent order, symlinks, and per-entry mode/ino/uid/gid/mtime), the
+stock `.ifs` (for the `0x0..0x44910` prefix), and optional replacements.  A
+plain `dumpifs` listing also works: modes then come from the tree, inodes are
+assigned sequentially, and the boot/script inodes are inferred by name.
 
-**Gap found while writing this:** `dumpifs -x` creates files and directories but
-**not symlinks** (0 in the tree, 26 in the listing).  The builder must parse the
-listing's `----  size  name -> target` lines for those.
+What it does:
+1. Parses the listing, parses symlink targets from its `name -> target` lines
+   (`dumpifs -x` creates files and directories but **not symlinks** — 0 in the
+   tree, 26 in the listing), and loads each file from the tree.
+2. Writes the `image_header` (mountpoint `/`), the dirents (24-byte attr;
+   symlink text NUL-terminated; zero terminator), then the file data.
+3. Reuses the reference offsets.  A **smaller** replacement keeps its slot (the
+   freed bytes stay zero), so the imagefs size and the `imagefs_size`/`ram_size`
+   fields stay stock; a **larger** one repacks on the address-space rule.
+4. Writes the trailer checksum, prepends the stock prefix, clears the `flags1`
+   compression bits, and **recomputes the startup checksum** they invalidate
+   (see §3).
+
+Proven by `tools/tests/test_ifs_build.py`: the stock 1917 tree rebuilds and
+`dumpifs` reports the same 99 dirents (root + 72 files + 26 symlinks) with the
+same names, sizes, modes, inodes, uid/gid and mtimes, and prints
+`Checksums: image=<our trailer> startup=<recomputed>`.  The output is
+byte-identical to `dumpifs -u` of the stock image except the 3 root-padding
+bytes, the imagefs trailer, `flags1`, and the startup checksum.
+
+**The shim image.**  Replacing only `proc/boot/rfs_validator` with the 8,759-byte
+shim keeps the reference slot `0x6a0800` (the original is 50,554 B), so the
+imagefs stays `0x74446C`, the startup's `imagefs_size`/`ram_size` stay valid,
+and `dumpifs` lists `proc/boot/rfs_validator 2237`.  The reseal then appends the
+8-byte OS trailer and patches `LoadEnd`; the CRC path reports `VERIFIED`.
+(`local/work/ifs-shim-sealed.ifs`, 0x788D84 bytes.)  `stored_size` remains the
+stock compressed value — see §4.
+
+Not attempted here: compression (the output is uncompressed).
 
 ## 6. Milestones, each with an acceptance test
 
-1. **Writer round-trip (offline).** `dumpifs` must list the same 72 entries with
-   the same names, sizes and modes from our output, and print a `Checksums:` line.
-   QNX's own reader accepting our writer is the real test — no device needed.
-2. **Mount shim.** Build with `ntoarmv7-gcc` a `rfs_validator` replacement that
-   mounts `/base` and exits 0:
-   qnx6, `-r`, `noatime`, `crypto=enable,sync=optional`, device probed over
-   `hd1t179`/`hd2t179`/`hd7t179`/`hd7t178` (all measured from the live unit —
-   `df -g` and `rfs_validator -vc`).  **Test it on the stock unit as
-   `/tmp/shim -c`** — it exercises the mount call without touching media.
-3. **Reseal with length** (see §4).
-4. **Boot test**, one variable at a time: mount line over the *stock* `/base`
-   first; only then a custom `/base`.
+1. **Writer round-trip (offline) — DONE (2026-11-03).** `dumpifs` lists the same
+   entries with the same names, sizes and modes from our output and prints a
+   `Checksums:` line.  Result: 99 dirents (root + 72 files + 26 symlinks), all
+   matching; `tools/ifs_build.py selftest` and
+   `tools/tests/test_ifs_build.py` pass.  QNX's own reader accepting our writer
+   was the real test — no device needed.
+2. **Mount shim — DONE (2026-11-03).**  `tools/rfs_validator_shim.c`, built with
+   `ntoarmv7-gcc` (8,759 B, ARM EABI5, `/usr/lib/ldqnx.so.2`, `libc.so.3`),
+   probes `hd1t179`/`hd2t179`/`hd7t179`/`hd7t178`, mounts qnx6 read-only with
+   `noatime,crypto=enable,sync=optional`, and treats `EBUSY` as success.
+   **Tested on the reference as `/tmp/rfs_validator_shim -vc`**: it reached
+   `/dev/hd1t179`, found `/base` already mounted, and exited 0; `df -g /base`
+   afterwards was byte-for-byte the same mount (127,996 blocks, `0x21`,
+   `crypto=enable,sync=optional`).  Read-only, no media write.
+3. **Reseal with length — DONE (2026-11-03).**  `89-crc_tool.py reseal IN OUT
+   --image-off 0 --length auto --append-os-trailer` appends the 8-byte OS
+   trailer, patches `LoadEnd` (`image+0x08`; the descriptor's `load_end_ptr`
+   points at it), sets `os_type`, writes the end-8 cookie, and computes the CRC
+   over `[0, length-4)`.  Proven two ways: resealing the sealed 4869 stock
+   reproduces it byte-for-byte (`0x116B2562`), and the shim image verifies on
+   the CRC path (`0x788D84`, CRC `0x38EE7B46`).
+4. **Boot test — DONE (2026-11-03).**  The shim image over the **stock 1917
+   `/base`** was flashed with `bbusb.py flash --signed` in one container with
+   the vendor 1917 RCFS (operator decision: match the pair, because a 4869
+   RCFS's libraries do not match a 1917 IFS).  It booted: `/dev/hd1t179 on
+   /base type qnx6`, `/base/etc/os.version` = `2.1.0.1917`,
+   `/proc/boot/rfs_validator` = 8,759 B, OS up (QNX 6.6.0 2014/03/19; HTTP,
+   qconn, SSH on `0fca:8012`).  Report 169 has the evidence and the flash
+   gotchas.  The UFS is still 4869; that mix did not block the boot.
+5. **`/base` hook + UFS — DONE (2026-11-03).**  `/base` carries exactly one
+   guarded call after `start_runlevel FINAL`:
+   `if [ -x /accounts/devuser/startup.sh ]; then /accounts/devuser/startup.sh & fi;`
+   (pristine 61,238 B → edited 61,713 B; no other hunk).  The **stock** 1917
+   UFS (`PlayBook_2.1.0.1917.5.ufs`, `autorun::0`) replaced the ROOT V1.4 UFS,
+   whose `qconnDoor` never authenticates.  The operator added the 4,566-byte
+   startup script and the top-up ran (`0x2E → 0x32`, read back).  Report 170.
+6. **The custom 1917 `/base` (bloatware removal) is no longer the goal**
+   (operator, 2026-11-03).  The image work on this document is complete.  **The
+   next goal is to edit a BB10 image to run on the PlayBook** (`ROADMAP.md` item
+   8); the repeatable PlayBook procedure (for any `.ifs`/`/base`/UFS) is
+   `IMAGE-REBUILD-GUIDE.md`.
 
 ## 7. Risk, stated once and plainly
 

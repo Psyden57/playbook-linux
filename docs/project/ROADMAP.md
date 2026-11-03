@@ -1,18 +1,32 @@
 # Roadmap
 
 Ordered. Each item states the evidence that would close it, so "done" is not a
-matter of opinion. Items 1–3 and 3a–3d are closed (the display works). **The
-active item is 0, the modified 2.1.0.1917 IFS + RCFS**; item 5's region-1 half
-is done, and items 4 and 6–7 follow.
+matter of opinion. Items 1–3 and 3a–3d are closed (the display works). Item 0's
+image work is done (the 1917 IFS + `/base` + stock UFS boots). **The next goal
+is item 8, a BB10 image on the PlayBook** (operator, 2026-11-03); item 5's
+region-1 half is done, and items 4, 6–7 follow.
 
-## 0. A modified 2.1.0.1917 boot image — **ACTIVE**
+## 0. A modified 2.1.0.1917 boot image — **ACTIVE (IFS, /base and UFS done; the image boots)**
 
 The operator needs `/base` modifiable (bloatware removal, and later PlayBook OS image
 porting), and the RCFS validator cannot be re-signed.  The route, the format
 facts and four milestones each with an acceptance test are in
-**`IFS-REBUILD.md`**: an imagefs emitter appended to RIM's unchanged
-`0x0..0x44910` prefix, then a `rfs_validator` mount shim, then the reseal with
-the descriptor's image length, then one boot test.
+**`IFS-REBUILD.md`**; the repeatable build/flash procedure is
+**`IMAGE-REBUILD-GUIDE.md`**.
+
+**The image boots with our IFS and `/base`, on the stock 1917 UFS (session 24,
+reports 169/170).**  `tools/ifs_build.py` rebuilds the stock image and
+`dumpifs` accepts it; `tools/rfs_validator_shim.c` mounts `/base`;
+`89-crc_tool.py reseal --length auto --append-os-trailer` produces the
+CRC-sealed image; `bbusb.py flash` wrote the set (its first hardware runs) and
+the unit came up: PlayBook OS 2.1.0.1917, `/base` mounted,
+`/proc/boot/rfs_validator` = 8,759 B, `devuser` login.  `/base` carries one
+guarded hook that runs `/accounts/devuser/startup.sh`; the operator added the
+script and the `BOOTCTR_FCTRY` top-up works (`0x2E → 0x32`, read back).
+
+**The custom `/base` is no longer the goal** (operator, 2026-11-03); the image
+work on this item is complete and the next direction is not yet stated.  The
+item stays open until the operator sets it.
 
 **Closes when:** a 2.1.0.1917 image whose IFS mounts our `/base` boots on the
 factory path, with the RCFS signature block irrelevant and unchanged.
@@ -202,6 +216,24 @@ Nothing about tooling, licence or distribution has been decided
 **Closes when:** a clean checkout plus documented host prerequisites reproduces
 the image byte-for-byte (same CRC) and installs it on a unit without manual
 steps.
+
+## 8. A BB10 image on the PlayBook — **NEXT (operator, 2026-11-03)**
+
+**Goal: boot BB10 on the PlayBook**; the target image/version is **not decided**
+yet.  Operator-supplied, to be verified against the image (do not assume
+otherwise): BB10 reports as **QNX 8** (not 6.6/7.0); the **Z10 is OMAP-based**
+(OMAP4460 code compatible with the OMAP4430, or RIM left TabletOS-era code in);
+early **BB10 10.0.9.1103 already runs** on the PlayBook; the BB10 **`/base` is
+an RCFS image** that `bb10mt qnx6 mount` cannot mount (dump/edit/repack is the
+expected route); a **QNX 8 SDP/toolchain** is needed.
+
+The PlayBook image chain is ready (IFS/RCFS/UFS, container/flash, the
+`rfs_validator` shim; reports 169/170, `IMAGE-REBUILD-GUIDE.md`).  The facts,
+the open questions and the read-only starting procedure are in
+**`BB10-PORT.md`**.
+
+**Closes when:** BB10 boots on the PlayBook, or the first hard blocker is
+proven and recorded with its evidence.
 
 ---
 

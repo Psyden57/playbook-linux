@@ -51,8 +51,14 @@ timeout 20 tools/pbssh.sh 'uname -a'
 
 `tools/pbssh.sh` = `ssh -i local/secrets/rsa` plus
 `HostKeyAlgorithms=+ssh-rsa`, `KexAlgorithms=+diffie-hellman-group1-sha1`,
-`Ciphers=+aes128-cbc`, target `root@169.254.0.1`; it starts `door-hold.sh` if the
-door is down. **"Connection refused" = the door, not the network.**
+`Ciphers=+aes128-cbc`, target `$PB_USER@$PB_HOST` (default
+`root@169.254.0.1`); it starts `door-hold.sh` if the door is down.
+**"Connection refused" = the door, not the network.**
+
+**The 2.1.0.1917 OS only accepts `devuser`.**  The 4869 root key is rejected
+(operator, report 169); use `PB_USER=devuser tools/pbssh.sh 'uname -a'`.  The
+1917 OS comes up on USB `0fca:8012` ("RIM Network Device"), not `0x8010`, and
+takes about a minute after the flash before `169.254.0.1` answers.
 
 The QNX shell has no `head`, `xxd`, `od`, `md5sum`, `sum`, `cmp`, `bc` or
 `python`; it has `tail`, `dd`, `strings`, `awk`, `sed`, `grep`, and `python2.7`
@@ -596,12 +602,22 @@ Wire sequence, verified against `ramloader.pas:925-1071`:
 `{u16 560}` + signature → `0x40C0` Complete.  A trailing 560-byte `QNXH` block is
 stripped from the payload and sent as the signature, exactly as FlashFile does.
 
-`tools/pre_os_ifs_flash.py` remains the proven IFS route (it clones a vendor
-template and has done every write on this unit so far); `bbusb.py flash` removes the
-template dependency and adds whole-container flashing.  They send the same frames.
-**It reads the 560-byte `signature_data` constant from bb10mt's `qcfm.pas`**,
-which is not in this tree; supply your own bb10mt checkout, or use `bbusb.py
-flash` (which carries the constant but has not been run on hardware).
+`tools/pre_os_ifs_flash.py` remains the template-based alternative (it clones a
+vendor template); `bbusb.py flash` removes the template dependency and adds
+whole-container flashing.  They send the same frames.  **It reads the 560-byte
+`signature_data` constant from bb10mt's `qcfm.pas`**, which is not in this tree;
+supply your own bb10mt checkout, or use `bbusb.py flash`, which carries the
+constant.
+
+**Hardware-proven 2026-11-03 (report 169).**  `bbusb.py flash --signed` wrote a
+363,790,928-byte container (1917 RCFS + our shim IFS, 22,232 frames, signature,
+`COMPLETE`) and the unit booted PlayBook OS 2.1.0.1917 with `/base` mounted.
+Run it as the **user**: the USB node carries a `user:psyden` ACL; `pkexec` runs
+as root, which lacks the user's `pyusb`, and a killed `pkexec` left an orphan
+root `bbusb.py` holding the interface (and a wedged ramloader that only a
+power-cycle cleared).  `--from-bootrom` opens the device for only 10 s, so arm a
+`while ! lsusb | grep -q 0fca:0001; do sleep 0.5; done` wait first, or run the
+flash with the unit already in the ramloader.
 
 ## 13. `bbusb.py reset-osregion` — clearing the OSREGION marker without Windows
 

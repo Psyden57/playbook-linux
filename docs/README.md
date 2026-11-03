@@ -17,6 +17,8 @@ preserves evidence, and must not restate status.
 | `project/FACTORY-PATH.md` | the product/ECDSA vs factory/CRC paths and the switch procedure | current unit state |
 | `project/BOOT-CHAIN.md` | the boot stages, stage by stage | current unit state |
 | `project/IFS-REBUILD.md` | the 2.1.0.1917 image rebuild: layout, format, milestones | current unit state |
+| `project/IMAGE-REBUILD-GUIDE.md` | the repeatable build → edit `/base` → flash → verify procedure for any `.ifs` + `/base` (+ UFS) | status tables, session history |
+| `project/BB10-PORT.md` | BB10 on the PlayBook: operator-supplied facts, open questions, starting procedure | current state, speculation |
 | `project/ARMING-TUTORIAL.md` | the operator's arming procedure, step by step | current unit state |
 | `project/SAFETY.md` | what may be written, by whom | status |
 | `project/DECISIONS.md` | decisions with their evidence, and the open ones | current state |
@@ -39,6 +41,8 @@ preserves evidence, and must not restate status.
 | `FACTORY-PATH.md` | the product/ECDSA vs factory/CRC boot paths, what a clean tablet looks like, and the operator-only switch procedure (read after `SAFETY.md`) |
 | `BOOT-CHAIN.md` | the boot chain stage by stage, and the read-only verification protocol |
 | `IFS-REBUILD.md` | the working notes for the modified 2.1.0.1917 IFS |
+| `IMAGE-REBUILD-GUIDE.md` | the operator's repeatable procedure: build the IFS, edit `/base`, prepare the UFS, pack the container, flash, verify, and the way back |
+| `BB10-PORT.md` | the next goal (BB10 on the PlayBook): the operator's facts, the RCFS/QNX-8 questions, and the read-only starting procedure |
 | `ARMING-TUTORIAL.md` | the arming procedure as a tutorial, for outside readers |
 | `SAFETY.md` | **read before writing anything to the device**: the two non-volatile stores, `BOOTCTR_FCTRY` values that brick, the media write path, and who may write |
 | `DECISIONS.md` | decisions taken with their evidence, and the open ones (license, visibility, proprietary corpus) |

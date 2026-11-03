@@ -46,6 +46,11 @@ Usage
                                        [--desc-off 0x2C] [--type 6]
                                        [--patch OFFSET:HEX ...]
 
+  # finalize an image whose size changed (the IFS rebuild): append the OS
+  # trailer, patch LoadEnd, set os_type and write the CRC
+  89-crc_tool.py reseal IN.bin OUT.bin --image-off 0 --length auto \
+                                       --append-os-trailer
+
 Conventions
 -----------
   * All offsets are little-endian ARM (QNX/OMAP4430).
@@ -384,16 +389,18 @@ def verify_image(img, size=None, off=0, desc_off=None, verbose=True):
         c2 = k not in (0, 0xFFFFFFFF)
         c3 = u32(region, size - 8) == END_COOKIE
         say("  %s  u32(end-0x178) == 0xB5A60BFD            0x%08X"
-            % ("PASS " if c1 else "FAIL ", u32(region, size - 0x178)))
+            % ("PASS " if c1 else "INFO ", u32(region, size - 0x178)))
         say("  %s  u32(end-0x210) != {0, -1}              0x%08X"
-            % ("PASS " if c2 else "FAIL ", k))
+            % ("PASS " if c2 else "INFO ", k))
         say("  %s  u32(end-8) == 0xD7C82D1F               0x%08X"
             % ("PASS " if c3 else "FAIL ", u32(region, size - 8)))
         say("  INFO sha512[0x0,0x%X) = %s"
             % (t, hashlib.sha512(region[:t]).hexdigest()[:32] + "..."))
         say("  INFO ECDSA (r,s) would be at image offset 0x%X (len 0x88)"
             % (t + SIG_BLOCK_OFF))
-        ok = ok and c1 and c2 and c3
+        # The CRC path (0x80014610/0x80014788) requires the end-8 cookie but
+        # not the ECDSA material; a CRC-only image legitimately fails c1/c2.
+        ok = ok and c3
 
     say("  ---- RESULT: %s ----" % ("VERIFIED (CRC path)" if ok else "FAILED"))
     return ok, info, out
@@ -402,12 +409,22 @@ def verify_image(img, size=None, off=0, desc_off=None, verbose=True):
 # ---------------------------------------------------------------------------
 # reseal
 # ---------------------------------------------------------------------------
-def reseal(data, desc_off=None, os_type=6, patches=(), verbose=True):
-    """Return a new bytearray with os_type set and the CRC trailer rewritten."""
+def reseal(data, desc_off=None, os_type=6, patches=(), length=None,
+           verbose=True):
+    """Return a new bytearray with the image length, os_type and CRC set.
+
+    `length` (if not None) is the new image size in bytes.  It is written into
+    the OS image header's LoadEnd (image+0x08, the field the descriptor's
+    load_end_ptr points at), the end-8 cookie is (re)written, and the CRC is
+    recomputed over [0, length-4).  Without it the declared size is reused.
+    """
     buf = bytearray(data)
     info, _ = parse_header(buf[:0x200], desc_off)
-    size = info['size']
+    size = info['size'] if length is None else int(length)
     doff = info['desc_off']
+    if size <= 0 or size % 4:
+        raise ValueError("image length 0x%X is not a positive multiple of 4"
+                         % size)
     if len(buf) < size:
         raise ValueError("input shorter (0x%X) than declared image size (0x%X)"
                          % (len(buf), size))
@@ -417,13 +434,22 @@ def reseal(data, desc_off=None, os_type=6, patches=(), verbose=True):
         if verbose:
             print("  patched image offset 0x%X (%d bytes) -> %s"
                   % (off, len(val), val.hex()))
-    # 2. the OS-type byte
+    # 2. the image length (LoadEnd = LoadStart + size), then the OS cookie
+    if length is not None:
+        old_end = info['load_end']
+        new_end = (info['load_start'] + size) & 0xFFFFFFFF
+        struct.pack_into('<I', buf, 0x08, new_end)
+        if verbose:
+            print("  LoadEnd (image+0x08): 0x%08X -> 0x%08X (size 0x%X)"
+                  % (old_end, new_end, size))
+        struct.pack_into('<I', buf, size - 8, END_COOKIE)
+    # 3. the OS-type byte
     old = buf[doff + 0xD4]
     buf[doff + 0xD4] = os_type & 0xFF
     if verbose:
         print("  os_type: image offset 0x%X %d -> %d"
               % (doff + 0xD4, old, os_type & 0xFF))
-    # 3. the CRC trailer
+    # 4. the CRC trailer
     new = crc32_iso_hdlc(bytes(buf[:size - 4]))
     struct.pack_into('<I', buf, size - 4, new)
     if verbose:
@@ -583,12 +609,22 @@ def cmd_reseal(a):
     else:
         data = data[off:]
         off = 0
+    if a.append_os_trailer:
+        # The imagefs emitter ends at the imagefs trailer; the CRC path's
+        # OS trailer (cookie + CRC) lives after it.
+        data = data + b'\0' * 8
+    if a.length == 'auto':
+        length = len(data)
+    elif a.length:
+        length = int(a.length, 0)
+    else:
+        length = None
     patches = []
     for p in a.patch or []:
         o, v = p.split(':', 1)
         patches.append((int(o, 0), bytes.fromhex(v)))
     print("== reseal %s -> %s ==" % (a.file, a.out))
-    buf = reseal(data, desc, int(a.type, 0), patches)
+    buf = reseal(data, desc, int(a.type, 0), patches, length)
     with open(a.out, 'wb') as f:
         f.write(buf)
     print("  wrote 0x%X bytes" % len(buf))
@@ -626,6 +662,11 @@ def main(argv):
     s.add_argument('--size'); s.add_argument('--desc-off')
     s.add_argument('--type', default='6')
     s.add_argument('--patch', action='append', metavar='OFFSET:HEX')
+    s.add_argument('--length', metavar='N|auto',
+                   help='new image size: patch LoadEnd (image+0x08), write the '
+                        'end-8 cookie and CRC over [0,length-4)')
+    s.add_argument('--append-os-trailer', action='store_true',
+                   help='append the 8-byte OS trailer after the input')
     s.set_defaults(func=cmd_reseal)
 
     a = ap.parse_args(argv)

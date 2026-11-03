@@ -128,8 +128,51 @@ Linux-era 15, absolute 22 is Linux-era 16 and absolute 23 is Linux-era 17.
 > document tree and `SECURITY.md` were deleted; the "UFS = region 1", "two
 > 32 GB units", "BB10 2.1.0.1917" and trap-41 errors were corrected; the per-doc
 > session stamps were dropped.  **No USB/device work was done; the unit state is
-> unchanged from the last measured state.**  The IFS writer (`tools/ifs_build.py`,
-> milestone 1) was **not** started.
+> unchanged from the last measured state.**
+
+> **Session 24 result — IFS milestones 1–3 done; offline plus one read-only
+> shim run on the reference.**
+> `tools/ifs_build.py` now emits a QNX imagefs (`image_header + dirents + data +
+> trailer`) and appends it to RIM's stock `0x0..0x44910` prefix.  On the stock
+> 2.1.0.1917 tree, `dumpifs` lists the same **99 dirents (root + 72 files + 26
+> symlinks)** with the same names, sizes and modes and prints a `Checksums:`
+> line; `tools/ifs_build.py selftest` and `tools/tests/test_ifs_build.py` pass.
+> Format facts settled (report 168): the trailer and the startup checksum are
+> both the **two's complement of the 32-bit LE word sum** (the startup value is
+> a stored word at `startup_off+startup_size-4`); the attr is 24 bytes; symlink
+> text is NUL-terminated; `hdr_dir_size` includes a 4-byte zero terminator;
+> `dumpifs` picks decompression from `flags1` at `0x80e`, so an uncompressed
+> stream must clear those bits.  The builder changes only `flags1` and the
+> startup checksum in RIM's prefix.
+> The **mount shim** (`tools/rfs_validator_shim.c`, 8,759 B with
+> `ntoarmv7-gcc`) passed its read-only test on the reference:
+> `/tmp/rfs_validator_shim -vc` reached `/dev/hd1t179`, found `/base` already
+> mounted, and exited 0; `df -g /base` was unchanged.
+> The **reseal** tool now sets the image length (`LoadEnd` at `image+0x08`) as
+> well as `os_type` and the CRC, appends the 8-byte OS trailer, and reproduces
+> the sealed 4869 stock byte-for-byte.  The shim image
+> `local/work/ifs-shim-sealed.ifs` (**0x788D84 bytes, CRC `0x38EE7B46`**)
+> verifies on the CRC path and keeps the stock reference slot and imagefs size.
+> **Milestone 4 is done too: the pair was flashed and booted** (report 169).
+> Operator decision: ship the 1917 IFS with the **vendor 2.1.0.1917 RCFS**,
+> because a 4869 `/base`'s libraries do not match a 1917 IFS.  One
+> `bbusb.py flash --signed` container (363,790,928 B, RCFS runs vendor-identical
+> + the shim IFS) wrote region 0 through the **first hardware run of that
+> flasher**, and the unit came up: `/dev/hd1t179 on /base type qnx6`,
+> `/base/etc/os.version` = `2.1.0.1917`, `/proc/boot/rfs_validator` = 8,759 B,
+> OS services on `0fca:8012`.  **The 1917 OS logs in as `devuser` only**
+> (`PB_USER=devuser tools/pbssh.sh …`); the 4869 root key is rejected.
+> **No RPMB write; no UFS write.**
+> **The `/base` hook and the UFS are done too (report 170).**  `/base` carries
+> exactly one change: a guarded `if [ -x /accounts/devuser/startup.sh ]; then
+> /accounts/devuser/startup.sh & fi;` after `start_runlevel FINAL`.  The UFS is
+> the **stock** `PlayBook_2.1.0.1917.5.ufs` (`autorun::0`; the ROOT V1.4 EXE
+> UFS was rejected — its door never authenticates).  The operator added the
+> 4,566-byte startup script after the flash and **the top-up works**:
+> `bootctr: wrote 0x32, readback ok (was 0x2E (decimal 46))`.  Root SSH is not a
+> `/base` edit: `qconnDoor` enforces `DenyUsers=root`; root is a post-boot
+> operator method.  **The step-by-step for any image set is
+> `IMAGE-REBUILD-GUIDE.md`.**
 
 ## What to read first, in this order
 
@@ -234,11 +277,44 @@ is reseeded at boot).
 **ACTIVE: a modified 2.1.0.1917 boot image.**  The operator needs `/base`
 modifiable (bloatware removal, and later PlayBook OS image porting), and the validator
 cannot be re-signed, so the image itself must change.  `docs/project/IFS-REBUILD.md`
-has the environment, the measured layout, the format structs, the builder design
-and four milestones each with an acceptance test.  **Nothing has been built or
-flashed.**  `mkifs` is blocked (it links every bootstrap and needs an ARM BSP this
-SDP does not have), so the route is our own imagefs emitter appended to RIM's
-unchanged `0x0..0x44910` prefix.
+has the environment, the measured layout, the format structs, the builder and
+four milestones each with an acceptance test.  **Milestone 1 is done (offline,
+session 24); nothing has been flashed.**  `mkifs` is blocked (it links every
+bootstrap and needs an ARM BSP this SDP does not have), so the route is
+`tools/ifs_build.py`, our own imagefs emitter appended to RIM's
+`0x0..0x44910` prefix.
+
+**Milestones 1–4 are done, the image boots, and the `/base` hook works
+(session 24).**  The final media set:
+* **IFS** — our uncompressed 2.1.0.1917 image with the 8,759-byte
+  `rfs_validator` shim; `0x788D84` bytes, `os_type` 6, CRC `0x38EE7B46`,
+  sha256 `b52195bb…`.
+* **RCFS (`/base`)** — the vendor `PlayBook_2.1.0.1917.1.rcfs` (sha256
+  `8ccf518c…`) with one guarded hook in `scripts/startup.sh` that runs
+  `/accounts/devuser/startup.sh &` after the final runlevel (report 170).
+* **UFS (`/`)** — the **stock** `PlayBook_2.1.0.1917.5.ufs` (sha256
+  `0c0f7d77…`, `autorun::0`).  The ROOT V1.4 EXE UFS is **not** used: it boots
+  but its door never authenticates, so SSH stays closed.
+* **`/accounts/devuser/startup.sh`** — operator's 4,566 B script; the top-up
+  works (`bootctr: wrote 0x32, readback ok (was 0x2E)`).
+* **Login** — `PB_USER=devuser tools/pbssh.sh …`; root is denied by
+  `qconnDoor` and is a post-boot operator method.
+
+**The next goal is BB10 on the PlayBook (operator, 2026-11-03).**  Target
+image/version **not decided**.  Operator-supplied facts (verify against the
+image; do not assume otherwise): BB10 reports as **QNX 8** (not 6.6/7.0); the
+**Z10 is OMAP-based** (OMAP4460 code compatible with the OMAP4430, or RIM left
+TabletOS-era code in); early **BB10 10.0.9.1103 already runs** on the PlayBook;
+the BB10 **`/base` is an RCFS image** that `bb10mt qnx6 mount` cannot mount
+(dump/edit/repack); a **QNX 8 SDP/toolchain** is needed.  Read
+**`BB10-PORT.md`** for the open questions and the read-only starting procedure;
+do not flash until the operator approves the first variable (`ROADMAP.md` item
+8).
+
+The current way back is the **working 2.1.0.1917 set** (our IFS + edited RCFS +
+stock UFS); the 4869 set (sealed IFS + `PB-4869-root.0.1.rcfs` + 4869 UFS) is
+the deeper fallback.  **Any flash needs the operator's go-ahead; the unit is
+the only one.**
 
 **SECONDARY, BLOCKED: the RPMB counter top-up.**  Stop writing to the store.
 Report **149** is the incident; `docs/project/BOOT-CHAIN.md` is the stage-by-stage
