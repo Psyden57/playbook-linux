@@ -195,18 +195,28 @@ steps.
 
 ## 8. A BB10 image on the PlayBook — **NEXT (operator, 2026-11-03)**
 
-**Goal: boot BB10 on the PlayBook**; the target image/version is **not decided**
-yet.  Operator-supplied, to be verified against the image (do not assume
-otherwise): BB10 reports as **QNX 8** (not 6.6/7.0); the **Z10 is OMAP-based**
-(OMAP4460 code compatible with the OMAP4430, or RIM left TabletOS-era code in);
-early **BB10 10.0.9.1103 already runs** on the PlayBook; the BB10 **`/base` is
-an RCFS image** that `bb10mt qnx6 mount` cannot mount (dump/edit/repack is the
-expected route); a **QNX 8 SDP/toolchain** is needed.
+**Goal: boot BB10 on the PlayBook.**  Session 25 fixed the direction to **a Z10
+OMAP build**; the **image itself is not in hand yet**, so no analysis has been
+done and nothing has been flashed.  Two inputs are outstanding:
+
+* **the Z10 image** — device SKU + BB10 version + path.  Published model tables
+  put the only OMAP Z10 at **STL100-1 = OMAP4470**; the other Z10 SKUs are
+  Qualcomm MSM8960.  **OMAP4460 is the Dev Alpha A, not a retail Z10**, so the
+  device must be named explicitly (`BB10-PORT.md` §1);
+* **the QNX 8.0.0 SDP** — the operator is locating it.  The QNX **6.6** SDP's
+  `mkrcfs` exists and builds images, and bb10mt ships the same binary, but the
+  operator's instruction is **not to trust it or base anything on it** until
+  the 8.0.0 tool is available.
+
+Operator-supplied, still to be verified against the image (do not assume
+otherwise): BB10 reports as **QNX 8** (not 6.6/7.0); early **BB10 10.0.9.1103
+already runs** on the PlayBook; the BB10 **`/base` is an RCFS image** that
+`bb10mt qnx6 mount` cannot mount (dump/edit/repack is the expected route).
 
 The PlayBook image chain is ready (IFS/RCFS/UFS, container/flash, the
 `rfs_validator` shim; reports 169/170, `IMAGE-REBUILD-GUIDE.md`).  The facts,
-the open questions and the read-only starting procedure are in
-**`BB10-PORT.md`**.
+the open questions, the tool surface and the fixed intake procedure are in
+**`BB10-PORT.md`** (§3, §4a).
 
 **Closes when:** BB10 boots on the PlayBook, or the first hard blocker is
 proven and recorded with its evidence.

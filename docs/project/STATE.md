@@ -26,10 +26,16 @@ The `PlayBook_2.1.0.1917_ROOT_V1.4.EXE` UFS was **rejected**: it boots but its
 Use the `.5.ufs` with `autorun::0` (report 170 §3).
 
 **The custom 1917 `/base` (bloatware removal) is no longer the operator's
-goal** (2026-11-03).  **The next goal is to edit a BB10 image to run on the
-PlayBook** (operator, 2026-11-03); the PlayBook image tooling is ready, the BB10
-side is not analysed yet (`ROADMAP.md` item 8).  The step-by-step for any
-PlayBook image set is `docs/project/IMAGE-REBUILD-GUIDE.md`.
+goal** (2026-11-03).  **The next goal is to boot BB10 on the PlayBook**
+(operator, 2026-11-03).  **Session 25 fixed the target to a Z10 OMAP build, but
+no BB10 image has been supplied and no BB10 binary has been inspected** — the
+work so far is offline/read-only.  Two inputs are outstanding: the **Z10 image**
+(SKU + version + path; the only OMAP Z10 is STL100-1 = OMAP4470, while OMAP4460
+is the Dev Alpha A — `BB10-PORT.md` §1) and the **QNX 8.0.0 SDP** (the 6.6
+`mkrcfs` exists but the operator's instruction is not to trust it).  The
+step-by-step for any PlayBook image set is
+`docs/project/IMAGE-REBUILD-GUIDE.md`; the BB10 tool surface and intake
+procedure are in `BB10-PORT.md` §4a.
 
 **One working unit remains: the reference (`0x50175127`), armed AND sealed.**
 `BOOTCTR_FCTRY` was `0x2E` (46) before the operator's top-up and is now
@@ -55,13 +61,12 @@ region-1 Linux root is present, read-only, and left in place.  The spare
 RPMB subsystem unusable, report 153) and it presents no USB.  Two 32 GB units
 are bricked.  **No RPMB writes by an agent, ever.**
 
-**The active work** is the modified 2.1.0.1917 IFS (`IFS-REBUILD.md`).  All
-four milestones are done, the image boots, and the `/base` hook runs the
-operator's startup script (reports 169/170).  Next: a custom 1917 `/base`
-(bloatware removal) with the same IFS/UFS.  The persistent blocker is the
-**Linux `BOOTCTR_FCTRY` top-up**: the monitor's `0x2F` transform is not
-reproduced (reports 148/156), so QNX's `/dev/rpmb` is still the only proven
-writer.  That gates the hd3 cut-over, not the IFS/RCFS work.
+**The active work is the BB10 port** (`BB10-PORT.md`, `ROADMAP.md` item 8),
+blocked on the two inputs above; the 1917 IFS work (`IFS-REBUILD.md`) is
+complete and the unit's image set is final for now.  The other persistent
+blocker is the **Linux `BOOTCTR_FCTRY` top-up**: the monitor's `0x2F` transform
+is not reproduced (reports 148/156), so QNX's `/dev/rpmb` is still the only
+proven writer.  That gates the hd3 cut-over, not the image work.
 
 ## Per-subsystem state
 
@@ -198,8 +203,11 @@ writer**, `pbrpmb write` stays compiled blocked, and **no agent writes RPMB**
 
 `ROADMAP.md` owns the ordered work list; the 1917 image work is complete
 (`IFS-REBUILD.md`, `IMAGE-REBUILD-GUIDE.md`), and **the next goal is item 8, a
-BB10 image on the PlayBook** (operator, 2026-11-03).  The custom 1917 `/base`
-is no longer the current goal; the next direction is the BB10 port.
+BB10 image on the PlayBook** (operator, 2026-11-03), target **a Z10 OMAP
+build**.  It cannot start until the **Z10 image** and the **QNX 8.0.0 SDP**
+arrive; when the image does, the intake procedure in `BB10-PORT.md` §4a is the
+first step (read-only: copy, hash, identify container, list components, then try
+the readers on copies).
 
 ## Workspace location
 

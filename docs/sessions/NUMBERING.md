@@ -1,13 +1,13 @@
 # Session numbering
 
-The project spans **twenty-four sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **twenty-five sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-24`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-25`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
 * **Linux-era** ("session 1…13") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
@@ -36,6 +36,7 @@ So:
 | **22** | **16** | **tooling, mostly offline**: `tools/bbusb.py` with CFP-style subcommands (`info`, `flash`, `reset-osregion`, `pack`/`unpack`/`split`); static RE of CFP.exe and LDR_01 — the eight `info` opcodes, **`RESETQNXOSREGION` = `0xE8 {4}` = delete NVRAM `0x2074`**, and `0x39` shown to be the CREAD opcode so path 2 cannot resolve (`161`…`164`) |
 | **23** | **17** | the canonical-docs audit (report 167) executed: the ownership model, the root README and contradictions, `tools/docs_audit.py`; the public GitHub snapshot and `publish_public.sh`; the docs/repo cleanup.  No bench work; the IFS writer was not started |
 | **24** | **18** | **IFS milestones 1–4 done, the `/base` hook and the `.5.ufs` + `autorun::0` shipped**: `tools/ifs_build.py` reproduces the stock imagefs, the `rfs_validator` shim mounts `/base`, the reseal sets the image length, and the **1917 IFS + edited 1917 RCFS + the 1917 `.5.ufs` with `autorun::0`** set was flashed with `bbusb.py flash` (its first hardware runs) and **booted** — PlayBook OS 2.1.0.1917, `/base` mounted, `devuser` login; the `/base` hook runs the operator's startup script and the `BOOTCTR_FCTRY` top-up works (`0x2E → 0x32`).  The ROOT V1.4 UFS was rejected (door never authenticates) (reports 169/170) |
+| **25** | **19** | **BB10 target fixed to a Z10 OMAP build; read-only prep only.**  No BB10 image exists in the tree and none was analysed.  Corrected the operator's "Z10 + OMAP4460" shorthand: the only OMAP Z10 is **STL100-1 = OMAP4470**, and OMAP4460 is the **Dev Alpha A**.  Mapped the container tool surface (`bb10mt autoloader/split/unpack/raw dump/rcfs extract`, `bbusb.py`); found `mkrcfs` in the QNX 6.6 SDP (identical to bb10mt's copy) but was instructed **not to trust it or base anything on it** pending QNX 8.0.0.  No USB, no write |
 
 ## Anchors (evidence for the mapping)
 
@@ -61,6 +62,7 @@ The Linux-era sessions are anchored by their own handoffs, all in `docs/reports/
 | `docs/sessions/session-22.md` | Linux session 16 (absolute 22) — written by the session |
 | `docs/sessions/session-23.md` | Linux session 17 (absolute 23) — written by the session |
 | `docs/sessions/session-24.md` | Linux session 18 (absolute 24) — written by the session |
+| `docs/sessions/session-25.md` | Linux session 19 (absolute 25) — written by the session |
 
 The pre-Linux phase (absolute 1…6) has these artefacts, in chronological order. <!-- audit-ok: pre-Linux phase range -->
 The exact assignment to 1…6 is **not** reconstructed here — the operator knows it,

@@ -68,6 +68,7 @@ __pycache__/
 .vscode/
 .idea/
 *.swp
+*.kate-swp
 .DS_Store
 Thumbs.db
 

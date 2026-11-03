@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# derived from bb10mt by oleksandr
+# https://github.com/bb10root/bb10mt
 
 """PlayBook USB protocol module — ours, in `tools/`.
 
