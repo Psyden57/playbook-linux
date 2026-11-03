@@ -25,7 +25,7 @@ left in place.  The spare (`0x50176EC1`) is **down** — its red 1-2-2 blink is
 error `0x5B` (NV-record / RPMB subsystem unusable, report 153) and it presents
 no USB.  Two 32 GB units are bricked.  **No RPMB writes by an agent, ever.**
 
-**The active work** is the modified BB10 2.1.0.1917 IFS (`IFS-REBUILD.md`).  The
+**The active work** is the modified 2.1.0.1917 IFS (`IFS-REBUILD.md`).  The
 persistent blocker is the **Linux `BOOTCTR_FCTRY` top-up**: the monitor's `0x2F`
 transform is not reproduced (reports 148/156), so QNX's `/dev/rpmb` is still the
 only proven writer.  That blocks the hd3 cut-over, not the offline IFS
@@ -161,7 +161,7 @@ writer**, `pbrpmb write` stays compiled blocked, and **no agent writes RPMB**
 
 ## What is next
 
-`ROADMAP.md` owns the ordered work list; **item 0, the modified BB10 2.1.0.1917
+`ROADMAP.md` owns the ordered work list; **item 0, the modified 2.1.0.1917
 IFS + RCFS, is the active item**, and `IFS-REBUILD.md` is its working notes.
 `HANDOFF.md` carries the next experiment, its exact inputs and the decision table.
 

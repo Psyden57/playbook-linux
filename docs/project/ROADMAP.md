@@ -7,9 +7,9 @@ matter of opinion. Items 1–3 and 3a–3d are closed (the display works). **The
 active item is 0, the modified 2.1.0.1917 IFS + RCFS**; item 5's region-1 half
 is done, and items 4 and 6–7 follow.
 
-## 0. A modified BB10 2.1.0.1917 boot image — **ACTIVE**
+## 0. A modified 2.1.0.1917 boot image — **ACTIVE**
 
-The operator needs `/base` modifiable (bloatware removal, and later BB10 image
+The operator needs `/base` modifiable (bloatware removal, and later PlayBook OS image
 porting), and the RCFS validator cannot be re-signed.  The route, the format
 facts and four milestones each with an acceptance test are in
 **`IFS-REBUILD.md`**: an imagefs emitter appended to RIM's unchanged

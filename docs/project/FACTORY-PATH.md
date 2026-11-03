@@ -164,7 +164,7 @@ not depend on region 0, the chainloader or the counter.
 |---|---|
 | armed, then the region-0 image is not CRC-valid | halt at `0x800094BE` (retry branch); no OS, no `/dev/rpmb`. **Recovery: pre-OS `0xF7` flash of a CRC-sealed image.** A raw stock image will not do — it has `os_type = 4`, so reseal it first (or delete the record, which needs a booting OS you no longer have) |
 | unarmed, and a CRC-sealed image was flashed | product/ECDSA verify fails → halt (retry branch). **Recovery: pre-OS `0xF7` flash of a stock image** (or reseal + arm it properly this time) |
-| counter reaches `0` | `BootModeCount expended`, halt. Reflash does not help — the record must be rewritten, and that needs a booting OS. The two 32 GB units in this state are parked (report 92 §0.4) |
+| counter reaches `0` | `BootModeCount expended`, halt. Reflash does not help — the record must be rewritten, and that needs a booting OS. The 32 GB unit in this state is parked (report 92 §0.4). The other 32 GB unit failed differently: its NVRAM partition was erased and it refuses to boot with `nvram signature invalid` |
 | value written as `0`, `> 0x32`, `0xFFFFFFFF`, or length ≠ 4 | selector `2` → halt, same problem as above (report 92 §0.6) |
 | record deleted while a rooted TabletOS still boots | back to the product path; boot a stock `os_type = 4` image again (reseal it back if that is what is on media) |
 | RPMB write counter saturates | the partition becomes permanently write-protected; not readable from userland. Do not loop write/delete experiments (report 92 §6 R4) |
@@ -176,9 +176,6 @@ armed-and-sealed state is in `STATE.md`; the rule is unchanged for any other uni
 
 ## 5. What is still not known
 
-* **Whether every retail PlayBook starts unarmed.**  Measured on one unit (the spare,
-  report 95 §1).  A unit that arrives with a non-absent record has an unknown history;
-  read it before assuming anything.
 * **Whether the normal-path nuke ever runs on a *verify failure*.**  The `0x800149C2`
   `cbnz` → `0x80014A16` → `0x800156E8` sequence is documented in report 71 §3.4 and the
   erase has never been observed; the retry branch (which the surviving unit takes) halts at

@@ -211,33 +211,6 @@ and session 10 later showed the script had been writing the brick value
 `0x00000000` while logging "ok"
 (`docs/contradictions/bootctr-drain-vs-session10-readings.md`).
 
-## 9. The native CRC path, not kexec
-
-**Decision.** This project boots Linux by making a self-built region-0 image pass
-the bootloader's **factory/CRC** verification (`os_type = 6`, CRC-32 trailer), and
-does not pursue a kexec chain. The kexec work was a *separate, earlier project*
-that was abandoned before session 1; its documents are in the private working
-history (the public snapshot omits them and keeps only a placeholder).
-
-**Why.** kexec needed a first working Linux kernel anyway, and the operator's own
-verdict was that it was "not really in a good state, riddled with bugs, unstable
-and random". The CRC path is the bootloader's own supported path for a
-non-RIM-signed OS, and it costs one unit of the RPMB factory budget per boot
-instead of depending on a chainloader that had to survive its own previous
-kernel (session-06).
-
-**Evidence.** The path is proven end to end: the 5-byte reseal of the stock image
-(`os_type 4 → 6`, CRC `0x8D46FB4A → 0x116B2562`) booted TabletOS with the counter
-50 → 49 (report 95), and a clean 6.15.11 then booted through the same gate
-(report 103). The chainloader image's own entry/verification model is
-`ARCHITECTURE.md` §1; the gate is `SAFETY.md` §3.
-
-**Cost, stated honestly.** Every factory boot spends a finite, one-way budget
-that only a *booted TabletOS* can top up (`ROADMAP.md` §6). That is why the
-initramfs is a single immutable image, why the iteration loop restores the sealed
-IFS after each experiment, and why the panel work is done with registers rather
-than with repeated A/B image swaps.
-
 ## 10. Region 0 only — no A/B staging for our image
 
 **Decision.** Our image is written to region 0 and verified there. Region 1 is
@@ -546,10 +519,10 @@ a format is not the same as copying an implementation.
 ### Repository visibility
 
 **Public.**  The GitHub repository is a fresh public snapshot of this tree; the
-full 161-commit working history remains in the private local repository.  The
-snapshot excludes `docs/history/`, `.commandcode/`, the proprietary datasheets,
-the bb10mt source and the path-leaking host binary.  Visibility is a property of
-the host, not something the tree can prove.
+full working history remains in the private local repository.  The snapshot
+excludes `.commandcode/`, the proprietary datasheets, the bb10mt source and the
+path-leaking host binary.  Visibility is a property of the host, not something
+the tree can prove.
 
 ### Publishing the proprietary QNX dumps and the TI TRM
 

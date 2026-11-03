@@ -6,11 +6,8 @@ The project spans **twenty-three sessions** so far (and continues).  Two numberi
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
-> a clean mainline kernel.  The **kexec attempt was a separate, earlier project
-> that was abandoned before session 1**; its documents live in `docs/history/` and
-> are prior art only.  Some session notes mention kexec because those sessions
-> discussed *why it was dropped* — that is not this project's own history, and the
-> pre-Linux sessions are boot-chain research, not kexec work.
+> a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
+> separate OS project.
 
 * **Absolute** (`session-01` … `session-23`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
@@ -22,7 +19,7 @@ So:
 
 | absolute | Linux-era | phase |
 |---|---|---|
-| 1 – 6 | — | boot-chain research: boot ROM, second-stage loader, NVRAM, RPMB, the CRC/signature path, the pre-OS reflash, the first chainloader (native boot; kexec already abandoned) |
+| 1 – 6 | — | boot-chain research: boot ROM, second-stage loader, NVRAM, RPMB, the CRC/signature path, the pre-OS reflash, the first chainloader (native boot) |
 | **7** | **1** | clean 6.15.11 on the CRC path |
 | **8** | **2** | clean kernel, capture v2 |
 | **9** | **3** | the "1.4 s global stall" (later proved to be the VFS panic) |

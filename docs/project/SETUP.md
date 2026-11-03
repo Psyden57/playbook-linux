@@ -108,9 +108,8 @@ tarball in `local/pristine/` is the authoritative copy (sha256
 `$HOME/wsl-migration/kernel/pristine` is no longer part of any
 procedure.
 
-**Do not diff against `…/kernel/linux`** — that is the *modified* tree from the
-earlier, abandoned **kexec** project (not this project's history; see
-`docs/history/`), so it is neither pristine nor this project's tree
+**Do not diff against `…/kernel/linux`** — that is a *modified* tree from an
+earlier phase, so it is neither pristine nor this project's tree
 (bootstrap §5). The working kernel tree is in the gitignored payload
 (`local/kernel-tree`); it is regenerable from the patch (34 files / 5 137 lines;
 see `kernel/patches/README.md` §"Regenerating this patch") plus
@@ -166,7 +165,7 @@ regenerable:
 | `local/vendor/` | third-party tooling: `bb10mt*`, `cellebrite-blackberry`, `CFP.exe`, `nvram-*`.  (`bbusb` is ours and lives in `tools/`; the ramloader moved to `local/loaders/`) |
 | `local/research/` | RE scratch: `hd0-modemap-2026-10-20`, `deckard-*`, `ghidra-mmc-2026-10-26`, `loader-audit-2026-10-21`, `loader-test-2026-10-25` |
 | `local/kernel-tree/` | the kernel build tree (regenerable from the patch + `winchester.config`) |
-| `local/legacy/` | the earlier, abandoned kexec project (separate from this one) |
+| `local/legacy/` | an earlier, abandoned phase (kept locally, separate from this one) |
 
 `hardware/swpu231ap.pdf.txt` (the TI OMAP4430 TRM as text) and
 `hardware/twl6030.pdf` are on disk; `hardware/README.md` is the only tracked file

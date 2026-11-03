@@ -15,8 +15,7 @@ the *product*.
 The project is long-running; `NUMBERING.md` has the current count and the full
 absolute ↔ Linux-era mapping.  Historically those handoffs were written at
 roughly 50–60 % of the context budget
-rather than at the end (the private working history records this; it is not
-included in the public snapshot), which is why they
+rather than at the end (the historical handoffs record this), which is why they
 are lossy: a handoff keeps what the next session needed and drops what looked
 unimportant at the time.  **That is a record of how the notes came about, not an
 instruction** — an agent working on this repository must not budget or trim its
@@ -82,8 +81,6 @@ Read, in this order:
   docs/reports/HANDOFF-2026-10-27-session6.md and
     docs/reports/NEXT-SESSION-BOOTSTRAP-2026-10-26.md  (current state + manual)
   the reports for PHASE (docs/reports/): REPORTS
-  if yours is a pre-Linux session, also the private `docs/history/` tree (not
-  included in the public snapshot; the kexec-phase docs and the operator's notes)
 
 Then write docs/sessions/session-NN.md from your own session context: the
 measurements, reasoning, dead ends and device facts this session had that are

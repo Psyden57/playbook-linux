@@ -11,14 +11,12 @@ boots an image this project builds, written into **media region 0**
 measurement — from a live QNX 6.6 reference on the same hardware and from static
 RE of its binaries — rather than from a vendor source drop, which does not exist.
 
-A second artefact is built here: a modified BB10 **2.1.0.1917** boot image whose
+A second artefact is built here: a modified **2.1.0.1917** boot image whose
 IFS and `/base` are ours (`IFS-REBUILD.md`).  For what works, what is next and
 the current unit, read `STATE.md`; this page deliberately carries no status.
 
 Session numbering is explained in `docs/sessions/NUMBERING.md`: the reports call
-the Linux-era sessions "session 1…N", which are absolute `N+6`. The kexec attempt
-was an *earlier, separate, abandoned* project; the public snapshot omits it
-(`docs/history/README.md` records why).
+the Linux-era sessions "session 1…N", which are absolute `N+6`.
 
 ## The hardware
 

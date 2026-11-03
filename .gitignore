@@ -88,7 +88,6 @@ initramfs/root/console
 initramfs/root/pbrpmb
 
 # --- third-party QNX documentation kept for reference, not redistributable ---
-docs/history/optimized-docs/
 
 # --- logs and scratch -------------------------------------------------------
 *.log

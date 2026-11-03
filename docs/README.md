@@ -86,15 +86,6 @@ against the raw data.
 Each file states the conflicting claims, the evidence for each, what is uncertain
 and what would settle it.  Resolved ones are kept for their history.
 
-## `history/` — the earlier phase
-
-The abandoned kexec-phase project is **not included in the public snapshot**.  A
-placeholder `history/README.md` records that it exists and remains in the
-private working history.  The project idea and its working method are described
-in that private material; it is background, not a working rule.  The public
-project's own narrative is in `sessions/` and `reports/`; `project/` is the
-product.
-
 ## Where the binaries are
 
 The proprietary QNX dumps, the TI TRM, the device images, the sealed IFS, the

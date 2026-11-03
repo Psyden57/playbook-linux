@@ -2,14 +2,14 @@
 
 Verified at session 23 (2026-11-02).
 
-Everything a session needs to build a **modified** BB10 2.1.0.1917 IFS.  Written
+Everything a session needs to build a **modified** 2.1.0.1917 IFS.  Written
 at the end of session 20 (absolute) after establishing feasibility; nothing here
 has been built or flashed yet.
 
 **Goal.** Replace `proc/boot/rfs_validator` (or the `.script` line that runs it)
 so `/base` no longer has to be signed, then reseal the image for the factory
 path.  Secondary goal: make image building repeatable for bloatware removal and
-for later BB10 image porting.
+for later PlayBook OS image porting.
 
 ## 1. Environment (all of this was run, not guessed)
 

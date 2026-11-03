@@ -42,9 +42,11 @@ ends at `0x3BFE10`.  The RCFS is validated later, by the IFS itself
 (`rfs_validator`, which ships **inside the IFS** at `proc/boot/rfs_validator`).
 
 Do not confuse the two filesystems: the **RCFS** is mounted at **`/base`**, the
-**UFS** (region 1) is mounted at **`/`**, and they are separate components of a
-release (`*.rcfs` and `*.ufs` in a bb10mt extraction).  Neither is inside the
-`.ifs` — only the boot image is.
+**UFS** (the `hd3` FS partition, MCT type `0x1C`) is mounted at **`/`**, and they
+are separate components of a release (`*.rcfs` and `*.ufs` in a bb10mt
+extraction).  Neither is inside the `.ifs` — only the boot image is.  **Region 1
+is not the UFS**: it is the second OS slot (`/dev/hd2`, 512 MB, another
+IFS/RCFS), separate from the `hd3` filesystem.
 
 Any self-built image is CRC-sealed (`os_type = 6`, CRC trailer), which breaks the
 ECDSA signature — so it can only boot on the **factory** path.  Arming = make the

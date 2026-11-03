@@ -227,7 +227,7 @@ stamps, the banners and `tools/docs_audit.py` are in place; keep the guard green
 at wrap-up.
 
 **ACTIVE: a modified 2.1.0.1917 boot image.**  The operator needs `/base`
-modifiable (bloatware removal, and later BB10 image porting), and the validator
+modifiable (bloatware removal, and later PlayBook OS image porting), and the validator
 cannot be re-signed, so the image itself must change.  `docs/project/IFS-REBUILD.md`
 has the environment, the measured layout, the format structs, the builder design
 and four milestones each with an acceptance test.  **Nothing has been built or
@@ -360,7 +360,7 @@ Full text: `docs/project/KNOWN-ISSUES.md` §2. The ones that end sessions:
 16. **Blocking I²C is the same hazard** — everything that touches I²C runs forked with a bounded wait.
 17. **A stale door holder looks like `Connection refused`** — after a host reboot start `door-hold.sh`; after a unit reboot kill the holder by explicit pid, never `pkill -f`.
 21. **A GPIO write to an un-muxed GPMC ball is a silent no-op** — check `peek 4a1000XX` → `[2:0] == 3` first.
-24. **`/dev/ttyACM0` is recreated per enumeration** — `pkexec chmod 666` after *every* boot (trap 41: `pkexec` can start being denied — the operator must run `sudo chmod`).
+24. **`/dev/ttyACM0` is recreated per enumeration** — `pkexec chmod 666` after *every* boot (if `pkexec` starts being denied, the operator can run `sudo chmod 666 /dev/ttyACM0`).
 26. **`pmic-twl6030-ctl set_state vaux1 off` takes the unit down.** Read rails; never toggle VAUX1.
 27. **A flash cycle's precondition is media running, not the ramloader** — end every flash with a loader reset (the flasher now does it), or use `--reuse-loader`.
 28. **Panel-chain writes outlive a warm reset and QNX does not undo them** — `SYS_RST <- 0x1f` degraded the *reference* display until a cold battery pull.
@@ -387,7 +387,7 @@ Full text: `docs/project/KNOWN-ISSUES.md` §2. The ones that end sessions:
 61. **The 224-byte RPMB record block is encrypted on media by the secure monitor** (`0x2F`, op 0, dir 1=seal / 0=unseal); the MACs cover the ciphertext.  A plaintext patch is invalid and a wrong `BOOTCTR_FCTRY` is the brick path.  The Linux top-up needs the monitor call (report 144).
 62. **The monitor reads identity physical addresses and cannot reach `0xBF040000`.**  There is **no `−0x10000000` DRAM bias** (that was QNX's own paddr offset).  Keep every monitor page — command page, descriptor, data, key — **below `0xB0000000`** with true physical addresses; `0xA0200000` works, `0xBF040000` hangs the bus.  `0xFF05` is a **page-validation error**, not a caller rejection (a differently malformed page returns `1`), and the domain is irrelevant.  Never send a seal with an unvalidated address (it writes 224 bytes where told).  ARM `smc` = `0xe1600070|imm4`, Thumb = `0xF7F0|imm4, 0x8000`.  (Supersedes 145/146; report 147.)
 63. **The seal ABI is accepted and the transform still disagrees with the device.**  `0x12`/`0x31`/`0x33`/`0x2F` all return 0 and `seal(unseal(C)) == C`, but no key/framing/op variant reproduces block 0x43 (`op=2` → `-EIO`; the key *is* used; the monitor writes `desc+0x10 = 0x004017C8`, the same handle as QNX).  Two tooling traps found the hard way: the misc report nodes are **non-seekable** — reopen them for every read, or the next read silently returns nothing; and after a **warm reboot** `0x12` returns 0 with **16 zero bytes**, so a transform result is untrustworthy until the nonce is known live.  Recapture the pair on one boot before trusting it.  (Report 148.)
-The rest (15, 18, 19, 20, 22, 23, 25, 29, 30, 32, 34, 35, 38, 40, 41, 42) are
+The rest (15, 18, 19, 20, 22, 23, 25, 29, 30, 32, 34, 35, 38, 40, 42) are
 one-liners in `KNOWN-ISSUES.md` §2.  Trap 42: the bridge's I²C slave is **not
 wired**.
 
@@ -456,9 +456,9 @@ unit boots; the pre-flash measurement (stock, os_type 4) is what report 160 reco
 Treat the unit as the only one: no RPMB writes by an agent, and no edited-IFS flash until the offline milestones
 pass.
 
-GOAL FOR THIS SESSION: a modified BB10 **2.1.0.1917** image in which **both** the IFS
+GOAL FOR THIS SESSION: a modified **2.1.0.1917** image in which **both** the IFS
 and the RCFS (/base) are ours — /base no longer gated by rfs_validator, so bloatware
-can be removed and later BB10 images ported.
+can be removed and later PlayBook OS images ported.
 
 TOOLS THAT EXIST NOW (session 22; see docs/project/DEVELOPMENT.md §10-§14):
 * `tools/bbusb.py` — one CFP-style tool with all the subcommands:

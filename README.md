@@ -96,8 +96,6 @@ docs/reports/     the analysis reports this work is built on (numbered)
 docs/sessions/    per-session notes (one file per session; the backfill trail)
 docs/captures/    live text captures (register dumps, ring buffers)
 docs/contradictions/  recorded disagreements between sources, left unresolved
-docs/history/     a separate, abandoned kexec project + this project's
-                  early planning docs — prior art only, not this history
 kernel/           patch set, kernel config, board DTS + modified driver copies
 boot/             chainloader source and image builder
 initramfs/        PID 1 (init.c) and the bench console (console.c)
