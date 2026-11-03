@@ -1,11 +1,9 @@
-# Handoff — session 24 (absolute)
+# Handoff — session 25 (absolute)
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§5).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — the reports written in absolute 18 are Linux-era "session 12";
-absolute 19 is Linux-era 13, absolute 20 is Linux-era 14, absolute 21 is
-Linux-era 15, absolute 22 is Linux-era 16 and absolute 23 is Linux-era 17.
-**This handoff is for absolute 24 = Linux-era 18.**  See
+`N+6`.  Absolute 23 is Linux-era 17, absolute 24 is Linux-era 18, and
+**this handoff is for absolute 25 = Linux-era 19.**  See
 `docs/sessions/NUMBERING.md`.
 
 > **Session 18 result — superseded by the session-19 and session-20 updates below.**
@@ -177,30 +175,28 @@ Linux-era 15, absolute 22 is Linux-era 16 and absolute 23 is Linux-era 17.
 ## What to read first, in this order
 
 0. `docs/project/SAFETY.md` — the two stores, the boot budget, what may never be
-   written. Nothing else in this file is safe to act on without it.
-1. `docs/project/STATE.md` — the dated current block, then the history below its
-   divider. That is the only place current status is stated.
-2. **`docs/project/IFS-REBUILD.md`** — the active work: the 2.1.0.1917 layout,
-   the format structs and the four milestones with acceptance tests.  Its
-   evidence is reports **159** (feasibility / why `mkifs` fails) and **158**
-   (`rfs_validator`, the `/base` mount and the signature block).
-3. **Reports 147, 148, 156 and 157** — the RPMB state: caller/address solved
-   (147), transform not reproduced (148), a genuine same-boot pair with both
-   MACs verified (156), trustzone shortcut blocked (157).  Report **154** is the
-   `0x5B`/record-format correction; **149** is the incident.
-4. **Reports 160 and 161** — the measured armed state (pre-flash, report 160)
-   and CFP's corroborating `info` (report 161, raw data in
-   `docs/reports/data/cfp-2026-11-01/`).
-5. **Reports 162–166** — the tooling RE: CFP's `info` opcodes, `RESETQNXOSREGION`,
-   LDR_01's opcode map, and the action log (`0xB3`) vs the crash log (`0xB0`).
-6. **Storage and the boot log**: report **134** (eMMC reads proven; the
-   `(block−0x15)·0x10000` offset correction), **136** (write path and the ACM
-   limit), **138** (the hd3 reseed), **140** (the region-1 root) and **142**
-   (the clean boot log).
-7. **The display, if you need it**: **133** (the DSS core clock — the last
-   defect), then **132** (the QNX oracle and the porch fix).  Then
-   `docs/sessions/session-23.md` for the most recent session note, and
-   `docs/contradictions/README.md` for the open disagreements.
+   written.  Nothing else in this file is safe to act on without it.
+1. `docs/project/STATE.md` — the dated current block; it is the only place
+   current status is stated.
+2. **`docs/project/BB10-PORT.md`** — the next goal (BB10 on the PlayBook): the
+   operator-supplied facts, the open questions and the read-only starting
+   procedure.  Do not assume any BB10 property; ask or read the image.
+3. `docs/project/ROADMAP.md` item 8 — what closes the goal.
+4. **`docs/project/IMAGE-REBUILD-GUIDE.md`** — the proven PlayBook build, edit,
+   pack, flash and verify procedure (IFS, `/base`, UFS, container, flash).
+5. `docs/project/BOOT-CHAIN.md` and `docs/project/FACTORY-PATH.md` — the boot
+   path a BB10 image must fit: the loader, the MCT/regions, the CRC/factory gate.
+6. Reports **169** and **170** — the PlayBook image chain that works today (the
+   shim IFS, the `/base` hook, the UFS, the flasher, the door); reports **98**,
+   **100** and **158** for the MCT/regions and the RCFS.
+7. `docs/project/KNOWN-ISSUES.md` — at least traps 72–75 and 77 (the UFS door,
+   no `pkexec`, no lazy unmount, the 10 s bootrom window, the 2014 clock); the
+   rest as they come up.
+8. `docs/project/DECISIONS.md` — the decisions with their evidence.
+9. The RPMB material (**reports 147/148/156/157**, `BOOT-CHAIN.md`) only if the
+   counter/top-up becomes relevant; **no agent writes RPMB**.
+10. `docs/sessions/session-24.md` — the most recent session note; then
+    `docs/contradictions/README.md` for the open disagreements.
 
 ## 0. The job, and where it stands
 
@@ -208,8 +204,13 @@ Linux-era 15, absolute 22 is Linux-era 16 and absolute 23 is Linux-era 17.
 (OMAP4430 ES2.2 "winchester", secure device), booting from our own chainloader
 image in media region 0 (`/dev/hd1`, IFS at region-0 offset `0x100000`), with an
 initramfs PID 1/console on USB (and optionally the read-only region-1 root).
-**The stated goal — an image on the DSI → TC358764 → LVDS panel (1024x600) — is
-met.**  The operator's direction after that is postmarketOS/nura.
+**The display goal — an image on the DSI → TC358764 → LVDS panel (1024x600) —
+is met.**  The operator's direction is now **BB10 on the PlayBook**
+(`ROADMAP.md` item 8, `BB10-PORT.md`).
+
+> The table below records the **Linux bring-up** (historical).  For the
+> **current** unit state read the session-24 result above, `STATE.md` and
+> `BB10-PORT.md`; the next goal is BB10, not another PlayBook OS image.
 
 | item | state |
 |---|---|
@@ -223,16 +224,13 @@ met.**  The operator's direction after that is postmarketOS/nura.
 | Panel TCON (MCSPI4) | **sent automatically at bring-up by `/init`** (Hitachi table, high byte first) |
 | Backlight (LM3532 @ `0x38` on i2c-0) | **working** — brightness 255, panel lit, I²C registers readable |
 | **Image on the panel** | **WORKING** — clean, stable; solid colours and the kernel console as legible text |
-| Unit | **ONE WORKING UNIT REMAINS: the reference (`0x50175127`), armed AND sealed** — `BOOTCTR_FCTRY` present, size 4, `32 00 00 00` (Factory mode, counter ~50); the operator **flashed the sealed `os_type` 6 IFS on 2026-11-01**, so region 0 boots (the unit has been booted into the OS repeatedly since, and the counter rises on an OS boot because that runs the devuser top-up: `50 → 49 → 47 → 49 → 50`).  **Trap 68's halt never applied — its precondition (the stock type-4 image) was removed by that flash.**  Session 21 had measured the pre-flash state (`75be24e8…`, `os_type` 4, report 160); **read region 0 back to confirm which sealed asset is on media** — the two candidates are `local/images/ifs0.sealed.bin` (`c72b0530…`) and `PB-4869-root.0.3-crc.ifs` (`561e3fae…`), both `os_type` 6 / CRC `0x116B2562`.  CFP `info` (report 161) reports mode Factory and `OS Version 2.0.0.4869 DEV` in region 0.  Door up.  The spare is **down** with the **1-2-2 blink = error `0x5B` (NV/RPMB unusable, report 153)** and presents no USB.  **Treat the reference as pristine: no RPMB writes by an agent** |
+| Unit | **ONE WORKING UNIT: the reference (`0x50175127`), armed AND sealed** — `BOOTCTR_FCTRY = 0x32` (the OS boot tops it up via `/accounts/devuser/startup.sh`); the unit runs PlayBook OS 2.1.0.1917 from **our IFS** (shim, CRC `0x38EE7B46`) + **our edited `/base`** + the **vendor `PlayBook_2.1.0.1917.5.ufs` with the operator's `autorun::0` change**; `devuser` login (root denied by `qconnDoor`); USB `0fca:8012`, door up.  The spare (`0x50176EC1`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  **No RPMB writes by an agent** |
 
-**Image on media now: a sealed 4869 IFS** — the operator flashed the `os_type` 6 image
-on 2026-11-01 so the unit would boot, which is why the unit boots today.  Session 21
-measured the *pre-flash* stock image (`75be24e8…`, `os_type` 4, report 160); **the exact
-asset on media has not been read back yet** (candidates: `local/images/ifs0.sealed.bin`
-`c72b0530…`, or `PB-4869-root.0.3-crc.ifs` `561e3fae…` — both `os_type` 6 / CRC
-`0x116B2562`).  Reading region 0 back is a cheap first check for session 24, and the
-loader's `0xDC` range hash or `0xC4` verify would do it without booting (report 164
-addendum 9).  Session
+**Image on media now:** our uncompressed 2.1.0.1917 IFS (the 8,759-byte shim,
+CRC `0x38EE7B46`) + our edited 1917 RCFS (`/base`, one guarded hook) + the
+vendor `PlayBook_2.1.0.1917.5.ufs` with the operator's `autorun::0` change.
+The unit boots 2.1.0.1917 and `devuser` SSH works; `BOOTCTR_FCTRY = 0x32`.
+The 4869 sealed image is **no longer on media**.  Earlier test images: Session
 20 flashed six diagnostic images — **`0x3116B6F8`** (oracle), **`0xC71BEF44`**
 (identity page), **`0x476A084F`** (key slot + `/dev/pbkey`), **`0x30CE1FEA`**
 (`/dev/pbpair`), **`0xBE48A6C5`** (`/dev/pbctl`), **`0xA3382D01`** (non-seekable
@@ -272,17 +270,9 @@ is reseeded at boot).
 
 ## 1. The one thing to do next
 
-**The active work is the IFS rebuild.**
+**The IFS/RCFS image work is complete; the next goal is BB10.**
 
-**ACTIVE: a modified 2.1.0.1917 boot image.**  The operator needs `/base`
-modifiable (bloatware removal, and later PlayBook OS image porting), and the validator
-cannot be re-signed, so the image itself must change.  `docs/project/IFS-REBUILD.md`
-has the environment, the measured layout, the format structs, the builder and
-four milestones each with an acceptance test.  **Milestone 1 is done (offline,
-session 24); nothing has been flashed.**  `mkifs` is blocked (it links every
-bootstrap and needs an ARM BSP this SDP does not have), so the route is
-`tools/ifs_build.py`, our own imagefs emitter appended to RIM's
-`0x0..0x44910` prefix.
+**DONE (session 24): a modified 2.1.0.1917 boot image.**  The operator needed `/base` modifiable (bloatware removal, and later PlayBook OS image porting), and the validator cannot be re-signed, so the image itself had to change.  `docs/project/IFS-REBUILD.md` has the environment, the measured layout, the format structs, the builder and the four milestones.  `mkifs` is blocked (it links every bootstrap and needs an ARM BSP this SDP does not have), so the route is `tools/ifs_build.py`, our own imagefs emitter appended to RIM's `0x0..0x44910` prefix.  **The image is built, flashed and boots; the media set is below.**
 
 **Milestones 1–4 are done, the image boots, and the `/base` hook works
 (session 24).**  The final media set:
@@ -527,103 +517,63 @@ Start the next session in this repository root as the working directory, then
 paste this.  It is self-contained; the sections above are the long form.
 
 ```
-PlayBook (OMAP4430 "winchester") boot-image work — session 24
-(absolute numbering; the reports call it Linux-era "session 18").
+PlayBook (OMAP4430 "winchester") — session 25 (absolute; Linux-era 19)
 
 Workspace: this repository — a git checkout.  The earlier work tree
 `$HOME/rea-work` is READ-ONLY.  Map: docs/README.md.
 
-STATUS: ONE UNIT IS DOWN, ONE WORKING UNIT REMAINS — NO RPMB WRITES, EVER.
-The spare died after an RPMB write-back (report 149), blinks 0x5B and presents no USB.
-The survivor is the REFERENCE unit (0x50175127): Boot Mode factory, counter ~50 (the OS
-boot tops it up — it can RISE: the OS boot runs the devuser top-up, so do not assume it
-is monotonic).  **The operator flashed the sealed os_type 6 IFS on 2026-11-01** so the
-unit boots; the pre-flash measurement (stock, os_type 4) is what report 160 recorded.
-Treat the unit as the only one: no RPMB writes by an agent, and no edited-IFS flash until the offline milestones
-pass.
+READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, BB10-PORT.md,
+ROADMAP.md item 8, IMAGE-REBUILD-GUIDE.md, BOOT-CHAIN.md + FACTORY-PATH.md,
+reports 169/170, KNOWN-ISSUES.md (traps 72–75, 77), DECISIONS.md.
 
-GOAL FOR THIS SESSION: a modified **2.1.0.1917** image in which **both** the IFS
-and the RCFS (/base) are ours — /base no longer gated by rfs_validator, so bloatware
-can be removed and later PlayBook OS images ported.
+STATUS: ONE WORKING UNIT: the reference (0x50175127), armed AND sealed.
+It runs PlayBook OS 2.1.0.1917 from:
+* our uncompressed IFS (the 8,759-byte rfs_validator shim; CRC 0x38EE7B46);
+* our edited /base (one guarded hook that runs /accounts/devuser/startup.sh);
+* the vendor PlayBook_2.1.0.1917.5.ufs with the operator's autorun::0 change.
+Login is devuser only (PB_USER=devuser tools/pbssh.sh); root is denied by
+qconnDoor and is a post-boot operator method.  BOOTCTR_FCTRY = 0x32 (the OS
+top-up works).  No RPMB writes by an agent, ever.
 
-TOOLS THAT EXIST NOW (session 22; see docs/project/DEVELOPMENT.md §10-§14):
-* `tools/bbusb.py` — one CFP-style tool with all the subcommands:
-    info               read-only device report: bootrom block, PIN, boot mode/count,
-                       block size, flash identity, 19-TLV MCT, loader action log
-                       (opcode 0xB3), bugdisp crash log (0xB0), OSREGION record, DRAM,
-                       vendor id, 50-field CSD/ExtCSD, OS-version block
-    flash              a .signed as-is, or a bare .ifs/.rcfs/.mbr/.ufs with
-                       --dest-block; dry run unless --apply; host-side gate against the
-                       measured MCT extents
-    reset-osregion     delete NVRAM 0x2074 (= CFP's RESETQNXOSREGION), read-back
-                       verified; --apply to write
-    boot-mode          read the factory counter (writes look unimplemented in LDR_01)
-    reset-loader       reset a unit left in the ramloader (0fca:8001)
-    pack/unpack/split/parse   QCFM containers, byte-identical to bb10mt
-* `tools/tests/test_offline.py` — 87 checks, stub device, no USB.  Run it after any
-  change to bbusb.py.
-* `tools/pre_os_ifs_flash.py` — **the only flasher that has ever written to this
-  unit.**  `bbusb.py flash` has never run on hardware; treat it as untested until it
-  has, and prefer the proven tool for anything that matters.
-* `tools/ifs_extract.sh` (dumpifs wrapper), `tools/89-crc_tool.py` (reseal; still needs
-  the image-LENGTH patch), `tools/pbscp.sh` (scp), plus the QNX probe tools.
-* **Unused but known loader commands** (report 164 addendum 9):  `0xEC`/`0xED` report the blocked-OS and
-  blocked-radio tables (relevant to moving to 2.1.0.1917).  Do **not** sweep opcodes:
-  write commands (`0xC0` COMPLETE, `0xEE` erase, `0xE8`, `0xF3`) share the range.
+GOAL: boot BB10 on the PlayBook.  The target image/version is NOT decided —
+ask the operator first (which image/device/version, and the path).  Do NOT
+assume BB10's OS version, image format, partition layout, boot chain or
+signing.  Read docs/project/BB10-PORT.md; it records only the operator's
+facts and the open questions.  Operator-supplied, to verify: BB10 reports as
+QNX 8; the Z10 is OMAP-based (OMAP4460 code compatible with the OMAP4430, or
+RIM left TabletOS-era code in); early BB10 10.0.9.1103 already runs on the
+PlayBook; the BB10 /base is an RCFS image that `bb10mt qnx6 mount` cannot
+mount (dump/edit/repack is the expected route); a QNX 8 SDP/toolchain is
+needed.
 
-TASK: docs/project/IFS-REBUILD.md §6 milestone 1 — write `tools/ifs_build.py`
-(imagefs emitter: image_header + dirents + data + trailer, appended to RIM's unchanged
-0x0..0x44910 prefix) and pass its acceptance test: `dumpifs` must list the SAME 72
-entries with the same names, sizes and modes from our output, and print a
-`Checksums:` line.  Offline only.  Known gaps are in that file §4/§5 (trailer checksum
-unknown; `dumpifs -x` does not create symlinks — take the 26 from the listing).
-Then, in order: (2) the rfs_validator mount shim (ntoarmv7-gcc), tested read-only on the
-stock unit as `/tmp/shim -c`; (3) teach the reseal tool the descriptor's image LENGTH as
-well as os_type and CRC; (4) a boot test with the mount line over the STOCK /base.  Only
-after those, build the 2.1.0.1917 IFS+RCFS pair.
+FIRST STEPS (read-only): copy the image to local/work; identify the
+container and components (bbusb.py parse/split/unpack, bb10mt); identify the
+IFS and RCFS formats on copies; record sizes, hashes, deltas and any
+signature.  Do not flash until the operator approves the first variable.
+The way back is the working 2.1.0.1917 set.
 
-THE RCFS SIDE: /base is the `1.rcfs` component — a plain QNX6 filesystem (x86 MBR at
-0x0, QNX6 magic 0x68191122 at 0x2000); the RCFS signature block is a separate 64 KiB
-component destined for region-0 0xF0000 (report 158).  **Do not change the IFS and the
-RCFS in the same step.**
+TOOLS: docs/project/IMAGE-REBUILD-GUIDE.md (the proven PlayBook build/edit/
+pack/flash/verify procedure); bbusb.py (info, flash, reset-osregion,
+pack/unpack/split/parse); ifs_build.py; 89-crc_tool.py; bb10mt qnx6 mount;
+PB_USER=devuser tools/pbssh.sh; tools/pbscp.sh.  The kernel patch is current
+(5137 lines / 34 files; kernel/patches/README.md).
 
-BENCH: door = 169.254.0.1 over the RNDIS interface; the host needs
-`ip addr add 169.254.0.2/16 dev <iface>` (the pb-rndis NetworkManager profile is bound
-to one port).  The host's /tmp is volatile.  Files move with
-`tools/pbscp.sh local :/tmp/` (directories need -O; the device's /tmp is /dev/shmem and
-cannot mkdir).  pkexec chmod 666 /dev/ttyACM0 after every boot of our own images.  After
-EVERY console command, dump the last 50-100 lines of kmsg and read them.
+BENCH: door = 169.254.0.1 (host: ip addr add 169.254.0.2/16 dev <iface>);
+tools/door-hold.sh; files via tools/pbscp.sh (directories need -O).  Run the
+USB tools as the USER — never pkexec (the node has a user ACL; root lacks
+the user's pyusb, and a killed pkexec leaves an orphan holding the
+interface).  `bbusb.py flash --from-bootrom` opens for 10 s: arm
+`while ! lsusb | grep -q 0fca:0001; do sleep 1; done` first.  No lazy
+unmount of the FUSE images; wait for terminals/editors to leave.  A wedged
+ramloader needs a power-cycle.  The 1917 OS clock is 2014.
 
-PASSWORD — READ SAFETY.md §7 FIRST (new rules): `--password` has NO default; ten wrong
-attempts WIPE UFS/RCFS/IFS and the password NVRAM record.  A supplied password is sent
-exactly once; interactively you are re-prompted with the remaining budget (e.g. 9/10)
-and the tool stops at two spent attempts, as bb10mt does.  After a rejection the boot rom
-stops offering a challenge until the unit boots the OS — that silence is NOT "wrong
-password", so do not retry blindly.
+SAFETY: read SAFETY.md first.  An agent never writes RPMB.  One variable per
+flash; keep the way back verified.  Do not hand-edit the OS descriptor (the
+reseal tool sets os_type and LoadEnd).
 
-DO NOT: write RPMB in any form; flash an edited IFS before milestones 1-3 pass; modify
-the IFS and the RCFS together.  A failed rfs_validator run shuts the unit down and marks
-the region dirty in NVRAM 0x2074; recover with `tools/bbusb.py reset-osregion --apply`,
-which reads the record back before and after (CFP's "cleared" print is only a status-6,
-so it proves nothing).
+SUBAGENTS: static RE only, no bench.  Skeleton first, exact paths, an
+explicit "stop when answered", findings written as you go.
 
-SUBAGENTS: static RE only, no bench.  Skeleton FIRST, exact paths, an explicit "stop
-when answered", findings written as you go.  Reports 162-166 are the pattern working —
-two of them also corrected this project's own errors, which is exactly why the habit
-(disassemble the callee before trusting a call site) is written down.
-
-CORRECTIONS since the previous handoff (all committed, do not re-derive):
-* LDR_01 has **no 0x10000-byte header**: `file_offset = VA - 0x80100000`;
-* the PIN is the raw u32's **hex digits** (0x50175127 -> "50175127");
-* the loader action log is **0xB3** (0xB0 is the bugdisp crash log, encrypted at rest,
-  written verbatim by CFP to c:\log.bug);
-* CFP's `0x461750` is `memcpy`, not a decrypt — CFP does not decrypt the log;
-* the CSD/ExtCSD (50 fields), bootrom block (13) and OS-version block are decoded
-  against CFP's own printed values, with captures in
-  docs/reports/data/live-info-2026-11-01/.
-
-UPDATE THE DOCS as you go and commit: HANDOFF.md, STATE.md, IFS-REBUILD.md and the
-reports are the entry points and must stay true.  Record contradictions rather than
-resolving them silently.  The kernel patch is current (5137 lines / 34 files; see
-kernel/patches/README.md §"Regenerating this patch").
+UPDATE THE DOCS as you go and commit: BB10-PORT.md, STATE.md, HANDOFF.md,
+ROADMAP.md, KNOWN-ISSUES.md, DECISIONS.md and the session note.
 ```
