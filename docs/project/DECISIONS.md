@@ -474,6 +474,103 @@ monitor call and `0xFF05`), 146 (static RE: no handshake; `r3` suspect);
 
 ---
 
+## 22. BB10: backport the Winchester platform support into 10.3 (session 25)
+
+**Decision (operator, 2026-11-03).** The first BB10 attempt targets **Z10
+10.3.03.2049 STL100-1**, with the **Winchester (PlayBook) platform support
+backported from the known-running `10.0.09.1103-ROOT-winchester` set** — route B
+of the three in `BB10-PORT.md` §4b.  It is not a "boot 10.0.9.1103 first"
+experiment (route A), and not a wholesale display-stack replacement (route C).
+
+**Why.** The operator wants 10.3 as the target, and the analysis shows the port
+is a *platform-support* problem, not a container one: the 10.3 IFS has only
+`*London*` and MSM branches in `ifs_variables.sh` while 10.0.9.1103 still has
+the full `*Winchester*` branch (OMAP4430/4460, `graphics/omap4430`,
+`devpm-omap4.so`, `thermal_win.conf`).  The 10.3 `/base` also still carries
+partial winchester support (deckard platform, `devu-ehci-omap4430-winchester.so`,
+a 1024x600 `splash_winchester.conf`), so the board was not fully removed.
+
+**Evidence.** `BB10-PORT.md` §4b: both IFS images are plain QNX imagefs read by
+`dumpifs`; both are `os_type = 4`; `/base` is the `r-c-f-s` RCFS and
+`tools/rcfs_extract.py` reads both fully; the branch tables differ as above.
+Dependency check (session 25): every winchester/colt binary from 10.0.9.1103
+resolves against the **10.3** IFS libraries (`libhwio-gen`, `libhwio-omap4`,
+`libcsm`, `libcam`, `libpps`, `libslog2`, `libforensics`, libc/m); only
+`librocket.so.1` is absent and is carried along.  Three plugins
+(`cpuTemp_omap4430.so`, `cpuTemp_omap4460.so`, `led-led_rocket.so`) reference
+symbols (`slog2*`, `thermalVerbose`, `pps_*`) they do not link, i.e. they rely
+on the dlopen/process namespace — to verify at run time.
+
+**Constraint.** Route A would not even boot the armed reference: the
+10.0.9.1103 IFS is `os_type = 4` (product/ECDSA), and the operator confirms
+that run was on an **unarmed** unit; the reference is armed, so only the
+factory/CRC path is available until the set is resealed.  Whatever is built
+must therefore be resealed (`os_type = 6` + CRC) and packed V1+V2 with the
+PlayBook deltas (the Z10 container is V2-only, trap 55).  One variable per
+flash; the way back is the working 2.1.0.1917 set.
+
+**Open.** Whether 10.3's winmgr accepts the 10.0 `graphics.conf` dialect and
+`displayHAL-winchester.so`; whether the 10.3 `rfs_validator` mounts the RCFS at
+the PlayBook's device path (`/dev/emmc/os%ut179` vs the TabletOS `hd1t179`);
+whether the 10.3 UFS works in the PlayBook's `hd3`.
+
+---
+
+## 23. BB10: disable the deckard OS-blocklist NVRAM writer (session 25)
+
+**Decision (operator, 2026-11-03).** The BB10 `/base` is edited so the
+OS-blocklist record (`NV_OSSTORE_NotSupportedOS`, NVRAM `0x2819`) can no longer
+be written by the OS: `deckard/platform/blacklist.pyc`'s `update`, `write` and
+`_write` are no-ops.
+
+**Why.**  The bootloader verifier reads `0x2819`; if BB10 writes our image's
+version range into it as unsupported, the unit can stop booting.  The operator
+identified the mechanism and asked for it to be invalidated.
+
+**Evidence.**  `uncompyle6` of the 10.3.03.2049 `/base` module: the class holds
+`NV_OSSTORE_NotSupportedOS_NUM = 10265` and `_write` opens `/dev/nvram`
+`O_WRONLY` and `pwrite`s the `OSRangeAndType` records; `read` is the harmless
+consumer.  The edit was compiled with a portable CPython 3.2.6 and spliced into
+the RCFS in place (inode 12,015, LZO recompressed 2,957 B, `inode.size` 7,849,
+byte-identical readback).  `sbin/blupdater` is a separate, native, update-time
+writer and is recorded, not edited.
+
+**Constraint.**  Any `/base` edit invalidates the RCFS verifier hash/signature,
+so the stock `rfs_validator` must be replaced by `tools/rfs_rcfs_shim.c`, which
+mounts the RCFS through `fs-rcfs.so` without verification.  The reference stays
+recoverable only through the pre-OS `0xF7`/`bbusb.py flash` path with the
+working 2.1.0.1917 set.
+
+---
+
+## 24. BB10 10.3 verified but does not run; use 10.0.9.1103 as the control (session 25)
+
+**Decision.** The first BB10 10.3.03.2049 set is **not** to be iterated on the
+unit for now.  Restore the working 2.1.0.1917 set, then test the
+**10.0.9.1103 winchester set** (resealed to `os_type 6` + CRC) as a
+compatibility control before any further 10.3 work.
+
+**Why.** The 10.3 image is structurally correct — the loader's CRC path
+accepted it and jumped (`factory_count` 50 → 45), but BB10 never brought up a
+display or USB and the unit re-entered the bootrom on each reset.  With one
+working unit and a finite factory counter, the cheapest next fact is whether a
+BB10 image that is *reported to run* on the PlayBook behaves differently.  If
+it runs, the 10.3 gap is something the Winchester backport did not cover; if it
+also fails, the gap is the kernel/board support and 10.3 iteration is pointless
+without a different route (for example a PlayBook-native BB10 image or RIM's
+own TabletOS-era platform code).
+
+**Evidence.** `BB10-PORT.md` §4b/§4c and report 171/172 (the format/toolchain);
+the loader `info` output (`os_address 0x800FF800-0x80928247`, `0x06001A06`,
+`factory_count 45`); the session-25 flash log (2,964,324,384/2,964,324,384
+bytes, signature, COMPLETE).
+
+**Constraint.** The counter only refills on a TabletOS boot; the way back
+(`local/work/back-1917.signed`) is packed and must be flashed from the
+ramloader.  An agent never writes RPMB; no flash without the operator.
+
+---
+
 These were the open policy questions.  The licence and visibility are decided
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.

@@ -1,72 +1,52 @@
 # Current state
 
-## Current state — 2026-11-03
+## Current state — 2026-11-03/04 (session 25)
 
-**The modified 2.1.0.1917 image is on the reference and the `/base` hook
-works.**  The unit runs PlayBook OS **2.1.0.1917** from:
-* **our uncompressed IFS** — the stock 1917 tree with `proc/boot/rfs_validator`
-  replaced by the 8,759-byte shim; `0x788D84` B, `os_type` 6, CRC
-  `0x38EE7B46`, sha256 `b52195bb…` (report 169);
-* **our edited 1917 RCFS** (`/base`) — the vendor
-  `PlayBook_2.1.0.1917.1.rcfs` (sha256 `8ccf518c…`) with one guarded call in
-  `scripts/startup.sh` that runs `/accounts/devuser/startup.sh &` after the
-  final runlevel (report 170);
-* the **1917 UFS** — the vendor `PlayBook_2.1.0.1917.5.ufs` **with the operator's `autorun::0` change** (2,550,202,368 B, sha256 `0c0f7d77…`).
+**The unit is held in the bootrom/ramloader with the first BB10 test set on
+media.**  Session 25 built and flashed a BB10 10.3.03.2049 set for the PlayBook
+(`BB10-PORT.md` §4b/§4c, **`BB10-IMAGE-GUIDE.md`**):
 
-The operator added `/accounts/devuser/startup.sh` (4,566 B, sha256
-`8acf568f…`) after the flash, and it **works**: the boot log records
-`bootctr: wrote 0x32, readback ok (was 0x2E (decimal 46))`.  The door
-authenticates and **`devuser` SSH works** (`PB_USER=devuser tools/pbssh.sh …`);
-root is denied by `qconnDoor` (`DenyUsers=root`) and is a post-boot operator
-method, not a `/base` edit.  Evidence: `/dev/hd1t179 on /base type qnx6`,
-`/base/etc/os.version` = `2.1.0.1917`, `/proc/boot/rfs_validator` = 8,759 B.
+* **IFS** — our rebuilt, compressed 10.3 IFS with the `*Winchester*` branch, the
+  winchester driver set, the SGX540 stack at `proc/boot/gfx4430`, and the
+  `rfs_rcfs_shim`; 8,555,080 B, `VERIFIED (CRC path)`, sha256 `50e1c04a…`;
+* **`/base`** — the 10.3 RCFS with the deckard blocklist writer neutered, the
+  seed `autorun::0`, and the startup hook; sha256 `88711f9e…`;
+* **UFS** — the 10.3 `.0.4.ufs` with `autorun::0`, sha256 `8bc7c13f…`.
 
-The `PlayBook_2.1.0.1917_ROOT_V1.4.EXE` UFS was **rejected**: it boots but its
-`qconnDoor`/root kit never completes the door handshake, so SSH stays closed.
-Use the `.5.ufs` with `autorun::0` (report 170 §3).
+**The image verified on the loader, but BB10 did not run.**  `bbusb.py info`
+reports `boot_mode = factory` and `factory_count = 45` (it was 50): the CRC path
+accepted the image and the loader jumped five times, so the
+container/IFS/RCFS chain is sound and the stall is inside BB10 (kernel/board
+support for the OMAP4430).  There was no splash and no USB; the unit re-entered
+the bootrom on each reset.  **It is now held in the ramloader (`0fca:8001`)**,
+where nothing drains — `bbusb.py info --keep-loader` was the last action.
 
-**The custom 1917 `/base` (bloatware removal) is no longer the operator's
-goal** (2026-11-03).  **The next goal is to boot BB10 on the PlayBook**
-(operator, 2026-11-03).  **Session 25 fixed the target to a Z10 OMAP build, but
-no BB10 image has been supplied and no BB10 binary has been inspected** — the
-work so far is offline/read-only.  Two inputs are outstanding: the **Z10 image**
-(SKU + version + path; the only OMAP Z10 is STL100-1 = OMAP4470, while OMAP4460
-is the Dev Alpha A — `BB10-PORT.md` §1) and the **QNX 8.0.0 SDP** (the 6.6
-`mkrcfs` exists but the operator's instruction is not to trust it).  The
-step-by-step for any PlayBook image set is
-`docs/project/IMAGE-REBUILD-GUIDE.md`; the BB10 tool surface and intake
-procedure are in `BB10-PORT.md` §4a.
+**The way back is packed and verified, NOT flashed**:
+`local/work/back-1917.signed`, 1,104,544,336 B — our 1917 IFS + the edited 1917
+RCFS + the vendor `.5.ufs` with `autorun::0`.  Flashing it from the ramloader
+(no `--from-bootrom`) restores TabletOS, and its boot tops `BOOTCTR_FCTRY` back
+to `0x32`.
 
-**One working unit remains: the reference (`0x50175127`), armed AND sealed.**
-`BOOTCTR_FCTRY` was `0x2E` (46) before the operator's top-up and is now
-`0x32` (50), written and read back by `/accounts/devuser/startup.sh` at boot
-(`.bootctr.log`).  The OS boot tops it up through that script, so read the log
-before the next flash; `devuser` cannot read `/dev/rpmb` directly and root is
-denied by `qconnDoor`.
+**The factory budget is 45 (`0x2D`).**  Only a TabletOS boot refills it; every
+successful boot spends one, and a reset-looping image can spend several per
+minute.  The operator's `/accounts/devuser/startup.sh` is not on the BB10 UFS,
+so nothing on this set tops it up.
 
-**On media now:** region 0 = **our** 2.1.0.1917 IFS (uncompressed, shim
-`rfs_validator`, CRC `0x38EE7B46`, sha256 `b52195bb…`, `0x788D84` bytes) at
-`0x100000`; the **edited 1917 RCFS** at `0xC00000` (vendor
-`PlayBook_2.1.0.1917.1.rcfs`, sha256 `8ccf518c…`, plus the guarded hook);
-and the **1917 UFS** (vendor `.5.ufs` + operator `autorun::0`, sha256 `0c0f7d77…`).
-The 4869 `.sig` block at `0xF0000` was left stock and is irrelevant with the
-shim.  The way back is the 4869 set: sealed IFS + `PB-4869-root.0.1.rcfs` +
-the 4869 UFS.
+**Next:** flash the 1917 way back to stabilise the unit and refill the counter;
+then continue BB10 offline.  The step-by-step for BB10 image editing is
+**`BB10-IMAGE-GUIDE.md`**.  The obvious compatibility control is the
+**10.0.9.1103 winchester set** (reported to run on the PlayBook), resealed to
+`os_type 6` + CRC, against 10.3's failure.
 
-Bench: **PlayBook OS 2.1.0.1917 is up**, USB `0fca:8012` ("RIM Network
-Device"), `169.254.0.1`, ports 22/4455/80/443; login **`devuser` only**
-(`PB_USER=devuser tools/pbssh.sh …`; root is denied by `qconnDoor`).  The
-region-1 Linux root is present, read-only, and left in place.  The spare
-(`0x50176EC1`) is **down** — its red 1-2-2 blink is error `0x5B` (NV-record /
-RPMB subsystem unusable, report 153) and it presents no USB.  Two 32 GB units
-are bricked.  **No RPMB writes by an agent, ever.**
+**Bench:** unit in the ramloader, `lsusb` = `0fca:8001`; the device password is
+`0000` (sent once, never retried).  The door/`devuser` path is unavailable
+until a TabletOS set is restored.  The region-1 Linux root is still in place
+(it starts at raw `0x29000000`, above the BB10 UFS writes).
 
-**The active work is the BB10 port** (`BB10-PORT.md`, `ROADMAP.md` item 8),
-blocked on the two inputs above; the 1917 IFS work (`IFS-REBUILD.md`) is
-complete and the unit's image set is final for now.  The other persistent
-blocker is the **Linux `BOOTCTR_FCTRY` top-up**: the monitor's `0x2F` transform
-is not reproduced (reports 148/156), so QNX's `/dev/rpmb` is still the only
-proven writer.  That gates the hd3 cut-over, not the image work.
+**Persistent blockers:** the **Linux `BOOTCTR_FCTRY` top-up** (the monitor's
+`0x2F` transform is not reproduced, reports 148/156, so only QNX's `/dev/rpmb`
+writes it — an agent never does), and the **BB10 OS compatibility** shown by
+this trial.
 
 ## Per-subsystem state
 
@@ -172,13 +152,13 @@ the I²C bus and resets the unit).
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **ours**: the uncompressed 2.1.0.1917 IFS with the 8,759-byte `rfs_validator` shim, `0x788D84` bytes, `os_type` 6, CRC **`0x38EE7B46`**, sha256 `b52195bb…` (report 169).  Flashed 2026-11-03 with the 1917 RCFS.  The 4869 `.sig` block at `0xF0000` is stock/irrelevant.  **No chainloader/kernel image is on media** |
-| region-0 RCFS (`/base`) | **our edited vendor 2.1.0.1917**: `PlayBook_2.1.0.1917.1.rcfs`, sha256 `8ccf518c…`, written sparse at block 192, with one guarded hook in `scripts/startup.sh` (report 170).  Mounted at `/dev/hd1t179`, `/base/etc/os.version` = `2.1.0.1917` |
-| UFS (`/`) | **vendor 2.1.0.1917 `.5.ufs` + operator `autorun::0`**: 2,550,202,368 B, sha256 `0c0f7d77…` (setup skipped).  The ROOT V1.4 EXE UFS was rejected — its door never authenticates (report 170 §3) |
-| `/accounts/devuser/startup.sh` | **operator's**, 4,566 B, sha256 `8acf568f…`, added after the flash; runs the top-up at boot (`.bootctr.log`) |
-| `BOOTCTR_FCTRY` | **`0x32` (50)**, written and read back by the startup script (`bootctr: wrote 0x32, readback ok (was 0x2E (decimal 46))`).  `devuser` cannot read `/dev/rpmb` directly |
+| region-0 IFS on media | **the BB10 10.3.03.2049 test IFS**: 8,555,080 B, `os_type` 6, `VERIFIED (CRC path)`, sha256 `50e1c04a…` (Winchester branch, `rfs_rcfs_shim`, winchester set, `proc/boot/gfx4430`).  The 1917 IFS is **not** on media |
+| region-0 RCFS (`/base`) | **the edited BB10 10.3 RCFS**: sha256 `88711f9e…` (blocklist writer neutered, seed `autorun::0`, startup hook), written at block 192.  The 1917 RCFS is **not** on media |
+| UFS (`/`) | **the BB10 10.3 `.0.4.ufs` with `autorun::0`**: 2,588,409,856 B, sha256 `8bc7c13f…`.  The 1917 `.5.ufs` is **not** on media |
+| `/accounts/devuser/startup.sh` | **not on the BB10 UFS** (the operator's 4,566 B script was on the 1917 UFS).  The BB10 `/base` hook would run it if present |
+| `BOOTCTR_FCTRY` | **`0x2D` (45)** at session end, down from `0x32` (50) — five verified BB10 boots spent five units (loader `info` read them).  Only a TabletOS boot refills it |
 | region-1 Linux root | **present, read-only** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 32 MiB ext4, no journal, sha256 `0b87c29f…`, FNV-1a64 `c2e78e1f09b50208`.  Written through the pre-OS `0xF7` loop and read back byte-exactly; mounted read-only and its `/init` ran on `0xFB3A9F5D` (report 140).  **Left in place** |
-| TabletOS / OS | **PlayBook OS 2.1.0.1917 up** (`QNX localhost 6.6.0 2014/03/19… armle`), **the `.5.ufs` with `autorun::0`** (`/dev/hd3 on /`); USB `0fca:8012` "RIM Network Device", `169.254.0.1`, ports 22/4455/80/443.  Login **`devuser` only** (`PB_USER=devuser tools/pbssh.sh …`); root is denied by `qconnDoor` (`DenyUsers=root`) and is a post-boot operator method |
+| TabletOS / OS | **none running**: the unit is held in the ramloader (`0fca:8001`).  The BB10 10.3 image verified and jumped but did not bring the OS up (no splash, no USB).  Restoring `local/work/back-1917.signed` brings PlayBook OS 2.1.0.1917 back |
 | device-side files | `tools/pbdsi` was pushed to `/tmp/pbdsi` and is **gone** (QNX `/tmp` is wiped by a reboot).  Re-push before use |
 
 The factory boot budget is real and one-way: every successful factory/CRC boot
@@ -203,11 +183,12 @@ writer**, `pbrpmb write` stays compiled blocked, and **no agent writes RPMB**
 
 `ROADMAP.md` owns the ordered work list; the 1917 image work is complete
 (`IFS-REBUILD.md`, `IMAGE-REBUILD-GUIDE.md`), and **the next goal is item 8, a
-BB10 image on the PlayBook** (operator, 2026-11-03), target **a Z10 OMAP
-build**.  It cannot start until the **Z10 image** and the **QNX 8.0.0 SDP**
-arrive; when the image does, the intake procedure in `BB10-PORT.md` §4a is the
-first step (read-only: copy, hash, identify container, list components, then try
-the readers on copies).
+BB10 image on the PlayBook** (operator, 2026-11-03), target **Z10 10.3.03.2049
+STL100-1**.  Session 25 did the format/tool analysis (`BB10-PORT.md` §4b).  The
+next step is **static**: diff the 10.3 and 10.0.9.1103 IFS/`/base` trees and
+decide whether to start from 10.0.9.1103 or backport its Winchester support
+into 10.3 — no device write is needed for either.  Repacking an RCFS still
+needs a writer (QNX 8.0.0 `mkrcfs`, being located).
 
 ## Workspace location
 

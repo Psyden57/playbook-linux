@@ -19,6 +19,7 @@ preserves evidence, and must not restate status.
 | `project/IFS-REBUILD.md` | the 2.1.0.1917 image rebuild: layout, format, milestones | current unit state |
 | `project/IMAGE-REBUILD-GUIDE.md` | the repeatable build → edit `/base` → flash → verify procedure for any `.ifs` + `/base` (+ UFS) | status tables, session history |
 | `project/BB10-PORT.md` | BB10 on the PlayBook: operator-supplied facts, open questions, starting procedure | current state, speculation |
+| `project/BB10-IMAGE-GUIDE.md` | the repeatable procedure for editing a BB10 IFS (build → splice → reseal) and `/base` RCFS (in-place LZO edits, `.pyc`, the verifier shim), the UFS `autorun` change, packing and flashing | status tables, session history |
 | `project/ARMING-TUTORIAL.md` | the operator's arming procedure, step by step | current unit state |
 | `project/SAFETY.md` | what may be written, by whom | status |
 | `project/DECISIONS.md` | decisions with their evidence, and the open ones | current state |
@@ -43,6 +44,7 @@ preserves evidence, and must not restate status.
 | `IFS-REBUILD.md` | the working notes for the modified 2.1.0.1917 IFS |
 | `IMAGE-REBUILD-GUIDE.md` | the operator's repeatable procedure: build the IFS, edit `/base`, prepare the UFS, pack the container, flash, verify, and the way back |
 | `BB10-PORT.md` | the next goal (BB10 on the PlayBook): the operator's facts, the RCFS/QNX-8 questions, and the read-only starting procedure |
+| `BB10-IMAGE-GUIDE.md` | **how to edit a BB10 image**: IFS build/splice/reseal, `/base` RCFS in-place edits (LZO, `.pyc`, the verifier shim), the UFS `autorun` change, packing, flashing, verifying and the way back |
 | `ARMING-TUTORIAL.md` | the arming procedure as a tutorial, for outside readers |
 | `SAFETY.md` | **read before writing anything to the device**: the two non-volatile stores, `BOOTCTR_FCTRY` values that brick, the media write path, and who may write |
 | `DECISIONS.md` | decisions taken with their evidence, and the open ones (license, visibility, proprietary corpus) |

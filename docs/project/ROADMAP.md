@@ -195,28 +195,75 @@ steps.
 
 ## 8. A BB10 image on the PlayBook — **NEXT (operator, 2026-11-03)**
 
-**Goal: boot BB10 on the PlayBook.**  Session 25 fixed the direction to **a Z10
-OMAP build**; the **image itself is not in hand yet**, so no analysis has been
-done and nothing has been flashed.  Two inputs are outstanding:
+**Goal: boot BB10 on the PlayBook.**  Target: **Z10 10.3.03.2049 STL100-1**
+(OMAP4470), supplied as components; the known-running
+`10.0.09.1103-ROOT-winchester.signed` set is also in hand.  Session 25 analysed
+both **read-only** (`BB10-PORT.md` §4b).  What that settled:
 
-* **the Z10 image** — device SKU + BB10 version + path.  Published model tables
-  put the only OMAP Z10 at **STL100-1 = OMAP4470**; the other Z10 SKUs are
-  Qualcomm MSM8960.  **OMAP4460 is the Dev Alpha A, not a retail Z10**, so the
-  device must be named explicitly (`BB10-PORT.md` §1);
-* **the QNX 8.0.0 SDP** — the operator is locating it.  The QNX **6.6** SDP's
-  `mkrcfs` exists and builds images, and bb10mt ships the same binary, but the
-  operator's instruction is **not to trust it or base anything on it** until
-  the 8.0.0 tool is available.
+* both BB10 IFS images are plain **QNX imagefs** and the QNX 6.6 `dumpifs`
+  reads them; both are `os_type = 4` (**product/ECDSA**, not CRC-sealed), so a
+  PlayBook experiment needs our reseal to `os_type = 6` + CRC;
+* the BB10 `/base` is the **`r-c-f-s` RCFS** container, not QNX6;
+  `tools/rcfs_extract.py` now reads both images fully (11,911 files on the Z10);
+* **the port is a platform-support problem**: the 10.3 IFS has only
+  `*London*`/MSM branches, while 10.0.9.1103 still has **`*Winchester*`**
+  (OMAP4430/4460, `graphics/omap4430`, `devpm-omap4.so`, `displayHAL-winchester`)
+  — that branch is how BB10 ran on the PlayBook;
+* containers differ: 10.0.9.1103 uses the **PlayBook deltas** (16/192/16640/…),
+  the Z10 set is **V2-only**, which this loader rejects (trap 55);
+* `/base` is gated by `rfs_validator` and mounted through `fs-rcfs.so` — the
+  PlayBook shim has a direct BB10 analogue to prove later.
 
-Operator-supplied, still to be verified against the image (do not assume
-otherwise): BB10 reports as **QNX 8** (not 6.6/7.0); early **BB10 10.0.9.1103
-already runs** on the PlayBook; the BB10 **`/base` is an RCFS image** that
-`bb10mt qnx6 mount` cannot mount (dump/edit/repack is the expected route).
+**Route chosen (operator, session 25): backport into 10.3** (`DECISIONS.md`
+§22).  The surface is small and dependency-clean — the Manifest is
+`local/work/bb10/backport-manifest.txt`; the IFS set is ~21 files plus
+`librocket.so.1`, and the omap4430 graphics stack (26 files, carried in the IFS
+so `/base` stays stock) — and every binary resolves against the 10.3 IFS
+libraries.  The plan:
+
+1. graft the 10.0.9.1103 `*Winchester*` block into 10.3's `ifs_variables.sh`,
+   adapted to the variable names 10.3's scripts consume and with paths pointing
+   into `/proc/boot` (the IFS), not `/base`;
+2. add the manifest files to the 10.3 IFS (`tools/ifs_build.py --add`) and keep
+   `/base` stock by putting the omap4430 graphics stack in the IFS too, with
+   `DCONF_GRAPHICS_ROOT` pointing at it (no RCFS writer needed);
+3. store the IFS compressed (13.7 MB imagefs vs an 11.0 MiB slot).  **Solved
+   in session 25** (reports 171/172, `BB10-PORT.md` §4b): `tools/ifs_build.py`
+   emits the uncompressed imagefs, `tools/ucl_nrv2b.py` is the host NRV2B
+   encoder (QNX's own `libucl` decodes its output), `tools/bb10_ifs.py splice`
+   puts it into RIM's preamble/header/stub and patches the fields, and
+   `89-crc_tool.py reseal` gives a `VERIFIED (CRC path)` image.  The unmodified
+   10.3 tree round-trips through the whole chain (`dumpifs` lists the same 339
+   entries).  Then reseal and pack V1+V2 with the PlayBook deltas
+   (16/192/16640) — the Z10 container is V2-only and is rejected (trap 55);
+4. craft the actual Winchester branch: add the manifest's winchester/colt
+   binaries and configs plus the omap4430 graphics stack to the IFS (keeping
+   `/base` stock), graft `ifs_variables.sh` with values that 10.3's scripts
+   consume, and build/splice/verify/reseal the real image;
+5. only with the operator's approval, flash and read the first boot.
+
+Repacking an RCFS needs a writer that emits this format; the QNX 8.0.0
+`mkrcfs` is still being located (the 6.6 one is not trusted), so RCFS edits
+are the gated step.
 
 The PlayBook image chain is ready (IFS/RCFS/UFS, container/flash, the
 `rfs_validator` shim; reports 169/170, `IMAGE-REBUILD-GUIDE.md`).  The facts,
-the open questions, the tool surface and the fixed intake procedure are in
-**`BB10-PORT.md`** (§3, §4a).
+the open questions, the tool surface and the intake procedure are in
+**`BB10-PORT.md`** (§3, §4a, §4b).
+
+**Result (session 25):** the first BB10 10.3.03.2049 set was built, packed and
+flashed.  **The loader verified it and jumped five times** (`factory_count`
+50 → 45, read with `bbusb.py info`), but **BB10 did not run** — no splash, no
+USB, and the unit re-entered the bootrom on each reset.  So the container / IFS
+/ RCFS chain is sound and the gap is inside BB10 (kernel/board support for the
+OMAP4430).  The unit is held in the ramloader; the way back
+(`local/work/back-1917.signed`) is packed and not flashed.  The repeatable
+procedure is **`BB10-IMAGE-GUIDE.md`**.
+
+**Next:** restore the 1917 way back (tops `BOOTCTR_FCTRY` to `0x32`), then run
+the **10.0.9.1103 winchester set**, resealed to `os_type 6` + CRC, as a
+compatibility control.  If it also fails to run, diff its IFS/`proc/boot` and
+`/base` against the 10.3 set for what the 10.3 branch backport did not cover.
 
 **Closes when:** BB10 boots on the PlayBook, or the first hard blocker is
 proven and recorded with its evidence.

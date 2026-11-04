@@ -358,6 +358,8 @@ def _load_entry_data(entries, tree, replacements):
     for e in entries:
         if e.kind != 'file':
             continue
+        if e.data is not None:      # --add entries already carry their bytes
+            continue
         if e.name in replacements:
             with open(replacements[e.name], 'rb') as f:
                 e.data = f.read()
@@ -531,6 +533,25 @@ def build(args):
             raise SystemExit('ifs_build: --replace expects NAME=PATH')
         name, path = r.split('=', 1)
         replacements[name] = path
+
+    # --add: new files that have no reference in the listing (BB10 backport).
+    existing = {e.name for e in entries}
+    for spec in getattr(args, 'add', None) or []:
+        if '=' not in spec:
+            raise SystemExit('ifs_build: --add expects NAME=PATH')
+        name, path = spec.split('=', 1)
+        name = name.lstrip('/')
+        if name in existing:
+            raise SystemExit('ifs_build: --add %s already exists' % name)
+        with open(path, 'rb') as f:
+            data = f.read()
+        st = os.stat(path)
+        entries.append(Entry(name, 'file', size=len(data),
+                             mode=st.st_mode & 0o7777, gid=0, uid=0,
+                             mtime=int(st.st_mtime) & 0xFFFFFFFF,
+                             data=data))
+        entries[-1].has_meta = True
+        existing.add(name)
 
     _load_entry_data(entries, args.tree, replacements)
     _assign_inodes(entries)
@@ -769,6 +790,8 @@ def main(argv):
     s.add_argument('--out', required=True)
     s.add_argument('--replace', action='append', metavar='NAME=PATH',
                    help='replace one image path (repeatable)')
+    s.add_argument('--add', action='append', metavar='NAME=PATH',
+                   help='add a NEW file (BB10 backport; repeatable)')
     s.add_argument('--repack', action='store_true',
                    help='ignore reference offsets and pack data')
     s.add_argument('--keep-compress-flag', action='store_true',
