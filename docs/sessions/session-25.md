@@ -334,6 +334,17 @@ with the way back packed.
 * **"Early BB10 10.0.9.1103 already runs on the PlayBook"** — operator-supplied,
   not reproduced; still the strongest existence proof for the whole goal.
 
+## Wrap-up (operator)
+
+At the end of the session the operator **parked the BB10 port and the PlayBook
+OS image (IFS/RCFS) work** for someone else to follow, and asked for
+`HANDOFF.md` to return to the **Linux bring-up**.  The unit is left in the
+ramloader with the way back packed; the Linux kickoff is `HANDOFF.md`, and the
+Linux work order is `ROADMAP.md` item 6 (the factory top-up) → item 4
+(brightness) → item 5 (real userland / hd3) → item 7 (packaging).  The BB10
+documents (`BB10-PORT.md`, `BB10-IMAGE-GUIDE.md`) and reports 171/172 stay in
+the tree for whoever resumes it.
+
 ## Artefacts produced
 
 * `docs/project/BB10-PORT.md` — §1 SoC check (Z10 SKU/part correction, sources);
@@ -348,7 +359,11 @@ with the way back packed.
   one bad chunk; use `tools/rcfs_extract.py`; the container is `r-c-f-s`).
 * `docs/project/DECISIONS.md` — **§22**: route B (backport the Winchester
   support into 10.3), with the evidence, the reseal/repack constraint and the
-  open questions.
+  open questions; **§23** the `/base` blocklist edit; **§24** the test result
+  and the parked status.
+* `docs/project/HANDOFF.md` — rewritten at the operator's request as the
+  **session-26 Linux-work kickoff** (BB10/IFS parked), with the physical state
+  (ramloader, counter 45, way back packed) and the restore command.
 * `docs/sessions/NUMBERING.md` — session 25 row and anchor.
 * `docs/sessions/session-25.md` — this note.
 * `local/work/bb10/backport-manifest.txt` — the route-B file list with sizes and

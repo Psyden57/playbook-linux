@@ -569,6 +569,11 @@ bytes, signature, COMPLETE).
 (`local/work/back-1917.signed`) is packed and must be flashed from the
 ramloader.  An agent never writes RPMB; no flash without the operator.
 
+**Parked (operator, session 25 end).**  The BB10 port and the PlayBook OS image
+(IFS/RCFS) work are set aside for someone else to follow; `HANDOFF.md` returns
+to the Linux bring-up.  When BB10 resumes, this control is the first step; its
+documents (`BB10-PORT.md`, `BB10-IMAGE-GUIDE.md`, reports 171/172) stay.
+
 ---
 
 These were the open policy questions.  The licence and visibility are decided

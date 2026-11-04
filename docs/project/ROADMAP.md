@@ -3,9 +3,10 @@
 Ordered. Each item states the evidence that would close it, so "done" is not a
 matter of opinion. Items 1–3 and 3a–3d are closed (the display works). The
 1917 image work is complete and lives in `IFS-REBUILD.md` /
-`IMAGE-REBUILD-GUIDE.md`. **The next goal is item 8, a BB10 image on the
-PlayBook** (operator, 2026-11-03); item 5's region-1 half is done, and items
-4, 6–7 follow.
+`IMAGE-REBUILD-GUIDE.md`. **Item 8 (BB10) and the image work are parked by the
+operator (session 25 end)** — their documents stay, but the work returns to
+the Linux items: **item 6 (the factory-counter top-up) is the blocker, then
+items 4, 5 and 7.**
 
 ## 1. Force the complete QNX timing set as ONE experiment — **DONE, negative**
 
@@ -193,7 +194,7 @@ Nothing about tooling, licence or distribution has been decided
 the image byte-for-byte (same CRC) and installs it on a unit without manual
 steps.
 
-## 8. A BB10 image on the PlayBook — **NEXT (operator, 2026-11-03)**
+## 8. A BB10 image on the PlayBook — **PARKED (operator, session 25 end)**
 
 **Goal: boot BB10 on the PlayBook.**  Target: **Z10 10.3.03.2049 STL100-1**
 (OMAP4470), supplied as components; the known-running

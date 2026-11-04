@@ -32,11 +32,14 @@ successful boot spends one, and a reset-looping image can spend several per
 minute.  The operator's `/accounts/devuser/startup.sh` is not on the BB10 UFS,
 so nothing on this set tops it up.
 
-**Next:** flash the 1917 way back to stabilise the unit and refill the counter;
-then continue BB10 offline.  The step-by-step for BB10 image editing is
-**`BB10-IMAGE-GUIDE.md`**.  The obvious compatibility control is the
-**10.0.9.1103 winchester set** (reported to run on the PlayBook), resealed to
-`os_type 6` + CRC, against 10.3's failure.
+**Next:** flash the 1917 way back to stabilise the unit and refill the counter,
+then **resume the Linux work** (`HANDOFF.md` is the Linux kickoff).  **The BB10
+port and the PlayBook OS image (IFS/RCFS) work are parked by the operator**
+(session 25 end): their documents stay (`BB10-PORT.md`,
+`BB10-IMAGE-GUIDE.md`, `IFS-REBUILD.md`, `IMAGE-REBUILD-GUIDE.md`) but are not
+the current work.  The ordered Linux work is `ROADMAP.md`: item 6 (the factory
+top-up) is the blocker, then item 4 (brightness), item 5 (real userland and the
+hd3 cut-over) and item 7 (packaging).
 
 **Bench:** unit in the ramloader, `lsusb` = `0fca:8001`; the device password is
 `0000` (sent once, never retried).  The door/`devuser` path is unavailable
