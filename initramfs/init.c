@@ -482,6 +482,49 @@ out:
 	close(bfd);
 }
 
+/* ---- the factory boot budget -------------------------------------------
+ * Every factory/CRC boot spends one BOOTCTR_FCTRY unit, and before session 27
+ * only a booted TabletOS put one back.  Linux does its own top-up now
+ * (report 175): /pbrpmb reads the record and, when the value has fallen below
+ * the threshold, unseals the block, patches the four bytes to 0x32, re-seals
+ * with the monitor, verifies the seal round-trips, and writes exactly ONE
+ * frame before unsealing the read-back to check it.
+ *
+ * 0x1E (30) leaves room for a reset loop to be noticed before the budget can
+ * reach 0, which is the hard lock.  One attempt, never a loop: a failed RPMB
+ * write does not return (SAFETY.md §2).  The tool logs its own outcome to
+ * /dev/kmsg, so it runs with stdio on /dev/null.
+ */
+static void topup_try(void)
+{
+	pid_t pid;
+	int st = 0, fd;
+
+	if (access("/pbrpmb", X_OK) != 0) {
+		kf("PLAYBOOK: topup: /pbrpmb missing\n");
+		return;
+	}
+	pid = fork();
+	if (pid < 0) {
+		kf("PLAYBOOK: topup: fork failed: %s\n", strerror(errno));
+		return;
+	}
+	if (pid == 0) {
+		fd = open("/dev/null", O_RDWR);
+		if (fd >= 0) {
+			dup2(fd, 1);
+			dup2(fd, 2);
+			if (fd > 2)
+				close(fd);
+		}
+		execl("/pbrpmb", "pbrpmb", "topup", "0x1e", (char *)NULL);
+		_exit(127);
+	}
+	waitpid(pid, &st, 0);
+	kf("PLAYBOOK: topup: /pbrpmb topup 0x1E exited %d\n",
+	   WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+}
+
 int main(void)
 {
 	char b[128];
@@ -552,6 +595,14 @@ int main(void)
 	} else {
 		rlog("PB: console pipe() FAILED");
 	}
+
+	/*
+	 * The factory budget: this boot spent one unit, so top it back up if it
+	 * has fallen below the threshold.  After the console (so its log is
+	 * visible outside the ring) and before the rootfs, so a wedged root does
+	 * not cost us the write.
+	 */
+	topup_try();
 
 	/*
 	 * With the gadget up (/dev/ttyGS0 exists) try the region-1 Linux root.

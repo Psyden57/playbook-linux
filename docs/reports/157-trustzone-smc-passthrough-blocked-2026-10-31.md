@@ -116,3 +116,29 @@ independent of our tool.
 * The reference is otherwise fine; no RPMB/NVRAM/media writes.
 * The read-only block-`0x3B` pair from report 156 remains the validation input
   for the armed `pbmon` route.
+
+---
+
+## Addendum — re-tested on 2.1.0.1917 with root (session 27, 2026-11-06)
+
+The operator enabled root ssh on the 1917 set, so the probe was re-run on that
+build (the earlier test was the 2.0.0.4869 restored root).
+
+* `/dev/trustzone` exists and `trustzone-omap4` is **alive** (pid 16390) — it
+  does not crash at boot here, unlike the 4869 root.
+* `tools/qnx-tzsmc.c` builds and runs; `tzsmc addr` prints its four pages with
+  `mem_offset64() == PTINFO_paddr` (`0x...`), so the tool side is fine.
+* `tzsmc nonce` (`0x12`) → **`devctl` returns 25 (`ENOTTY`)**,
+  `retval` stays `0x7fffffff`, the buffer is untouched, and **the resmgr
+  survives**.  No segfault, no `libc+0x91f8` fault.
+* **Static reason:** the 1917 `trustzone-omap4` (65 304 B) does **not** contain
+  the devctl constants at all.  The 4869 binary (61 208 B) has
+  `e3003501`/`e34c3028` (`movw/movt r3,#0xC0280501`) at `0x8A5C`/`0x8A60` and
+  `movw r3,#0x502` at `0x8A6C`; the 1917 build has **none** of `0xC0280501`,
+  `0xC0280502` or `0xC0285001` in any encoding (scanned as little-endian words
+  and as ARM/Thumb immediates).
+
+So on 1917 the raw SMC pass-through is **not present**, rather than present and
+faulting: `ENOTTY` is the whole story.  The route stays closed for this unit's
+current OS, and the negative is now explained rather than unexplained.  The
+transform work of report 175 does not need it.

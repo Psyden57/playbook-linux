@@ -67,27 +67,33 @@
 #include <linux/uaccess.h>
 #include <linux/delay.h>
 
-#define PBMON_LEN 0xE0
+#define PBMON_BLK 0xE0		/* 224-byte record block (plaintext/ciphertext) */
+#define PBMON_SEALED 0x100	/* 256 bytes on media: 224 ciphertext + 32 tag */
 #define PBMON_PAGE 0x1000
 
 /*
- * Page layout, mirroring the live QNX page (report 143's dump):
- *   +0x020 key        the 0x33 preload slot QNX keeps the key in
- *   +0x400 command pages (0x33, 0x2F, 0x31, 0x12)
- *   +0x480 descriptor
+ * Page layout, mirroring the live QNX page (report 143's dump) with the
+ * extra slots the bootloader's two-stage transform addresses:
+ *   +0x020 keyA       the 0x2E descriptor's digest key
+ *   +0x060 keyB       the 0x33 preload key (used by 0x2F and 0x2E)
+ *   +0x400 command pages (0x33, 0x2F, 0x31, 0x2E)
+ *   +0x480 descriptor (0x2E: 8 words, 0x2F: 0x30 bytes)
  *   +0x500 nonce buffer
- *   +0x700 input block (plaintext or ciphertext)
- *   +0x800 output block
- * The input must NOT overlap +0x020: if the monitor takes the key from the
- * fixed slot rather than the pointer, an input at +0x000 would hand it 16
- * bytes of ciphertext as the key — a ret=0 with garbage output, which is
- * exactly what the first identity-era seal test produced.
+ *   +0x600 0x2E digest output (32 bytes)
+ *   +0x700 input block (224 or 256)
+ *   +0x800 output block (224 or 256)
+ * The input must NOT overlap +0x020/+0x060: if the monitor takes the key from
+ * a fixed slot rather than the pointer, an input at +0x000 would hand it
+ * ciphertext as the key — a ret=0 with garbage output, which is exactly what
+ * the first identity-era seal test produced.
  */
 #define OFF_IN   0x700
 #define OFF_OUT  0x800
+#define OFF_TAG  0x600
 #define OFF_DESC 0x480
 #define OFF_CMD  0x400
 #define OFF_KEY  0x020
+#define OFF_KEY2 0x060
 
 #define CM2_PHYS 0x4A009000
 #define CM2_L4SEC_CLKSTCTRL 0x580
@@ -111,38 +117,53 @@
 #define PB_ORACLE_MAX 7
 
 /*
- * The 16-byte key the 0x33 service preloads, from the live page at +0x20
- * (report 144).  /dev/pbkey overrides it so the key/framing matrix can be run
- * in one boot; the default is QNX's value, restored by a reboot.
+ * The two key slots, and they are SEPARATE slots in the bootloader too:
+ * the 0x2E wrapper takes its digest key from the descriptor (page+0x20 there),
+ * while both wrappers preload the 0x33 slot (page+0x60) for the engine.
+ *
+ *   keyA — the descriptor's digest key.  PROVEN to be seed[0:16]: the block
+ *          tag is HMAC-SHA256(seed[0:16], C[0:0xE0]), verified offline and now
+ *          reproduced by the monitor on live media (session 27: unseal returns
+ *          the plaintext exactly when keyA = seed[0:16]).
+ *   keyB — the 0x33 preload, i.e. the engine's key input for the 0x2F cipher.
+ *          Content still unknown; the default follows QNX's own read path,
+ *          which preloads [obj+0x30] = the seed.
+ *
+ * They must be settable independently, or the cipher's key can never be varied
+ * while the tag stays valid — that is the whole point of /dev/pbkeys.
+ *
+ * The preload length is 16, not 32: the bootloader hardcodes 16, and a 32-byte
+ * preload makes the monitor refuse the call (-EIO) — measured, session 27.
  */
-static u8 pb_xf_key[16] = {
+static u8 pb_key_a[16] = {
+	0x15, 0x00, 0x00, 0x01, 0x4d, 0x43, 0x47, 0x41,
+	0x46, 0x41, 0x10, 0x00, 0x2b, 0xe1, 0x1d, 0xa8,
+};
+/* the measured cipher key, page+0x20 of the reference's rpmmb page */
+static u8 pb_key_b[16] = {
 	0x86, 0x78, 0x7c, 0x2a, 0x63, 0x2f, 0xbe, 0x16,
 	0x48, 0xec, 0xab, 0xa6, 0xd8, 0x84, 0x01, 0x09,
 };
-
 /*
  * ABI knobs for the known-pair sweep (/dev/pbctl: four bytes
  * {op, kek, desc_mode, key_mode}).
  *
- * op         descriptor op field (rpmb-omap4 accepts 0 and 2)
- * kek        which select_kek(0x31) precedes the transform
- *            (0 = none, 1 = index 0, 2 = index 1 — its read path uses 1)
- * desc_mode  addresses written into the descriptor: 0 = identity,
- *            1 = phys - 0x10000000 (what QNX puts there, measured)
- * key_mode   the 0x33 key pointer: 0 = identity, 1 = phys - 0x10000000
- *
- * The measured convention (session 20, live QNX page): the command page and
- * its arguments are TRUE physical addresses, while the descriptor's data/out
- * fields are stored 0x10000000 LOWER — the monitor adds 0x10000000 back when
- * it hands those to the crypto engine.  Passing identity addresses there made
- * the engine read the wrong buffer, which is why ret=0 came with garbage.
+ * op         the 0x2F descriptor's u16 op field (0 on this device)
+ * kek        which select_kek(0x31) opens the session
+ *            (0 = none — the DEFAULT, because id 1 breaks the transform;
+ *            1 = id 0, harmless; 2 = id 1, which changes the plaintext)
+ * klen_sel   reserved: the preload is 16 bytes and a 32-byte one is refused
+ *            by the monitor (-EIO, measured session 27)
+ * key_mode   reserved: the monitor's address view is identity (report 147)
  */
 static u8 pb_op = 0;
-static u8 pb_kek = 2;
+static u8 pb_kek;		/* 0 = no 0x31: the measured-good default */
 static u8 pb_desc_mode;
 static u8 pb_key_mode;
+static u32 pb_dom = 5;	/* monitor domain for the transform: 5 = bootloader, 4 = QNX */
+static u32 pb_2e_op = 3;	/* the 0x2E digest descriptor's op (both call sites) */
 
-/* block 0x43: plaintext from rpmb-omap4 page+0x700, ciphertext from media */
+/* the reference's known pair (block 0x3B): plaintext and sealed 256 bytes */
 #include "pbmon-pair.h"
 /* the whole captured RpmbInit page, for the key-window sweep */
 #include "pbmon-page.h"
@@ -155,7 +176,8 @@ static char pb_rep[256];
 static struct device *pb_dev;
 static struct platform_device *pb_pdev;
 static DEFINE_MUTEX(pb_lock);
-static u8 pb_out[PBMON_LEN];
+static u8 pb_out[PBMON_SEALED];
+static size_t pb_out_len;
 static bool pb_out_valid;
 
 static const u32 cm2_offs[6] = {
@@ -255,14 +277,10 @@ static inline u32 pb_mon_pa(u32 pa)
 }
 
 /*
- * Descriptor data/out addresses.  QNX stores them as phys - 0x10000000 (the
- * monitor's engine view) while the command page and its arguments are true
- * physical addresses; pb_desc_mode selects which form we write.
+ * The transform now uses identity physical addresses everywhere (report 147),
+ * so the old "descriptor engine view" helper is gone with the bias.  The
+ * pbctl address-mode bytes are kept in the ABI but no longer change anything.
  */
-static u32 pb_eng_addr(u32 pa)
-{
-	return pb_desc_mode ? pb_mon_pa(pa) : pa;
-}
 
 /*
  * The 0x12 address oracle (report 146 "what to try next", report 145 §4.3).
@@ -380,128 +398,250 @@ static int pb_oracle(unsigned n)
 }
 
 /*
- * The transform path.  Everything the monitor touches lives in the reserved
- * low page at PB_LOW_PA and is addressed by its true physical address: report
- * 147 pinned the monitor's view as identity, with a reachable window that
- * excludes 0xBF040000 (where a coherent allocation lands) and includes
- * 0xA0200000.  The session-19 bias is gone.
+ * The two-stage transform, transcribed from the bootloader with the corrected
+ * load base (report 173: the arm9000 section runs at 0x80000000 from media
+ * 0x9000, so the seal is 0x80007F58 and the unseal 0x80008048):
+ *
+ *   seal   : 0x31(id 1) -> 0x33(keyB) -> 0x2F encrypt 224
+ *            -> 0x33(keyB) -> 0x2E digest (32) -> 0x31(id 0)
+ *   unseal : 0x31(id 1) -> 0x33(keyB) -> 0x2E digest of the ciphertext
+ *            -> memcmp(digest, block tag)  (mismatch = tamper, abort)
+ *            -> 0x33(keyB) -> 0x2F decrypt 224 -> 0x31(id 0)
+ *
+ * 0x2F is the block cipher, not a digest: its descriptor carries src/len and
+ * dst/len (224 in, 224 out) and its +0x04 byte is the direction (1 = encrypt,
+ * 0 = decrypt).  It has NO key field — its key is the 0x33 preload (keyB).
+ * 0x2E is the digest: {u16 op=3, u16 0, src, srclen, dst, dstlen, key, keylen}
+ * with dstlen 32, its second SMC argument is the constant 1, and its key is
+ * keyA.  Reports 150/151 label these the other way round; the bytes do not.
+ *
+ * Everything the monitor touches lives in the reserved low page at PB_LOW_PA
+ * and is addressed by its true physical address (report 147).
  */
+static void pb_zero_desc(void)
+{
+	memset(pb_low + OFF_DESC, 0, 0x30);
+}
+
+/* 0x2F: the block cipher, cd. dir 1 = encrypt (seal), 0 = decrypt (unseal) */
+static void pb_desc_2f(u32 dir, u32 src, u32 dst, u32 len)
+{
+	u32 *d = (u32 *)(pb_low + OFF_DESC);
+
+	pb_zero_desc();
+	((u16 *)d)[0] = 1;
+	((u16 *)d)[1] = 0x0400 | pb_op;
+	((u8 *)d)[4] = dir ? 1 : 0;
+	((u8 *)d)[5] = 0;
+	d[3] = len;			/* +0x0c */
+	d[4] = 0;			/* +0x10 handle (monitor-written) */
+	d[5] = 0;			/* +0x14 u16 op, u16 pad */
+	d[6] = src;			/* +0x18 */
+	d[7] = len;			/* +0x1c */
+	d[8] = dst;			/* +0x20 */
+	d[9] = len;			/* +0x24 */
+	d[10] = 0;			/* +0x28 */
+	d[11] = 0;			/* +0x2c */
+}
+
+/* 0x2E: the digest, 224 bytes -> 32 */
+static void pb_desc_2e(u32 src, u32 srclen, u32 dst, u32 dstlen,
+		       u32 key, u32 keylen)
+{
+	u32 *d = (u32 *)(pb_low + OFF_DESC);
+
+	pb_zero_desc();
+	((u16 *)d)[0] = pb_2e_op;
+	((u16 *)d)[1] = 0;
+	d[1] = src;			/* +0x04 */
+	d[2] = srclen;			/* +0x08 */
+	d[3] = dst;			/* +0x0c */
+	d[4] = dstlen;			/* +0x10 */
+	d[5] = key;			/* +0x14 */
+	d[6] = keylen;			/* +0x18 */
+}
+
 static int pb_xform(const u8 *in, u8 *out, int dir)
 {
 	const u32 base = PB_LOW_PA;
-	u32 *desc = (u32 *)(pb_low + OFF_DESC);
 	u32 *cmd33 = (u32 *)(pb_low + OFF_CMD);
 	u32 *cmd2f = (u32 *)(pb_low + OFF_CMD + 0x10);
 	u32 *cmd31 = (u32 *)(pb_low + OFF_CMD + 0x20);
-	u32 *cmd12 = (u32 *)(pb_low + OFF_CMD + 0x30);
-	u32 r12, r31, r33, r2f;
+	u32 *cmd2e = (u32 *)(pb_low + OFF_CMD + 0x30);
+	u32 in_pa = base + OFF_IN, out_pa = base + OFF_OUT;
+	u32 tag_pa = base + OFF_TAG, keya_pa = base + OFF_KEY;
+	u32 keyb_pa = base + OFF_KEY2;
+	u32 r31 = 0, r33 = 0, r2e = 0, r2f = 0;
+	int ret = 0;
 
-	memcpy(pb_low + OFF_IN, in, PBMON_LEN);
-	memcpy(pb_low + OFF_KEY, pb_xf_key, sizeof(pb_xf_key));
-
-	memset(desc, 0, 0x160);
-	((u16 *)desc)[0] = 1;
-	((u16 *)desc)[1] = pb_op | 0x0400;	/* op | key33 preload */
-	((u8 *)desc)[4] = (u8)dir;
-	((u8 *)desc)[5] = 0;
-	desc[3] = PBMON_LEN;			/* +0x0c */
-	desc[4] = 0;				/* +0x10 */
-	desc[5] = 0;				/* +0x14 */
-	desc[6] = pb_eng_addr(base + OFF_IN);	/* +0x18 data */
-	desc[7] = PBMON_LEN;			/* +0x1c */
-	desc[8] = pb_eng_addr(base + OFF_OUT);	/* +0x20 out */
-	desc[9] = PBMON_LEN;			/* +0x24 */
+	memcpy(pb_low + OFF_KEY, pb_key_a, sizeof(pb_key_a));
+	memcpy(pb_low + OFF_KEY2, pb_key_b, sizeof(pb_key_b));
+	memcpy(pb_low + OFF_IN, in, dir ? PBMON_BLK : PBMON_SEALED);
+	memset(pb_low + OFF_TAG, 0xaa, 32);
+	memset(pb_low + OFF_OUT, 0xaa, PBMON_SEALED);
+	pb_zero_desc();
 
 	cmd33[0] = 2;
-	cmd33[1] = pb_key_mode ? pb_mon_pa(base + OFF_KEY) : base + OFF_KEY;
-	cmd33[2] = sizeof(pb_xf_key);
+	cmd33[1] = keyb_pa;
+	cmd33[2] = sizeof(pb_key_b);
 	cmd2f[0] = 1;
 	cmd2f[1] = base + OFF_DESC;
 	cmd31[0] = 1;
-	cmd31[1] = 1;				/* 0x31 index 1 */
-	cmd12[0] = 2;
-	cmd12[1] = base + 0x500;
-	cmd12[2] = 16;
-	memset(pb_low + 0x500, 0xaa, 16);
+	cmd31[1] = 1;				/* the bootloader's open id */
+	cmd2e[0] = 2;				/* {desc, 1} */
+	cmd2e[1] = base + OFF_DESC;
+	cmd2e[2] = 1;
 
 	mb();
 	pb_clocks_on();
 	mb();
-	r12 = pb_smc(0x12, 0, 4, base + OFF_CMD + 0x30);
-	mb();
+
 	if (pb_kek) {
-		cmd31[1] = pb_kek - 1;		/* 1 = index 0, 2 = index 1 */
+		cmd31[1] = pb_kek - 1;		/* 1 = id 0, 2 = id 1 */
 		mb();
-		r31 = pb_smc(0x31, 0, 4, base + OFF_CMD + 0x20);
+		r31 = pb_smc(0x31, 0, pb_dom, base + OFF_CMD + 0x20);
 		mb();
-	} else {
-		r31 = 0;
+		/*
+		 * The bootloader aborts here when 0x31 fails.  We record it and
+		 * carry on: a refused open is worth a diagnostic line, and the
+		 * 0x33/0x2E/0x2F returns below still say what happened.
+		 */
 	}
-	r33 = pb_smc(0x33, 0, 4, base + OFF_CMD);
-	mb();
-	if (r33 == 0) {
-		r2f = pb_smc(0x2F, 0, 4, base + OFF_CMD + 0x10);
+
+	if (dir) {
+		/* seal: plaintext -> ciphertext, then digest the ciphertext */
+		pb_desc_2f(1, in_pa, out_pa, PBMON_BLK);
 		mb();
+		r33 = pb_smc(0x33, 0, pb_dom, base + OFF_CMD);
+		if (r33) {
+			ret = -EIO;
+			goto out_close;
+		}
+		mb();
+		r2f = pb_smc(0x2F, 0, pb_dom, base + OFF_CMD + 0x10);
+		mb();
+		if (r2f) {
+			ret = -EIO;
+			goto out_close;
+		}
+		pb_desc_2e(out_pa, PBMON_BLK, tag_pa, 32, keya_pa, 16);
+		mb();
+		r33 = pb_smc(0x33, 0, pb_dom, base + OFF_CMD);
+		if (r33) {
+			ret = -EIO;
+			goto out_close;
+		}
+		mb();
+		r2e = pb_smc(0x2E, 0, pb_dom, base + OFF_CMD + 0x30);
+		mb();
+		if (r2e) {
+			ret = -EIO;
+			goto out_close;
+		}
+		memcpy(out, pb_low + OFF_OUT, PBMON_BLK);
+		memcpy(out + PBMON_BLK, pb_low + OFF_TAG, 32);
 	} else {
-		r2f = 0xffffffff;
+		/* unseal: digest the ciphertext, check the tag, then decrypt */
+		pb_desc_2e(in_pa, PBMON_BLK, tag_pa, 32, keya_pa, 16);
+		mb();
+		r33 = pb_smc(0x33, 0, pb_dom, base + OFF_CMD);
+		if (r33) {
+			ret = -EIO;
+			goto out_close;
+		}
+		mb();
+		r2e = pb_smc(0x2E, 0, pb_dom, base + OFF_CMD + 0x30);
+		mb();
+		if (r2e) {
+			ret = -EIO;
+			goto out_close;
+		}
+		if (memcmp(pb_low + OFF_TAG, in + PBMON_BLK, 32)) {
+			ret = -EBADMSG;
+			goto out_close;
+		}
+		pb_desc_2f(0, in_pa, out_pa, PBMON_BLK);
+		mb();
+		r33 = pb_smc(0x33, 0, pb_dom, base + OFF_CMD);
+		if (r33) {
+			ret = -EIO;
+			goto out_close;
+		}
+		mb();
+		r2f = pb_smc(0x2F, 0, pb_dom, base + OFF_CMD + 0x10);
+		mb();
+		if (r2f) {
+			ret = -EIO;
+			goto out_close;
+		}
+		memcpy(out, pb_low + OFF_OUT, PBMON_BLK);
 	}
-	/* QNX's block path closes with select_kek(0) (rpmb-omap4 0x2bd0) */
+
+out_close:
+	/* the bootloader closes the session with 0x31(id 0) */
 	if (pb_kek) {
 		cmd31[1] = 0;
 		mb();
-		pb_smc(0x31, 0, 4, base + OFF_CMD + 0x20);
+		pb_smc(0x31, 0, pb_dom, base + OFF_CMD + 0x20);
 		mb();
 	}
 	pb_clocks_off();
 
-	pr_err("pbmon: xform dir=%d op=%u kek=%u page=0x%08x 0x12=%u 0x31=%u 0x33=%u 0x2F=%u nonce=%*phN\n",
-	       dir, pb_op, pb_kek, base, r12, r31, r33, r2f, 16,
-	       (u8 *)(pb_low + 0x500));
-	if (r33 != 0 || r2f != 0)
-		return -EIO;
-	memcpy(out, pb_low + OFF_OUT, PBMON_LEN);
-	return 0;
+	pr_debug("pbmon: xform dir=%d op=%u op2e=%u kek=%u dom=%u page=0x%08x 0x31=%u 0x33=%u 0x2E=%u 0x2F=%u ret=%d\n",
+		 dir, pb_op, pb_2e_op, pb_kek, pb_dom, base, r31, r33, r2e,
+		 r2f, ret);
+	return ret;
 }
 
 static int __init pb_selftest(void)
 {
-	u8 out[PBMON_LEN];
+	u8 out[PBMON_SEALED];
 	int u = -1, s = -1;
 
-	u = pb_xform(pb_c67, out, 0);
-	pr_info("pbmon: unseal(C67) -> %s\n",
-		u ? "smc error" : (memcmp(out, pb_p67, PBMON_LEN) ?
-				  "MISMATCH" : "PASS"));
-	if (u == 0 && memcmp(out, pb_p67, PBMON_LEN))
+	u = pb_xform(pb_c3b, out, 0);
+	pr_info("pbmon: unseal(C3b) -> %s\n",
+		u ? (u == -EBADMSG ? "TAG MISMATCH" : "smc error") :
+		    (memcmp(out, pb_p3b, PBMON_BLK) ? "MISMATCH" : "PASS"));
+	if (u == 0 && memcmp(out, pb_p3b, PBMON_BLK))
 		print_hex_dump(KERN_INFO, "pbmon: unsealed ", DUMP_PREFIX_NONE,
 			       16, 1, out, 32, false);
 
-	s = pb_xform(pb_p67, out, 1);
-	pr_info("pbmon: seal(P67)   -> %s\n",
-		s ? "smc error" : (memcmp(out, pb_c67, PBMON_LEN) ?
+	s = pb_xform(pb_p3b, out, 1);
+	pr_info("pbmon: seal(P3b)   -> %s\n",
+		s ? "smc error" : (memcmp(out, pb_c3b, PBMON_SEALED) ?
 				  "MISMATCH" : "PASS"));
-	if (s == 0 && memcmp(out, pb_c67, PBMON_LEN))
+	if (s == 0 && memcmp(out, pb_c3b, PBMON_SEALED))
 		print_hex_dump(KERN_INFO, "pbmon: sealed ", DUMP_PREFIX_NONE,
 			       16, 1, out, 32, false);
 
-	return (u == 0 && s == 0 && !memcmp(out, pb_c67, PBMON_LEN)) ? 0 : -EIO;
+	return (u == 0 && s == 0 && !memcmp(out, pb_c3b, PBMON_SEALED)) ? 0
+								       : -EIO;
 }
 
+/*
+ * The unseal interface carries 256 bytes (224 ciphertext + its 32-byte tag)
+ * and yields 224; the seal takes the 224-byte plaintext and yields the whole
+ * 256-byte media block.  A tag mismatch is -EBADMSG, so userspace can tell a
+ * wrong key/descriptor (EIO) from a block that simply does not authenticate.
+ */
 static int pb_xform_user(const char __user *ubuf, size_t n, int dir)
 {
-	u8 in[PBMON_LEN];
+	u8 in[PBMON_SEALED];
+	size_t want = dir ? PBMON_BLK : PBMON_SEALED;
 	int ret;
 
-	if (n != PBMON_LEN)
+	if (n != want)
 		return -EINVAL;
-	if (copy_from_user(in, ubuf, PBMON_LEN))
+	if (copy_from_user(in, ubuf, want))
 		return -EFAULT;
 	mutex_lock(&pb_lock);
 	ret = pb_xform(in, pb_out, dir);
-	if (ret == 0)
+	if (ret == 0) {
 		pb_out_valid = true;
+		pb_out_len = dir ? PBMON_SEALED : PBMON_BLK;
+	}
 	mutex_unlock(&pb_lock);
-	return ret ? ret : (int)n;
+	return ret ? ret : (int)want;
 }
 
 static ssize_t pbseal_write(struct file *f, const char __user *u, size_t n,
@@ -527,8 +667,8 @@ static ssize_t pb_read(struct file *f, char __user *u, size_t n, loff_t *o)
 		mutex_unlock(&pb_lock);
 		return -EAGAIN;
 	}
-	if (n > PBMON_LEN)
-		n = PBMON_LEN;
+	if (n > pb_out_len)
+		n = pb_out_len;
 	ret = copy_to_user(u, pb_out, n) ? -EFAULT : (int)n;
 	mutex_unlock(&pb_lock);
 	return ret;
@@ -549,16 +689,17 @@ static struct miscdevice pbunseal_misc = {
 };
 
 /*
- * /dev/pbkey: read or replace the transform key (16 bytes).  Test-only knob
- * for the key/framing matrix; a reboot restores QNX's value.
+ * /dev/pbkey: read or replace keyA, the 0x2E descriptor's digest key (16
+ * bytes).  Test-only knob; a reboot restores the reference's seed[0:16].
+ * /dev/pbkeys does both slots at once: 32 bytes {keyA, keyB}.
  */
 static ssize_t pbkey_write(struct file *f, const char __user *u, size_t n,
 			   loff_t *o)
 {
-	if (n != sizeof(pb_xf_key))
+	if (n != sizeof(pb_key_a))
 		return -EINVAL;
 	mutex_lock(&pb_lock);
-	if (copy_from_user(pb_xf_key, u, n)) {
+	if (copy_from_user(pb_key_a, u, n)) {
 		mutex_unlock(&pb_lock);
 		return -EFAULT;
 	}
@@ -570,9 +711,9 @@ static ssize_t pbkey_read(struct file *f, char __user *u, size_t n, loff_t *o)
 {
 	if (*o != 0)
 		return 0;
-	if (n > sizeof(pb_xf_key))
-		n = sizeof(pb_xf_key);
-	if (copy_to_user(u, pb_xf_key, n))
+	if (n > sizeof(pb_key_a))
+		n = sizeof(pb_key_a);
+	if (copy_to_user(u, pb_key_a, n))
 		return -EFAULT;
 	*o += n;
 	return n;
@@ -583,6 +724,45 @@ static const struct file_operations pbkey_fops = {
 };
 static struct miscdevice pbkey_misc = {
 	.minor = MISC_DYNAMIC_MINOR, .name = "pbkey", .fops = &pbkey_fops,
+};
+
+static ssize_t pbkeys_write(struct file *f, const char __user *u, size_t n,
+			    loff_t *o)
+{
+	u8 v[2 * 16];
+
+	if (n != sizeof(v))
+		return -EINVAL;
+	if (copy_from_user(v, u, n))
+		return -EFAULT;
+	mutex_lock(&pb_lock);
+	memcpy(pb_key_a, v, 16);
+	memcpy(pb_key_b, v + 16, 16);
+	mutex_unlock(&pb_lock);
+	return n;
+}
+
+static ssize_t pbkeys_read(struct file *f, char __user *u, size_t n, loff_t *o)
+{
+	u8 v[2 * 16];
+
+	if (*o != 0)
+		return 0;
+	memcpy(v, pb_key_a, 16);
+	memcpy(v + 16, pb_key_b, 16);
+	if (n > sizeof(v))
+		n = sizeof(v);
+	if (copy_to_user(u, v, n))
+		return -EFAULT;
+	*o += n;
+	return n;
+}
+
+static const struct file_operations pbkeys_fops = {
+	.owner = THIS_MODULE, .write = pbkeys_write, .read = pbkeys_read,
+};
+static struct miscdevice pbkeys_misc = {
+	.minor = MISC_DYNAMIC_MINOR, .name = "pbkeys", .fops = &pbkeys_fops,
 };
 
 /* /dev/pbctl: four bytes {op, kek, desc_mode, key_mode} for the ABI sweep */
@@ -626,62 +806,63 @@ static struct miscdevice pbctl_misc = {
 };
 
 /*
- * The known-pair test: unseal the captured media bytes of block 0x43 and
- * compare with the plaintext captured from QNX's page buffer, then seal the
- * plaintext and compare with the media.  This is the gate from report 144 §5:
- * if the seal reproduces the device's bytes, the ABI, the key and the framing
- * are all right.  The /dev/pbkey knob makes it a key candidate sweep.
+ * The known-pair test: unseal the reference's captured block-0x3B bytes and
+ * compare with its plaintext, then seal the plaintext and compare the two
+ * halves of the result separately — the ciphertext isolates the 0x2F stage,
+ * the tag the 0x2E stage.  `p=` is the first 4 bytes of the unsealed
+ * plaintext: comparing it across key candidates shows whether the cipher key
+ * is being used at all or whether the engine holds its own.
  */
 static int pb_pair(char *rep, size_t sz)
 {
-	u8 out[PBMON_LEN];
-	int u, s, uok, sok;
+	u8 out[PBMON_SEALED], p0 = 0, p1 = 0, p2 = 0, p3 = 0;
+	int u, s, uok, ct, tag;
 
-	u = pb_xform(pb_c67, out, 0);
-	uok = (u == 0 && !memcmp(out, pb_p67, PBMON_LEN));
-	s = pb_xform(pb_p67, out, 1);
-	sok = (s == 0 && !memcmp(out, pb_c67, PBMON_LEN));
-	scnprintf(rep, sz, "pair: unseal=%d/%s seal=%d/%s\n",
-		  u, uok ? "OK" : "DIFF", s, sok ? "OK" : "DIFF");
-	return (uok && sok) ? 0 : 1;
+	u = pb_xform(pb_c3b, out, 0);
+	uok = (u == 0 && !memcmp(out, pb_p3b, PBMON_BLK));
+	if (u == 0) {
+		p0 = out[0]; p1 = out[1]; p2 = out[2]; p3 = out[3];
+	}
+	s = pb_xform(pb_p3b, out, 1);
+	ct = (s == 0 && !memcmp(out, pb_c3b, PBMON_BLK));
+	tag = (s == 0 && !memcmp(out + PBMON_BLK, pb_c3b + PBMON_BLK, 32));
+	scnprintf(rep, sz,
+		  "pair: unseal=%d/%s p=%02x%02x%02x%02x seal=%d ct=%s tag=%s\n",
+		  u, uok ? "OK" : (u == -EBADMSG ? "TAG" : "DIFF"),
+		  p0, p1, p2, p3,
+		  s, s ? "err" : ct ? "OK" : "DIFF",
+		  s ? "err" : tag ? "OK" : "DIFF");
+	return (uok && ct && tag) ? 0 : 1;
 }
 
 /*
  * /dev/pbwsweep: try every 16-byte window of the captured QNX page as the 0x33
- * key and ask whether any of them unseals the known ciphertext into the known
- * plaintext.  That is the "is the transform key anywhere in the page" question,
- * answered in one boot; both descriptor address conventions are tried.
+ * PRELOAD key (keyB) — the one input to the 0x2F cipher — with the proven
+ * digest key held at seed[0:16], and ask whether any window unseals the known
+ * block into its known plaintext.  That is "is the cipher key anywhere in the
+ * page", answered in one boot.  (The earlier version of this sweep varied the
+ * digest key, which is already proven; that question was the wrong one.)
  */
 static int pb_wsweep(char *rep, size_t sz)
 {
-	u8 out[PBMON_LEN], key_saved[16];
-	u8 dm_saved = pb_desc_mode;
-	int i, mode, hits = 0, ok = 0;
+	u8 out[PBMON_SEALED], key_saved[16];
+	int i, hits = 0;
 	size_t n = 0;
 
-	memcpy(key_saved, pb_xf_key, sizeof(key_saved));
-	for (mode = 0; mode < 2 && !hits; mode++) {
-		pb_desc_mode = (u8)mode;
-		for (i = 0; i + 16 <= (int)sizeof(pb_page); i += 16) {
-			memcpy(pb_xf_key, pb_page + i, 16);
-			if (pb_xform(pb_c67, out, 0))
-				continue;
-			ok++;
-			if (!memcmp(out, pb_p67, PBMON_LEN)) {
-				n += scnprintf(rep + n, sz - n,
-					       "wsweep: HIT desc=%d off=0x%x unseal=OK\n",
-					       mode, i);
-				hits++;
-				break;
-			}
-		}
+	memcpy(key_saved, pb_key_b, sizeof(key_saved));
+	for (i = 0; i + 16 <= (int)sizeof(pb_page); i += 16) {
+		memcpy(pb_key_b, pb_page + i, 16);
+		if (pb_xform(pb_c3b, out, 0) || memcmp(out, pb_p3b, PBMON_BLK))
+			continue;
+		n += scnprintf(rep + n, sz - n,
+			       "wsweep: HIT preload off=0x%x matches P3b\n", i);
+		hits++;
+		break;
 	}
-	memcpy(pb_xf_key, key_saved, sizeof(key_saved));
-	pb_desc_mode = dm_saved;
+	memcpy(pb_key_b, key_saved, sizeof(key_saved));
 	if (!hits)
 		n += scnprintf(rep + n, sz - n,
-			       "wsweep: no window matched (%d transforms ok)\n",
-			       ok);
+			       "wsweep: no preload window matched the pair\n");
 	return hits ? 0 : 1;
 }
 
@@ -790,7 +971,11 @@ static struct miscdevice pboracle_misc = {
 
 static int pbmon_selftest = 0;
 module_param_named(selftest, pbmon_selftest, int, 0644);
-MODULE_PARM_DESC(selftest, "run the block-0x43 seal selftest at probe (default 0)");
+module_param_named(dom, pb_dom, uint, 0644);
+module_param_named(op2e, pb_2e_op, uint, 0644);
+MODULE_PARM_DESC(dom, "monitor domain for the transform (default 5 = bootloader; 4 = QNX)");
+MODULE_PARM_DESC(op2e, "op field of the 0x2E digest descriptor (default 3)");
+MODULE_PARM_DESC(selftest, "run the block-0x3B seal selftest at probe (default 0)");
 
 static int pbmon_probe(struct platform_device *pdev)
 {
@@ -830,6 +1015,9 @@ static int pbmon_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 	ret = misc_register(&pbkey_misc);
+	if (ret)
+		return ret;
+	ret = misc_register(&pbkeys_misc);
 	if (ret)
 		return ret;
 	ret = misc_register(&pbctl_misc);

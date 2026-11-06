@@ -26,17 +26,18 @@
         .equ WDT2_BASE,   0x4A314000
         .equ SYNC32K,     0x4A304010
         .equ EP_TICKS,    0x00000000
+        .equ BL_PROBE,    0
 
         @ WDT2 reload/kick is done from the kernel instead (report 109 §8.1):
         @ a loader-side write diagnostic wedged the loader and produced no
         @ trustworthy readback.  Loader keeps its hands off the watchdog.
 
         .equ ZIMAGE_SRC,  0x803BF800
-        .equ ZIMAGE_SIZE, 0x0081A768
-        .equ DTB_SRC,     0x80BD9F68
+        .equ ZIMAGE_SIZE, 0x008227F8
+        .equ DTB_SRC,     0x80BE1FF8
         .equ DTB_SIZE,    0x000166C0
         .equ KERNEL_DEST, 0x84000000
-        .equ DTB_DEST,    0x8481A768
+        .equ DTB_DEST,    0x848227F8
 
         @ Clear the DEBUG_LL ring state (count +0x80, index +0x84) and the
         @ first page of characters, so every boot's earlyprintk log starts
@@ -169,6 +170,9 @@ _start:
         .endif
 
         @ ARM Linux boot protocol, jump to the zImage
+        .if BL_PROBE
+        bl      bl_probe
+        .endif
         mov     r0, #0
         mvn     r1, #0
         ldr     r2, =DTB_DEST
@@ -304,6 +308,142 @@ led_off:
         ldr     r1, =EN_BIT
         str     r1, [r0, #GPIO_CLEAR]
         bx      lr
+
+@ ---------------------------------------------------------------------------
+@ Stage-1 probe.  BL_PROBE selects the mode (default 0 = off):
+@   1 = DUMP the executing bootloader's key regions to the DTS no-map
+@       pbmon-low page (0xA0200000).  Pure reads: no calls, no writes.
+@   2 = CALL the bootloader's BOOTCTR_FCTRY selector, after re-enabling the
+@       CM2 L4SEC crypto clocks the tail disabled.  Read-only at the RPMB
+@       level.  Stash {l4sec ret, selector ret, value, WDT2 before/after}.
+@ The bootloader's arm9000 section (media file 0x9000) is loaded at
+@ 0x80000000 and is resident here; it verified region 0 and decremented the
+@ counter just before jumping to us.  MMU/caches are off, so these are
+@ physical addresses.
+@ IMPORTANT (session 26 correction): reports 150/151 quoted these code
+@ addresses as if media file 0 == 0x80000000.  The arm9000 section at media
+@ file 0x9000 is what is loaded at 0x80000000, so every CODE address in those
+@ reports is 0x9000 too high.  The addresses below are the corrected ones
+@ (verified against the executing image with BL_PROBE=1).  Data literals such
+@ as 0x80025F00 / 0x80025FB0 / 0x8001431C are stored absolute values and are
+@ correct as-is.
+@ Linux readback:  peek a0200000 16   (mode 1)  /  peek a0200000 8  (mode 2)
+@ mode 1 stash: +0x00 "BLDU" +0x04 WDT2 CRR; then copied regions:
+@   +0x010 0x80000000 0x160 | +0x180 0x800085E0 0xC0 | +0x240 0x8000C8E0 0xC0
+@   +0x300 0x80014318 0x050 | +0x350 0x8000F100 0xF0 | +0x440 0x80010220 0x90
+@   +0x4D0 0x8000F3D8 0x050 | +0x520 0x80000078 0x28
+@ mode 2 stash: +0x00 "PROB" +0x04 l4sec ret +0x08 selector ret +0x0c value
+@   +0x10 WDT2 CRR before +0x14 WDT2 CRR after (+0x100 = out slot)
+        .if BL_PROBE == 1
+        .equ BL_STASH, 0xA0200000
+bl_probe:
+        push    {r4, r5, r6, lr}
+        ldr     r4, =BL_STASH
+        ldr     r0, =0x424C4455          @ "BLDU": executing-bootloader dump
+        str     r0, [r4, #0]
+        ldr     r5, =WDT2_CRR
+        ldr     r6, [r5]
+        str     r6, [r4, #4]
+        ldr     r0, =0x80000000
+        add     r1, r4, #0x10
+        mov     r2, #0x160
+        bl      copy_words
+        ldr     r0, =0x800085E0
+        add     r1, r4, #0x180
+        mov     r2, #0xC0
+        bl      copy_words
+        ldr     r0, =0x8000C8E0
+        add     r1, r4, #0x240
+        mov     r2, #0xC0
+        bl      copy_words
+        ldr     r0, =0x80014318
+        add     r1, r4, #0x300
+        mov     r2, #0x50
+        bl      copy_words
+        ldr     r0, =0x8000F100
+        add     r1, r4, #0x350
+        mov     r2, #0xF0
+        bl      copy_words
+        ldr     r0, =0x80010220
+        add     r1, r4, #0x440
+        mov     r2, #0x90
+        bl      copy_words
+        ldr     r0, =0x8000F3D8
+        add     r1, r4, #0x4D0
+        mov     r2, #0x50
+        bl      copy_words
+        ldr     r0, =0x80000078
+        add     r1, r4, #0x520
+        mov     r2, #0x28
+        bl      copy_words
+        pop     {r4, r5, r6, pc}
+        .endif
+
+        .if BL_PROBE == 2
+        .equ BL_STASH, 0xA0200000
+        .equ BL_L4SEC, 0x8000F108        @ ARM: CM2 L4SEC crypto clock enable
+        .equ BL_SEL_T, 0x800000CF        @ Thumb: selector(u32 *out)
+bl_probe:
+        push    {r4, r5, r6, lr}
+        ldr     r4, =BL_STASH
+        ldr     r0, =0x50524F42          @ "PROB": call probe ran
+        str     r0, [r4, #0]
+        ldr     r5, =WDT2_CRR
+        ldr     r6, [r5]
+        str     r6, [r4, #0x10]
+        ldr     r12, =BL_L4SEC
+        blx     r12                      @ re-enable the crypto clocks
+        str     r0, [r4, #4]
+        mvn     r0, #0
+        str     r0, [r4, #0x0c]          @ out preload
+        add     r0, r4, #0x100
+        ldr     r12, =BL_SEL_T
+        blx     r12                      @ selector(&out)
+        str     r0, [r4, #8]
+        ldr     r1, [r4, #0x100]
+        str     r1, [r4, #0x0c]
+        ldr     r6, [r5]
+        str     r6, [r4, #0x14]
+        pop     {r4, r5, r6, pc}
+        .endif
+
+@ mode 3: the tail wipes the bootloader's RPMB store state and catalogue
+@ ([0x80025E78,0x800517C4)), so re-run the bootloader's own mount
+@ (0x800082DC, which opens the MMC, validates block 0, and rebuilds the
+@ catalogue) after re-enabling L4SEC, then read the counter back.
+@ stash: +0x00 "MOUN" +0x04 l4sec ret +0x08 mount ret +0x0c selector ret
+@        +0x10 value +0x14 WDT2 before +0x18 WDT2 after
+        .if BL_PROBE == 3
+        .equ BL_STASH, 0xA0200000
+        .equ BL_L4SEC, 0x8000F108        @ ARM: CM2 L4SEC crypto clock enable
+        .equ BL_MOUNT_T, 0x800082DD      @ Thumb: mount / catalogue rebuild
+        .equ BL_SEL_T, 0x800000CF        @ Thumb: selector(u32 *out)
+bl_probe:
+        push    {r4, r5, r6, lr}
+        ldr     r4, =BL_STASH
+        ldr     r0, =0x4E554F4D          @ "MOUN"
+        str     r0, [r4, #0]
+        ldr     r5, =WDT2_CRR
+        ldr     r6, [r5]
+        str     r6, [r4, #0x14]
+        ldr     r12, =BL_L4SEC
+        blx     r12                      @ re-enable the crypto clocks
+        str     r0, [r4, #4]
+        ldr     r12, =BL_MOUNT_T
+        blx     r12                      @ rebuild the record catalogue
+        str     r0, [r4, #8]
+        mvn     r0, #0
+        str     r0, [r4, #0x10]          @ out preload
+        add     r0, r4, #0x100
+        ldr     r12, =BL_SEL_T
+        blx     r12                      @ selector(&out)
+        str     r0, [r4, #0x0c]
+        ldr     r1, [r4, #0x100]
+        str     r1, [r4, #0x10]
+        ldr     r6, [r5]
+        str     r6, [r4, #0x18]
+        pop     {r4, r5, r6, pc}
+        .endif
 
 @ The LED blink stages (blink_n/delay/led_on) are gone: 12 uncached
 @ 0x04000000-iteration loops cost 1.8-4.8 s and varied with the bootloader's

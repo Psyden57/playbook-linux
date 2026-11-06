@@ -1,6 +1,124 @@
 # Current state
 
-## Current state — 2026-11-03/04 (session 25)
+## Current state — 2026-11-06 (session 27)
+
+**The RPMB block transform is reproduced and the factory counter was topped up
+FROM LINUX (`0x2E -> 0x32`, verified).  The unit is back on PlayBook OS
+2.1.0.1917 with the counter at `0x32`.**
+
+* **The monitor transform is solved** (report 175).  `pbmon` runs the
+  bootloader's two-stage sequence — `0x33` → `0x2F` (**cipher**, 224 in/out,
+  `dir 1` seals) → `0x33` → `0x2E` (**digest**, 224 → 32, tag gate) — with:
+  * digest key = `seed[0:16]` (`page+0x440`, proven offline and on the device);
+  * cipher key = the `0x33` preload `page+0x20` (`86 78 7c 2a…`), **16 bytes**;
+  * **no `0x31(id 1)`** — the bootloader's own `0x31` call changes the plaintext
+    and breaks it; `id 0` or no call both work (trap 89).
+  Seal and unseal both reproduce the device's bytes exactly (`ct=OK tag=OK` on
+  the captured block-0x3B pair; `seal(P) == block` on live 0x43).
+* **The store reads from Linux**: 512/512 frames authenticate, **107 blocks
+  carry a valid tag and all 107 unseal**, 405 are unused.
+  **`BOOTCTR_FCTRY` is at block `0x3A`, name offset 196, len 4**; the value read
+  `0x2B` after the session's seven factory boots.
+* **The raw RPMB relay is the wire view** — reverse the 256-byte data field
+  before the monitor (trap 86).
+* **Item 4 (brightness) is CLOSED**: `write /sys/class/backlight/backlight/
+  brightness 64` sets LM3532 register `0x74` to `0x40` (read back with `bl rd
+  0x74`; `0xFF` at 255), and the panel visibly follows.  The LED classdev's
+  `EBUSY` is `led-backlight` owning it, which is correct.
+* **The CRNG now has a seeding path**: the SoC RNG is firewalled, so the CRNG
+  never initialises by itself (`entropy_avail` 18, no `crng init done`).  The
+  console's new **`entropy <hex>`** command credits host bytes
+  (`RNDADDENTROPY`, root) — measured `credited 256 bits` → `crng init done` —
+  and `pbrpmb` now takes its nonce from `/dev/random` and warns loudly if it
+  cannot.  **Do this before any RPMB write** (trap 87).
+* **The top-up was performed from Linux (item 6 CLOSED).**  The operator ran
+  the prepared `pbrpmb write 0x3a yes`: unseal, patch 4 bytes to `0x32`,
+  re-seal, verify the seal round-trip, one type-3 frame, result read, and a
+  read-back that unsealed the block and printed `32 00 00 00`.  A read-only
+  scan afterwards still showed 512/512 frames authenticating and 107/107
+  blocks unsealing.  An agent still never writes RPMB (`SAFETY.md` §6).
+* **The top-up is now automatic at boot**: `/init` runs `pbrpmb topup 0x1E`
+  after the console is up, and writes `0x32` only when the value is inside
+  `1..0x32` and below the threshold (one sealed frame, one read-back, never a
+  loop; the outcome is one `pbrpmb: topup:` line in `kmsg`).  Measured at
+  `0x30`: `>= threshold 0x1e, no write`.  The record is looked for at block
+  `0x3A` then scanned `0..0x7F`, so a re-tiled store does not disable it.
+* **The region-0 IFS is COMPRESSED and boots.**  `local/work/ifs1917-compressed.ifs`
+  (3 466 232 B, sha256 `f14db207…`, `os_type` 6, CRC verified) is the shipping
+  1917 IFS + our `rfs_validator` shim, spliced into the stock NRV2B stream by
+  `tools/bb10_ifs.py splice` and resealed.  It booted on the factory path
+  (217 frames) with `/base` mounted.  The uncompressed
+  `local/work/ifs-shim-sealed.ifs` (`b52195bb…`, 7 900 548 B) is the
+  independently booting alternative; both are in the tree.
+* **Bench (end of session):** TabletOS 2.1.0.1917 up from the compressed IFS
+  (`/dev/hd1t179 on /base`), door up with **root ssh** (`tools/pbssh.sh`, no
+  `PB_USER`), **`BOOTCTR_FCTRY = 0x32`** — the bootloader read and decremented
+  the very record that was written from Linux, and `startup.sh` topped it back.
+  The restore-boot is the IFS verification (the read-back hash rule is
+  dropped).
+* **Next / the one open work item:** `ROADMAP.md` item 5 — a real userland in
+  the region-1 root, then the `hd3` cut-over.  **There is no current blocker**:
+  items 4 and 6 are closed, the counter repairs itself at boot, and the region-0
+  slot now has a working compression path if the Linux image needs the room.
+  Item 7 (packaging) is untouched.
+
+## Previous state — 2026-11-04 (session 26)
+
+**The unit is back on PlayBook OS 2.1.0.1917 and stable.**  Session 26 restored
+the working set at the start (the full 1917 way back, 67,498 frames), ran the
+chainloader probe series for `ROADMAP.md` item 6, hit a mount-probe reset loop,
+and restored the unit again.  Final state:
+
+* **OS:** QNX 6.6, 2.1.0.1917; `/dev/hd1t179 on /base type qnx6`; door up
+  (devuser).
+* **region-0 IFS:** the **1917 IFS** (`local/work/ifs-shim-sealed.ifs`, sha256
+  `b52195bbf85b7618f9860ad73aebbae65932443b63335f57053020402b771861`), block
+  `0x825`.  (`local/images/ifs0.sealed.bin` is the 2.0.0.4869 IFS and is the
+  wrong asset for this RCFS — trap 84.)
+* **`BOOTCTR_FCTRY = 0x32`.**  The mode-3 mount probe reset-looped and the
+  wrong-IFS restore added to it; the counter reached `0x28`, then the TabletOS
+  boot's `startup.sh` wrote `0x32` back (`bootctr: wrote 0x32, readback ok
+  (was '(')`).
+* **region-1 Linux root** is unchanged (raw `0x29000000`); no writes this
+  session.
+
+**Item-6 findings (report 173) — the important part.**
+
+* **The address base was wrong.**  The bootloader's arm9000 section is loaded at
+  `0x80000000` from media file `0x9000`, so every *code* address in reports
+  150/151 is `0x9000` too high (data literals are correct).  The "wipe-table
+  anomaly" was this error; the table is valid.  Trap 82 / correction 3.18.
+* **The bootloader wipes its RPMB state before the OS jump.**  The tail wipe
+  covers `[0x80025E78, 0x800517C4)`, including the store state and catalogue.
+  A chainloader selector call therefore returns `0` ("absent").
+* **The tail disables the CM2 L4SEC crypto clocks** (`0x8000F184`); the
+  chainloader re-enabled them (`0x8000F108` returned 1).
+* **Calling the bootloader's selector works; calling its mount hangs.**  The
+  mount (`0x800082DC`) reset-looped the unit.  The "reuse the bootloader's
+  writer from the chainloader" route is not viable as delivered.
+
+**The single current blocker:** the two-stage `0x2E`+`0x2F` transform is not
+implemented in `pbmon`.  The frame/block keys are fixed (`probe` prints
+`KEY PINNED`, `blockscan` 512/512 MAC-ok) but the unseal still has 0 hits:
+`pbmon` does only `0x2F`, preloaded with the wrong key (`page+0x20` instead of
+`page+0x60`), and the 224-byte interface lacks the 32-byte tag (report 174).
+
+**Next:** implement the two-stage `pbmon` transform (report 174 §5).  The
+frame key and block key were corrected to the reference's (report 174): `probe`
+prints `KEY PINNED` and `blockscan` reads/MAC-verifies **512/512** blocks (was
+0/512), but the unseal still gets 0 hits because `pbmon` calls only `0x2F`.
+The bootloader's transform is `0x2E` (key `page+0x20`, IV `frame+0x10`) → tag
+check → `0x2F` (key `page+0x60`); the unseal needs the 32-byte tag in its
+interface.  Both domains (5 and 4) give 0 hits, so the domain is not the
+variable.  The unit is restored and the counter is `0x32`.
+
+**Bench:** unit on 2.1.0.1917 (`0fca:8012`), door `169.254.0.1`
+(`tools/door-hold.sh`; start it with `setsid`, and do not use `pgrep -af
+door-hold` — it matches itself, trap 32), `PB_USER=devuser`.  The 1917 OS has
+no root SSH; `pkexec chmod 666 /dev/ttyACM0` is the documented console step.
+The USB/flash tools still run as the user, never `pkexec`.
+
+## Previous state — 2026-11-03/04 (session 25)
 
 **The unit is held in the bootrom/ramloader with the first BB10 test set on
 media.**  Session 25 built and flashed a BB10 10.3.03.2049 set for the PlayBook

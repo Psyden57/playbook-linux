@@ -104,7 +104,7 @@ report 121 §3/§11/§12.
 47. **The MCT/loader 64 KiB block numbers are NOT raw `mmcblk1`/`hd0` offsets.**  The measured rule is `raw byte = (block - 0x15) * 0x10000` (`0x15` blocks = `0x150000` = 1.3125 MiB), verified at five points in session 16 (report 134 §5): media LBA 0, region-0 sector 0 (`0x8000000`), the IFS (`0x8100000`), the region-0 RFS table (`0x8C00000`), region 1 (`0x28000000`).  The old "media offset" column (`block * 0x10000`, in `SAFETY.md`, report 100 and the flasher's log) is 1.3125 MiB high.  **The flash loop is unaffected** — the flasher and the loader both use loader-block coordinates — but any raw offset for `/dev/mmcblk1` must use the shifted rule (compute it with Python).
 48. **The flash loader strips the mfcp/qcfp container header.**  The payload starts at the destination block; the first bytes on media are the image's own (`fe 01 00 ea …`), not the template header.  Do not compute an image's media position from header sizes.  (Report 134 §3.)
 49. **Linux eMMC writes are only as large as the writer makes them, and were never 512-byte-limited by the driver.**  The driver advertises `max_blk_count = 0xFFFF` and 64 segments; the measured ceiling is 256 KiB per request (64 × 4 KiB SDMA segments).  An `O_DIRECT` write gives 256 KiB multi-block `CMD25`s at **5.5–7.0 MB/s** (4 KiB chunks 0.93 MB/s), with one `CMD13` per request from `mmc_blk_card_busy` — normal.  The old "single 512-byte `CMD25`, ~17–32 KB/s" was the console's `recv` `pwrite`ing one tty-sized buffer at a time, plus 4–7 unthrottled `pr_info`s per request to the **fbcon** console (~25–30 ms each).  Write ≥64 KiB `O_DIRECT` blocks with the MMC trace off.  (Report 136.)
-50. **`accounts/devuser/startup.sh` exists in several versions** — the live UFS, the UFS image backup in `PB-4869-root.exe`, and `bench/`.  An older copy silently stops the `BOOTCTR_FCTRY` top-up: its first `dd` runs before the devuser overlay interpreter exists (trap 29), the guard refuses to write, and the factory budget drains (0x32 → 0x2d observed).  The good 4869 script is 4490 B, sha256 `c265cfbb…`, and waits for a working `dd` first; the operator's current 1917 script is **4,566 B, sha256 `8acf568f…`** and is the one that topped the counter up on 2026-11-03 (`0x2E → 0x32`, report 170).  Both wait for `dd`; the warning is about older copies.  (Report 135 §5; report 170 §1.)
+50. **`accounts/devuser/startup.sh` exists in several versions** — the live UFS, the UFS image backup in `PB-4869-root.exe`, and the operator's on-device copy.  An older copy silently stops the `BOOTCTR_FCTRY` top-up: its first `dd` runs before the devuser overlay interpreter exists (trap 29), the guard refuses to write, and the factory budget drains (0x32 → 0x2d observed).  The good 4869 script is 4490 B, sha256 `c265cfbb…`, and waits for a working `dd` first; the operator's current 1917 script is **4,566 B, sha256 `8acf568f…`** and is the one that topped the counter up on 2026-11-03 (`0x2E → 0x32`, report 170).  Both wait for `dd`; the warning is about older copies.  (Report 135 §5; report 170 §1.)
 51. **The ACM console is not a bulk transport.**  It drains at ~134 KB/s and **drops bytes** when the host blasts: `sink 16777216` lost ~768 KiB, and `sink 1048576` never completed after a 0.08 s host blast.  The gadget is enumerated at High Speed (480 Mbps), 512-byte bulk packets, so this is not an enumeration limit.  `recv` therefore corrupts multi-MB images (an 11 159 480-byte test read back `25a2c15560ac5bda` vs the file's `473dcd0176320fba`).  Bulk images go through the pre-OS `0xF7` loop or QNX/`bb10mt`.  (Report 136 §3.3/§3.4.)
 52. **Nothing on this board is free to print per I/O.**  The only console is tty0 (fbcon) — the DTS deliberately has no `stdout-path` and printk draws synchronously — so per-request logging materially slows the path it measures.  Keep `PBREQ`/`PBIRQ` behind `/sys/module/omap_hsmmc/parameters/trace` (default off); with it on, `PBREQ` prints `R/W blksz blocks bytes sg_len dt`.  Use the DRAM ring for high-rate events.  (Report 136 §4.)
 53. **`blk info` reports `size 0 B`.**  It reads `fstat().st_size`, which is 0 for a block device; it needs `BLKGETSIZE64`.  Cosmetic (the device is 59.4 GiB); use `blk sum`/`sumb` for real work.
@@ -142,9 +142,99 @@ report 121 §3/§11/§12.
 80. **The loader's factory count is the first diagnostic after a flash.**  Read it with `python3 tools/bbusb.py info --from-bootrom --password 0000 --keep-loader --json` and look at `boot_mode.factory_count`.  A **decrement** means the CRC verify passed and the loader jumped — the failure is the OS (kernel/board support); **no change** means the loader rejected the image (descriptor, CRC or length).  Session 25: 50 → 45 with an image that verified but never brought BB10 up.  Pass the password explicitly (`0000` on this unit), **once** — never retry; `--keep-loader` stops `info` from resetting the unit into another boot that spends a count, and `--from-bootrom` is needed only when the unit is in the bootrom, not the ramloader.  (Session 25.)
 81. **A portable CPython 3.2 build needs `-no-pie` on this host.**  The default build segfaults on any `-c` execution (old CPython with a modern toolchain); `CFLAGS="-O0 -g -fcommon -fno-PIE -fno-strict-aliasing" LDFLAGS="-no-pie" ./configure --without-ensurepip --disable-shared` builds a working interpreter.  The 3.2 `.pyc` header is **12 bytes** (magic + mtime + size, not 16), and `uncompyle6` emits `return` in empty exception classes — change those to `pass` before compiling.  (Session 25, `BB10-IMAGE-GUIDE.md` §3c.)
 
+82. **The bootloader's arm9000 section is loaded at `0x80000000` from media
+    file `0x9000`, so reports 150/151 quote every *code* address `0x9000` too
+    high.**  A code address `A` in those reports is really `A - 0x9000` (the
+    selector is `0x800000CE`, the dispatcher `0x8000F3DC`, the L4SEC enable
+    `0x8000F108`, the mount `0x800082DC`, the reset path `0x80010224`).  The
+    *data* addresses are absolute literals and are correct as written (session
+    flag `0x80025F00`, store state `0x80025FB0`, catalogue `0x8002C760`, wipe
+    table `0x8001431C`).  Verified by dumping the executing image from the
+    chainloader: DRAM `0x80009000` matches media `0x12000`, DRAM `0x80009078`
+    matches media `0x12078`, and the report addresses read `0xFFFFFFFF`.
+    (Session 26, report 173 §1–§2.)
+83. **The bootloader wipes its own RPMB state before jumping to the OS, and its
+    mount hangs when re-run from the chainloader.**  The tail wipe covers
+    `[0x80025E78, 0x800517C4)` — the session flag, store state, frame,
+    catalogue and staging.  A chainloader therefore cannot call the
+    bootloader's `record_read`/`record_write` on a pre-built catalogue: the
+    selector returns `0` (absent).  Calling the bootloader's mount
+    (`0x800082DC`) to rebuild it hung and reset-looped the unit, spending ~10
+    counter units.  Any rebuild must account for the MMC controller state (the
+    mount re-opens it from a wiped slot) and needs an abort path.  (Session 26,
+    report 173 §3/§5.)
+84. **`local/images/ifs0.sealed.bin` is the 2.0.0.4869 IFS, not compatible with
+    a 1917 RCFS.**  Restoring it to a 2.1.0.1917 media set leaves a 4869 IFS
+    with a 1917 `/base`/UFS and the unit does not boot (it reset-looped).  The
+    1917 IFS with the `rfs_validator` shim is
+    `local/work/ifs-shim-sealed.ifs` (sha256 `b52195bb…`), flashed at block
+    `0x825`; the full way back is still `local/work/back-1917.signed`.
+    (Session 26.)
+
+85. **RPMB keys are per-unit, and the repo's compiled test keys were the
+    spare's.**  `initramfs/rpmb.c` carried the spare's frame key (`dfee…`) and
+    block seed (`…46 28 01 b4`); the reference's are `16 11 b3 bb…d922` and
+    `…2b e1 1d a8`.  With the reference keys, `probe` prints `KEY PINNED` and
+    `blockscan` reads/MAC-verifies 512/512 blocks (was 0/512).  `cid_seed32()`
+    is incomplete — the real 32-byte seed's upper half is a passphrase fragment
+    (`3e 00 00 00 "ing in the o"`), not zero.  The block transform is two-stage
+    (`0x2E` key `page+0x20`, IV `frame+0x10`; tag check; `0x2F` key
+    `page+0x60`), and `pbmon` implemented only the `0x2F` half with the wrong
+    key.  (Session 26, report 174.)  **Superseded by trap 89 / report 175:**
+    `0x2F` is the cipher and `0x2E` the digest, the digest key is
+    `seed[0:16]`, the preload key is `page+0x20`, and `0x31(id 1)` must not be
+    issued.
+
+86. **The raw RPMB relay returns the WIRE view; reverse it before the
+    monitor.**  `/dev/mmcblk1rpmb` hands userspace the frame exactly as the
+    card sent it, so the 256-byte data field is byte-reversed relative to the
+    logical block the `0x2E`/`0x2F` transform works on, and the 32-byte tag is
+    at logical `+0xE0` (= wire `+0x00`).  Feeding `resp.data` straight to
+    `/dev/pbunseal` makes every block fail the tag check.  Proof (session 27):
+    `run /pbrpmb dump 0x3b` prints `logical=ok`, its reversed bytes equal the
+    captured block-0x3B pair, and `HMAC(seed[0:16], rev(D)[0:0xE0]) ==
+    rev(D)[0xE0:]` for blocks 0x3B and 0x43.  Report 156 §5's "the read
+    leaves the logical view in `frame.data`" describes the **resmgr's** page,
+    not this relay.
+
+87. **The CRNG never initialises on this unit; the console can seed it.**
+    The OMAP4 hardware RNG is behind the secure firewall — the board DTS keeps
+    `rng_target` disabled because a non-secure read raises an L3 error and an
+    imprecise external abort — so no `crng init done` ever appears and
+    `/dev/urandom` is predictable (`entropy_avail` reads 18).  That matters
+    because the RPMB nonce is covered by the frame MAC.  **Fix: the console's
+    `entropy <hex>` command** (root `RNDADDENTROPY`) credits host bytes —
+    measured: `entropy: credited 256 bits (avail was 18)` → `random: crng init
+    done`.  `pbrpmb` now reads `/dev/random` (`O_NONBLOCK`) for the nonce and
+    prints a loud warning when it has to fall back.  **Seed before any RPMB
+    write.**  Reads are unaffected.  (Session 27.)
+
+88. **On the Linux image the reboot path is the console, not the door.**
+    Once our image runs, QNX/`devuser` and `169.254.0.1` do not exist;
+    `tools/pbssh.sh '/proc/boot/shutdown -S reboot'` silently fails.  Use
+    `tools/pbcon.py 'reboot'` (and start the pre-OS flasher immediately
+    before it).  `devuser` also cannot reboot TabletOS.  (Session 27.)
+
+89. **`0x31(id 1)` breaks the RPMB transform; `id 0` or no call do not.**
+    The bootloader calls `0x31` with id 1 before its seal/unseal, but issuing
+    that from `pbmon` changes the `0x2F` plaintext and makes the known pair
+    fail.  The working combination (session 27, report 175) is: `0x2E` digest
+    key = `seed[0:16]` (`page+0x440`), `0x33` preload = `page+0x20`
+    (`86 78 7c 2a…`, **16 bytes** — 32 is refused with `-EIO`), and `0x31`
+    either omitted or called with id 0.  With those, the captured
+    block-0x3B pair round-trips exactly and `blockscan` reads the store.
+    Corollary: **`scan`/`cmd_scan` searches the ciphertext** and can never find
+    a record — only the monitor unseal (`blockscan`) can.
+
+90. **`trustzone-omap4` on 2.1.0.1917 has no raw SMC passthrough.**  The
+    devctl returns `ENOTTY` (25) and the resmgr survives; the 1917 binary
+    (65 304 B) contains none of `0xC0280501`/`0x502`, which the 4869 build
+    (61 208 B) builds at `0x8A5C`/`0x8A60`.  The feature was dropped in the
+    newer build, not broken — do not spend time on it (report 157 addendum).
+
 ## 3. Corrections to older reports
 
-These seventeen are preserved deliberately. Each is newer than the text it
+These eighteen are preserved deliberately. Each is newer than the text it
 contradicts, and the older reports have been corrected in place where they could
 be.
 
@@ -179,7 +269,7 @@ exactly**. Source: report 118 §6.3.
 
 **3.5 `BOOTCTR_FCTRY` out of range is a hard lock, not a fallback to the product
 path.** The device-side top-up script, report 116 §2 and (in this tree)
-`bench/device-startup.sh`'s own comment used to say a value of `0` or `> 0x32`
+the startup script's own comment used to say a value of `0` or `> 0x32`
 "makes the bootloader fall back to the product/ECDSA path" (the comment was
 corrected in session 23). It does not: the unit stops
 booting with "expired factory mode" and there is no software recovery.
@@ -274,6 +364,16 @@ the region-0 IFS is at **`0x8100000`** (not `0x8250000`), region 0 starts at <!-
 `0x8000000`, region 1 at `0x28000000`, the FS partition at **`0x49000000`** (measured in session 17; 1 MiB above the rule's value — report 138).  The
 flash arguments are unchanged (loader coordinates); the raw offsets are not.
 Source: report 134 §5, trap 47.
+
+**3.18 The bootloader is loaded at `0x80000000` from media file `0x9000`, so
+reports 150/151's code addresses are `0x9000` too high.**  Those reports used
+`address = file + 0x80000000`, which assumes media file 0 maps to `0x80000000`.
+The arm9000 section at media `0x9000` is what is loaded at `0x80000000`, so a
+code address `A` there is really `A - 0x9000`.  This also withdraws report 151
+§Q5's "wipe table is inconsistent": at media `0x1D31C` (= DRAM `0x8001431C`)
+the table holds valid ranges (`0x800267C0`/`0x2B004`, `0x80025E78`/`0x948`).
+The data literals are correct as written.  Source: session 26, report 173
+§1–§3.
 
 **Also corrected elsewhere, for completeness:** `0x1cce0` in `winch_lcdctl` is a
 HAL parameter-block defaults initialiser, not the register programmer — the

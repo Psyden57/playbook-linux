@@ -47,6 +47,14 @@ it is the only stage that writes the persistent store.
 
 ## 1. Stage 2 in detail: the selector and the gate
 
+> **Address note (session 26, report 173).**  This stage's arm9000 section is
+> loaded at `0x80000000` from media file `0x9000`.  The code addresses below are
+> written in the reports' `media file + 0x80000000` convention and are therefore
+> **`0x9000` too high**; subtract `0x9000` for the real DRAM address (the
+> selector is `0x800000CE`, the dispatcher `0x8000F3DC`, the L4SEC enable
+> `0x8000F108`).  The data literals (`0x80025F00`, `0x80025FB0`, …) are correct
+> as written.  Trap 82 / correction 3.18.
+
 `FUN_8000911A` (ARM, `hd0` image `0x8000911A`) reads the RPMB record
 `BOOTCTR_FCTRY` and chooses a verify path **[P]** report 71 §2:
 

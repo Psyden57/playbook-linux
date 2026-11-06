@@ -194,7 +194,29 @@ and `dumpifs` lists `proc/boot/rfs_validator 2237`.  The reseal then appends the
 (`local/work/ifs-shim-sealed.ifs`, 0x788D84 bytes.)  `stored_size` remains the
 stock compressed value — see §4.
 
-Not attempted here: compression (the output is uncompressed).
+**Compression — SOLVED (session 27).**  The PlayBook container uses the same
+compressed-imagefs format as BB10 (a chain of `u16` BE length-prefixed NRV2B
+blocks between the startup header's payload start and `H+st`, then the OS
+signature block), so `tools/bb10_ifs.py splice` works unchanged:
+
+```bash
+python3 tools/bb10_ifs.py splice \
+    --stock PlayBook_2.1.0.1917.4.ifs \
+    --imagefs local/work/ifs-shim.ifs \
+    --out work/ifs-compressed.ifs
+python3 tools/bb10_ifs.py verify work/ifs-compressed.ifs
+python3 tools/89-crc_tool.py reseal work/ifs-compressed.ifs \
+    work/ifs-compressed-sealed.ifs --image-off 0 --length auto \
+    --append-os-trailer --type 6
+```
+
+Measured: imagefs 7 619 692 B → payload 3 142 560 B (41.2 %), 117 blocks, the
+container 3 466 232 B; `verify` decompresses it back exactly and `dumpifs` lists
+the same 106 entries.  **The unit booted TabletOS from it** (217 frames,
+`/base` mounted) — `local/work/ifs1917-compressed.ifs`, sha256 `f14db207…`.
+`splice` needs the *stock compressed* container as `--stock` (it copies the
+prefix and the tail after `H+st`), and the payload starts at `H + startup_size`
+(= `0x44910` here), which is also the default `--imagefs-offset`.
 
 ## 6. Milestones, each with an acceptance test
 

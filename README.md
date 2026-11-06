@@ -98,7 +98,6 @@ kernel/           patch set, kernel config, board DTS + modified driver copies
 boot/             chainloader source and image builder
 initramfs/        PID 1 (init.c) and the bench console (console.c)
 tools/            host tools (console driver, ssh wrapper, flasher, QNX probes)
-bench/            device-side scripts (the BOOTCTR top-up startup script)
 hardware/         TRM/datasheet copies (local only — not redistributed)
 local/            GITIGNORED payload: device dumps, images, keys, vendor tools
 ```

@@ -73,16 +73,21 @@ and the DISPC core clock below the pixel clock (report 133).  Both fixed.
 
 ---
 
-## 4. Userspace brightness control
+## 4. Userspace brightness control — **CLOSED 2026-11-06**
 
-The backlight works and sits at 255; nothing changes it (report 120 §4). The
-console already has `write <path> <text>` and `bl wr <reg> <val>`.
+**Measured (session 27):** `write /sys/class/backlight/backlight/brightness 64`
+moves LM3532 register **`0x74` from `0xFF` to `0x40`** — read back with `bl rd
+0x74` — and back to `0xFF` at 255, and the panel visibly follows (operator).
+The attribute is there from the initramfs, so the acceptance criterion is met
+with no code change.
 
-**Closes when:** the brightness is settable at run time through
-`/sys/class/backlight/backlight/brightness` from the initramfs, with the chip
-registers read back (`0x74`) to prove the write reached the LM3532 rather than
-being swallowed by `bl_power` (trap 23). Choosing a default level and a policy is
-a separate, later question.
+The path is `led-backlight` (`/sys/class/backlight/backlight`) over the LM3532
+LED, which is why `/sys/class/leds/lm3532::backlight/brightness` returns
+**`EBUSY`**: the LED core sets `LED_SYSFS_DISABLE` when a backlight consumer
+owns it.  Correct behaviour, not a fault — use the backlight attribute.
+
+**Left open (policy, not mechanism):** the default level (255, the boot state)
+and whether `/init` should set one.
 
 ## 5. A root filesystem — **region 1 done; real userland + hd3 cut-over next**
 
@@ -111,7 +116,13 @@ smaller filesystem in the 58 GB partition is reformatted and reseeded at boot
 so region 1 is the no-MCT home for a Linux root.  The read-only-mount policy is
 resolved (operator-approved).  The free-space facts are unchanged:
 
-* **region 0 is full** — the IFS zone is 11.25 MB and the image is 11.15 MB;
+* **region 0 is tight, but the 11.25 MB figure is unverified** — the Linux
+  images built in session 27 are 11 505 896 B and flash and boot, and the
+  flasher's gate only checks the MCT type-`0x1B` extents.
+  **A compression path now exists for a QNX IFS** (`tools/bb10_ifs.py splice` +
+  reseal; a booting 3.47 MB 1917 IFS, session 27 / report 175) — it does **not**
+  apply to our chainloader image, which is not a QNX imagefs and would need a
+  decompressing entry path;
 * **region 1** — raw `0x28000000`, 512 MB, already partitioned and empty,
   inside the loader's allowed OS range, so an `0xF7` write at loader block
   `0x2815` needs **no MCT edit**;
@@ -132,13 +143,45 @@ the deliberate `hd3` repurpose (`SAFETY.md` §4/§6, `DECISIONS.md` §17/§18,
 (region 1 first, at a Python-derived offset) and boots to a shell with modules
 loadable, with the recovery path back to the sealed IFS verified.
 
-## 6. RPMB / `BOOTCTR_FCTRY` from Linux
+## 6. RPMB / `BOOTCTR_FCTRY` from Linux — **CLOSED 2026-11-06**
 
 Every factory/CRC boot spends one unit of budget, and today only a **booted
-TabletOS** puts it back (`bench/device-startup.sh` writes `0x32` and verifies it
+TabletOS** puts it back (the operator's startup script writes `0x32` and verifies it
 by readback each time the reference OS starts). Once Linux is the normal OS,
 nothing repairs it — and a wedged image reset-looping every ~7.8 s spends units
 fast (`KNOWN-ISSUES.md` trap 33).
+
+**Status after session 27: CLOSED — the top-up was performed from Linux.**
+The operator ran the prepared frame (`pbrpmb write 0x3a yes`) on image
+`0x2238D00A`: the block was unsealed, the four bytes patched to `0x32`,
+re-sealed by the monitor, the seal round-trip checked, one type-3 frame sent,
+the result read, and the read-back unsealed and printed `32 00 00 00`.  A full
+read-only scan after the write still showed 512/512 frames authenticating and
+107/107 blocks unsealing, and the restore boot to 2.1.0.1917 left
+`BOOTCTR_FCTRY` reading `0x32` — the bootloader read and decremented that very
+record on the way in, so both readers accept it.  Report 175 addendum.
+
+The research half:  `pbmon` runs
+`0x33` → `0x2F` (**the cipher**, 224 in/out, `dir 1` seals) → `0x33` → `0x2E`
+(**the digest**, 224 → 32, tag gate) with digest key `seed[0:16]`, cipher key
+the `0x33` preload `page+0x20` (16 bytes), and **no `0x31(id 1)`** (that call
+breaks it — trap 89).  The captured block-0x3B pair round-trips exactly in both
+directions and live block 0x43 satisfies `seal(P) == block`.  `blockscan` reads
+the store from Linux: 512/512 frames authenticate, 107 blocks carry a valid tag
+and all 107 unseal, and `BOOTCTR_FCTRY` is found at block `0x3A` (len 4; the
+value read `0x2B` after seven factory boots).  Report 175, session-27 note.
+The write itself is the operator's (`SAFETY.md` §6) and was executed the same
+day; the CRNG has a seeding path for it (the console's `entropy` command,
+trap 87).
+
+**Status after session 26: the address map is corrected, and the
+chainloader-reuses-the-bootloader route is out.**  Reports 150/151's code
+addresses are `0x9000` too high (the arm9000 section is loaded at `0x80000000`
+from media `0x9000`); the bootloader wipes its RPMB store state before the OS
+jump (`[0x80025E78, 0x800517C4)`); and calling its mount from the chainloader
+reset-loops the unit.  The next experiment is to re-open the Linux `pbmon` seal
+with the corrected evidence — **domain 5** and the exact order
+`0x31 -> 0x33 -> 0x2F -> 0x33 -> 0x2E` (report 173).
 
 **Status after session 20: BLOCKED, and one unit was lost.**  The caller is solved
 (identity physical addresses below `0xB0000000`; report 147) and the whole seal ABI
@@ -173,9 +216,11 @@ Static RE (report 146) ruled out a registration/handshake, the domain `r2`, the
 address oracle.  Until the seal is reproduced, QNX's `/dev/rpmb` remains the only
 proven writer.  Item 5's hd3 cut-over is therefore blocked behind item 6.
 
-**Closes when:** a full Linux boot cycle leaves `BOOTCTR_FCTRY` reading `0x32`
+**Closed when (met):** a Linux boot cycle left `BOOTCTR_FCTRY` reading `0x32`
 afterwards, with the verified one-write/readback shape (exactly 4 bytes, value
-`0x32`, read first, write only on a mismatch, verify by readback).
+`0x32`, read first, write only on a mismatch, verify by readback).  The one
+addition the transform work forced: the patched plaintext is **re-sealed by the
+monitor**, never patched in ciphertext.
 
 **Read first:** `SAFETY.md` §2. The accepted range is `1..0x32`; `0` and `> 0x32`
 are a hard lock ("expired factory mode") with physical recovery only, not a

@@ -30,17 +30,20 @@
  *   pbrpmb read <addr>          raw authenticated read of one block
  *   pbrpmb probe                counter + read of block 0 + frame MAC check
  *   pbrpmb scan                 find BOOTCTR_FCTRY (zero writes)
- *   pbrpmb prep <addr>          build the 0x32 frame, print it, write nothing
- *   pbrpmb write <addr> yes     ONE verified 0x32 write + readback
+ *   pbrpmb prep <addr>          unseal, patch to 0x32, seal, print the frame
+ *   pbrpmb write <addr> yes     the operator's ONE verified 0x32 write
  *   pbrpmb oracle [n]           the 0x12 monitor address oracle (no RPMB)
- *   pbrpmb keytest              key/framing matrix for the block seal (no write)
- *   pbrpmb pairtest             known block-0x43 pair across key candidates
+ *   pbrpmb keytest              key matrix for the two-stage transform (no write)
+ *   pbrpmb pairtest             reference block-0x3B pair across key candidates
  *   pbrpmb blockscan [a [b]]    unseal blocks a..b and look for the record store
+ *   pbrpmb topup [thresh]       boot-time top-up: write 0x32 only if the value
+ *                               is below <thresh> (default 0x1E); one attempt
  */
 #define _GNU_SOURCE
 #include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -375,14 +378,19 @@ static const uint8_t lit_seed[32] =
  * Both reproduce device MACs exactly; they are f(CID seed) and stable.
  */
 static const uint8_t rpmb_key[32] = {
-	0xdf,0xee,0xc0,0xce,0x39,0x28,0x99,0xc2,
-	0x74,0xe1,0x2a,0x01,0xc8,0xb3,0x3d,0x6f,
-	0xf0,0xee,0xf5,0x85,0x1a,0x6f,0x9a,0x0b,
-	0xb2,0x4a,0xfd,0x0a,0x1c,0x5e,0x22,0x74
+	/* the REFERENCE's frame key (report 156, page+0x460): verified on this
+	 * unit's live frame MAC in session 26.  The previous value (dfee...) was
+	 * the SPARE's and cannot authenticate reference frames. */
+	0x16,0x11,0xb3,0xbb,0x0e,0xed,0xaa,0xcb,
+	0xe0,0xc1,0x55,0xb1,0xa5,0x45,0xcc,0xcd,
+	0x34,0xb3,0xf1,0xad,0x78,0xf2,0x9a,0x37,
+	0x5c,0xf0,0xc4,0x68,0xf7,0x9f,0xd9,0x22
 };
 static const uint8_t block_key[16] = {
+	/* the REFERENCE's seed[0:16] (report 156); the last 4 bytes were the
+	 * spare's (46 28 01 b4) — they differ per unit (CID-derived). */
 	0x15,0x00,0x00,0x01,0x4d,0x43,0x47,0x41,
-	0x46,0x41,0x10,0x00,0x46,0x28,0x01,0xb4
+	0x46,0x41,0x10,0x00,0x2b,0xe1,0x1d,0xa8
 };
 
 #define REC_MAGIC 0x5983BC2D
@@ -559,19 +567,55 @@ static int one_read(int fd, unsigned addr, const uint8_t nonce[16],
 	return 0;
 }
 
+/*
+ * The RPMB nonce.  It must be unpredictable to the card: the frame MAC covers
+ * it, so it is what makes a response fresh.
+ *
+ * The OMAP4 hardware RNG is behind the secure firewall on this unit (the board
+ * DTS keeps `rng_target` disabled: a non-secure read raises an L3 error and an
+ * imprecise external abort), so the CRNG may never be initialised.  Read
+ * /dev/random with O_NONBLOCK — it only answers once the CRNG is seeded — and
+ * fall back to /dev/urandom, saying so loudly.  A weak nonce is tolerable for
+ * the read-only tests; it is NOT tolerable for a write.
+ */
+static int nonce_seeded = -1;	/* 1 = from a seeded CRNG, 0 = weak */
+static int nonce_warned;
+
+static void nonce_report(void)
+{
+	if (nonce_seeded == 0 && !nonce_warned++) {
+		printf("WARNING: the CRNG is not initialised - this nonce is "
+		       "predictable; do NOT write with it\r\n");
+	}
+}
+
 static void fill_nonce(uint8_t nonce[16])
 {
-	int fd = open("/dev/urandom", O_RDONLY);
-	int i;
+	int fd, i;
 
+	fd = open("/dev/random", O_RDONLY | O_NONBLOCK);
+	if (fd >= 0) {
+		ssize_t n = read(fd, nonce, 16);
+
+		close(fd);
+		if (n == 16) {
+			nonce_seeded = 1;
+			nonce_report();
+			return;
+		}
+	}
+	nonce_seeded = 0;
+	fd = open("/dev/urandom", O_RDONLY);
 	if (fd >= 0 && read(fd, nonce, 16) == 16) {
 		close(fd);
+		nonce_report();
 		return;
 	}
 	if (fd >= 0)
 		close(fd);
 	for (i = 0; i < 16; i++)
 		nonce[i] = (uint8_t)(0x40 + i);
+	nonce_report();
 }
 
 static int block_valid(const struct rpmb_frame *resp);
@@ -636,11 +680,11 @@ static int record_block_valid(const uint8_t L[256])
  * header+0x04, so the header starts 4 bytes earlier; len is at name+0x12 and
  * the value at name+0x14.  Returns the name offset, or -1.
  */
-static int find_record(const uint8_t L[256], unsigned *lenp)
+static int find_record(const uint8_t *L, unsigned n, unsigned *lenp)
 {
-	int i;
+	unsigned i;
 
-	for (i = 4; i + 0x18 <= 0xE0; i++) {
+	for (i = 4; i + 0x18 <= n && i + 0x18 <= 0xE0; i++) {
 		uint32_t magic;
 		unsigned len;
 
@@ -651,7 +695,7 @@ static int find_record(const uint8_t L[256], unsigned *lenp)
 			((uint32_t)L[i - 1] << 24);
 		if (magic != REC_MAGIC)
 			continue;
-		len = ((unsigned)L[i + 0x12] << 8) | L[i + 0x13];
+		len = (unsigned)L[i + 0x12] | ((unsigned)L[i + 0x13] << 8);
 		*lenp = len;
 		return i;
 	}
@@ -741,7 +785,7 @@ static int cmd_scan(int fd, unsigned max)
 		}
 		valid++;
 		rev256(L, resp.data);
-		off = find_record(L, &len);
+		off = find_record(L, 256, &len);
 		if (off >= 0) {
 			printf("hit block %u name@0x%02x len=%u "
 			       "value=%02x%02x%02x%02x blockhmac=%s\r\n",
@@ -797,19 +841,36 @@ static int cmd_dump(int fd, unsigned addr)
 	return 0;
 }
 
+/* the transform helpers and the key matrix live further down */
+static int pb_seal(const uint8_t P[224], uint8_t C[256]);
+static int pb_unseal(const uint8_t C[256], uint8_t P[224]);
+static int tag_ok_offline(const uint8_t C[256]);
+static void wire_to_logical(uint8_t L[256], const uint8_t W[256]);
+static int pb_use_measured(void);
+
 /*
- * Read the record fresh and build the 0x32 write frame.  Returns 1 and fills F
- * on success, 0 if the current value is already 0x32 (nothing to do), or a
- * negative code for a refusal.
+ * Build the one legal RPMB write: BOOTCTR_FCTRY = 0x32, sealed by the monitor.
+ *
+ * The record block is encrypted on media by the secure monitor, so the patched
+ * plaintext must be RE-SEALED, not patched in ciphertext (report 144/175):
+ * unseal the block, patch the 4 value bytes, seal, and check that the seal is
+ * an exact inverse of the unseal before anything is built.  The frame carries
+ * the sealed 256 bytes in the wire (reversed) order and a fresh write counter.
+ *
+ * Returns 1 and fills F, 0 if the value is already 0x32, or a negative code.
  */
 static int build_topup(int fd, unsigned addr, struct rpmb_frame *F,
-		       uint32_t *counter, uint8_t old[4])
+		       uint32_t *counter, uint8_t old[4], unsigned *recoff,
+		       uint8_t N[256], uint8_t S[256])
 {
-	uint8_t nonce[16], L[256], W[256], mac[32];
+	uint8_t nonce[16], L[256], W[256], P[224], chk[224], mac[32];
 	struct rpmb_frame rd;
 	unsigned len;
 	int off, i;
 
+	/* the seal needs the monitor state the read path uses */
+	if (pb_use_measured())
+		return -8;
 	if (get_counter(fd, counter))
 		return -10;
 	fill_nonce(nonce);
@@ -817,16 +878,24 @@ static int build_topup(int fd, unsigned addr, struct rpmb_frame *F,
 		return -11;
 	if (!block_valid(&rd))
 		return -12;
-	rev256(L, rd.data);
-	if (!record_block_valid(L))
+	memcpy(W, rd.data, 256);
+	wire_to_logical(L, W);
+	if (!tag_ok_offline(L))
 		return -13;
-	off = find_record(L, &len);
+	/*
+	 * The store is sealed: the records live in the MONITOR's plaintext, not
+	 * in the bytes on media.  Unseal first (this also checks the tag), then
+	 * find the record there.
+	 */
+	if (pb_unseal(L, P))
+		return -20;
+	off = find_record(P, 224, &len);
 	if (off < 0)
 		return -14;
 	if (len != 4)
 		return -15;
 	for (i = 0; i < 4; i++)
-		old[i] = L[off + 0x14 + i];
+		old[i] = P[off + 0x14 + i];
 	if (old[1] || old[2] || old[3])
 		return -16;
 	if (old[0] == 0x32)
@@ -834,15 +903,22 @@ static int build_topup(int fd, unsigned addr, struct rpmb_frame *F,
 	if (old[0] == 0 || old[0] > 0x32)
 		return -17;
 
-	L[off + 0x14] = 0x32;
-	L[off + 0x15] = 0;
-	L[off + 0x16] = 0;
-	L[off + 0x17] = 0;
-	block_mac(L, L + 0xE0);
-	rev256(W, L);
+	/* patch the plaintext, then seal it with the device's own transform */
+	memset(N, 0, 256);
+	memcpy(N, P, 224);
+	N[off + 0x14] = 0x32;
+	N[off + 0x15] = 0;
+	N[off + 0x16] = 0;
+	N[off + 0x17] = 0;
+	if (pb_seal(N, S))
+		return -18;
+	if (pb_unseal(S, chk) || memcmp(chk, N, 224))
+		return -19;		/* the seal does not round-trip: refuse */
+	if (S[0xE0] == 0)
+		return -19;
 
 	memset(F, 0, sizeof(*F));
-	memcpy(F->data, W, 256);
+	rev256(F->data, S);		/* the frame carries the wire order */
 	F->write_counter = htobe32(*counter);
 	F->addr = htobe16((uint16_t)addr);
 	F->block_count = htobe16(1);
@@ -850,6 +926,7 @@ static int build_topup(int fd, unsigned addr, struct rpmb_frame *F,
 	F->req_resp = htobe16(RPMB_WRITE_DATA);
 	hmac_sha256(rpmb_key, 32, (const uint8_t *)F + 0xE4, 0x11C, mac);
 	memcpy(F->key_mac, mac, 32);
+	*recoff = off;
 	return 1;
 }
 
@@ -1062,54 +1139,278 @@ static int cmd_prep(int fd, unsigned addr)
 {
 	struct rpmb_frame F;
 	uint32_t counter = 0;
-	uint8_t old[4];
-	int r;
+	uint8_t old[4], N[256], S[256];
+	unsigned off = 0;
+	int r, i;
 
-	r = build_topup(fd, addr, &F, &counter, old);
+	r = build_topup(fd, addr, &F, &counter, old, &off, N, S);
 	if (r <= 0) {
 		if (r == 0)
-			printf("prep: value is already 32 00 00 00; nothing to do\r\n");
+			printf("prep: value is already 32 00 00 00; nothing to "
+			       "do\r\n");
 		else
-			printf("prep: REFUSED %d\r\n", r);
+			printf("prep: REFUSED (%d) - see the codes in the "
+			       "source\r\n", r);
 		return 1;
 	}
-	printf("prep: block %u value %02x%02x%02x%02x -> 32 00 00 00 (counter %u)\r\n",
-	       addr, old[0], old[1], old[2], old[3], counter);
+	printf("prep: block 0x%x record@%u value %02x%02x%02x%02x -> 32 00 00 00\r\n",
+	       addr, off, old[0], old[1], old[2], old[3]);
+	printf("prep: counter %u; seal round-trip OK\r\n", counter);
+	printf("prep: sealed(256) =");
+	for (i = 0; i < 256; i++)
+		printf("%s%02x", (i % 32) ? "" : "\r\n  ", S[i]);
+	printf("\r\n");
 	dump_frame(&F);
-	printf("prep: built, NOT written\r\n");
+	printf("prep: ONE frame of type 3 to block 0x%x, %d bytes; NOT written\r\n",
+	       addr, (int)sizeof(F));
+	printf("prep: writing is the operator's act: 'run /pbrpmb write 0x%x yes'\r\n",
+	       addr);
 	return 0;
 }
 
+/*
+ * The write itself.  This is the operator's step, not an agent's:
+ * SAFETY.md §2/§6.  It builds the same frame as `prep`, sends exactly one
+ * type-3 frame plus its result read, then does an authenticated read-back and
+ * prints the value it finds.  A failed write is as fatal as a wrong value, so
+ * never loop it.
+ */
 static int cmd_write(int fd, unsigned addr)
 {
-	/*
-	 * BLOCKED — report 144.  The 224-byte record block is encrypted on media
-	 * by the secure monitor (0x2F, direction 1 = seal); the frame/block MACs
-	 * cover the ciphertext.  Patching the received (ciphertext) image would
-	 * make the monitor's unseal produce garbage — and a wrong BOOTCTR_FCTRY
-	 * value is the brick path.  The write is re-enabled only after the seal
-	 * is reproduced (or the monitor is called) and validated against the
-	 * known block-0x43 pair.
-	 */
-	(void)fd;
-	printf("write: BLOCKED — the record block is sealed on media "
-	       "(report 144); plaintext patching is invalid\r\n");
-	printf("write: block %u not written\r\n", addr);
+	struct rpmb_frame F, resp, rb;
+	uint32_t counter = 0;
+	uint8_t nonce[16], old[4], N[256], S[256], P[224];
+	unsigned off = 0;
+	int r, i;
+
+	r = build_topup(fd, addr, &F, &counter, old, &off, N, S);
+	if (r <= 0) {
+		if (r == 0)
+			printf("write: value is already 32 00 00 00; nothing "
+			       "written\r\n");
+		else
+			printf("write: REFUSED (%d); nothing written\r\n", r);
+		return 1;
+	}
+	printf("write: block 0x%x value %02x%02x%02x%02x -> 32 00 00 00, "
+	       "counter %u\r\n", addr, old[0], old[1], old[2], old[3],
+	       counter);
+	dump_frame(&F);
+	printf("write: sending ONE frame ...\r\n");
+	r = rpmb_write_xfer(fd, &F, &resp);
+	printf("write: ioctl %d result=%u\r\n", r, be16toh(resp.result));
+	if (r || be16toh(resp.result)) {
+		printf("write: REJECTED - read the block back before anything "
+		       "else\r\n");
+	} else {
+		printf("write: accepted\r\n");
+	}
+
+	/* read it back: the only evidence that matters */
+	fill_nonce(nonce);
+	if (read_block_q(fd, addr, nonce, &rb)) {
+		printf("write: READ-BACK FAILED\r\n");
+		return 1;
+	}
+	printf("write: read-back frame MAC %s\r\n",
+	       block_valid(&rb) ? "ok" : "BAD");
+	{
+		uint8_t W[256], L[256];
+
+		memcpy(W, rb.data, 256);
+		wire_to_logical(L, W);
+		printf("write: read-back block tag %s\r\n",
+		       tag_ok_offline(L) ? "ok" : "BAD");
+		if (pb_unseal(L, P)) {
+			printf("write: read-back unseal FAILED\r\n");
+			return 1;
+		}
+		printf("write: read-back plaintext[%d..%d] =", off,
+		       off + 0x17);
+		for (i = 0; i < 4; i++)
+			printf(" %02x", P[off + 0x14 + i]);
+		printf("\r\n");
+		printf("write: %s\r\n",
+		       (P[off + 0x14] == 0x32 && P[off + 0x15] == 0 &&
+			P[off + 0x16] == 0 && P[off + 0x17] == 0) ?
+		       "PASS - BOOTCTR_FCTRY reads 0x32" :
+		       "FAIL - the value did not take");
+	}
+	return 0;
+}
+
+/* ---- the boot-time top-up --------------------------------------------- */
+
+/*
+ * klog — one line into the kernel log.  The boot-time top-up runs from /init
+ * with stdio on /dev/null, so this is how its outcome reaches `kmsg`.
+ */
+static void klog(const char *fmt, ...)
+{
+	char b[256];
+	va_list ap;
+	int fd, n;
+
+	va_start(ap, fmt);
+	n = vsnprintf(b, sizeof(b), fmt, ap);
+	va_end(ap);
+	fd = open("/dev/kmsg", O_WRONLY);
+	if (fd >= 0) {
+		write(fd, b, n);
+		close(fd);
+	}
+}
+
+/* Read BOOTCTR_FCTRY's four value bytes out of a block's monitor plaintext. */
+static int read_value(int fd, unsigned addr, uint8_t v[4], unsigned *offp,
+		      unsigned *lenp)
+{
+	uint8_t nonce[16], W[256], L[256], P[224];
+	struct rpmb_frame rd;
+	unsigned len;
+	int off;
+
+	fill_nonce(nonce);
+	if (read_block_q(fd, addr, nonce, &rd))
+		return -1;
+	if (!block_valid(&rd))
+		return -2;
+	memcpy(W, rd.data, 256);
+	wire_to_logical(L, W);
+	if (pb_unseal(L, P))
+		return -3;
+	off = find_record(P, 224, &len);
+	if (off < 0)
+		return -4;
+	if (offp)
+		*offp = off;
+	if (lenp)
+		*lenp = len;
+	memcpy(v, P + off + 0x14, 4);
+	return 0;
+}
+
+/* Where the record lives: the known block first, then a bounded scan. */
+static int find_counter_block(int fd)
+{
+	static const unsigned firsts[] = { 0x3a };
+	uint8_t v[4];
+	unsigned b;
+	int i;
+
+	for (i = 0; i < (int)(sizeof(firsts) / sizeof(firsts[0])); i++)
+		if (read_value(fd, firsts[i], v, NULL, NULL) == 0)
+			return (int)firsts[i];
+	for (b = 0; b < 0x80; b++)
+		if (read_value(fd, b, v, NULL, NULL) == 0)
+			return (int)b;
+	return -1;
+}
+
+/*
+ * topup [threshold] — the boot-time top-up.
+ *
+ * Reads the record and writes 0x32 ONLY when the value is inside the legal
+ * 1..0x32 range and below <threshold> (default 0x1E = 30, so a reset loop has
+ * room to be noticed before the budget runs out).  The write is the same
+ * single-frame, sealed, read-back write as `write` (report 175): unseal, patch
+ * four bytes, re-seal with the monitor, verify the seal round-trips, send one
+ * type-3 frame, read the result, unseal the read-back.
+ *
+ * One attempt, never a loop: a failed RPMB write does not return
+ * (SAFETY.md §2), and the only legal target value is 0x32.
+ */
+static int cmd_topup(int fd, unsigned thresh)
+{
+	struct rpmb_frame F, rb;
+	uint32_t counter = 0;
+	uint8_t old[4], N[256], S[256];
+	unsigned off = 0, len = 0;
+	int blk, r;
+
+	if (pb_use_measured()) {
+		klog("pbrpmb: topup: the monitor transform is unavailable\n");
+		return 1;
+	}
+	blk = find_counter_block(fd);
+	if (blk < 0) {
+		klog("pbrpmb: topup: BOOTCTR_FCTRY not found in blocks 0..0x7f\n");
+		return 1;
+	}
+	r = read_value(fd, (unsigned)blk, old, &off, &len);
+	if (r) {
+		klog("pbrpmb: topup: block 0x%x unreadable (%d)\n", blk, r);
+		return 1;
+	}
+	klog("pbrpmb: topup: BOOTCTR_FCTRY at block 0x%x record@%u = %02x%02x%02x%02x\n",
+	     blk, off, old[0], old[1], old[2], old[3]);
+
+	if (len != 4 || old[1] || old[2] || old[3]) {
+		klog("pbrpmb: topup: record is not a 4-byte value, REFUSING\n");
+		return 1;
+	}
+	if (old[0] == 0x32) {
+		klog("pbrpmb: topup: already 0x32, nothing to do\n");
+		return 0;
+	}
+	if (old[0] == 0 || old[0] > 0x32) {
+		klog("pbrpmb: topup: value 0x%02x is outside 1..0x32, REFUSING\n",
+		     old[0]);
+		return 1;
+	}
+	if (old[0] >= thresh) {
+		klog("pbrpmb: topup: 0x%02x >= threshold 0x%02x, no write\n",
+		     old[0], thresh);
+		return 0;
+	}
+
+	r = build_topup(fd, (unsigned)blk, &F, &counter, old, &off, N, S);
+	if (r != 1) {
+		klog("pbrpmb: topup: build refused (%d), nothing written\n", r);
+		return 1;
+	}
+	klog("pbrpmb: topup: writing 0x%02x -> 0x32 (RPMB counter %u)\n",
+	     old[0], counter);
+	r = rpmb_write_xfer(fd, &F, &rb);
+	if (r || be16toh(rb.result)) {
+		klog("pbrpmb: topup: WRITE FAILED (ioctl %d, result %u) - read back before anything else\n",
+		     r, be16toh(rb.result));
+		return 1;
+	}
+	if (read_value(fd, (unsigned)blk, old, NULL, NULL) == 0 && old[0] == 0x32 &&
+	    !old[1] && !old[2] && !old[3]) {
+		klog("pbrpmb: topup: PASS - BOOTCTR_FCTRY = 0x32\n");
+		return 0;
+	}
+	klog("pbrpmb: topup: READ-BACK MISMATCH - do not reboot blindly\n");
 	return 1;
 }
 
 /*
- * Validate the monitor seal via the pbmon misc devices.  Uses block 0x43,
- * whose plaintext holds bgroupcrt_dat8/fsecsyskey/drmclock.cfg (report 144):
- * unseal the media block, look for the records, seal the plaintext back and
- * compare with the media bytes.  This proves the smc ABI, the key and the
- * address convention without touching the RPMB write path.
+ * The two-stage monitor transform helpers live with the key matrix further
+ * down; the tests below use them.
+ */
+static int pb_seal(const uint8_t P[224], uint8_t C[256]);
+static int pb_unseal(const uint8_t C[256], uint8_t P[224]);
+static int tag_ok_offline(const uint8_t C[256]);
+static void wire_to_logical(uint8_t L[256], const uint8_t W[256]);
+
+/*
+ * Validate the monitor's two-stage transform via the pbmon misc devices.
+ *
+ * The input is the 256-byte data field as a read returns it — [ciphertext 224]
+ * [tag 32] — which is exactly the interface /dev/pbunseal now carries
+ * (session 27; report 174 §3/§5).  The driver digests the ciphertext with the
+ * 0x2E stage and compares it with the block's own tag before decrypting, so
+ * "unseal returns EBADMSG" means the digest stage did not reproduce the tag,
+ * and "unseal returns a plaintext that is not the store" means the 0x2F cipher
+ * key is still wrong.  Both are reported separately from the offline HMAC.
  */
 static int cmd_sealtest(int fd)
 {
-	uint8_t nonce[16], C[224], P[224], C2[224];
+	uint8_t nonce[16], W[256], C[256], P[224], C2[256];
 	struct rpmb_frame resp;
-	int ufd, sfd, ret = 1, plain_ok = 1;
+	int u, s, ret = 1;
 
 	fill_nonce(nonce);
 	if (read_block_q(fd, 0x43, nonce, &resp)) {
@@ -1120,125 +1421,201 @@ static int cmd_sealtest(int fd)
 		printf("sealtest: block 0x43 frame MAC invalid\r\n");
 		return 1;
 	}
-	memcpy(C, resp.data, 224);
+	memcpy(W, resp.data, 256);
+	wire_to_logical(C, W);
 
-	ufd = open("/dev/pbunseal", O_RDWR);
-	if (ufd < 0) {
-		printf("sealtest: open /dev/pbunseal: %s\r\n", strerror(errno));
+	printf("sealtest: tag offline=%s\r\n", tag_ok_offline(C) ? "ok" : "BAD");
+	u = pb_unseal(C, P);
+	printf("sealtest: unseal -> %s\r\n",
+	       u == 0 ? "ok" : u == -EBADMSG ? "TAG MISMATCH" : strerror(-u));
+	if (u) {
+		printf("sealtest: the 0x2E stage did not reproduce the tag\r\n");
 		return 1;
 	}
-	if (write(ufd, C, 224) != 224) {
-		printf("sealtest: unseal write: %s\r\n", strerror(errno));
-		close(ufd);
-		return 1;
-	}
-	lseek(ufd, 0, SEEK_SET);
-	if (read(ufd, P, 224) != 224) {
-		printf("sealtest: unseal read: %s\r\n", strerror(errno));
-		close(ufd);
-		return 1;
-	}
-	close(ufd);
-
-	printf("sealtest: unsealed[0:16]=");
+	printf("sealtest: P[0:16]=");
 	{
-		int i, off0, offr;
+		int i;
 
 		for (i = 0; i < 16; i++)
 			printf("%02x", P[i]);
-		printf(" [208:224]=");
-		for (i = 208; i < 224; i++)
-			printf("%02x", P[i]);
-		off0 = find_bytes(P, 224, (const uint8_t *)"\x2d\xbc\x83\x59", 4);
-		offr = find_bytes(P, 224, (const uint8_t *)"\x59\x83\xbc\x2d", 4);
-		printf("\r\nsealtest: magic fwd@%d rev@%d\r\n", off0, offr);
-		if (off0 != 0) {
-			printf("sealtest: plaintext does not look like the store "
-			       "(key/framing?), continuing to the round trip\r\n");
-			plain_ok = 0;
-		}
+		printf(" magic fwd@%d rev@%d\r\n",
+		       find_bytes(P, 224, (const uint8_t *)"\x2d\xbc\x83\x59", 4),
+		       find_bytes(P, 224, (const uint8_t *)"\x59\x83\xbc\x2d", 4));
 	}
 
-	sfd = open("/dev/pbseal", O_RDWR);
-	if (sfd < 0) {
-		printf("sealtest: open /dev/pbseal: %s\r\n", strerror(errno));
+	s = pb_seal(P, C2);
+	printf("sealtest: seal -> %s\r\n",
+	       s == 0 ? "ok" : strerror(-s));
+	if (s)
 		return 1;
-	}
-	if (write(sfd, P, 224) != 224) {
-		printf("sealtest: seal write: %s\r\n", strerror(errno));
-		close(sfd);
-		return 1;
-	}
-	lseek(sfd, 0, SEEK_SET);
-	if (read(sfd, C2, 224) != 224) {
-		printf("sealtest: seal read: %s\r\n", strerror(errno));
-		close(sfd);
-		return 1;
-	}
-	close(sfd);
-
-	if (!memcmp(C2, C, 224) && plain_ok) {
-		printf("sealtest: PASS - unseal and seal match block 0x43\r\n");
+	if (!memcmp(C2, C, 256)) {
+		printf("sealtest: PASS - unseal and seal both match block 0x43\r\n");
 		ret = 0;
-	} else if (!memcmp(C2, C, 224)) {
-		printf("sealtest: ROUND TRIP only - seal(unseal(C)) == C but the "
-		       "plaintext is not the store\r\n");
 	} else {
-		printf("sealtest: MISMATCH - seal(P) != media\r\n");
+		int k = 0;
+
+		while (k < 256 && C2[k] == C[k])
+			k++;
+		printf("sealtest: seal(P) differs from the media block "
+		       "(first diff at %d)\r\n", k);
 	}
 	return ret;
 }
 
-#define NFRAME 6
-#define NKEY 5
+#define NKEY 6
 
-static void keytest_frame(const uint8_t *D, int f, uint8_t *out)
-{
-	int i;
-
-	switch (f) {
-	case 0: memcpy(out, D, 224); break;			/* D[0:224] */
-	case 1: for (i = 0; i < 224; i++) out[i] = D[223 - i]; break;
-	case 2: memcpy(out, D + 32, 224); break;		/* D[32:256] */
-	case 3: for (i = 0; i < 224; i++) out[i] = D[255 - i]; break;
-	case 4: memcpy(out, D + 16, 224); break;		/* D[16:240] */
-	default: for (i = 0; i < 224; i++) out[i] = D[239 - i]; break;
-	}
-}
-
+/*
+ * Candidate 16-byte halves.  The pair is (blob[0:16], blob[16:32]): the first
+ * half is the 0x2E digest key (index 2, the reference's seed[0:16], proven)
+ * and the second is only read when the 0x33 preload length is 32.  Index 5 is
+ * the seed's real second half, so (2, 5) is the device's whole 32-byte seed.
+ */
 static const uint8_t keytest_keys[NKEY][16] = {
-	/* page+0x20, the value RpmbInit loads (report 144) */
+	/* page+0x20 (the bootloader page slot / session-19 default) */
 	{ 0x86, 0x78, 0x7c, 0x2a, 0x63, 0x2f, 0xbe, 0x16,
 	  0x48, 0xec, 0xab, 0xa6, 0xd8, 0x84, 0x01, 0x09 },
 	/* page+0x40, the second key in the page */
 	{ 0x44, 0x3a, 0xc2, 0x02, 0xeb, 0x50, 0x05, 0x1f,
 	  0x0c, 0x2c, 0x12, 0xb3, 0x4a, 0xc9, 0x3b, 0x4d },
-	/* page+0x440, seed[0:16] — the block-HMAC key */
+	/* seed[0:16] — the block-HMAC key (reference, proven offline and live) */
 	{ 0x15, 0x00, 0x00, 0x01, 0x4d, 0x43, 0x47, 0x41,
-	  0x46, 0x41, 0x10, 0x00, 0x46, 0x28, 0x01, 0xb4 },
-	/* page+0x460, the frame key, both halves */
-	{ 0xdf, 0xee, 0xc0, 0xce, 0x39, 0x28, 0x99, 0xc2,
-	  0x74, 0xe1, 0x2a, 0x01, 0xc8, 0xb3, 0x3d, 0x6f },
-	{ 0xf0, 0xee, 0xf5, 0x85, 0x1a, 0x6f, 0x9a, 0x0b,
-	  0xb2, 0x4a, 0xfd, 0x0a, 0x1c, 0x5e, 0x22, 0x74 },
+	  0x46, 0x41, 0x10, 0x00, 0x2b, 0xe1, 0x1d, 0xa8 },
+	/* the reference's frame key, first 16 */
+	{ 0x16, 0x11, 0xb3, 0xbb, 0x0e, 0xed, 0xaa, 0xcb,
+	  0xe0, 0xc1, 0x55, 0xb1, 0xa5, 0x45, 0xcc, 0xcd },
+	/* the reference's frame key, second 16 */
+	{ 0x34, 0xb3, 0xf1, 0xad, 0x78, 0xf2, 0x9a, 0x37,
+	  0x5c, 0xf0, 0xc4, 0x68, 0xf7, 0x9f, 0xd9, 0x22 },
+	/* seed[16:32] — the passphrase fragment (page+0x450) */
+	{ 0x3e, 0x00, 0x00, 0x00, 0x69, 0x6e, 0x67, 0x20,
+	  0x69, 0x6e, 0x20, 0x74, 0x68, 0x65, 0x20, 0x6f },
 };
 
-/*
- * One transform through /dev/pbseal or /dev/pbunseal.  The misc nodes are
- * non-seekable, so every call needs a fresh file description: reusing one would
- * leave the read offset advanced and the next read would return nothing.
- */
-static int pb_xf(const char *path, const uint8_t *in, uint8_t *out)
+static const uint8_t seed_first[16] = {
+	0x15, 0x00, 0x00, 0x01, 0x4d, 0x43, 0x47, 0x41,
+	0x46, 0x41, 0x10, 0x00, 0x2b, 0xe1, 0x1d, 0xa8
+};
+
+/* {op, kek, klen_sel (0 = 16-byte preload, 1 = 32), key_mode} */
+static int pb_set_ctl(uint8_t op, uint8_t kek, uint8_t klen_sel)
 {
-	int fd, ok = -1;
+	uint8_t v[4] = { op, kek, klen_sel, 0 };
+	int fd, ok;
+
+	fd = open("/dev/pbctl", O_WRONLY);
+	if (fd < 0)
+		return -1;
+	ok = write(fd, v, 4) == 4 ? 0 : -1;
+	close(fd);
+	return ok;
+}
+
+/*
+ * The winning transform parameters, measured in session 27:
+ *
+ *   digest key (0x2E descriptor) = seed[0:16]      (page+0x440, proven)
+ *   cipher key (0x33 preload)    = page+0x20       (86 78 7c 2a…)
+ *   NO 0x31 select_kek            — issuing it changes the plaintext and
+ *                                   breaks the transform
+ *
+ * `wsweep` found it: with the digest key held at the seed and no 0x31, the
+ * preload window at page+0x20 unseals the captured block-0x3B bytes into the
+ * captured plaintext exactly.
+ */
+static const uint8_t cipher_key[16] = {
+	0x86, 0x78, 0x7c, 0x2a, 0x63, 0x2f, 0xbe, 0x16,
+	0x48, 0xec, 0xab, 0xa6, 0xd8, 0x84, 0x01, 0x09
+};
+
+/* set the two transform key slots (/dev/pbkeys: keyA || keyB) */
+static int pb_set_keys2(const uint8_t a[16], const uint8_t b[16]);
+static int pb_set_keys2(const uint8_t a[16], const uint8_t b[16])
+{
+	uint8_t v[32];
+	int fd, ok;
+
+	memcpy(v, a, 16);
+	memcpy(v + 16, b, 16);
+	fd = open("/dev/pbkeys", O_WRONLY);
+	if (fd < 0)
+		return -1;
+	ok = write(fd, v, 32) == 32 ? 0 : -1;
+	close(fd);
+	return ok;
+}
+
+/* pin the driver to the measured combination (see the block comment above) */
+static int pb_use_measured(void)
+{
+	return pb_set_ctl(0, 0, 0) || pb_set_keys2(seed_first, cipher_key);
+}
+
+static const char *xf_status(int r)
+{
+	return r == 0 ? "ok" : r == -EBADMSG ? "tag" : "err";
+}
+
+/*
+ * The monitor works on the LOGICAL view; /dev/mmcblk1rpmb hands us the wire
+ * frame, in which the 256-byte data field is byte-reversed (trap 60).  This is
+ * proven, not assumed: `dump 0x3b` shows the captured block-0x3B bytes rotated
+ * so that its tag lands at +0xE0, and HMAC(seed16, L[0:0xE0]) == L[0xE0:] on
+ * that view (report 156's pair).
+ */
+static void wire_to_logical(uint8_t L[256], const uint8_t W[256])
+{
+	rev256(L, W);
+}
+
+/*
+ * One transform through /dev/pbseal (224 plaintext -> 256 sealed) or
+ * /dev/pbunseal (256 sealed -> 224 plaintext).  The misc nodes are
+ * non-seekable report nodes, so every call needs a fresh file description:
+ * reusing one would leave the read offset advanced and the next read would
+ * return nothing (trap 63).
+ *
+ * Returns 0 on success, -EBADMSG when the 0x2E tag does not match (a block
+ * that does not authenticate), and another negative errno for an smc error.
+ */
+static int pb_xf(const char *path, const uint8_t *in, size_t inlen,
+		 uint8_t *out, size_t outlen)
+{
+	int fd;
+	ssize_t n;
 
 	fd = open(path, O_RDWR);
 	if (fd < 0)
-		return -1;
-	if (write(fd, in, 224) == 224 && read(fd, out, 224) == 224)
-		ok = 0;
+		return -errno;
+	if (write(fd, in, inlen) != (ssize_t)inlen) {
+		int err = errno;
+
+		close(fd);
+		return err ? -err : -EIO;
+	}
+	n = read(fd, out, outlen);
 	close(fd);
-	return ok;
+	if (n != (ssize_t)outlen)
+		return n < 0 ? -errno : -EIO;
+	return 0;
+}
+
+static int pb_seal(const uint8_t P[224], uint8_t C[256])
+{
+	return pb_xf("/dev/pbseal", P, 224, C, 256);
+}
+
+static int pb_unseal(const uint8_t C[256], uint8_t P[224])
+{
+	return pb_xf("/dev/pbunseal", C, 256, P, 224);
+}
+
+/* the block tag the device stores: HMAC-SHA256(seed[0:16], C[0:0xE0]) */
+static int tag_ok_offline(const uint8_t C[256])
+{
+	uint8_t mac[32];
+
+	hmac_sha256(block_key, 16, C, 0xE0, mac);
+	return !memcmp(mac, C + 0xE0, 32);
 }
 
 /* one /dev/pbpair query (fresh description each time) */
@@ -1284,95 +1661,73 @@ static int cmd_wsweep(void)
 }
 
 /*
- * pairtest — the known-pair gate (report 144 §5) across key candidates.
+ * pairtest — the known-pair gate (report 144 §5), one boot, both stages.
  *
- * The driver holds block 0x43's captured plaintext (QNX page+0x700) and its
- * on-media ciphertext; /dev/pbpair unseals one and seals the other and reports
- * whether each reproduces the counterpart.  Here we sweep the keys seen in the
- * live page, forward and byte-reversed, through /dev/pbkey.  No media access.
+ * The digest key is proven (seed[0:16]), so it is held fixed and only the 0x33
+ * preload — the engine's key input for the 0x2F cipher — is varied.  Every row
+ * therefore returned a plaintext: `p=` answers whether the cipher key is being
+ * used at all (identical p across rows = the engine holds its own key) and
+ * `ct=OK` is the cipher matching the captured bytes.
+ *
+ * No media access: the pair is in the driver.
  */
 static int cmd_pairtest(void)
 {
-	/* {op, kek, desc_mode, key_mode} — desc_mode 1 = phys-0x10000000 */
-	static const uint8_t variants[][4] = {
-		{ 0, 2, 0, 0 },	/* identity everywhere (what we used before) */
-		{ 0, 2, 1, 0 },	/* QNX's descriptor form, key identity */
-		{ 0, 2, 1, 1 },	/* both biased */
-		{ 0, 2, 0, 1 },	/* descriptor identity, key biased */
-	};
-	uint8_t key[16];
-	char rep[128];
-	int kfd, cfd, k, i, r, v, tried = 0, hits = 0, ret = 1;
+	char rep[160];
+	int b, hits = 0;
 
-	kfd = open("/dev/pbkey", O_WRONLY);
-	cfd = open("/dev/pbctl", O_WRONLY);
-	if (kfd < 0 || cfd < 0) {
-		printf("pairtest: open: %s\r\n", strerror(errno));
+	if (pb_set_ctl(0, 2, 0)) {
+		printf("pairtest: pbctl: %s\r\n", strerror(errno));
 		return 1;
 	}
-	for (v = 0; v < (int)(sizeof(variants) / sizeof(variants[0])); v++) {
-		if (write(cfd, variants[v], 4) != 4) {
-			printf("pairtest: pbctl: %s\r\n", strerror(errno));
-			goto out;
-		}
-		for (k = 0; k < NKEY; k++) {
-			for (r = 0; r < 2; r++) {
-				for (i = 0; i < 16; i++)
-					key[i] = r ? keytest_keys[k][15 - i]
-						   : keytest_keys[k][i];
-				if (write(kfd, key, 16) != 16) {
-					printf("pairtest: pbkey: %s\r\n",
-					       strerror(errno));
-					goto out;
-				}
-				if (pb_pair_query(rep, sizeof(rep))) {
-					printf("pairtest: pbpair: %s\r\n",
-					       strerror(errno));
-					goto out;
-				}
-				tried++;
-				if (strstr(rep, "OK")) {
-					printf("pairtest: desc=%u key=%u k=%d%s %s",
-					       variants[v][2], variants[v][3], k,
-					       r ? "rev " : "", rep);
-					hits++;
-				} else if (k == 0 && r == 0) {
-					printf("pairtest: desc=%u key=%u key0 %s",
-					       variants[v][2], variants[v][3],
-					       rep);
-				}
-			}
+	for (b = 0; b < NKEY; b++) {
+		if (pb_set_keys2(seed_first, keytest_keys[b]))
+			goto io;
+		if (pb_pair_query(rep, sizeof(rep)))
+			goto io;
+		printf("pairtest: preload B=%d %s", b, rep);
+		if (strstr(rep, "ct=OK") || strstr(rep, "unseal=0/OK"))
+			hits++;
+	}
+
+	/* the measured preload (page+0x20) under all three kek settings: the
+	 * no-kek row is the one wsweep found, and the other two are the control
+	 * that shows the 0x31 call changes the result */
+	{
+		static const uint8_t keks[] = { 0, 1, 2 };
+		int v;
+
+		for (v = 0; v < 3; v++) {
+			if (pb_set_ctl(0, keks[v], 0) ||
+			    pb_set_keys2(seed_first, cipher_key))
+				goto io;
+			if (pb_pair_query(rep, sizeof(rep)))
+				goto io;
+			printf("pairtest: preload=0x20 kek=%u %s", keks[v], rep);
+			if (strstr(rep, "ct=OK") && strstr(rep, "tag=OK"))
+				hits++;
 		}
 	}
-	printf("pairtest: %d combinations, %d with an OK\r\n", tried, hits);
-	ret = hits ? 0 : 1;
-out:
-	close(kfd);
-	close(cfd);
-	return ret;
+
+	printf("pairtest: %d line(s) with a stage match\r\n", hits);
+	return 0;
+io:
+	printf("pairtest: io: %s\r\n", strerror(errno));
+	return 1;
 }
 
 /*
- * keytest — the key/framing matrix (report 148, in progress).
- *
- * The monitor accepts the transform and seal/unseal are exact inverses, but the
- * plaintext recovered from block 0x43 does not look like the record store.  So
- * either the 0x33 key or the 224-byte window taken from the 256-byte data field
- * is wrong.  This walks a small candidate set of both and reports the first
- * combination whose plaintext carries the record magic 2d bc 83 59.
- *
- * Framings use D, the 256-byte data field as received.  Report 143's verified
- * relation (`logical = reverse(D)`, block HMAC over logical[0:0xE0]) makes
- * f3 = reverse(D[32:256]) the strongest candidate: it is logical[0:224].
- *
- * Zero media writes: this only reads block 0x43 and runs the monitor transform.
+ * keytest — the live-media check, digest key held at the proven seed and the
+ * 0x33 preload varied.  Block 0x43's tag verifies offline first; then each row
+ * must return a plaintext (the tag gate is satisfied by keyA) and shows the
+ * first 32 bytes plus the record-magic offset.  Zero media writes: one read.
  */
 static int cmd_keytest(int fd)
 {
 	static const uint8_t magic[4] = { 0x2d, 0xbc, 0x83, 0x59 };
-	uint8_t nonce[16], D[256], in[224], P[224], C2[224];
+	uint8_t nonce[16], W[256], D[256], P[224];
 	struct rpmb_frame resp;
-	int k, f, kfd, hit = 0;
+	int hit = 0;
 
 	fill_nonce(nonce);
 	if (read_block_q(fd, 0x43, nonce, &resp)) {
@@ -1383,108 +1738,142 @@ static int cmd_keytest(int fd)
 		printf("keytest: block 0x43 frame MAC invalid\r\n");
 		return 1;
 	}
-	memcpy(D, resp.data, 256);
+	memcpy(W, resp.data, 256);
+	wire_to_logical(D, W);
+	printf("keytest: block 0x43 tag offline=%s\r\n",
+	       tag_ok_offline(D) ? "ok" : "BAD");
 
-	kfd = open("/dev/pbkey", O_WRONLY);
-	if (kfd < 0) {
-		printf("keytest: open: %s\r\n", strerror(errno));
+	if (pb_use_measured()) {
+		printf("keytest: setup: %s\r\n", strerror(errno));
 		return 1;
 	}
+	{
+		int i, off, u = pb_unseal(D, P);
 
-	for (k = 0; k < NKEY && !hit; k++) {
-		if (write(kfd, keytest_keys[k], 16) != 16) {
-			printf("keytest: pbkey write: %s\r\n", strerror(errno));
-			break;
+		off = u == 0 ? find_bytes(P, 224, magic, 4) : -1;
+		printf("keytest: unseal=%s p=", xf_status(u));
+		if (u == 0) {
+			for (i = 0; i < 8; i++)
+				printf("%02x", P[i]);
+		} else {
+			printf("--------");
 		}
-		printf("keytest: key %d:", k);
-		for (f = 0; f < NFRAME && !hit; f++) {
-			int off;
+		printf(" magic@%d\r\n", off);
+		if (off >= 0) {
+			uint8_t C2[256];
 
-			keytest_frame(D, f, in);
-			if (pb_xf("/dev/pbunseal", in, P)) {
-				printf(" f%d=err", f);
-				continue;
-			}
-			if (f == 0)
-				printf(" f0=%02x%02x%02x%02x", P[0], P[1],
-				       P[2], P[3]);
-			off = find_bytes(P, 224, magic, 4);
-			if (off < 0)
-				continue;
-			printf("\r\nkeytest: HIT key %d frame %d magic@%d\r\n",
-			       k, f, off);
 			hit = 1;
-			if (pb_xf("/dev/pbseal", P, C2)) {
+			if (pb_seal(P, C2)) {
 				printf("keytest: seal failed\r\n");
-				break;
+			} else {
+				printf("keytest: seal(P) vs the block: %s\r\n",
+				       memcmp(C2, D, 256) ? "differs" : "equal");
 			}
-			printf("keytest: seal(P) vs the input ciphertext: %s\r\n",
-			       memcmp(C2, in, 224) ? "differs" : "equal");
 		}
-		printf("\r\n");
 	}
-	close(kfd);
 	if (!hit)
-		printf("keytest: no key/framing combination produced the "
-		       "record magic\r\n");
+		printf("keytest: the measured pair did not produce the record "
+		       "magic\r\n");
 	return hit ? 0 : 1;
 }
 
 /*
- * blockscan — an independent check of key/framing that does not depend on the
- * captured block-0x43 pair: unseal every record block on media and look for the
- * record magic or a known record name.  If the key and framing are right, the
- * block that holds bgroupcrt_dat8/fsecsyskey/drmclock.cfg must show them,
- * whatever its address.  Read-only; the key/op/kek in force are those set
- * through /dev/pbkey and /dev/pbctl.
+ * blockscan — unseal every record block on media and look for the record store.
+ *
+ * The input is the 256-byte data field exactly as the read returned it: the
+ * orientation is settled (report 156 §5 — a read leaves the logical view in
+ * frame.data and the tag sits at +0xE0), so there is no framing sweep.  Three
+ * counters separate the stages: `tag` counts blocks whose 0x2E digest did not
+ * reproduce the stored tag, `ok` counts blocks the monitor unsealed, `offline`
+ * counts blocks whose tag the same HMAC verifies host-side.  If offline and
+ * `ok`+`tag` disagree, the driver and the monitor do not share a key.
+ *
+ * Read-only.
  */
 static int cmd_blockscan(int fd, unsigned first, unsigned last)
 {
 	static const uint8_t magic[4] = { 0x2d, 0xbc, 0x83, 0x59 };
-	static const char *names[3] = { "bgroupcrt_dat", "fsecsyskey",
+	static const char *names[4] = { REC_NAME, "bgroupcrt_dat", "fsecsyskey",
 					"drmclock.cfg" };
-	uint8_t nonce[16], D[256], in[224], P[224];
+	uint8_t nonce[16], W[256], D[256], P[224];
 	struct rpmb_frame resp;
 	unsigned b;
-	int f, i, hits = 0, rdok = 0;
+	int i, hits = 0, rdok = 0, ok = 0, tag = 0, err = 0, offline = 0;
 
 	if (last > 511)
 		last = 511;
+	/*
+	 * Pin the state to the measured pair rather than inheriting whatever a
+	 * previous command left: digest key seed[0:16], 0x33 preload
+	 * page+0x20, no select_kek.
+	 */
+	if (pb_use_measured()) {
+		printf("blockscan: setup: %s\r\n", strerror(errno));
+		return 1;
+	}
+	printf("blockscan: digest=seed[0:16] preload=page+0x20 kek=none\r\n");
+
 	for (b = first; b <= last; b++) {
+		int off, u;
+
 		fill_nonce(nonce);
 		if (read_block_q(fd, b, nonce, &resp))
 			continue;
 		if (!block_valid(&resp))
 			continue;
 		rdok++;
-		memcpy(D, resp.data, 256);
-		for (f = 0; f < 2; f++) {
-			int off;
+		memcpy(W, resp.data, 256);
+		wire_to_logical(D, W);
+		if (tag_ok_offline(D))
+			offline++;
+		u = pb_unseal(D, P);
+		if (u == -EBADMSG) {
+			tag++;
+			continue;
+		}
+		if (u) {
+			err++;
+			continue;
+		}
+		ok++;
+		/*
+		 * Names first: every store block carries the record magic, so a
+		 * magic test alone would mask the records.  A record is
+		 * {u32 magic, char name[14], u16 slot, u16 slot, u16 len} and the
+		 * payload follows the header, i.e. at name+0x14.
+		 */
+		for (i = 0; i < 4; i++) {
+			off = find_bytes(P, 224, (const uint8_t *)names[i],
+					 strlen(names[i]));
+			if (off < 0)
+				continue;
+			printf("blockscan: HIT block 0x%x '%s'@%d ", b, names[i],
+			       off);
+			if (off >= 0x14 && off + 0x16 <= 224) {
+				unsigned len = P[off + 0x12] |
+					       (P[off + 0x13] << 8);
+				int k;
 
-			keytest_frame(D, f ? 3 : 0, in);
-			if (pb_xf("/dev/pbunseal", in, P))
-				continue;
-			off = find_bytes(P, 224, magic, 4);
-			if (off >= 0) {
-				printf("blockscan: HIT block 0x%x f%d magic@%d\r\n",
-				       b, f, off);
-				hits++;
-				continue;
+				printf("len=%u data=", len);
+				for (k = 0; k < 8; k++)
+					printf("%02x", P[off + 0x14 + k]);
 			}
-			for (i = 0; i < 3; i++) {
-				off = find_bytes(P, 224,
-						 (const uint8_t *)names[i],
-						 strlen(names[i]));
-				if (off >= 0) {
-					printf("blockscan: HIT block 0x%x f%d "
-					       "'%s'@%d\r\n", b, f, names[i], off);
-					hits++;
-					break;
-				}
-			}
+			printf("\r\n");
+			hits++;
+			break;
+		}
+		if (i < 4)
+			continue;
+		off = find_bytes(P, 224, magic, 4);
+		if (off >= 0) {
+			printf("blockscan: block 0x%x magic@%d (no known name)\r\n",
+			       b, off);
+			hits++;
 		}
 	}
-	printf("blockscan: %d blocks read/MAC-ok, %d hits\r\n", rdok, hits);
+	printf("blockscan: %d blocks read/MAC-ok, tag offline %d, unsealed %d, "
+	       "tag-mismatch %d, smc-error %d, %d hits\r\n",
+	       rdok, offline, ok, tag, err, hits);
 	return hits ? 0 : 1;
 }
 
@@ -1598,6 +1987,9 @@ int main(int argc, char **argv)
 					     : 0,
 				    argc > 3 ? (unsigned)strtoul(argv[3], NULL, 0)
 					     : 511);
+	} else if (!strcmp(cmd, "topup")) {
+		ret = cmd_topup(fd, argc > 2 ?
+				(unsigned)strtoul(argv[2], NULL, 0) : 0x1E);
 	} else if (!strcmp(cmd, "dump")) {
 		if (argc < 3) {
 			printf("dump <block>\r\n");
@@ -1622,7 +2014,8 @@ int main(int argc, char **argv)
 		}
 	} else {
 		printf("usage: pbrpmb [selftest|counter|read <addr>|probe|scan|"
-		       "prep <addr>|write <addr> yes|oracle [n]|keytest|pairtest|blockscan]\r\n");
+		       "prep <addr>|write <addr> yes|topup [thresh]|oracle [n]|keytest|"
+		       "pairtest|blockscan]\r\n");
 		ret = 1;
 	}
 	close(fd);

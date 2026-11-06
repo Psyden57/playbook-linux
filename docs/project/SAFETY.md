@@ -48,13 +48,21 @@ corrects `108` §4.4). It is the factory boot budget.
 | `0xFFFFFFFF`, or a record of length ≠ 4 | selector 2 → failure (`KNOWN-ISSUES.md` §3.5; `docs/contradictions/expired-counter-nuke-vs-retry-halt.md`) |
 
 * **Writing exactly `0x32` is the normal top-up, not a hack.** It is what the
-  reference OS does on every TabletOS boot (`bench/device-startup.sh`,
-  `top_up_bootctr`: wait for `/dev/rpmb`, refuse to write if the value already
+  reference OS does on every TabletOS boot (`top_up_bootctr` in the operator's startup script, wait for `/dev/rpmb`, refuse to write if the value already
   reads `0x32`, build the 4-byte value, verify the temp file, write, read back
   the first byte, retry up to 6×). Report `116` §2.2 settled that `74`'s
   "never write `BOOTCTR_FCTRY`" was right for a better reason than it gave.
-* **On the unit the top-up is `/accounts/devuser/startup.sh` on the UFS**
-  (installed from `bench/device-startup.sh`; run via `/radio/scripts/env.sh` →
+* **Linux performs the top-up now (session 27, report 175).**  Our image's
+  `/init` runs `pbrpmb topup 0x1E` on every boot: it reads the record and, only
+  when the value is inside `1..0x32` **and below `0x1E`**, unseals the block,
+  patches the four value bytes, **re-seals with the monitor**, checks the seal
+  round-trips to the patched plaintext, sends **one** type-3 frame, reads the
+  result and unseals the read-back.  One attempt, never a loop (a failed write
+  does not return).  The threshold leaves ~30 boots of headroom so a reset loop
+  is noticed before the budget can reach `0`.  `pbrpmb topup <thresh>` does the
+  same thing by hand; nothing else writes RPMB.
+* **On the unit the **TabletOS** top-up is `/accounts/devuser/startup.sh` on the UFS**
+  (the operator's script; run via `/radio/scripts/env.sh` →
   `post-boot.sh` on every TabletOS boot).
   It must be the 4490-byte version (sha256 `c265cfbb…`) that waits for a
   working `dd`; an older copy fails its first `dd` (traps 29/50), refuses the
@@ -217,13 +225,22 @@ therefore `bb10mt flash`) cannot be used on this unit (reports `98` §2.3,
   under the session-18 decision; a writable mount of QNX's filesystem is only
   for a deliberate repurpose (and the UFS image is the way back).  See
   `docs/contradictions/safety-no-emmc-mount-vs-readonly-root.md`.
-* **Restore and verify** after every test: `local/images/ifs0.sealed.bin`,
-  sha256 `c72b0530…` (`dd if=/dev/hd1 bs=16 skip=65536 count=180193` — exactly
-  `0x2BFE10` bytes; the older `bs=512 skip=2048 count=5632` reads 496 bytes too
-  many and can never match, hash
-  host-side). "Sealed" means **CRC-sealed**: `os_type=6`, CRC `0x116B2562`. The
-  original shipping image is the *other* one — `75be24e8…`, CRC `0x8D46FB4A`,
-  `os_type=4` (report `95`; session-06 §Superseded).
+* **Restore and verify** after every test: flash a **1917 IFS** at block
+  `0x825` and boot it.  Two are in the tree and both boot: the **compressed**
+  `local/work/ifs1917-compressed.ifs` (3 466 232 B, sha256 `f14db207…`, 217
+  frames — the one on media now) and the **uncompressed**
+  `local/work/ifs-shim-sealed.ifs` (7 900 548 B, sha256 `b52195bb…`, 489
+  frames — the conservative choice).  Both are `os_type=6`, CRC-sealed.  **The boot is the verification** (operator,
+  session 27): the loader CRC-verifies the image before it runs and the OS
+  mounts `/base` — if the unit comes up, the flashed IFS is the one on media,
+  so a read-back hash adds nothing.  What to check instead: the OS boots,
+  `/base` is mounted, and `BOOTCTR_FCTRY` reads `0x32` (`cat
+  /dev/rpmb/BOOTCTR_FCTRY`, now readable as root).
+  `local/images/ifs0.sealed.bin` (sha256 `c72b0530…`, CRC `0x116B2562`,
+  `os_type=6`) is the **2.0.0.4869** IFS and is the wrong asset for a 1917
+  media set (trap 84).  The original shipping image is the *other* one —
+  `75be24e8…`, CRC `0x8D46FB4A`, `os_type=4` (report `95`; session-06
+  §Superseded).
 * **Never flash image `0x3B04298E`** (LM3532 without VAUX3 — it wedges the I²C
   bus and resets the unit; `STATE.md`).
 
@@ -242,7 +259,7 @@ therefore `bb10mt flash`) cannot be used on this unit (reports `98` §2.3,
 
 | actor | may |
 |---|---|
-| an **agent / automated session** | read everything; build and flash images through the documented loops; **write the eMMC for our own data** (region 1, and `hd3` once repurposed) under the session-18 operator decision; never **write** NVRAM or the MCT; **never write RPMB at all** — not even the `BOOTCTR_FCTRY` top-up.  Session 20 wrote a *captured genuine* `0x32` block from Linux with a verified frame MAC; the device accepted it and the unit then stopped booting (report 149).  A write-back that proves storage does **not** prove the record still unseals.  The operator performs any RPMB write, from a booted OS, with a readback |
+| an **agent / automated session** | read everything; build and flash images through the documented loops; **write the eMMC for our own data** (region 1, and `hd3` once repurposed) under the session-18 operator decision; never **write** NVRAM or the MCT; **never issue an RPMB write itself** — not even the `BOOTCTR_FCTRY` top-up.  The **image** performs that one write automatically at boot (`/init` → `pbrpmb topup 0x1E`, report 175); that is the operator's standing decision, not an agent action, and it obeys the threshold, single-frame and read-back rules above.  Session 20 wrote a *captured genuine* `0x32` block from Linux with a verified frame MAC; the device accepted it and the unit then stopped booting (report 149).  A write-back that proves storage does **not** prove the record still unseals.  Apart from the image's own boot-time top-up, any RPMB write is the operator's, from a booted OS, with a readback |
 | the **operator**, or a guarded on-device script | the `0x32` top-up, NVRAM maintenance, and anything else in this file — on a unit they can afford to lose, with a readback |
 | the **reference unit** (`0x50175127`) | the operator's writes only.  It was armed by the operator on 2026-11-01 (record `0x32`) and carries the sealed IFS; an agent treats it as read-only except the documented region-0 image flashes |
 

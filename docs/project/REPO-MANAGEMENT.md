@@ -27,7 +27,6 @@ already contains exactly the public content:
 * `.commandcode/` — the agent's learned working notes.
 * `tools/qnx6-usage` — the host-built binary.  Its source
   `tools/qnx6-usage.c` is tracked and public; rebuild it locally.
-* `bench/*.orig-*` — one-off backups.
 * `hardware/*` PDFs and the TRM text extraction.  Only
   `hardware/README.md` is tracked.
 

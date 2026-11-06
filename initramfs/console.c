@@ -47,6 +47,7 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include <linux/random.h>
 
 #include <linux/loop.h>
 #include <linux/i2c.h>
@@ -1757,6 +1758,9 @@ static void cmd_help(void)
 	line("  blkwr <byteoff> <len> [chunk]  timed O_DIRECT write of a known pattern");
 	line("                           (hex off, 4096-aligned; region 1 test only)");
 	line("  write <path> <text>      write a string to a file (sysfs)");
+	line("  entropy <hex>            credit entropy from the host (root ioctl);");
+	line("                           the SoC RNG is firewalled, so the CRNG");
+	line("                           never seeds itself (trap 87)");
 	line("  qnx6 [off-hex]           mount hd3 read-only on /mnt (default raw");
 	line("                           0x49000000; read-only loop, never writable)");
 	line("  rootfs [off-hex]         mount the region-1 ext4 root read-only on");
@@ -1966,6 +1970,63 @@ static void cmd_write(char **av, int ac)
 	line("write: %s <- '%s' (%d bytes)%s", av[1], av[2], n,
 	     n < 0 ? strerror(errno) : "");
 	close(fd);
+}
+
+/*
+ * entropy <hex> — credit real entropy into the kernel pool (root-only ioctl).
+ *
+ * The OMAP4 hardware RNG is behind the secure firewall: the board DTS keeps
+ * rng_target disabled because a non-secure read raises an L3 error and an
+ * imprecise external abort.  The CRNG therefore never initialises on this unit
+ * and /dev/urandom stays predictable — which matters because the RPMB nonce is
+ * covered by the frame MAC (trap 87).  The console is root in the initramfs, so
+ * the host can hand bytes over and RNDADDENTROPY credits them.  Run it before
+ * any RPMB write; the RPMB tool reports whether it saw a seeded CRNG.
+ */
+static void cmd_entropy(char **av, int ac)
+{
+	struct rand_pool_info *rp;
+	unsigned char b[64];
+	const char *h;
+	int fd, avail = -1, n = 0;
+
+	if (ac < 2) {
+		line("entropy: need <hex>, at least 32 hex digits");
+		return;
+	}
+	for (h = av[1]; h[0] && h[1] && n < (int)sizeof(b); h += 2, n++) {
+		unsigned v;
+
+		if (sscanf(h, "%2x", &v) != 1)
+			break;
+		b[n] = (unsigned char)v;
+	}
+	if (n < 16) {
+		line("entropy: %d byte(s) parsed, need at least 16", n);
+		return;
+	}
+	rp = calloc(1, sizeof(*rp) + n);
+	if (!rp) {
+		line("entropy: out of memory");
+		return;
+	}
+	rp->entropy_count = n * 8;
+	rp->buf_size = n;
+	memcpy(rp->buf, b, n);
+
+	fd = open("/dev/random", O_RDWR);
+	if (fd < 0) {
+		line("entropy: open /dev/random: %s", strerror(errno));
+		free(rp);
+		return;
+	}
+	ioctl(fd, RNDGETENTCNT, &avail);
+	if (ioctl(fd, RNDADDENTROPY, rp) < 0)
+		line("entropy: RNDADDENTROPY: %s", strerror(errno));
+	else
+		line("entropy: credited %d bits (avail was %d)", n * 8, avail);
+	close(fd);
+	free(rp);
 }
 
 /* ------------------------------------------------------- read-only mounts */
@@ -2207,6 +2268,8 @@ static void run_line(char *l)
 		cmd_grep(av, ac);
 	else if (!strcmp(av[0], "write"))
 		cmd_write(av, ac);
+	else if (!strcmp(av[0], "entropy"))
+		cmd_entropy(av, ac);
 	else if (!strcmp(av[0], "qnx6"))
 		cmd_qnx6(av, ac);
 	else if (!strcmp(av[0], "rootfs"))

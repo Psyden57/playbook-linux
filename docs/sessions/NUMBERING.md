@@ -1,13 +1,13 @@
 # Session numbering
 
-The project spans **twenty-five sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **twenty-seven sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-25`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-27`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
 * **Linux-era** ("session 1…13") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
@@ -37,6 +37,7 @@ So:
 | **23** | **17** | the canonical-docs audit (report 167) executed: the ownership model, the root README and contradictions, `tools/docs_audit.py`; the public GitHub snapshot and `publish_public.sh`; the docs/repo cleanup.  No bench work; the IFS writer was not started |
 | **24** | **18** | **IFS milestones 1–4 done, the `/base` hook and the `.5.ufs` + `autorun::0` shipped**: `tools/ifs_build.py` reproduces the stock imagefs, the `rfs_validator` shim mounts `/base`, the reseal sets the image length, and the **1917 IFS + edited 1917 RCFS + the 1917 `.5.ufs` with `autorun::0`** set was flashed with `bbusb.py flash` (its first hardware runs) and **booted** — PlayBook OS 2.1.0.1917, `/base` mounted, `devuser` login; the `/base` hook runs the operator's startup script and the `BOOTCTR_FCTRY` top-up works (`0x2E → 0x32`).  The ROOT V1.4 UFS was rejected (door never authenticates) (reports 169/170) |
 | **25** | **19** | **BB10 target fixed (Z10 10.3.03.2049 STL100-1), both supplied images analysed, `/base` and the UFS edited, and a complete set built and flashed.**  Corrected "Z10 + OMAP4460" (the OMAP Z10 is **STL100-1 = OMAP4470**; OMAP4460 is the Dev Alpha A).  Found the BB10 IFS is a plain QNX imagefs and `/base` the `r-c-f-s` RCFS; wrote `rcfs_extract.py`, `ucl_nrv2b.py` (NRV2B codec) and `bb10_ifs.py` (splice/reseal), plus `rfs_rcfs_shim.c`.  Edited the deckard blocklist writer, the `autorun::0` copies and the startup hook.  **The loader verified the image and jumped five times** (`factory_count` 50 → 45) but BB10 did not run; the unit is held in the ramloader, way back packed.  New tutorial: `BB10-IMAGE-GUIDE.md` |
+| **26** | **20** | **the factory top-up, re-examined**: the bootloader's load base (`0x80000000` at media `0x9000`, so reports 150/151's code addresses are `0x9000` high), its pre-boot wipe of the RPMB store state, the CM2 L4SEC clock disable, and the chainloader probes (dump, selector, mount — the mount reset-loops).  The unit was restored to 2.1.0.1917 (`0x32`) (report 173) |
 
 ## Anchors (evidence for the mapping)
 
@@ -63,6 +64,7 @@ The Linux-era sessions are anchored by their own handoffs, all in `docs/reports/
 | `docs/sessions/session-23.md` | Linux session 17 (absolute 23) — written by the session |
 | `docs/sessions/session-24.md` | Linux session 18 (absolute 24) — written by the session |
 | `docs/sessions/session-25.md` | Linux session 19 (absolute 25) — written by the session |
+| `docs/sessions/session-26.md` | Linux session 20 (absolute 26) — written by the session |
 
 The pre-Linux phase (absolute 1…6) has these artefacts, in chronological order. <!-- audit-ok: pre-Linux phase range -->
 The exact assignment to 1…6 is **not** reconstructed here — the operator knows it,
@@ -80,7 +82,7 @@ and each session knows its own position:
 Reports `10`…`102` are the pre-Linux phase's output (boot media, monitor
 security, IRAM tables, the ROM API, `hd0`, NVRAM records `0x2801`, RPMB, the CRC
 recipe, the loader audit, the pre-OS IFS reflash).
-`103`…`146` are the Linux-era sessions.
+`103`…`173` are the Linux-era sessions (and continuing).
 
 ## Why the two schemes are kept
 

@@ -44,6 +44,7 @@ def require_qnx_tools():
             'or QNX_HOST=.../host/linux/x86.' % AS)
 
 EP_TICKS = int(os.environ.get('EP_TICKS', '0'), 0)   # epoch-test delay, WDT2 32 kHz ticks
+BL_PROBE = int(os.environ.get('BL_PROBE', '0'), 0)   # 1 = call the bootloader's BOOTCTR_FCTRY selector and stash it
 
 BASE = 0x800FF800
 ZOFF = 0x2C0000
@@ -84,6 +85,7 @@ def main():
         '__KERNEL_DEST__': '0x%08X' % KDEST,
         '__DTB_DEST__': '0x%08X' % ddest,
         '__EP_TICKS__': '0x%08X' % EP_TICKS,
+        '__BL_PROBE__': '%d' % BL_PROBE,
     }
     asm = open(TPL).read()
     for k, v in subs.items():

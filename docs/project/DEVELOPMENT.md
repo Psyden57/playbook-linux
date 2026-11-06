@@ -55,10 +55,17 @@ timeout 20 tools/pbssh.sh 'uname -a'
 `root@169.254.0.1`); it starts `door-hold.sh` if the door is down.
 **"Connection refused" = the door, not the network.**
 
-**The 2.1.0.1917 OS only accepts `devuser`.**  The 4869 root key is rejected
-(operator, report 169); use `PB_USER=devuser tools/pbssh.sh 'uname -a'`.  The
-1917 OS comes up on USB `0fca:8012` ("RIM Network Device"), not `0x8010`, and
-takes about a minute after the flash before `169.254.0.1` answers.
+**SSH to the 1917 OS runs as `root`** (the operator enabled root SSH on
+2026-11-05; the 4869 root key is still rejected — report 169).  `tools/pbssh.sh`
+therefore needs no `PB_USER` on the door: `tools/pbssh.sh 'uname -a'` logs in as
+`root@169.254.0.1`.  `PB_USER=devuser` still works if a task needs the
+unprivileged account, but it cannot reboot the unit or read `/dev/rpmb`.
+The 1917 OS comes up on USB `0fca:8012` ("RIM Network Device"), not `0x8010`,
+and takes about a minute after the flash before `169.254.0.1` answers.
+
+**These commands are for the TabletOS (QNX) side only.**  Once **our** Linux
+image is running there is no door, no ssh and no `/proc/boot/shutdown`; the
+console (`tools/pbcon.py 'reboot'`) is the reboot path (trap 88).
 
 The QNX shell has no `head`, `xxd`, `od`, `md5sum`, `sum`, `cmp`, `bc` or
 `python`; it has `tail`, `dd`, `strings`, `awk`, `sed`, `grep`, and `python2.7`
@@ -72,11 +79,12 @@ tools/pbssh.sh 'dd if=/dev/hd1 bs=16 skip=65536 count=180193' | sha256sum
 
 ## 3. Build and wrap
 
-**Every binary in `initramfs/root/` is checked in prebuilt.**  They are not
-built by the kernel's build; the kernel only packs the directory into the cpio.
-A source change in `initramfs/*.c` does nothing until you rebuild the matching
-binary **and** drop the cpio (the kernel build reuses it otherwise).  The full
-recipe, in order:
+**The binaries in `initramfs/root/` are NOT built by the kernel's build** — the
+kernel only packs the directory into the cpio — **and they are gitignored**
+(`initramfs/root/{init,console,pbrpmb}`; only the sources are tracked), so a
+fresh clone has none until you build them.  A source change in `initramfs/*.c`
+does nothing until you rebuild the matching binary **and** drop the cpio (the
+kernel build reuses it otherwise).  The full recipe, in order:
 
 ```bash
 K=local/kernel-tree
@@ -152,14 +160,23 @@ The builder assembles the chainloader with the QNX 6.6 toolchain and **rewrites
 `0x008` (`LoadEnd`), `end-8` (magic) and `end-4` (CRC)** every time, so the
 printed CRC is the only thing worth quoting.
 
-## 4. Flash a test build (from **media running**, e.g. TabletOS)
+## 4. Flash a test build (from **a booted OS**, TabletOS or our own image)
+
+The flasher only speaks the pre-OS protocol, so it cannot reboot the unit
+itself.  Start it immediately before the reboot and use **the reboot command of
+whatever is running**:
+
+| the unit is running | reboot with |
+|---|---|
+| TabletOS 2.1.0.1917 | `tools/pbssh.sh '/proc/boot/shutdown -S reboot'` (root ssh) |
+| **our Linux image** | **`tools/pbcon.py 'reboot'`** — there is no door and no `/proc/boot/shutdown` (trap 88) |
 
 ```bash
-lsusb | grep -i 0fca                      # want 0fca:8010; 0fca:0001 = bootrom, 8001 = ramloader
+lsusb | grep -i 0fca                      # 0fca:8010/8012 = OS running; 0fca:0001 = bootrom, 8001 = ramloader
 nohup python3 tools/pre_os_ifs_flash.py --template-ifs boot/chainloader/kernel.img > /tmp/f.log 2>&1 &
-sleep 3
-timeout 30 tools/pbssh.sh '/proc/boot/shutdown -S reboot'   # or tools/pbcon.py 'reboot' from Linux
-until grep -q 'done (' /tmp/f.log; do sleep 2; done; tail -2 /tmp/f.log
+sleep 2
+tools/pbcon.py 'reboot'                   # our Linux image  (TabletOS: tools/pbssh.sh '/proc/boot/shutdown -S reboot')
+until grep -qE 'done \(|COMPLETE' /tmp/f.log; do sleep 2; done; tail -2 /tmp/f.log
 # The flasher now resets the loader itself (leave_loader(): 0x80EF/0xEF on a
 # fresh 0x8001 handle, retried), so the old manual force_reset_loader loop is
 # no longer needed.  If the log ends with "loader still enumerated", run the
@@ -236,7 +253,17 @@ Console command reference (`initramfs/console.c`):
 | `sink <len>` | read `<len>` bytes from the host and discard them: measures the console link alone (`tools/pbsink.py`); pace it, the ACM path drops bytes when blasted (trap 51) |
 | `blkwr <byteoff> <len> [chunk]` | timed `O_DIRECT` write of a deterministic pattern to `/dev/mmcblk1` (hex off, 4096-aligned; FNV-1a64 of the bytes written).  Region-1 test writes only.  This is the tested large-write primitive (report 136) |
 | `write <path> <text>` | write a string to sysfs |
+| `entropy <hex>` | credit real entropy into the kernel pool (root `RNDADDENTROPY`).  **The SoC RNG is firewalled, so the CRNG never seeds itself** — run this before any RPMB write (trap 87).  32+ hex digits; verify with `kmsg crng` (`crng init done`). |
 | `reboot` | reboot now (returns to the boot ROM) |
+
+**The factory counter tops itself up at boot.**  `/init` runs `pbrpmb topup
+0x1E` after the console is up: it reads `BOOTCTR_FCTRY` and writes `0x32` only
+when the value is inside `1..0x32` and **below `0x1E`** — one sealed frame, one
+result read, one read-back, never a loop (report 175).  Its outcome is one
+`pbrpmb: topup: ...` line in `kmsg` (`cat` the log or `kmsg topup` on the
+console); the earlier modes are `>= threshold, no write` and `PASS`.  Because a
+factory boot spends one unit, a normal boot at `0x32` lands at `0x31` and does
+**not** write.
 
 Everything that touches hardware runs forked with a bounded wait, so a gated
 target's L4 abort is a SIGBUS in the worker, not a dead console (trap 14). Near a
@@ -291,20 +318,32 @@ it retries.
 
 ```bash
 nohup python3 tools/pre_os_ifs_flash.py \
-  --template-ifs local/images/ifs0.sealed.bin > /tmp/f.log 2>&1 &
-sleep 3; ./tools/pbcon.py 'reboot'              # or ./tools/pbssh.sh '/proc/boot/shutdown -S reboot'
-until grep -q 'done (' /tmp/f.log; do sleep 2; done
+  --template-ifs local/work/ifs-shim-sealed.ifs > /tmp/f.log 2>&1 &
+sleep 2; ./tools/pbcon.py 'reboot'        # the unit is running our Linux image
+until grep -qE 'done \(|COMPLETE' /tmp/f.log; do sleep 2; done
 # the flasher resets the loader itself; only if it logs "loader still enumerated":
 #   timeout 40 python3 tools/force_reset_loader.py
 for i in $(seq 1 60); do timeout 12 ./tools/pbssh.sh 'echo DOOROK' 2>/dev/null | grep -q DOOROK && break; sleep 5; done
-./tools/pbssh.sh 'dd if=/dev/hd1 bs=512 skip=2048 count=5632 2>/dev/null' > /tmp/ifs.bin
-python3 -c "import hashlib;print(hashlib.sha256(open('/tmp/ifs.bin','rb').read()[:0x2BFE10]).hexdigest())"
-# expect c72b053027769c4d49270e9ee208fd2b0afcf69ce4fb3cf0c0be3c938ee05299
-./tools/pbssh.sh 'dd if=/dev/rpmb/BOOTCTR_FCTRY bs=4 count=1 2>/dev/null' | xxd -p   # expect 32000000
+tools/pbssh.sh 'uname -a; mount | grep base'      # 6.6.0 … and /dev/hd1t179 on /base
+tools/pbssh.sh 'cat /dev/rpmb/BOOTCTR_FCTRY' | xxd -p     # expect 32000000
 ```
 
-The payload copies are `local/images/ifs0.sealed.bin` (sealed IFS) and
-`local/images/kernel*.img` (37 files, the tagged builds). If the restore flash
+**The boot is the verification** (operator, session 27): the loader
+CRC-verifies the image before it runs and the OS mounts `/base`, so if the unit
+comes up on 2.1.0.1917 the flashed IFS is the one on media — a read-back hash
+adds nothing and is no longer part of the loop.  Check instead that the OS
+boots, `/base` is mounted, and the counter reads `0x32` (root ssh can finally
+read `/dev/rpmb`).
+
+**Restore the 1917 IFS, not `local/images/ifs0.sealed.bin`.**  That file is the
+**2.0.0.4869** IFS and is incompatible with the 1917 `/base`/UFS on the media
+(trap 84).  The 1917 IFS with the `rfs_validator` shim is
+`local/work/ifs-shim-sealed.ifs` (7 900 548 B, block `0x825`), and the full way
+back — IFS + RCFS + UFS — is `local/work/back-1917.signed`.
+
+The payload copies are `local/work/ifs-shim-sealed.ifs` (the 1917 IFS — **not**
+`local/images/ifs0.sealed.bin`, which is the 4869 IFS, trap 84) and
+`local/images/kernel*.img` (the tagged builds). If the restore flash
 misbehaves, `--delay 40` is the trick that catches the *next* WDT2 self-reset
 instead of the bootrom you just left (report 103 §6.3). The `BOOTCTR` line is a
 **read**: see `SAFETY.md` §2 before writing anything there.
@@ -433,7 +472,7 @@ Also: **`bb10mt info` prints mostly wrong data for the PlayBook** (operator,
 `tools/bbusb.py info` for the parts we can read without Windows.
 
 **Keep `accounts/devuser/startup.sh` in sync** between the live unit, the UFS
-image and `bench/`.  An older copy stops the `BOOTCTR_FCTRY` top-up: its first
+image and the operator's on-device copy (`local/work/devuser-startup.sh`).  An older copy stops the `BOOTCTR_FCTRY` top-up: its first
 `dd` runs before the devuser overlay interpreter exists (trap 29), the guard
 refuses to write, and the factory budget drains (0x32 → 0x2d was observed).
 The good script (4490 B, sha256 `c265cfbb…`) waits for a working `dd` first.

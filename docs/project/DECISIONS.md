@@ -184,7 +184,7 @@ agent never writes RPMB, at all, and any top-up is the operator's, from a booted
 OS, with a readback.  The transform is still unreproduced (reports 148/156).
 
 **Decision (as originally taken).** `BOOTCTR_FCTRY` maintenance is out of bounds for automated work.
-It is done by `bench/device-startup.sh` (`top_up_bootctr`) on the unit, or by the
+It is done by the operator's startup script (`top_up_bootctr`; a source copy at `local/work/devuser-startup.sh`) on the unit, or by the
 operator by hand.
 
 **Why.** The record lives in RPMB behind an authenticated write path (nonce +
@@ -440,6 +440,14 @@ mismatch, verify by readback, never a loop.  NVRAM and the MCT remain forbidden.
 clean boot); the operator's session-18 direction ("i'd prefer that we do it all
 from linux, be independent").
 
+**Executed (session 27).**  The top-up was performed from Linux: `pbrpmb prep
+0x3a` unseals the record block, patches the four bytes to `0x32`, **re-seals it
+with the monitor**, checks the seal round-trips, and builds one type-3 frame;
+the operator's `pbrpmb write 0x3a yes` sent it, the card accepted it, the
+read-back unsealed to `32 00 00 00`, and the restore boot's bootloader consumed
+that very record.  Report 175 and its addendum.  The constraint below held and
+is what made it safe.
+
 ---
 
 ## 20. The RPMB record block is sealed; a plaintext patch is forbidden (session 19)
@@ -464,7 +472,8 @@ superseded by report 147: `0xFF05` was a page-validation error, not a caller
 refusal; the address rule is identity physical pages below `0xB0000000`.**
 
 **Constraint.** No RPMB write until a seal reproduces the media bytes; then
-exactly one `0x32` write with readback (`SAFETY.md` §2/§4).  Do not send a seal
+exactly one `0x32` write with readback (`SAFETY.md` §2/§4).  **Met and
+executed in session 27** (report 175 addendum).  Do not send a seal
 with a guessed physical address — the monitor writes 224 bytes where told.
 NVRAM and the MCT remain forbidden.
 
@@ -573,6 +582,64 @@ ramloader.  An agent never writes RPMB; no flash without the operator.
 (IFS/RCFS) work are set aside for someone else to follow; `HANDOFF.md` returns
 to the Linux bring-up.  When BB10 resumes, this control is the first step; its
 documents (`BB10-PORT.md`, `BB10-IMAGE-GUIDE.md`, reports 171/172) stay.
+
+---
+
+## 25. The bootloader's load base is `0x80000000` at media `0x9000`; do not reuse its RPMB writer from the chainloader (session 26)
+
+**Decision.**  Treat the code addresses in reports 150/151 as `0x9000` too high
+(`real DRAM = quoted - 0x9000`).  Do not pursue the
+"call the bootloader's `record_read`/`record_write`/`mount` from our
+chainloader" top-up route.  Continue item 6 on the Linux `pbmon` path,
+re-checking the seal with the bootloader's own sequence — **domain 5** and
+`0x31 -> 0x33 -> 0x2F -> 0x33 -> 0x2E`.
+
+**Why.**  A chainloader dump proved the arm9000 section is loaded at
+`0x80000000` from media `0x9000` (DRAM `0x80009000` = media `0x12000`), which
+also explains report 151 §Q5's "wipe table anomaly" (the table is valid at
+media `0x1D31C`).  The bootloader's tail then wipes
+`[0x80025E78, 0x800517C4)`, including its RPMB store state and catalogue, so a
+selector call from the chainloader returns `0` (absent); calling its mount
+(`0x800082DC`) to rebuild them hung and reset-looped the unit (~10 counter
+units).  The data literals in those reports are correct; only code addresses
+shift.
+
+**Evidence.**  Report 173 §1–§5; the three probe images
+(`0xBD8966DD` dump, `0xA051A23C` selector, `0x984267D3` mount — do not boot the
+last); the restored unit (2.1.0.1917, `BOOTCTR_FCTRY = 0x32`).
+
+**Constraint.**  No RPMB write by an agent (`SAFETY.md` §6).  The next
+experiment is read-only: re-run `pbmon`'s seal against a known pair with domain
+5 before any write, and only then consider the single verified `0x32` top-up.
+
+---
+
+## 26. The region-0 IFS is shipped compressed (session 27)
+
+**Decision (operator, session 27).**  Compress the booting IFS with the QNX
+NRV2B imagefs stream rather than leaving it uncompressed: the PlayBook IFS uses
+the same `u16` length-prefixed block format as BB10, so `tools/bb10_ifs.py
+splice` + `tools/89-crc_tool.py reseal` apply unchanged.  The compressed
+container is what is on media now.
+
+**Why.**  The region-0 IFS slot is finite (11.25 MB) and the image work keeps
+growing; the stock IFS is compressed for the same reason.  Compression also
+cuts a flash from 489 frames to 217.
+
+**Evidence.**  `local/work/ifs-shim.ifs` (our shim imagefs, uncompressed)
+spliced into the vendor 1917 container's stream: payload 3 142 560 B for a
+7 619 692 B imagefs (41.2 %), `bb10_ifs.py verify` decompresses it back exactly
+(117 blocks, `imagefs_ok`, `startup_sum0`), `dumpifs` lists the same 106 entries
+with `proc/boot/rfs_validator 2237`, `89-crc_tool.py verify` reports
+`RESULT: VERIFIED (CRC path)`, and the unit **booted TabletOS from it**
+(217 frames, `/base` mounted, `BOOTCTR_FCTRY = 0x32`).  The artefact is
+`local/work/ifs1917-compressed.ifs` (3 466 232 B, sha256 `f14db207…`).
+
+**Constraint.**  The uncompressed `local/work/ifs-shim-sealed.ifs` boots too and
+stays as the conservative way back.  Our **Linux** chainloader image is not a
+QNX imagefs, so this does not compress it: it would need a decompressing entry
+path (RIM's startup blob decompresses the stock IFS; our chainloader replaces
+the OS entry), which is a design question, not a tool invocation.
 
 ---
 

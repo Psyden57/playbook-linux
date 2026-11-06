@@ -43,7 +43,7 @@ Consequences that matter:
 * **A clean retail tablet is on the product path.**  Its `BOOTCTR_FCTRY` record is
   **absent** — report 95 §1 measured exactly that on the spare unit before it was armed.
   Nothing in the stock OS creates the record: the periodic top-up is *our* script
-  (`bench/device-startup.sh`, installed as a devuser startup), not stock behaviour.
+  (the operator's startup script, installed as a devuser startup), not stock behaviour.
 * **Our images only boot on the factory path.**  Every image this project flashes is
   **CRC-sealed**: `os_type = 6` at image offset `0x100` and a CRC-32 trailer
   (report 89).  Changing those bytes is what makes a self-built image bootable, and it is
@@ -144,7 +144,7 @@ recovery story.
 * the first boot takes the factory path, verifies region 0 by CRC, boots, and
   **decrements** the counter (`0x32 → 0x31`, measured in report 95 §4);
 * the counter is "factory boots remaining".  On the spare it was kept topped up to `0x32`
-  by `bench/device-startup.sh`, installed on the unit as
+  by the operator's startup script, installed on the unit as
   `/accounts/devuser/startup.sh` and run from `/radio/scripts/post-boot.sh` on every
   TabletOS boot — that script is ours, not stock, and it is what kept 15 sessions of
   bench work alive;
