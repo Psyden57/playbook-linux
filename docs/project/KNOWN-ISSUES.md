@@ -232,6 +232,77 @@ report 121 §3/§11/§12.
     (61 208 B) builds at `0x8A5C`/`0x8A60`.  The feature was dropped in the
     newer build, not broken — do not spend time on it (report 157 addendum).
 
+91. **The sensor cluster is on OMAP I²C4 `0x48350000`, and the board DTS had the
+    bus comment inverted.**  QNX instantiates three controllers —
+    `0x48070000`, `0x48072000`, `0x48350000` — and names the third
+    `/dev/i2c3`; `/dev/i2c2` (`0x48060000`) is **not** instantiated.  The DTS's
+    `&i2c4` (`0x48350000`) was `disabled` with the note "the one QNX does not
+    instantiate", while `&i2c3` (`0x48060000`) was enabled.  It is the other way
+    round: the BMA150/HMC5883L/MPU3050/CM3217/FAN5702/WM8994 all answer on
+    `0x48350000`.  RIM's own map is `/base/etc/system/config/sensor_config.xml`
+    (board `Winchester` rev 0) and the driver set is `/base/lib/dll`.  (Session
+    28, report 176.)
+
+92. **A read-write mount of a loop device backed by an `O_RDONLY` fd fails with
+    `EACCES`.**  The first switch_root attempt opened `/dev/mmcblk1` `O_RDONLY`
+    and mounted the loop `rw`; `mount(2)` returned "Permission denied" and the
+    initramfs fell back to the console.  The loop's write path needs a writable
+    backing fd: open the whole-disk node `O_RDWR` for a writable loop root (our
+    own ext4, `DECISIONS.md` §18).  (Session 28.)
+
+93. **Shutting down from the loop-RW root produced eMMC errors/warnings and a
+    stuck tty — cause not yet identified.**  Observed from the console at the
+    first `reboot` (session 28): a burst of eMMC-related messages and the tty
+    appeared stuck before the unit reset.  The obvious noise was removed
+    (`/etc/inittab` no longer runs `umount -a -r` on a loop root, which can only
+    print EBUSY), but the eMMC part is **not** explained.  The next Linux boot
+    should capture the full console `dmesg` and the shutdown output; candidates
+    are the MMC2 idle-stall (the `mmc2_target` keep-awake) during the final
+    writes, the ext4 writeback at shutdown, and the ttyGS0/`sh -l` respawn path.
+    Do not assume the inittab change fixed it.  A graceful `reboot` took ~90 s,
+    which is why a flasher started before it missed the bootrom; **`reboot -f`**
+    from the shell resets immediately and is the flashing workaround (the
+    `bbusb.py` window is now 60 s, `DECISIONS.md` §29).
+
+94. **The `=m` sensor drivers need their whole module closure in the rootfs.**
+    Putting only `bma150.ko`/`hmc5843*.ko`/`mpu3050.ko` in
+    `/lib/modules/6.15.11` gives `bma150` but every IIO driver fails with
+    "unknown symbol" (and "module 'industrialio' not found"), because
+    `CONFIG_IIO=m` makes the IIO core a module too.  The closure is:
+    `industrialio`, `industrialio-triggered-buffer`, `kfifo_buf`, `i2c-mux`
+    (for mpu3050); plus `evdev` for `/dev/input/event*` (the input device exists
+    without it, but there is no node).  `build_rootfs.py` installs exactly the
+    files in `--modules`; add the closure and `modprobe evdev bma150
+    hmc5843_i2c mpu3050` in rcS.  The **TMP103** is the same case with
+    `hwmon`: `CONFIG_HWMON=m`, so `tmp103.ko` needs `hwmon.ko` first or it
+    fails with "Unknown symbol devm_hwmon_device_register_with_info".
+    (Session 28, reports 177/178.)
+
+95. **The CM3217 ambient light sensor reads all-zero and has no mainline
+    driver.**  Both 0x10 and 0x11 on I²C4 ACK, but every register (0x00–0x10)
+    reads `0x00`; the mainline `cm32181` driver accepts only chip IDs
+    `0x18` (CM3218), `0x81`/`0x82` (CM32181/82) and would reject it.  The QNX
+    reference is `/base/lib/dll/ls-cm3217.so`: disassembly gives address
+    **0x10**, 400 kHz, `devctl 0xC0100506` register reads, two ALS bytes
+    combined `(hi << 8) | lo`, and a CMD/integration-time/`cal_table` config.
+    From Linux the CM32181 sequence is refused: a byte read of 0x04 gave 0x4d
+    once then 0x00, a word read gives 0xff00, and a word write of CMD 0x0800
+    returns **ENXIO**.  `ls_startup` writes the CMD from a config byte at
+    `+0x40` (`ls_shutdown` ORs bit 0) — that byte and the ALS register pair are
+    the RE targets.  Do **not** poke further; the next step is a static RE of
+    that module followed by a small driver.  (Session 28, report 178.)
+
+96. **The FAN5702 EN is GPIO1_13 on pad `0x1b0`, and the pad boots in safe
+    mode.**  Raw `devmem` writes of the pad/`GPIO_OE`/`SETDATAOUT` left the
+    chip in reset and every I2C access returned `ENXIO`.  The working path is
+    the `leds-fan5702` driver's pinctrl (`OMAP4_IOPAD(0x1b0, 0x0003)`) plus
+    `enable-gpios = <&gpio1 13 GPIO_ACTIVE_HIGH>`, which pulses EN low→high
+    before the init writes.  Protocol (external `LED-RE.md` + `led-fan5702.so`):
+    `GENERAL (0x10)` bits 1/2/3 = red/green/blue, `0x20 = 0`,
+    `0x30/0x40/0x50 = 0x36`; the vendor driver sets 100 kHz but 400 kHz works.
+    Once the driver owns the client, `i2cget` says "Device or resource busy" —
+    use `/sys/class/leds`.  (Session 28, report 179.)
+
 ## 3. Corrections to older reports
 
 These eighteen are preserved deliberately. Each is newer than the text it
@@ -428,6 +499,28 @@ decrements `BOOTCTR_FCTRY`" was an incomplete caller audit — reports 89 §3.5 
   (`118` §8.2, `111` §8 item 4).  The corrections are applied *in place* in those
   two files and listed in §3; the other reports are left as written so the
   section-by-section citations elsewhere still resolve.
+
+### Fixed in session 28 (userland, sensors, flasher)
+
+* **The DTS sensor-bus inversion** — `&i2c4` (`0x48350000`) was `disabled`;
+  it is enabled with the BMA150/HMC5883L/MPU3050 and FAN5702 nodes, and
+  `&i2c3` (`0x48060000`) stays enabled-but-empty (trap 91; reports 176/177).
+* **The BMA150 driver had no `of_match`** — added (the driver predates DT);
+  HMC5883L/MPU3050 bound through their existing tables.
+* **The `=m` module closure** — `industrialio`,
+  `industrialio-triggered-buffer`, `kfifo_buf`, `i2c-mux`, `evdev` and
+  `hwmon` are installed by `build_rootfs.py --modules` and modprobed by rcS
+  (trap 94).
+* **The FAN5702 EN** — `leds-fan5702` with the pad `0x1b0` pinctrl and
+  `enable-gpios` (trap 96).
+* **`rootfs/etc/init.d/rcS` was untracked** — the `*.d` ignore rule shadowed
+  it; force-added and a `.gitignore` negation added.
+* **The `bbusb.py` bootrom window** — 10 s → 60 s; it is the flasher of record
+  (trap 93's flashing workaround, `DECISIONS.md` §29).
+* **The inittab `umount -a -r`** — removed (`sync`), trap 93.
+* **The LED class name duplication** — the source labels are now
+  `red:status`/`green:status`/`blue:status`; the media image still has
+  `playbook:playbook:*` until the next region-0 build.
 
 ### Fixed in session 17 (write path, tooling, policy)
 

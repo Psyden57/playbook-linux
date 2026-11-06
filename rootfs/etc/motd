@@ -1,0 +1,8 @@
+PlayBook region-1 Linux root (BusyBox).
+
+  reboot              warm reset; the pre-OS flasher can catch the bootrom
+  insmod FILE.ko      load a module (modules live in /lib/modules/$(uname -r))
+  modprobe NAME       load by name (modules.dep is built by rcS's depmod)
+  dmesg               kernel log
+  pbconsole           the bring-up hardware console (fb/bl/peek/spi/i2c/...);
+                      it takes over this tty until it exits

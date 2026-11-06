@@ -20,7 +20,7 @@ path.
 
 ## 1. Preconditions, always
 
-* Check USB ownership: `ps -ef | grep -E 'BerryShell|pre_os_ifs_flash|force_reset'`.
+* Check USB ownership: `ps -ef | grep -E 'BerryShell|bbusb|pre_os_ifs_flash|force_reset'`.
   Only **one** process may own the USB link. Bench work and static RE are
   different jobs; subagents never touch the bench.
 * The flash precondition is the **unit running media** (`0fca:8010`), not the
@@ -160,27 +160,91 @@ The builder assembles the chainloader with the QNX 6.6 toolchain and **rewrites
 `0x008` (`LoadEnd`), `end-8` (magic) and `end-4` (CRC)** every time, so the
 printed CRC is the only thing worth quoting.
 
+## 3a. The region-1 BusyBox userland and its modules
+
+The real root lives on the eMMC (region 1, raw `0x29000000`), not in the
+initramfs.  `tools/build_rootfs.py` stages `rootfs/` plus a static BusyBox plus
+the bring-up tools and the module tree, and writes a journal-free ext4:
+
+```bash
+. tools/env.sh
+# 1. BusyBox (once; the tree is gitignored under local/):
+#    download busybox-1.36.1, then:
+make ARCH=arm CROSS_COMPILE=arm-buildroot-linux-gnueabihf- defconfig
+sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
+make ARCH=arm CROSS_COMPILE=arm-buildroot-linux-gnueabihf- -j12
+make ARCH=arm CROSS_COMPILE=arm-buildroot-linux-gnueabihf- \
+     CONFIG_PREFIX=/tmp/bbinstall install   # generates busybox.links
+
+# 2. kernel modules (needed once for Module.symvers; CONFIG_MODVERSIONS=y):
+make -C $K ARCH=arm CROSS_COMPILE=$CROSS_COMPILE -j12 modules
+make -C $K ARCH=arm CROSS_COMPILE=$CROSS_COMPILE M=$PWD/rootfs/modules modules
+cp rootfs/modules/pbhello.ko local/work/modules/
+
+# 3. the region-1 image (64 MiB, ext4, no journal):
+python3 tools/build_rootfs.py --size-mb 64 \
+  --busybox local/work/src/busybox-1.36.1/busybox \
+  --busybox-links local/work/src/busybox-1.36.1/busybox.links \
+  --modules local/work/modules
+```
+
+What it installs: `/bin/busybox` + 401 applet links, `/sbin/init` ->
+BusyBox init, `/etc/inittab` (a `sysinit` rcS and `ttyGS0::respawn:/bin/sh -l`),
+`/etc/init.d/rcS` (mounts proc/sys/dev, tmpfs /tmp//run, hostname, `depmod -a`),
+`/etc/profile` (**`PS1='pb> '`** so `tools/pbcon.py` keeps working),
+`/bin/pbconsole` (the hardware console), `/bin/pbrpmb`, and the `.ko` files
+under `/lib/modules/<uname -r>` with a host-generated `modules.dep`.
+
+**The hand-off.**  `initramfs/init.c`'s `rootfs_boot()` mounts the region-1
+ext4 **read-write** (the loop's backing `/dev/mmcblk1` must be opened `O_RDWR`,
+trap 92), bind-mounts `/dev` `/proc` `/sys` into it, `chroot`s and `exec`s
+`/sbin/init`.  With no `/sbin/init` it runs the old diagnostic and falls back to
+the bring-up console.  On the shell, `reboot` is a BusyBox applet (warm reset;
+the pre-OS flasher catches the bootrom), `insmod`/`modprobe` load a module, and
+`/bin/pbconsole` takes over the tty for the old `fb`/`bl`/`peek`/`spi` commands.
+
+**Flash both halves in ONE bootrom session** (the unit must be booted, not in
+the ramloader).  **`tools/bbusb.py` is the flasher**; the older
+`pre_os_ifs_flash.py` is kept only for historical recipes (`DECISIONS.md` §29):
+
+```bash
+printf 'boot/chainloader/kernel.img=16,0\nlocal/images/rootfs-region1.ext4=8448,0\n' \
+    > /tmp/both.lst
+python3 tools/bbusb.py pack -l /tmp/both.lst -v 1,2 -s -f -c /tmp/both.signed
+python3 tools/bbusb.py flash --signed /tmp/both.signed --from-bootrom \
+        --password 0000 --apply
+# or one component:
+python3 tools/bbusb.py flash --component local/images/rootfs-region1.ext4 \
+        --dest-block 0x2915 --from-bootrom --password 0000 --apply
+```
+
+Success is `COMPLETE 0x40C0 -> cmd 0x4006` and `done`.  `/etc/inittab`
+deliberately has no `umount -a -r`: on a loop root it can only print EBUSY.
+Shutdown from this root produced eMMC warnings and a stuck tty once (trap 93);
+use **`reboot -f`** from the shell to reset immediately for a flash.
+
 ## 4. Flash a test build (from **a booted OS**, TabletOS or our own image)
 
-The flasher only speaks the pre-OS protocol, so it cannot reboot the unit
-itself.  Start it immediately before the reboot and use **the reboot command of
-whatever is running**:
+**`tools/bbusb.py` is the flasher** (`DECISIONS.md` §29); `pre_os_ifs_flash.py`
+is the older template tool.  It only speaks the pre-OS protocol, so it cannot
+reboot the unit itself.  Start it immediately before the reboot and use **the
+reboot command of whatever is running**:
 
 | the unit is running | reboot with |
 |---|---|
 | TabletOS 2.1.0.1917 | `tools/pbssh.sh '/proc/boot/shutdown -S reboot'` (root ssh) |
-| **our Linux image** | **`tools/pbcon.py 'reboot'`** — there is no door and no `/proc/boot/shutdown` (trap 88) |
+| **our Linux image** | **`tools/pbcon.py 'reboot -f'`** — `-f` skips the slow busybox shutdown (trap 93); there is no door (trap 88) |
 
 ```bash
 lsusb | grep -i 0fca                      # 0fca:8010/8012 = OS running; 0fca:0001 = bootrom, 8001 = ramloader
-nohup python3 tools/pre_os_ifs_flash.py --template-ifs boot/chainloader/kernel.img > /tmp/f.log 2>&1 &
+nohup python3 tools/bbusb.py flash --component boot/chainloader/kernel.img \
+      --dest-block 0x825 --from-bootrom --password 0000 --apply > /tmp/f.log 2>&1 &
 sleep 2
-tools/pbcon.py 'reboot'                   # our Linux image  (TabletOS: tools/pbssh.sh '/proc/boot/shutdown -S reboot')
-until grep -qE 'done \(|COMPLETE' /tmp/f.log; do sleep 2; done; tail -2 /tmp/f.log
-# The flasher now resets the loader itself (leave_loader(): 0x80EF/0xEF on a
-# fresh 0x8001 handle, retried), so the old manual force_reset_loader loop is
-# no longer needed.  If the log ends with "loader still enumerated", run the
-# fallback by hand:  timeout 40 python3 tools/force_reset_loader.py
+tools/pbcon.py 'reboot -f'                # our Linux image  (TabletOS: pbssh '/proc/boot/shutdown -S reboot')
+until grep -qE 'COMPLETE|done|error' /tmp/f.log; do sleep 2; done; tail -5 /tmp/f.log
+# bbusb resets the loader itself after the write.  The bootrom window is 60 s
+# (a graceful shutdown can take ~90 s; use reboot -f).  If the log says
+# "No BlackBerry device found", the reboot came too late: retry and reboot sooner.
 for i in $(seq 1 40); do ls /dev/ttyACM0 >/dev/null 2>&1 && break; sleep 2; done
 timeout 15 pkexec chmod 666 /dev/ttyACM0
 ```
@@ -317,10 +381,10 @@ it retries.
 ## 6. Restore and verify (do this before ending a session)
 
 ```bash
-nohup python3 tools/pre_os_ifs_flash.py \
-  --template-ifs local/work/ifs-shim-sealed.ifs > /tmp/f.log 2>&1 &
-sleep 2; ./tools/pbcon.py 'reboot'        # the unit is running our Linux image
-until grep -qE 'done \(|COMPLETE' /tmp/f.log; do sleep 2; done
+nohup python3 tools/bbusb.py flash --component local/work/ifs-shim-sealed.ifs \
+  --dest-block 0x825 --from-bootrom --password 0000 --apply > /tmp/f.log 2>&1 &
+sleep 2; ./tools/pbcon.py 'reboot -f'     # the unit is running our Linux image
+until grep -qE 'COMPLETE|done|error' /tmp/f.log; do sleep 2; done
 # the flasher resets the loader itself; only if it logs "loader still enumerated":
 #   timeout 40 python3 tools/force_reset_loader.py
 for i in $(seq 1 60); do timeout 12 ./tools/pbssh.sh 'echo DOOROK' 2>/dev/null | grep -q DOOROK && break; sleep 5; done
@@ -641,12 +705,12 @@ Wire sequence, verified against `ramloader.pas:925-1071`:
 `{u16 560}` + signature → `0x40C0` Complete.  A trailing 560-byte `QNXH` block is
 stripped from the payload and sent as the signature, exactly as FlashFile does.
 
-`tools/pre_os_ifs_flash.py` remains the template-based alternative (it clones a
-vendor template); `bbusb.py flash` removes the template dependency and adds
-whole-container flashing.  They send the same frames.  **It reads the 560-byte
-`signature_data` constant from bb10mt's `qcfm.pas`**, which is not in this tree;
-supply your own bb10mt checkout, or use `bbusb.py flash`, which carries the
-constant.
+**`tools/bbusb.py flash` is the flasher** (`DECISIONS.md` §29).  The older
+`tools/pre_os_ifs_flash.py` clones a vendor template and is kept for historical
+recipes only; both send the same frames.  `bbusb.py` removes the template
+dependency, adds whole-container flashing (both regions in one session) and
+carries the 560-byte `signature_data` constant that the old tool reads from
+bb10mt's `qcfm.pas`.
 
 **Hardware-proven 2026-11-03 (report 169).**  `bbusb.py flash --signed` wrote a
 363,790,928-byte container (1917 RCFS + our shim IFS, 22,232 frames, signature,

@@ -1,6 +1,72 @@
 # Current state
 
-## Current state — 2026-11-06 (session 27)
+## Current state — 2026-11-06 (session 28)
+
+**ROADMAP item 5 is CLOSED: the region-1 root is a real BusyBox userland and the
+unit boots to a shell on it, with modules loadable.  The unit was restored to
+PlayBook OS 2.1.0.1917 and `BOOTCTR_FCTRY = 0x32` verified.**
+
+* **The real userland is on media.**  `local/images/rootfs-region1.ext4` (64 MiB
+  ext4, no journal, sha256 `e1ec2bf3…`) carries BusyBox 1.36.1 (static, 401
+  applet links), `/sbin/init` (BusyBox init), `/etc/inittab`, `rcS`/`profile`,
+  the bring-up console as `/bin/pbconsole`, `pbrpmb`, and a test module under
+  `/lib/modules/6.15.11`.  It was written at raw `0x29000000` (loader block
+  `0x2915`) through the pre-OS `0xF7` loop.
+* **The initramfs hands PID 1 to it.**  `rootfs_boot()` mounts region 1
+  **read-write** (our own ext4, `DECISIONS.md` §18), bind-mounts /dev, /proc and
+  /sys into it, chroots, and execs `/sbin/init`.  BusyBox init starts `sh -l` on
+  `/dev/ttyGS0`; `PS1='pb> '` keeps `tools/pbcon.py` working.  If there is no
+  `/sbin/init` the old console comes up, so a bad root never costs the debug
+  channel.
+* **Measured:** `/dev/loop0 on / type ext4 (rw)`; `uname -a` = `6.15.11`;
+  `insmod`/`modprobe pbhello` load and `dmesg` logs `pbhello: loaded`; the
+  boot-time top-up saw `0x30 >= threshold 0x1e, no write`.
+* **Recovery verified:** the sealed 1917 IFS was flashed from the Linux image
+  (489 frames), TabletOS booted, `/base` mounted, `BOOTCTR_FCTRY` reads `0x32`.
+* **The working images:** `local/images/kernel-0xAEDF68D0-rootuserland.img`
+  (region 0, CRC `0xAEDF68D0`) and the region-1 image above.  Region 0 on media
+  is now the restored 1917 IFS; re-flash the kernel image to return to Linux.
+* **New focus (operator): the device's own peripherals.**  Report 176 is the
+  inventory.  The sensor cluster is on **OMAP I²C4 `0x48350000`**, which the
+  board DTS currently **disables** (it enables `&i2c3` = `0x48060000`, which QNX
+  never instantiates): BMA150 accel `0x38`, HMC5883L mag `0x1E`, MPU3050 gyro
+  `0x68`, CM3217 light `0x10`, FAN5702 LED `0x36`.  The BQ27541 gauge (`0x55`),
+  TMP103 (`0x77`) and LM3532 (`0x38`) are on I²C1; the WM8994 codec is on I²C4
+  `0x1a`; the TI WL1283 combo (WiFi/BT/GPS+AGPS) is SDIO/UART on `mmc1`.  Most
+  mainline drivers exist but are disabled; FAN5702, NCP5623, the Cypress
+  CY8CTMA3 touch and the OMAP4+WM8994 machine glue are real work.  The `hd3`
+  repurpose is **parked**.
+* **The sensor bus and the three motion sensors are WORKING (report 177).**
+  `&i2c4` (`0x48350000`, Linux `i2c-3`) is enabled and carries `3-0038`
+  (BMA150), `3-001e` (HMC5883L) and `3-0068` (MPU3050).  BMA150 is `input0`
+  with live `EV_ABS` on `/dev/input/event0`; HMC5883L and MPU3050 are IIO
+  devices with live raw values (MPU die ID `0E9E`).  The **working image** is
+  region-0 `0x3E479F6F` + region-1 `local/images/rootfs-region1.ext4` sha256
+  `6aa322bd…`; region 0 on media is now the restored 1917 IFS, so re-flash both
+  with `tools/bbusb.py` to return to Linux.  The `=m` IIO module closure (`industrialio`,
+  `industrialio-triggered-buffer`, `kfifo_buf`, `i2c-mux`, `evdev`) and the
+  BMA150 `of_match` table are part of it (traps 91/94).  `tools/bbusb.py` is
+  now the flasher and both regions flash in one bootrom session
+  (`DECISIONS.md` §29).
+* **Step 2 is part-done (report 178).**  The **BQ27541 fuel gauge** works
+  (`/sys/class/power_supply/bq27541-0`: capacity 100 %, 4.093 V, 28.8 °C,
+  5.307 Ah full / 5.400 Ah design, cycle count 5, Li-ion, TI), and the
+  **TMP103** works (`hwmon0` name `tmp103`, `temp1_input=37000`); the TMP103
+  needs the `hwmon` module (`CONFIG_HWMON=m`).  The **CM3217 light sensor is
+  open**: 0x10/0x11 on I²C4 ACK but read all-zero, and the mainline `cm32181`
+  accepts only IDs 0x18/0x81/0x82 — it needs the QNX `ls-cm3217` RE (trap 95).
+  Working image: region-0 `0x1D9159E0` + rootfs `c689ca9e…` (14 modules).
+* **Step 3 (report 179): the FAN5702 status LED works.**  `drivers/leds/
+  leds-fan5702.c` (compatible `fairchild,fan5702`) probes `3-0036`; the three
+  channels appear as `playbook:…:{red,green,blue}:status` and the `brightness`
+  writes turn them on/off.  **EN = GPIO1_13 (pad `0x1b0`)**, which boots in
+  safe mode; the driver's pinctrl + `enable-gpios` pulse is what makes the chip
+  answer (raw I2C was `ENXIO` before).  The protocol is in the external
+  `LED-RE.md` and `led-fan5702.so`: `GENERAL 0x10` bits 1/2/3 = R/G/B,
+  `0x20 = 0`, `0x30/0x40/0x50 = 0x36`.  Working image: region-0
+  `0xB759C3A2` + rootfs `0a55a170…` (15 modules).
+
+## Previous state — 2026-11-06 (session 27)
 
 **The RPMB block transform is reproduced and the factory counter was topped up
 FROM LINUX (`0x2E -> 0x32`, verified).  The unit is back on PlayBook OS
@@ -179,7 +245,8 @@ this trial.
 | WDT2 | **working** | Petted from a 2 s `timer_list` (`TGR` kick; `LDR` writes are dropped); heartbeat 14 510 ms measured. Report 109 §8.1 |
 | eMMC (MMC2) | **reads proven; writes healthy — but writers must use large blocks** | `mmcblk1` = MCGAFA 59.4 GiB, `boot0`/`boot1`/`rpmb`; needs the `vemmc` fixed supply for `ocr_avail` (report 109 §9).  Session 16 read a freshly flashed 11 152 064-byte image back **byte-exactly** and matched a pre-flash TabletOS capture (report 134); the MMC2 functional clock is 96 MHz.  Session 17 measured the write path (report 136): the driver has no request-size limit — an O_DIRECT write gives **256 KiB `CMD25`s, 5.5–7.0 MB/s** (4 KiB chunks: 0.93 MB/s), one `CMD13` per request (normal `mmc_blk_card_busy`).  The old 17–32 KB/s was `recv`'s tiny buffered writes plus 4–7 unthrottled `printk`s per request to **fbcon**.  Use ≥64 KiB (ideally 256 KiB–1 MiB) writes with the MMC trace off.  **Session 18: region 1 now holds a bootable Linux root** (32 MiB ext4 at raw `0x29000000`), written through the pre-OS `0xF7` loop (2055 frames) and read back byte-exactly (QNX `dd` and Linux `blk sumb`); it mounts read-only via a loop and its `/init` runs (report 140). |
 | USB device + gadget | **working, but not a bulk transport** | enumerates `0fca:8010`, CDC-ACM, product string "PlayBook (Linux bring-up)"; `/dev/ttyACM0` ↔ `/dev/ttyGS0`; High Speed (480 Mbps), 512-byte bulk packets.  **Drains at only ~134 KB/s and drops bytes when the host blasts** (report 136 §3.3), so it is a control/debug channel: do not send multi-MB images through `recv`.  Report 114, 136 |
-| Userspace (initramfs) | **working, minimal** | `/init` = PID 1, mounts, creates the configfs ACM gadget, forks `/console`.  **No auto-reboot since session 15** — PID 1 reboots only on the console's request (operator decision; the timer was a pre-console way to recover the log and spent a `BOOTCTR_FCTRY` unit per iteration).  **Session 18:** after the gadget is up, `/init` also loop-mounts the region-1 ext4 root read-only at `0x29000000` and forks its `/init` (report 140). Report 132 §10 |
+| Userspace (initramfs) | **working, minimal** | `/init` = PID 1, mounts, creates the configfs ACM gadget, forks `/console` in the fallback path.  **No auto-reboot since session 15** — PID 1 reboots only on request (the timer spent a `BOOTCTR_FCTRY` unit per iteration).  **Session 28:** after the gadget and the boot-time top-up, `/init` mounts the region-1 ext4 root **read-write**, bind-mounts /dev//proc//sys, chroots and execs `/sbin/init`; with no `/sbin/init` it falls back to the console.  Report 176, session-28 note |
+| Userspace (region-1 root) | **working — a real BusyBox userland** | 64 MiB ext4 at raw `0x29000000`; BusyBox 1.36.1 + init + 401 applet links + `pbconsole`/`pbrpmb` + `/lib/modules/6.15.11`; boots to `sh -l` on `/dev/ttyGS0`; `insmod`/`modprobe` proven.  `local/images/rootfs-region1.ext4` sha256 `e1ec2bf3…`, kernel image `0xAEDF68D0` |
 | Console | **working** | `help ls cat peek poke kick disp bl i2c i2c16 spi fb kmsg grep blk recv sink blkwr qnx6 rootfs write reboot`; `spi tcon` (low-first) and `spi tconbe` (high-first); `blk info/sum/sumb/rd` is read-only FNV-1a64 over `/dev/mmcblk1` (**`blk info` prints size 0 B — `fstat` bug, see KNOWN-ISSUES**), `grep <substr> <path>` scans any-size text (for `clk_summary`); `sink <len>` measures the link, `blkwr <off> <len> [chunk]` is a timed O_DIRECT write with a deterministic pattern (report 136); `qnx6 [off-hex]` mounts hd3 read-only (report 138); `rootfs [off-hex]` mounts the region-1 ext4 root read-only on `/rootfs` (report 140); argument limit 24.  `pb_reg` op set is now `w a:v` / `r a` / `t a` (16 reads, re-arm) / `u a` (16 reads, no re-arm) / `d from:to` (range dump) / `v` (video liveness).  Every hardware access forks with a bounded wait |
 | QNX6 read access (hd3) | **working, read-only** | `CONFIG_QNX6FS_FS=y` + console `qnx6 [off-hex]`: a read-only loop over `/dev/mmcblk1` at raw **`0x49000000`** (superblock `0x49002000`) mounted qnx6 on `/mnt`.  Verified on `0xFC77CD47`; the old `0x48F00000` offset gives `wrong signature (magic)` from the driver.  Report 138 |
 | DSS / DISPC via omapdrm | **working — and the core clock is now right** | `/dev/dri`, `/dev/fb0`, `card0-LVDS-1` connected+enabled, `LINE_STATUS` advancing (37 lines/ms), GFX overlay scanning the painted buffer.  The DSS functional clock, which is the DISPC's **core** clock, was left at 48 MHz by the boot chain while the pixel clock is 50.4 MHz — that was the last display defect.  `dss_probe()` now asks the PER PLL for the reference's rate and gets **96 MHz**.  **Session 18:** the boot-time `pb` bridge-read probes are behind `pb_probe` (default **off**), so a normal boot has **no DSI CIO errors**; the DSS rate-mismatch WARN is gone and the real rate is recorded (report 142).  Report 133 §2/§3 |
@@ -195,7 +262,10 @@ this trial.
 
 ## Last known-good image
 
-**`0x0D1DA0D3` remains the boot baseline.**  Session 19's images
+**The current working image is `0xB759C3A2`** (`boot/chainloader/kernel.img`,
+session 28: I²C4 motion sensors + TMP103/BQ27541 + FAN5702) with the region-1
+root `local/images/rootfs-region1.ext4` (sha256 `0a55a170…`, 15 modules).
+**`0x0D1DA0D3` remains the clean pre-userland fallback.**  Session 19's images
 (`0x87FD6EED`, `0x9CE309CF`, `0xFCCE507A`, `0x65599D90`, `0xC462AE22`,
 `0x771355C0`, `0x94640F82`, `0x853C5323`, `0x96FC5CA9`) are RPMB/monitor
 diagnostics; the last, `0x96FC5CA9`, is saved as
@@ -273,14 +343,14 @@ the I²C bus and resets the unit).
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **the BB10 10.3.03.2049 test IFS**: 8,555,080 B, `os_type` 6, `VERIFIED (CRC path)`, sha256 `50e1c04a…` (Winchester branch, `rfs_rcfs_shim`, winchester set, `proc/boot/gfx4430`).  The 1917 IFS is **not** on media |
-| region-0 RCFS (`/base`) | **the edited BB10 10.3 RCFS**: sha256 `88711f9e…` (blocklist writer neutered, seed `autorun::0`, startup hook), written at block 192.  The 1917 RCFS is **not** on media |
-| UFS (`/`) | **the BB10 10.3 `.0.4.ufs` with `autorun::0`**: 2,588,409,856 B, sha256 `8bc7c13f…`.  The 1917 `.5.ufs` is **not** on media |
-| `/accounts/devuser/startup.sh` | **not on the BB10 UFS** (the operator's 4,566 B script was on the 1917 UFS).  The BB10 `/base` hook would run it if present |
-| `BOOTCTR_FCTRY` | **`0x2D` (45)** at session end, down from `0x32` (50) — five verified BB10 boots spent five units (loader `info` read them).  Only a TabletOS boot refills it |
-| region-1 Linux root | **present, read-only** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 32 MiB ext4, no journal, sha256 `0b87c29f…`, FNV-1a64 `c2e78e1f09b50208`.  Written through the pre-OS `0xF7` loop and read back byte-exactly; mounted read-only and its `/init` ran on `0xFB3A9F5D` (report 140).  **Left in place** |
-| TabletOS / OS | **none running**: the unit is held in the ramloader (`0fca:8001`).  The BB10 10.3 image verified and jumped but did not bring the OS up (no splash, no USB).  Restoring `local/work/back-1917.signed` brings PlayBook OS 2.1.0.1917 back |
-| device-side files | `tools/pbdsi` was pushed to `/tmp/pbdsi` and is **gone** (QNX `/tmp` is wiped by a reboot).  Re-push before use |
+| region-0 IFS on media | **the restored uncompressed 1917 IFS**: `local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`, flashed at block `0x825` with `bbusb.py` (489 frames, `COMPLETE 0x4006`, session 28).  The compressed `local/work/ifs1917-compressed.ifs` (3,466,232 B, sha256 `f14db207…`) is the session-27 alternative and is **not** on media now |
+| region-0 RCFS (`/base`) | **the 1917 RCFS** of the restored media set; `/base` mounts as `/dev/hd1t179 on /base type qnx6` (measured session 28).  The BB10 10.3 RCFS is not on media |
+| UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
+| `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; the restore boot left `BOOTCTR_FCTRY = 0x32`, which is the evidence it ran |
+| `BOOTCTR_FCTRY` | **`0x32`** (measured at session 28 end after the restore; the TabletOS startup script tops it up) |
+| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 `0a55a170…`, 15 modules; the initramfs mounts it **read-write** and chroots into it.  Left in place by the region-0 restore |
+| TabletOS / OS | **PlayBook OS 2.1.0.1917 running** (`uname -a` measured), `/base` mounted, door up with root ssh |
+| device-side files | `/tmp/pbi2c` was re-pushed to TabletOS this session for the I²C scans; QNX `/tmp` is wiped by a reboot, so re-push before use |
 
 The factory boot budget is real and one-way: every successful factory/CRC boot
 spends one unit, and only a **TabletOS** boot puts one back.  `0` and `> 0x32` do
@@ -290,26 +360,26 @@ exactly one unit and stays up until asked.
 
 ## The single current blocker
 
-**The Linux `BOOTCTR_FCTRY` top-up.**  The caller and the address rule are solved
-(identity physical addresses below `0xB0000000`; report 147) and the whole seal
-ABI is accepted from Linux, but the monitor's `0x2F` transform does not reproduce
-the device's own block-0x43/0x3B pair with any key, framing or ABI variant we can
-reach (reports 148/156, trap 63).  The first write-back — a *captured, genuine*
-block, accepted by the device — left the spare in the `0x5B` loop (report 149).
-Until the transform is reproduced, **QNX's `/dev/rpmb` is the only proven
-writer**, `pbrpmb write` stays compiled blocked, and **no agent writes RPMB**
-(`SAFETY.md` §6).  This gates the hd3 cut-over, not the IFS milestones.
+**None.**  Items 4, 5 and 6 are closed (brightness, the real userland/`hd3`
+root story, the Linux `BOOTCTR_FCTRY` top-up).  The unit tops the counter up at
+boot, boots a real region-1 userland, and the 1917 way back is verified.  The
+next work is additive: the peripheral bring-up in report 176.  The `hd3`
+repurpose is **parked by the operator**; NVRAM and the MCT remain unwritable,
+and an agent never writes RPMB (`SAFETY.md` §6).
 
 ## What is next
 
-`ROADMAP.md` owns the ordered work list; the 1917 image work is complete
-(`IFS-REBUILD.md`, `IMAGE-REBUILD-GUIDE.md`), and **the next goal is item 8, a
-BB10 image on the PlayBook** (operator, 2026-11-03), target **Z10 10.3.03.2049
-STL100-1**.  Session 25 did the format/tool analysis (`BB10-PORT.md` §4b).  The
-next step is **static**: diff the 10.3 and 10.0.9.1103 IFS/`/base` trees and
-decide whether to start from 10.0.9.1103 or backport its Winchester support
-into 10.3 — no device write is needed for either.  Repacking an RCFS still
-needs a writer (QNX 8.0.0 `mkrcfs`, being located).
+`ROADMAP.md` owns the ordered list.  Item 5 is **closed** (session 28); item 9
+is the **device's own sensors and peripherals**, with the `hd3` repurpose
+parked.  Report **176** is the inventory; **step 1 is done (report 177):** the
+I²C4 bus and BMA150/HMC5883L/MPU3050 work.  **Step 2 (report 178):** the
+TMP103 and the BQ27541 gauge work; **step 3 (report 179):** the FAN5702
+status LED works.  The **CM3217 is open** (all-zero/ENXIO, needs the
+`ls-cm3217` RE, trap 95).  Next: (4) the WL1283 WiFi/BT/GPS combo on `mmc1`;
+(5) the WM8994 audio machine and the Cypress CY8CTMA3 touch; and the CM3217
+RE.  Every step is one variable per boot and none needs an RPMB write.  The
+sensor IRQs (GPIO2 lines 2/27/18) are the next variable if triggered sampling
+is wanted.
 
 ## Workspace location
 

@@ -754,7 +754,7 @@ def _open_ramloader(bb: BBUSB, loaders_dir: str, from_bootrom: bool,
                     addr_override: Optional[int], password: str = '',
                     debug: bool = False) -> bool:
     """Open the device in ramloader mode, optionally uploading the loader first."""
-    if not bb.open([0x0001, 0x8001], timeout_ms=10000):
+    if not bb.open([0x0001, 0x8001], timeout_ms=60000):
         print("No BlackBerry device found")
         return False
 
@@ -790,7 +790,7 @@ def _open_ramloader(bb: BBUSB, loaders_dir: str, from_bootrom: bool,
                     pass
                 bb.close()
                 time.sleep(2.5)
-                if not bb.open([0x0001], timeout_ms=8000):
+                if not bb.open([0x0001], timeout_ms=30000):
                     print("Device did not come back after reboot")
                     return False
 

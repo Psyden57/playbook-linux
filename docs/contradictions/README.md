@@ -24,6 +24,7 @@ note after it is what a reader needs before opening the file.
 | `118-vs-121-dsi-link-rate.md` | **resolved 2026-10-27** — 118 §8.2 was wrong; the reference runs four data lanes, not two |
 | `bootctr-drain-vs-session10-readings.md` | **resolved for the rate (session 22); session-10 anomaly open** — one factory boot spends one count and an OS boot tops it back up (`50 → 49 → 47 → 49 → 50` measured); why session 10 read a static `0x32` is still unexplained |
 | `expired-counter-nuke-vs-retry-halt.md` | **open** — `0xFFFFFFFF` is selector 2; normal-path nuke vs retry-branch halt depends on the expired unit's `0x2801`, which was not read, and there is no sacrificial unit left |
+| `fan5702-dimming-register-bits.md` | **open** — the datasheet-derived `0b11xxxxxx` dimming write vs the bootloader/QNX `0x36`; the on/off path (GENERAL `0x10`) is unaffected (report 179) |
 | `gpio2-24-resx-vs-datasheet.md` | **open** — report 122 calls `GPIO2_24` the bridge RESX (medium), but the reference reads that bit LOW during a working display while the datasheet says RESX is low-active; the pad's input path is disabled, so the `DATAIN` bit may be meaningless.  Not blocking: the display works |
 | `ldr01-0x10000-header.md` | **resolved — there is no header** — report 164's corrected addendum and the session-23 handoff give `file_offset = VA − 0x80100000`; session 22's note still records the `0x10000` belief and is left as written (evidence, not product) |
 | `open-dispc-dsi-timing-fields.md` | **resolved (falsified) 2026-10-28** — all four fields and the QNX PHY words were forced and read back identical; the panel stayed black (report 124), so the split was not the blocker.  The display was later fixed by the DISPC core clock (report 133) |
@@ -33,7 +34,7 @@ note after it is what a reader needs before opening the file.
 
 ## Still open — keep these in mind
 
-Only four files have a genuinely open question left; none of them blocks the
+Five files have a genuinely open question left; none of them blocks the
 IFS rebuild, but each changes how a result should be read:
 
 1. **`expired-counter-nuke-vs-retry-halt.md`** — what an out-of-range
@@ -52,6 +53,10 @@ IFS rebuild, but each changes how a result should be read:
    forward (one factory boot = one count; an OS boot tops up), but session 10's
    static `0x32` across many boots is still unexplained.  Keep measuring the
    counter at both ends of a cycle rather than trusting either story.
+5. **`fan5702-dimming-register-bits.md`** — whether the FAN5702 dimming
+   registers `0x30/0x40/0x50` take the datasheet's `0b11xxxxxx` or the
+   bootloader's `0x36`; the on/off path (GENERAL `0x10`) is unaffected.
+   *Would settle it:* a brightness sweep on the live unit, or datasheet Table 4.
 
 Two smaller residuals, not contradictions in their own right:
 `66` still does not prove that the `0xDE` `count` field *is* the RPMB record, and

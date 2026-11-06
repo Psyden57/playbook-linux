@@ -1,0 +1,42 @@
+#!/bin/sh
+# rcS -- first userspace script in the PlayBook region-1 root.
+#
+# The initramfs already created the USB gadget and mounted devtmpfs/proc/sys
+# for its own use.  We are now in a chroot over the eMMC root, so mount the
+# filesystems again where they belong in *this* root; a duplicate mount of
+# devtmpfs/proc/sys is harmless if it is already there.
+
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+mkdir -p /proc /sys /dev /tmp /run /root /var/log
+mount -t proc    proc    /proc 2>/dev/null
+mount -t sysfs   sysfs   /sys  2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mkdir -p /dev/pts /dev/shm
+mount -t devpts  devpts  /dev/pts 2>/dev/null
+mount -t tmpfs   tmpfs   /tmp  2>/dev/null
+mount -t tmpfs   tmpfs   /run  2>/dev/null
+
+hostname playbook 2>/dev/null
+
+# Make the module tree usable: depmod writes modules.dep from the .ko files
+# installed under /lib/modules/$(uname -r).  Harmless when there are none.
+if [ -d "/lib/modules/$(uname -r)" ]; then
+	depmod -a 2>/dev/null
+fi
+
+# The I2C4 sensor cluster (session 28).  Each is a no-op when the module or
+# the device is absent; the i2c clients themselves come from the DTS.
+for m in evdev bma150 hmc5843_i2c mpu3050 hwmon tmp103 bq27xxx_battery_i2c \
+	 leds-fan5702; do
+	modprobe "$m" 2>/dev/null
+done
+
+# One line in the kernel log, so the boot is visible from kmsg even when the
+# console is not attached.
+{
+	printf '<6>PBROOT: region-1 root booted: '
+	uname -a
+} > /dev/kmsg 2>/dev/null
+
+exit 0

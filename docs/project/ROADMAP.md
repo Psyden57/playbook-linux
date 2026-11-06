@@ -89,7 +89,17 @@ owns it.  Correct behaviour, not a fault — use the backlight attribute.
 **Left open (policy, not mechanism):** the default level (255, the boot state)
 and whether `/init` should set one.
 
-## 5. A root filesystem — **region 1 done; real userland + hd3 cut-over next**
+## 5. A root filesystem — **CLOSED 2026-11-06 (session 28)**
+
+**Closed.**  The initramfs now mounts the region-1 ext4 **read-write**,
+bind-mounts /dev//proc//sys, chroots and execs BusyBox `/sbin/init`; the unit
+boots to a `sh -l` shell on `/dev/ttyGS0` from the eMMC root, `insmod`/
+`modprobe` load a module from `/lib/modules/6.15.11`, and the way back to the
+sealed 1917 IFS was flashed and verified (`BOOTCTR_FCTRY = 0x32`).  The image is
+`local/images/rootfs-region1.ext4` (sha256 `e1ec2bf3…`) with kernel image
+`0xAEDF68D0`; tools `tools/build_rootfs.py` + `rootfs/`.  The `hd3` cut-over is
+**parked by the operator** (session 28), so this item closes on the region-1
+root; the `hd3` repurpose, when it resumes, is a separate deliberate step.
 
 Userspace in our own image is an initramfs, so every driver must be `=y` and
 nothing can be tried without a rebuild (report 118 §11).
@@ -122,7 +132,11 @@ resolved (operator-approved).  The free-space facts are unchanged:
   **A compression path now exists for a QNX IFS** (`tools/bb10_ifs.py splice` +
   reseal; a booting 3.47 MB 1917 IFS, session 27 / report 175) — it does **not**
   apply to our chainloader image, which is not a QNX imagefs and would need a
-  decompressing entry path;
+  decompressing entry path.  Session 28 restored the **uncompressed** 1917 IFS
+  (`b52195bb…`, 7.9 MB) as the media asset; the compressed one (`f14db207…`,
+  3.47 MB) is the session-27 alternative.  Reclaiming the ~11 MB region-0
+  budget for the Linux image therefore needs a decompressing entry path, not
+  just `splice`;
 * **region 1** — raw `0x28000000`, 512 MB, already partitioned and empty,
   inside the loader's allowed OS range, so an `0xF7` write at loader block
   `0x2815` needs **no MCT edit**;
@@ -316,11 +330,61 @@ proven and recorded with its evidence.
 
 ---
 
+## 9. The device's own sensors and peripherals — **next (operator, session 28)**
+
+**Goal:** bring up the sensors and the rest of the board under Linux, before any
+`hd3` repurpose.  Report **176** is the inventory and the bus map.
+
+**Measured (read-only, on TabletOS):** the sensor cluster is on OMAP **I²C4
+`0x48350000`** (QNX `/dev/i2c3`), which the board DTS currently **disables**:
+BMA150 accelerometer `0x38`, HMC5883L magnetometer `0x1E`, MPU-3050 gyroscope
+`0x68`, CM3217 ambient light `0x10`/`0x11`, FAN5702 LED driver `0x36`; the
+WM8994 codec is also on that bus at `0x1a`.  The BQ27541 gauge `0x55` and TMP103
+`0x77` are on I²C1 (with the LM3532 `0x38` and the TWL6030 `0x48`–`0x4a`).  The
+TI **WL1283** combo (WiFi/BT/**GPS+AGPS**) is SDIO/UART on `mmc1`/UART3.
+
+**Step 1 — DONE (session 28, report 177).**  `&i2c4` is enabled and the three
+motion sensors work: BMA150 `3-0038` (`input0`, live evdev events), HMC5883L
+`3-001e` (IIO raw values), MPU3050 `3-0068` (IIO, die ID `0E9E`).  Images:
+region-0 `0x3E479F6F`, region-1 `6aa322bd…`.  The IRQ GPIOs are still not
+described (polling/direct reads); that is the next variable if triggered
+sampling is wanted.
+
+**Step 2 — TMP103 + BQ27541 DONE, CM3217 open (report 178).**  The BQ27541
+gauge (`bq27541-0`: 100 %, 4.093 V, 28.8 °C, 5.307 Ah, cycle 5) and the TMP103
+(`hwmon0`, 37.0 °C) work; the TMP103 needs `hwmon.ko` (trap 94).  The CM3217
+light sensor is **open**: 0x10/0x11 ACK but read all-zero and the mainline
+`cm32181` accepts only IDs 0x18/0x81/0x82 — it needs the `ls-cm3217` RE
+(trap 95).  Images: region-0 `0x1D9159E0`, region-1 `c689ca9e…`.
+
+**Step 3 — DONE (report 179).**  A mainline `leds-fan5702` driver probes
+`3-0036`; the red/green/blue channels work via `/sys/class/leds`.  EN =
+GPIO1_13 (pad `0x1b0`, safe mode at boot) is driven by the driver's pinctrl +
+`enable-gpios`.  Images: region-0 `0xB759C3A2`, region-1 `0a55a170…`.
+
+**Plan (one variable per boot):**
+1. ~~enable `&i2c4`, add the BMA150/HMC5883L/MPU3050 nodes and their IRQ GPIOs;
+   enable `INPUT_BMA150` and HMC5843, keep `MPU3050=m`; read via IIO.~~
+   **DONE** (session 28).
+2. ~~add the CM3217, TMP103 and BQ27541 (I²C4/I²C1) and enable their drivers.~~
+   **TMP103 + BQ27541 DONE; the CM3217 is still open (RE, trap 95).**
+3. ~~the FAN5702 LED driver (no mainline driver; RE `led-fan5702.so`).~~
+   **DONE** (report 179: `leds-fan5702`, EN = GPIO1_13).
+4. the WL1283: enable `mmc1` SDIO, the power/32k GPIOs, `wl12xx` + firmware/NVS;
+   then BT (`hci_ll`/TI ST) and GPS/AGPS.
+5. audio (WM8994 MFD+codec + an OMAP4 machine driver) and the Cypress
+   **CY8CTMA3** touch (QNX "Munin/Pegasus" firmware; no mainline Gen3 driver).
+
+**Closes when:** each peripheral reports data under Linux (IIO/evdev/ALSA/input)
+and survives a reboot; the touch and FAN5702 have a driver; WiFi/BT/GPS are
+enumerated, with firmware and calibration sourced from the QNX blobs.
+
 ## Out of scope for now
 
-SGX/GPU, IVA-HD, audio, touch, sensors, WiFi, camera and the secure-world
-(TrustZone) path are all disabled or untouched in the board DTS. They are not
-blocked on the panel and are not on this roadmap.
+SGX/GPU, IVA-HD, camera and the secure-world (TrustZone) path are all disabled
+or untouched in the board DTS.  They are not blocked on the panel.  Audio,
+touch, the sensors and WiFi/BT/GPS are **no longer out of scope**: they are
+item 9 (report 176).
 
 ## Working rules that apply to every item
 

@@ -1,15 +1,15 @@
 # Session numbering
 
-The project spans **twenty-seven sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **twenty-eight sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-27`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-28`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
-* **Linux-era** ("session 1…13") — used inside the reports and handoffs, because
+* **Linux-era** ("session 1…22") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
   started.  **Linux session N = absolute session N + 6.**
 
@@ -38,6 +38,8 @@ So:
 | **24** | **18** | **IFS milestones 1–4 done, the `/base` hook and the `.5.ufs` + `autorun::0` shipped**: `tools/ifs_build.py` reproduces the stock imagefs, the `rfs_validator` shim mounts `/base`, the reseal sets the image length, and the **1917 IFS + edited 1917 RCFS + the 1917 `.5.ufs` with `autorun::0`** set was flashed with `bbusb.py flash` (its first hardware runs) and **booted** — PlayBook OS 2.1.0.1917, `/base` mounted, `devuser` login; the `/base` hook runs the operator's startup script and the `BOOTCTR_FCTRY` top-up works (`0x2E → 0x32`).  The ROOT V1.4 UFS was rejected (door never authenticates) (reports 169/170) |
 | **25** | **19** | **BB10 target fixed (Z10 10.3.03.2049 STL100-1), both supplied images analysed, `/base` and the UFS edited, and a complete set built and flashed.**  Corrected "Z10 + OMAP4460" (the OMAP Z10 is **STL100-1 = OMAP4470**; OMAP4460 is the Dev Alpha A).  Found the BB10 IFS is a plain QNX imagefs and `/base` the `r-c-f-s` RCFS; wrote `rcfs_extract.py`, `ucl_nrv2b.py` (NRV2B codec) and `bb10_ifs.py` (splice/reseal), plus `rfs_rcfs_shim.c`.  Edited the deckard blocklist writer, the `autorun::0` copies and the startup hook.  **The loader verified the image and jumped five times** (`factory_count` 50 → 45) but BB10 did not run; the unit is held in the ramloader, way back packed.  New tutorial: `BB10-IMAGE-GUIDE.md` |
 | **26** | **20** | **the factory top-up, re-examined**: the bootloader's load base (`0x80000000` at media `0x9000`, so reports 150/151's code addresses are `0x9000` high), its pre-boot wipe of the RPMB store state, the CM2 L4SEC clock disable, and the chainloader probes (dump, selector, mount — the mount reset-loops).  The unit was restored to 2.1.0.1917 (`0x32`) (report 173) |
+| **27** | **21** | **the RPMB block transform is reproduced** (`0x2F` cipher + `0x2E` digest, the two keys, no `0x31(id 1)`) and the operator performed the **`BOOTCTR_FCTRY = 0x32` top-up from Linux**; the boot-time top-up, brightness (item 4), the CRNG seeding path, and the compressed booting IFS (report 175) |
+| **28** | **22** | **item 5 closed**: the region-1 root is a real BusyBox userland, the initramfs mounts it read-write and chroots/execs `/sbin/init`, and modules load.  Then the **peripheral inventory** (report 176) and the **I²C4 sensor bring-up** — BMA150/HMC5883L/MPU3050 live (report 177).  `tools/bbusb.py` becomes the flasher (`DECISIONS.md` §29).  The `hd3` cut-over is parked |
 
 ## Anchors (evidence for the mapping)
 

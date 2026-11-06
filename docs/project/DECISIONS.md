@@ -643,6 +643,96 @@ the OS entry), which is a design question, not a tool invocation.
 
 ---
 
+## 27. The real root is a BusyBox userland on region 1; the initramfs chroots into it (session 28)
+
+**Decision (operator).**  The region-1 ext4 root becomes a real userland:
+BusyBox 1.36.1 (static), BusyBox `init` with `/etc/inittab`, a `rcS` that mounts
+the pseudo-filesystems and runs `depmod`, the bring-up console as
+`/bin/pbconsole`, `pbrpmb`, and `/lib/modules/$(uname -r)`.  The initramfs
+`/init`, after the gadget and the boot-time top-up, mounts the root
+**read-write**, bind-mounts /dev//proc//sys into it, `chroot`s and `exec`s
+`/sbin/init`.  `PS1='pb> '` keeps `tools/pbcon.py` unchanged.
+
+**Why.**  ROADMAP item 5 asks for "a real root filesystem ... boots to a shell
+with modules loadable".  A read-only probe root could not be a userland
+(`/run`, `/tmp`, module links), and it kept the initramfs as the only place to
+run anything, so every driver test was a kernel rebuild.  With a writable root
+and a module tree, the many `=m` drivers can be tried by `insmod`/`modprobe`.
+
+**Evidence.**  `/dev/loop0 on / type ext4 (rw)`, `uname -a` = `6.15.11`,
+`insmod`/`modprobe pbhello` and `dmesg`; the 1917 IFS was then flashed and
+TabletOS/`/base`/`BOOTCTR_FCTRY = 0x32` verified.  Region 1 is our own data
+(§18); the loop must be backed by an `O_RDWR` fd or the `rw` mount is `EACCES`
+(trap 92).
+
+**Constraint.**  If there is no `/sbin/init` the initramfs console comes up as
+before, so a missing/half-written root never costs the debug channel.  A
+`/sbin/init` that hangs is recovered with the power button and the pre-OS
+flasher.  The `hd3` cut-over is **parked** (operator, session 28), not part of
+this decision.
+
+---
+
+## 28. Peripherals first: mainline drivers where they exist, the QNX oracle for the rest (session 28)
+
+**Decision (operator).**  Before any `hd3` repurpose, bring up the device's own
+sensors and peripherals: accelerometer, magnetometer, gyroscope, touchscreen,
+the FAN5702 status LED, audio, WiFi/BT/GPS and the battery/thermal parts.
+Report **176** is the inventory.  Work in this order: (1) the sensor bus
+(OMAP I²C4 `0x48350000`) and BMA150/HMC5883L/MPU3050; (2) CM3217/TMP103/BQ27541;
+(3) FAN5702; (4) WL1283 WiFi/BT/GPS; (5) WM8994 audio and the Cypress CY8CTMA3
+touch.
+
+**Why.**  Most of these already have mainline drivers (BMA150, HMC5843,
+MPU3050, CM32181, TMP103, BQ27xxx, wl12xx, WM8994 codec), so enabling them and
+describing the board is cheap; the parts without a driver (FAN5702, NCP5623,
+CY8CTMA3 touch, the OMAP4+WM8994 machine glue) are contained RE/driver tasks.
+The sensor cluster is a single bus, and the correct one was mislabeled in the
+DTS (trap 91), so this is also a necessary correction.
+
+**Evidence.**  Live QNX over the door: `pidin ar` (`sensor-services -d
+sensor-accel-bma150 …`, `winchester-lc -d led-fan5702 -d ls-cm3217`,
+`io-audio -d omap4abe-wm8994`, `wpa_pps … ti0`, `devlp-ti128x`),
+`/base/etc/system/config/sensor_config.xml` (board `Winchester` rev 0),
+`/base/lib/dll`, and `pbi2c scan`/`rd` (chip IDs).  The RIM modules are in
+`local/work/qnx-libs/` for static RE; the WL1283 firmware/NVS are in
+`/base/lib/firmware/ti1283`, the touch firmware in `/base/lib/firmware/munin`,
+the GPS patch in `/base/lib/firmware/gps`.
+
+**Constraint.**  One variable per boot; no RPMB writes; the `hd3` repurpose
+stays parked.  The sensor interrupt GPIOs are QNX global 34/50/59 (GPIO2
+lines 2/18/27 under the Linux numbering) and must be checked against the pad
+mux and the GPIO2 reset note (trap 20).
+
+---
+
+## 29. `tools/bbusb.py` is the flasher; the bootrom window is 60 s (session 28)
+
+**Decision (operator).**  Use **`tools/bbusb.py`** for all pre-OS writes;
+`tools/pre_os_ifs_flash.py` is the older template tool and is no longer the
+runbook.  Raise the bootrom/ramloader open window from 10 s to **60 s**.
+
+**Why.**  `bbusb.py` takes a whole `-v 1,2` container, so region 0 and region 1
+can be written in **one** bootrom session (`pack` both, `flash --signed`),
+instead of two reboots; it also flashes a bare component
+(`flash --component FILE --dest-block N`) and reports `COMPLETE 0x40C0 ->
+cmd 0x4006` on success.  The 10 s window is shorter than a graceful BusyBox
+shutdown on this unit (~90 s observed), so a flasher started before a reboot
+missed the bootrom and reported "No BlackBerry device found".
+
+**Evidence.**  Session 28 wrote both regions in one session:
+`pack -l both.lst -v 1,2 -s -f` → 78 709 328 B, `flash --signed --from-bootrom`
+→ `COMPLETE 0x4006`, and the unit booted the new kernel + rootfs.  A single
+`--component` rootfs flash also worked (`COMPLETE 0x4006`).  The window change
+is in `_open_ramloader` (`timeout_ms=60000`).
+
+**Constraint.**  From our Linux shell, `reboot -f` resets immediately and avoids
+the slow shutdown (trap 93); a graceful `reboot` can exceed the flasher's
+window.  The levers below `O_TRUNC`/`>` on RPMB and all `SAFETY.md` rules are
+unchanged.
+
+---
+
 These were the open policy questions.  The licence and visibility are decided
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.

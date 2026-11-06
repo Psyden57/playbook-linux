@@ -169,6 +169,26 @@
 			led-max-microamp = <20000>;
 		};
 	};
+
+	/*
+	 * TI TMP103 thermal sensor at 0x77 (QNX `ti_tmp103.so`, the
+	 * `omap4_lpddr_temp_monitor`).  The address is one of its four pin
+	 * strappings (0x77..0x7a); this unit answers at 0x77.
+	 */
+	temperature-sensor@77 {
+		compatible = "ti,tmp103";
+		reg = <0x77>;
+	};
+
+	/*
+	 * BQ27541-class fuel gauge at 0x55 (QNX `battery_win`).  The bq27xxx
+	 * driver reads the standard command set; no battery profile is needed
+	 * for capacity/voltage/temperature.
+	 */
+	battery@55 {
+		compatible = "ti,bq27541";
+		reg = <0x55>;
+	};
 };
 
 /*
@@ -186,8 +206,67 @@
 	clock-frequency = <400000>;
 	status = "okay";
 };
+
+/*
+ * I2C4 (0x48350000) is the sensor bus.  QNX names it /dev/i2c3 and every
+ * motion sensor, the ambient-light sensor, the FAN5702 and the WM8994 answer
+ * there (report 176).  QNX does NOT instantiate I2C3 (0x48060000); it is the
+ * unconfirmed touch bus, so it stays enabled but empty.  (Session 28, trap 91.)
+ */
 &i2c4 {
-	status = "disabled";
+	clock-frequency = <400000>;
+	status = "okay";
+
+	/*
+	 * Bosch BMA150 accelerometer: QNX sensor_config.xml, board Winchester
+	 * rev 0, i2c_addr 0x38, int gpio 34 = GPIO2_2.  The driver polls when
+	 * no interrupt is described, so the IRQ is left out for this bring-up.
+	 */
+	accelerometer@38 {
+		compatible = "bosch,bma150";
+		reg = <0x38>;
+	};
+
+	/* Honeywell HMC5883L magnetometer, 0x1e; int gpio 59 = GPIO2_27. */
+	magnetometer@1e {
+		compatible = "honeywell,hmc5883l";
+		reg = <0x1e>;
+	};
+
+	/* InvenSense MPU-3050 gyroscope, 0x68; int gpio 50 = GPIO2_18. */
+	gyroscope@68 {
+		compatible = "invensense,mpu3050";
+		reg = <0x68>;
+	};
+
+	/*
+	 * Fairchild FAN5702 status LED, 0x36.  GENERAL (0x10) bits
+	 * 1/2/3 = red/green/blue; EN = GPIO1_13 (low resets, a low->high
+	 * pulse enables).  From the QNX led-fan5702.so and LED-RE.md.
+	 */
+	status_led: led-controller@36 {
+		compatible = "fairchild,fan5702";
+		reg = <0x36>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		enable-gpios = <&gpio1 13 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&fan5702_pins>;
+
+		led@0 {
+			reg = <0>;
+			label = "red:status";
+		};
+		led@1 {
+			reg = <1>;
+			label = "green:status";
+		};
+		led@2 {
+			reg = <2>;
+			label = "blue:status";
+		};
+	};
 };
 
 #include "twl6030.dtsi"
@@ -719,6 +798,13 @@
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x190, 0x0003)	/* gpio_2  (GPIO1_2)  */
 			OMAP4_IOPAD(0x1b4, 0x0003)	/* gpio_14 (GPIO1_14) */
+		>;
+	};
+
+	/* FAN5702 EN = GPIO1_13, pad 0x1b0 (TRM mux 3 = gpio_13) */
+	fan5702_pins: fan5702-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x1b0, 0x0003)
 		>;
 	};
 };

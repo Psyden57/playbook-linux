@@ -1,1 +1,1 @@
-pbroot 0.1 (session 18): first Linux root in media region 1
+pbroot 0.2 (session 28): BusyBox userland; the initramfs chroots into this root

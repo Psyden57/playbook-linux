@@ -1,0 +1,21 @@
+# /etc/inittab -- BusyBox init for the PlayBook region-1 Linux root.
+#
+# The initramfs mounts this filesystem and chroots into it; BusyBox init is
+# then PID 1.  The USB CDC-ACM gadget (created by the initramfs /init) is
+# /dev/ttyGS0, so the login shell runs there.  Its prompt is set to "pb> " in
+# /etc/profile so tools/pbcon.py keeps working unchanged.
+
+::sysinit:/etc/init.d/rcS
+
+# The USB console.  BusyBox init opens /dev/ttyGS0 and makes it the child's
+# controlling terminal.
+ttyGS0::respawn:/bin/sh -l
+
+# There is no keypad/console on this board; keep the standard hooks so the
+# behaviour matches a normal BusyBox system.
+#
+# Do NOT use `umount -a -r` here: / is a loop device over the whole eMMC and
+# /dev, /proc and /sys are bind mounts, so it can only print EBUSY errors on
+# every shutdown.  sync is enough; the kernel resets the unit anyway.
+::ctrlaltdel:/sbin/reboot
+::shutdown:/bin/sync

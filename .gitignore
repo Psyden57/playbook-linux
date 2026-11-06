@@ -38,6 +38,8 @@ boot/chainloader/chainloader_kernel.elf
 *.o
 *.a
 *.d
+# ...but rootfs/etc/init.d/ is a real directory, not a dependency file
+!rootfs/etc/init.d/
 *.i
 *.su
 *.cmd

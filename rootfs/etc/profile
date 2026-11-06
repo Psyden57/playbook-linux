@@ -1,0 +1,16 @@
+# /etc/profile -- login profile for the region-1 root.
+#
+# The prompt is deliberately "pb> ": tools/pbcon.py synchronises on that
+# marker, so the same host driver works whether the unit is in the bring-up
+# console or in this shell.
+
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+export PATH
+
+HOME=/root
+export HOME
+
+PS1='pb> '
+export PS1
+
+[ -f /etc/motd ] && cat /etc/motd

@@ -7,7 +7,7 @@ for facts. Neither shares code with the other.
 |---|---|---|
 | chainloader | `boot/chainloader/chainloader_kernel.S(.in)` | first code of ours to run; copies kernel+DTB high and jumps |
 | image builder | `tools/build_kernel_image.py` | assembles the chainloader image, patches the IFS header, computes the CRC |
-| flasher | `tools/pre_os_ifs_flash.py` | writes an image into media region 0 through the ramloader — the only flasher that has actually written to this unit |
+| flasher | `tools/bbusb.py` | the pre-OS `0xF7` writer: a `.signed` container (region 0 + region 1 in one bootrom session) or a bare component (`--component --dest-block`); `tools/pre_os_ifs_flash.py` is the older template tool (`DECISIONS.md` §29) |
 | USB tool | `tools/bbusb.py` | one CFP-style entry point: the protocol module plus `info` / `flash` / `reset-osregion` / `boot-mode` / `reset-loader` and offline `pack` / `unpack` / `split` / `parse` |
 | offline tests | `tools/tests/test_offline.py` | stubbed-device checks for the USB tools; no USB, no unit |
 | kernel source changes | `kernel/clean-kernel-6.15.11-changes.patch`, `kernel/patches/` | the complete delta vs pristine 6.15.11 + the board `.config` |

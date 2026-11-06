@@ -394,92 +394,154 @@ static void panel_tcon_init(void)
 		rlog("PB: tcon: Hitachi table sent (high byte first)");
 }
 
-/* ---- region-1 Linux root (read-only loop over the eMMC) -----------------
- * The first Linux root lives in media region 1 (raw 0x28000000) at region-1
+/* ---- region-1 Linux root: mount it read-write and hand PID 1 to it ------
+ * The real Linux root lives in media region 1 (raw 0x28000000) at region-1
  * offset 16 MiB, i.e. raw 0x29000000, placed there by
  * tools/pre_os_ifs_flash.py over the pre-OS 0xF7 loop (region 1 is inside the
- * loader's 0x1B allow-list, so no MCT edit).  The image is ext4 with no
- * journal; it is mounted through a LO_FLAGS_READ_ONLY loop with MS_RDONLY and
- * ext4 "noload", so the mount cannot write (see the read-only-mount decision).
- * Its /init is run forked and bounded: reaching it proves the image is on the
- * eMMC, ext4 reads it and code executes from it.
+ * loader's 0x1B allow-list, so no MCT edit).  It is our own ext4 (no journal),
+ * and DECISIONS.md §18 allows a writable mount of our own data: the root must
+ * be writable once it is a real userland (/run, /tmp, module links).
+ *
+ * The image carries BusyBox and /sbin/init (BusyBox init), so this function
+ * mounts it, mounts the pseudo-filesystems *inside* it, and chroots PID 1 into
+ * it before exec'ing /sbin/init.  That is the item-5 hand-off: the unit boots
+ * to a shell from the eMMC root, with the bring-up console and pbrpmb carried
+ * in the image as /bin/pbconsole and /bin/pbrpmb.
+ *
+ * If there is no /sbin/init (no real userland on the media), the old
+ * diagnostic /init is run and the function returns, so the initramfs console
+ * comes up exactly as before: a missing or half-written root never costs a
+ * debug channel.  If /sbin/init exists but fails to run, the unit is recovered
+ * with the power button and the pre-OS flasher (the documented way back).
  */
 #define ROOTFS_RAW_OFF 0x29000000ULL
 
-static void rootfs_try(void)
+static int rootfs_mount(void)
 {
 	struct loop_info64 li;
 	char loopdev[32], b[160];
-	int ctl, lfd, bfd, n, st = 0;
-	pid_t pid;
+	int ctl, lfd, bfd, n;
 
 	ctl = open("/dev/loop-control", O_RDWR);
 	if (ctl < 0) {
 		rlog("PB: rootfs: no /dev/loop-control");
-		return;
+		return -1;
 	}
 	n = ioctl(ctl, LOOP_CTL_GET_FREE);
 	close(ctl);
 	if (n < 0) {
 		rlog("PB: rootfs: no free loop device");
-		return;
+		return -1;
 	}
 	snprintf(loopdev, sizeof(loopdev), "/dev/loop%d", n);
-	bfd = open("/dev/mmcblk1", O_RDONLY);
+	/* O_RDWR: the loop is writable only if its backing file is, and a
+	 * read-write mount of a read-only loop is refused (EACCES).  Region 1
+	 * is our own ext4, which DECISIONS.md §18 allows us to write. */
+	bfd = open("/dev/mmcblk1", O_RDWR);
 	if (bfd < 0) {
 		snprintf(b, sizeof(b), "PB: rootfs: /dev/mmcblk1: %s", strerror(errno));
 		rlog(b);
-		return;
+		kf("PLAYBOOK: rootfs: %s\n", b);
+		return -1;
 	}
 	lfd = open(loopdev, O_RDWR);
 	if (lfd < 0) {
 		rlog("PB: rootfs: loop device open failed");
 		close(bfd);
-		return;
+		return -1;
 	}
 	if (ioctl(lfd, LOOP_SET_FD, bfd) < 0) {
 		snprintf(b, sizeof(b), "PB: rootfs: LOOP_SET_FD: %s", strerror(errno));
 		rlog(b);
-		goto out;
+		goto err;
 	}
 	memset(&li, 0, sizeof(li));
 	li.lo_offset = (typeof(li.lo_offset))ROOTFS_RAW_OFF;
-	li.lo_flags = LO_FLAGS_READ_ONLY;
+	li.lo_flags = 0;		/* read-write: our own ext4 (§18) */
 	if (ioctl(lfd, LOOP_SET_STATUS64, &li) < 0) {
 		snprintf(b, sizeof(b), "PB: rootfs: LOOP_SET_STATUS64: %s", strerror(errno));
 		rlog(b);
 		ioctl(lfd, LOOP_CLR_FD, 0);
-		goto out;
+		goto err;
 	}
 	mkdir("/rootfs", 0755);
-	if (mount(loopdev, "/rootfs", "ext4", MS_RDONLY, "noload") < 0) {
+	if (mount(loopdev, "/rootfs", "ext4", 0, NULL) < 0) {
 		snprintf(b, sizeof(b), "PB: rootfs: mount: %s", strerror(errno));
 		rlog(b);
+		kf("PLAYBOOK: rootfs: mount failed: %s\n", strerror(errno));
 		ioctl(lfd, LOOP_CLR_FD, 0);
-		goto out;
+		goto err;
 	}
 	snprintf(b, sizeof(b),
-		 "PB: rootfs: ext4 at 0x%llx mounted read-only on /rootfs",
+		 "PB: rootfs: ext4 at 0x%llx mounted read-write on /rootfs",
 		 (unsigned long long)ROOTFS_RAW_OFF);
 	rlog(b);
-	out("<0>PLAYBOOK: region-1 root mounted read-only; running its /init\n");
-
-	pid = fork();
-	if (pid == 0) {
-		alarm(5);
-		execl("/rootfs/init", "init", (char *)NULL);
-		_exit(127);
-	}
-	if (pid > 0) {
-		waitpid(pid, &st, 0);
-		snprintf(b, sizeof(b), "PB: rootfs: /rootfs/init %s %d",
-			 WIFSIGNALED(st) ? "killed by signal" : "exit",
-			 WIFSIGNALED(st) ? WTERMSIG(st) : WEXITSTATUS(st));
-		rlog(b);
-	}
-out:
+	kf("PLAYBOOK: rootfs: mounted read-write at 0x%llx\n",
+	   (unsigned long long)ROOTFS_RAW_OFF);
+	/* The loop must survive the chroot/exec; leak these deliberately. */
+	(void)lfd;
+	(void)bfd;
+	return 0;
+err:
 	close(lfd);
 	close(bfd);
+	return -1;
+}
+
+static void rootfs_boot(void)
+{
+	char b[160];
+	int st = 0;
+	pid_t pid;
+
+	if (rootfs_mount() < 0)
+		return;
+
+	/* The pseudo-filesystems must exist inside the new root before the
+	 * chroot; the mount points are part of the image. */
+	mkdir("/rootfs/dev", 0755);
+	mkdir("/rootfs/proc", 0555);
+	mkdir("/rootfs/sys", 0555);
+	mkdir("/rootfs/tmp", 01777);
+	mkdir("/rootfs/run", 0755);
+	/* Bind-mount the initramfs's own pseudo-filesystems in, rather than
+	 * mounting new instances: the same objects (and the same /dev nodes,
+	 * including /dev/ttyGS0) then survive the chroot. */
+	mount("/dev", "/rootfs/dev", NULL, MS_BIND, NULL);
+	mount("/proc", "/rootfs/proc", NULL, MS_BIND, NULL);
+	mount("/sys", "/rootfs/sys", NULL, MS_BIND, NULL);
+
+	if (access("/rootfs/sbin/init", F_OK) != 0) {
+		/* No real userland on the media: run the diagnostic probe and
+		 * leave the initramfs console to come up as before. */
+		rlog("PB: rootfs: no /sbin/init, keeping the initramfs console");
+		kf("PLAYBOOK: rootfs: no /sbin/init, keeping the initramfs console\n");
+		pid = fork();
+		if (pid == 0) {
+			alarm(5);
+			execl("/rootfs/init", "init", (char *)NULL);
+			_exit(127);
+		}
+		if (pid > 0) {
+			waitpid(pid, &st, 0);
+			snprintf(b, sizeof(b), "PB: rootfs: /rootfs/init %s %d",
+				 WIFSIGNALED(st) ? "killed by signal" : "exit",
+				 WIFSIGNALED(st) ? WTERMSIG(st) : WEXITSTATUS(st));
+			rlog(b);
+		}
+		return;
+	}
+
+	if (chdir("/rootfs") || chroot("/rootfs") || chdir("/")) {
+		kf("PLAYBOOK: rootfs: chroot failed: %s\n", strerror(errno));
+		return;
+	}
+	out("<0>PLAYBOOK: handing PID 1 to /sbin/init on the region-1 root\n");
+	execle("/sbin/init", "init", (char *)NULL,
+	       (char *[]){ "HOME=/", "PATH=/sbin:/bin:/usr/sbin:/usr/bin", NULL });
+	kf("PLAYBOOK: rootfs: exec /sbin/init failed: %s\n", strerror(errno));
+	for (;;)
+		pause();
 }
 
 /* ---- the factory boot budget -------------------------------------------
@@ -578,9 +640,25 @@ int main(void)
 	}
 
 	/*
-	 * Console first, probes second: the host polls for 0fca:8010 and can be
-	 * talking before the register probes have run.  The gadget is bound by
-	 * now, so /dev/ttyGS0 exists.
+	 * The factory budget: this boot spent one unit, so top it back up if it
+	 * has fallen below the threshold.  This happens in the initramfs, before
+	 * the hand-off, so a wedged root does not cost us the write.
+	 */
+	topup_try();
+
+	/*
+	 * Hand PID 1 to the real userland on the region-1 ext4 root.  With
+	 * /sbin/init present this chroots into it and execs BusyBox init and
+	 * never returns, so the console below is the fallback for a media set
+	 * with no real root.  The gadget is bound by now, so /dev/ttyGS0 exists
+	 * for the shell that init starts.
+	 */
+	rootfs_boot();
+
+	/*
+	 * Fallback (no /sbin/init on media): console first, probes second.  The
+	 * host polls for 0fca:8010 and can be talking before the register probes
+	 * have run.
 	 */
 	if (pipe(rb_pipe) == 0) {
 		cpid = console_start(rb_pipe[1]);
@@ -595,21 +673,6 @@ int main(void)
 	} else {
 		rlog("PB: console pipe() FAILED");
 	}
-
-	/*
-	 * The factory budget: this boot spent one unit, so top it back up if it
-	 * has fallen below the threshold.  After the console (so its log is
-	 * visible outside the ring) and before the rootfs, so a wedged root does
-	 * not cost us the write.
-	 */
-	topup_try();
-
-	/*
-	 * With the gadget up (/dev/ttyGS0 exists) try the region-1 Linux root.
-	 * A missing image is not an error: the probe boot still comes up and
-	 * the console reports why the mount failed.
-	 */
-	rootfs_try();
 
 	run_probe(probe_safe);
 	run_probe(probe_dsi);
