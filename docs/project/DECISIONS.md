@@ -733,6 +733,64 @@ unchanged.
 
 ---
 
+## 30. Identify a peripheral's bus from the reference OS's own process map (session 29)
+
+**Decision.**  Before writing a DT node for a peripheral, ask the running
+TabletOS which physical block its driver owns: `pidin mem` prints every
+`/dev/mem` mapping of every process, and `pidin irq` prints the vectors it
+attached.  The pair names the controller exactly (base address + interrupt
+number), with no static RE.  It is read-only and needs no device-side tool.
+
+**Why.**  Report 176 and the session-28 DTS both placed the WL1283 on MMC1 —
+wrongly.  `pidin mem` shows `devnp-ti1283.so` holding `/dev/mem 0x480d5000`
+(8 KiB) and `pidin irq` shows it attaching QNX vector `0x5b` (= GIC SPI 59,
+`mmc5`) plus `0x41d` (`1000 + gpio 53`, the chip's interrupt).  Five minutes of
+read-only query replaced an RE task and removed a wrong assumption that would
+have cost several boots to disprove on the bench.
+
+**Evidence.**  Report 180 §1; the full `pidin mem` dump also lists the six GPIO
+banks and CM2/PRM/sDMA, which is how the WLAN enable line was then found by
+diffing `GPIO2_DATAOUT` against report 118's session-5 capture (bit 22 is the
+only output that changes when the WLAN driver runs).
+
+**Constraint.**  Only the *first* question ("which block") is answered this way;
+pin-level wiring still needs either the driver's static RE or a live
+register/pad diff.  Addresses below `0x480d5000`-class L4PER2 targets are not
+readable from user mode on either OS (Linux logs an L3 custom error, QNX takes a
+SIGBUS), so `pidin mem` is the only route to them short of kernel
+instrumentation.
+
+---
+
+## 31. Characterise a peripheral from the OS that owns it (session 29)
+
+**Decision.**  When a peripheral is already claimed by a vendor driver on the
+reference OS, **do not** characterise it from that OS: every external I2C access
+races the vendor's own transaction sequence.  Characterise it from our Linux
+image, where our driver is the only client on the bus, or stop the vendor driver
+first if the reference must be used.
+
+**Why.**  The CM3217 investigation produced three false conclusions in a row, all
+from QNX-side readings: `Lux::0000` from `/pps/services/light_controller`, `0x6a`
+plateaus with `0x00` gaps, and a "covered vs uncovered" difference.  All were
+artefacts — the operator noticed the panel's automatic brightness froze *exactly
+while we were probing* and recovered when we stopped, because our reads
+interleaved with `ls-cm3217`'s own sequence.  Read from Linux, the same part gives
+a clean, stable 32 → 191 lux (report 182).
+
+**Evidence.**  Report 182 §2; traps 103 (the race) and 102 (the invalid
+cover/uncover run that followed from it).  The complementary case is the WL1283,
+where the reference *is* the right place to ask "what does the SoC map" (`pidin
+mem`, DECISIONS §30) and the *wrong* place to ask "what is the controller doing"
+(only io-pkt can read MMCHS5, trap 101).
+
+**Constraint.**  Comparing register *state* between the two OSes is still valid
+and is how the pads, GPIO banks, PMIC and clock manager were cleared — the rule
+is about *poking or reading a device a vendor driver owns*, not about comparing
+SoC-side configuration, which is inert.
+
+---
+
 These were the open policy questions.  The licence and visibility are decided
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.

@@ -138,6 +138,26 @@ def install_modules(stage, modules_dir, krel):
     return base, n
 
 
+def install_firmware(stage, firmware_dir):
+    """Copy a firmware tree into /lib/firmware (layout preserved).
+
+    The linux-firmware blobs are not in the repository (they are not ours to
+    redistribute here); the caller points at a directory such as
+    local/work/firmware that holds e.g. ti-connectivity/wl128x-fw-5-sr.bin.
+    """
+    n = 0
+    if firmware_dir and os.path.isdir(firmware_dir):
+        for dp, _, fns in os.walk(firmware_dir):
+            for fn in fns:
+                src = os.path.join(dp, fn)
+                rel = os.path.relpath(src, firmware_dir)
+                dst = stage + '/lib/firmware/' + rel
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+                n += 1
+    return n
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--size-mb', type=int, default=64)
@@ -147,6 +167,8 @@ def main():
     ap.add_argument('--busybox', default=None)
     ap.add_argument('--busybox-links', default=None)
     ap.add_argument('--modules', default=ROOT + '/local/work/modules')
+    ap.add_argument('--firmware', default=None,
+                    help='directory copied to /lib/firmware (layout preserved)')
     ap.add_argument('--krel', default=None)
     ap.add_argument('--keep-stage', action='store_true')
     args = ap.parse_args()
@@ -198,6 +220,8 @@ def main():
         build_static(cc, SRC + '/init.c', stage + '/init')
         build_static(cc, ROOT + '/initramfs/console.c', stage + '/bin/pbconsole')
         build_static(cc, ROOT + '/initramfs/rpmb.c', stage + '/bin/pbrpmb')
+        if os.path.exists(SRC + '/hci.c'):
+            build_static(cc, SRC + '/hci.c', stage + '/bin/pbhci')
 
         # Modules and their dependency map.
         modbase, nmods = install_modules(stage, args.modules, krel)

@@ -28,7 +28,7 @@ fi
 # The I2C4 sensor cluster (session 28).  Each is a no-op when the module or
 # the device is absent; the i2c clients themselves come from the DTS.
 for m in evdev bma150 hmc5843_i2c mpu3050 hwmon tmp103 bq27xxx_battery_i2c \
-	 leds-fan5702; do
+	 leds-fan5702 cm3217; do
 	modprobe "$m" 2>/dev/null
 done
 

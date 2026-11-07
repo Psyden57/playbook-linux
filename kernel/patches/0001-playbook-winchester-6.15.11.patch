@@ -152,6 +152,15 @@
  			/* Domains (V, P, C): wakeup, wkup_pwrdm, l4_wkup_clkdm */
  			clocks = <&l4_wkup_clkctrl OMAP4_WD_TIMER2_CLKCTRL 0>;
  			clock-names = "fck";
+@@ -1545,7 +1554,7 @@
+ 			ranges = <0x0 0x40000 0x10000>;
+ 		};
+ 
+-		target-module@55000 {			/* 0x48055000, ap 15 0c.0 */
++		gpio2_target: target-module@55000 {	/* 0x48055000, ap 15 0c.0 */
+ 			compatible = "ti,sysc-omap2", "ti,sysc";
+ 			reg = <0x55000 0x4>,
+ 			      <0x55010 0x4>,
 @@ -2286,7 +2295,7 @@
  			};
  		};
@@ -163,7 +172,7 @@
  			      <0xb4010 0x4>;
 --- a/arch/arm/boot/dts/ti/omap/omap4-winchester.dts
 +++ b/arch/arm/boot/dts/ti/omap/omap4-winchester.dts
-@@ -0,0 +1,816 @@
+@@ -0,0 +1,1119 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * BlackBerry PlayBook (RIM "winchester", OMAP4430 ES2.2 HS).
@@ -198,6 +207,29 @@
 +		regulator-name = "vemmc";
 +		regulator-min-microvolt = <3300000>;
 +		regulator-max-microvolt = <3300000>;
++		regulator-always-on;
++	};
++
++	/*
++	 * The WL1283 combo's SDIO I/O window (MMC5).  This does not switch a
++	 * rail — the chip is powered by the bootloader and has no host-side
++	 * regulator in RIM's own rail policy — it exists so the MMC core has a
++	 * non-zero `ocr_avail` (same reason as vemmc; without it
++	 * mmc_select_voltage() rejects the card with "no support for card's
++	 * volts").
++	 */
++	vwl1283: regulator-wl1283 {
++		compatible = "regulator-fixed";
++		regulator-name = "vwl1283";
++		regulator-min-microvolt = <1800000>;
++		regulator-max-microvolt = <1800000>;
++		/*
++		 * Deliberately NOT gpio-controlled: the loader leaves WL_EN
++		 * (GPIO2_22) high, and the whole point of `ti,no-reset-on-init`
++		 * on gpio2_target is that nothing in this boot ever drops it —
++		 * which is exactly the reference's condition.  The supply exists
++		 * only to give the MMC core an ocr_avail window.
++		 */
 +		regulator-always-on;
 +	};
 +
@@ -335,6 +367,26 @@
 +			led-max-microamp = <20000>;
 +		};
 +	};
++
++	/*
++	 * TI TMP103 thermal sensor at 0x77 (QNX `ti_tmp103.so`, the
++	 * `omap4_lpddr_temp_monitor`).  The address is one of its four pin
++	 * strappings (0x77..0x7a); this unit answers at 0x77.
++	 */
++	temperature-sensor@77 {
++		compatible = "ti,tmp103";
++		reg = <0x77>;
++	};
++
++	/*
++	 * BQ27541-class fuel gauge at 0x55 (QNX `battery_win`).  The bq27xxx
++	 * driver reads the standard command set; no battery profile is needed
++	 * for capacity/voltage/temperature.
++	 */
++	battery@55 {
++		compatible = "ti,bq27541";
++		reg = <0x55>;
++	};
 +};
 +
 +/*
@@ -352,8 +404,67 @@
 +	clock-frequency = <400000>;
 +	status = "okay";
 +};
++
++/*
++ * I2C4 (0x48350000) is the sensor bus.  QNX names it /dev/i2c3 and every
++ * motion sensor, the ambient-light sensor, the FAN5702 and the WM8994 answer
++ * there (report 176).  QNX does NOT instantiate I2C3 (0x48060000); it is the
++ * unconfirmed touch bus, so it stays enabled but empty.  (Session 28, trap 91.)
++ */
 +&i2c4 {
-+	status = "disabled";
++	clock-frequency = <400000>;
++	status = "okay";
++
++	/*
++	 * Bosch BMA150 accelerometer: QNX sensor_config.xml, board Winchester
++	 * rev 0, i2c_addr 0x38, int gpio 34 = GPIO2_2.  The driver polls when
++	 * no interrupt is described, so the IRQ is left out for this bring-up.
++	 */
++	accelerometer@38 {
++		compatible = "bosch,bma150";
++		reg = <0x38>;
++	};
++
++	/* Honeywell HMC5883L magnetometer, 0x1e; int gpio 59 = GPIO2_27. */
++	magnetometer@1e {
++		compatible = "honeywell,hmc5883l";
++		reg = <0x1e>;
++	};
++
++	/* InvenSense MPU-3050 gyroscope, 0x68; int gpio 50 = GPIO2_18. */
++	gyroscope@68 {
++		compatible = "invensense,mpu3050";
++		reg = <0x68>;
++	};
++
++	/*
++	 * Fairchild FAN5702 status LED, 0x36.  GENERAL (0x10) bits
++	 * 1/2/3 = red/green/blue; EN = GPIO1_13 (low resets, a low->high
++	 * pulse enables).  From the QNX led-fan5702.so and LED-RE.md.
++	 */
++	status_led: led-controller@36 {
++		compatible = "fairchild,fan5702";
++		reg = <0x36>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		enable-gpios = <&gpio1 13 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&fan5702_pins>;
++
++		led@0 {
++			reg = <0>;
++			label = "red:status";
++		};
++		led@1 {
++			reg = <1>;
++			label = "green:status";
++		};
++		led@2 {
++			reg = <2>;
++			label = "blue:status";
++		};
++	};
 +};
 +
 +#include "twl6030.dtsi"
@@ -493,7 +604,29 @@
 +	usb-supply = <&vusb>;
 +};
 +
-+/* no external SD slot, no wifi SDIO brought up yet */
++/*
++ * UART2 (0x4806C000) is the WL1283 combo's Bluetooth transport: QNX runs
++ * `devc-seromap-winbt ... 0x4806c000^2,105` on it.  Enable it only to probe the
++ * chip's BT core with `pbhci` — a reply to HCI_Reset proves the chip is powered
++ * and its digital core runs, which is what the silent SDIO side cannot tell us
++ * (session 29, report 180 §6).  Pad values are the reference's own readback.
++ */
++&omap4_pmx_core {
++	uart2_pins: uart2-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x11c, 0x4118)	/* uart2_rx  (in, pull-up) */
++			OMAP4_IOPAD(0x11e, 0x0000)	/* uart2_tx  (out) */
++		>;
++	};
++};
++
++&uart2 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart2_pins>;
++};
++
++/* no external SD slot, and the combos are not on MMC1 (see MMC5 below) */
 +&mmc1 {
 +	status = "disabled";
 +};
@@ -511,8 +644,48 @@
 +&mmc4 {
 +	status = "disabled";
 +};
++
++/*
++ * MMC5 (0x480D5000) is the TI WL1283 combo's SDIO bus — measured, not inferred
++ * (session 29, trap 97).  io-pkt's process map (`pidin mem`) shows
++ * devnp-ti1283.so holding `/dev/mem 0x480d5000` (8 KiB, the hsmmc block) and
++ * the mmc5 interrupt attached as QNX vector 0x5b = GIC SPI 59, which is
++ * exactly `mmc5` in omap4-l4.dtsi.  The sdmmc5 pads 0x148-0x152 read 0x0118
++ * (mux 0, pull-up, input enable) on the running TabletOS while every sdmmc1
++ * and sdmmc3 pad is still 0x000f (safe mode), and QNX never instantiates the
++ * MMC1 controller at all.  Report 176's "mmc1" was the wrong controller.
++ *
++ * The I/O rail: the TWL's VMMC is switched OFF in RIM's own rail policy
++ * (`/etc/system/config/pmic-twl6030.cfg`, "set_state vmmc off app con mod") —
++ * that is the SD-slot rail and there is no SD slot.  The 1.8 V window below is
++ * the one every mainline wl12xx board describes (e.g. omap4-epson-embt2ws);
++ * the supply exists to give the MMC core an `ocr_avail` (as with vemmc), not to
++ * switch anything.
++ *
++ * Step one is enumeration only: no wlcore child node yet, so the card comes up
++ * as a bare SDIO device and the bus/power/pinctrl are the only variables.
++ */
++&omap4_pmx_core {
++	sdmmc5_pins: sdmmc5-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x148, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_clk */
++			OMAP4_IOPAD(0x14a, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_cmd */
++			OMAP4_IOPAD(0x14c, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_dat0 */
++			OMAP4_IOPAD(0x14e, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_dat1 */
++			OMAP4_IOPAD(0x150, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_dat2 */
++			OMAP4_IOPAD(0x152, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_dat3 */
++		>;
++	};
++};
++
 +&mmc5 {
-+	status = "disabled";
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&sdmmc5_pins &fref_clk_pins>;
++	vmmc-supply = <&vwl1283>;
++	bus-width = <4>;
++	ti,non-removable;
++	non-removable;
 +};
 +
 +/*
@@ -581,6 +754,65 @@
 + * The values are the reference's own readback, not a decoding of the pad
 + * fields (§18.4.12.9.4 is opaque enough that copying is safer).
 + */
++/*
++ * The WL1283's reference clock comes OUT of the SoC and is requested by the
++ * chip with CLK_REQ.  The vendor's own config says so:
++ * local/work/qnx-fw/tiwlan_winchester.ini, `STRFRefClock = 2` (38.4 MHz) with
++ * "Bit 3 - CLK_REQ type, 0 = wired-OR", and `STRFRefClockSettingTime = 5` —
++ * "the time from asserting CLK_REQ (low to high) to valid FREF clock on the
++ * device inputs".  A WiLink with no running reference clock has no running
++ * digital core: it cannot answer SDIO, cannot answer HCI on UART2 and its IRQ
++ * line never goes high, which is exactly what this unit does.
++ *
++ * These pads live in the WKUP padconf at 0x4A31E000 — a block this project had
++ * never compared with the reference.  The reference muxes the request half of
++ * each pair:
++ *
++ *   0x4A31E050  FREF_CLK0_OUT / FREF_CLK3_REQ   ours 0x01080000  ref 0x00080000
++ *   0x4A31E054  FREF_CLK0_OUT / FREF_CLK3_REQ   ours 0x010F0002  ref 0x000F0003
++ *   0x4A31E058  FREF_CLK3_OUT / FREF_CLK4_REQ   ours 0x0108010F  ref 0x000B0003
++ *   0x4A31E05C  FREF_CLK4_OUT / SYS_32K         ours 0x01000108  ref 0x0100000B
++ *
++ * The values are the reference's own readback, as with the display pads.
++ */
++&omap4_pmx_wkup {
++	/*
++	 * Offsets are relative to the pinmux node's own reg base (0x40), so the
++	 * reference's 0x4A31E050..0x05C are 0x10..0x1C here.
++	 */
++	/*
++	 * Pin 10 (0x4A31E050) is already claimed by the TWL6030 ("0-0048"),
++	 * which wants FREF_CLK0_OUT as its own 32 kHz/oscillator clock — so it
++	 * is not in this group.  The three the reference muxes differently and
++	 * nothing else owns are below.
++	 */
++	fref_clk_pins: fref-clk-pins {
++		pinctrl-single,pins = <
++			0x018 0x000B0003	/* FREF_CLK4_OUT / FREF_CLK4_REQ */
++		>;
++	};
++};
++
++/*
++ * The reference leaves the TWL6030 MSECURE ball on fref_clk0_out in
++ * MUX_MODE2 (0x000F0003), not in safe mode.  mainline's twl6030_omap4.dtsi
++ * claims this pin for exactly that mux, so it has to be expressed as a pad
++ * setting rather than folded into the group above (the pin is single-owner).
++ */
++&omap4_pmx_wkup {
++	playbook_twl_wkup_pins: twl-wkup-pins {
++		pinctrl-single,pins = <
++			0x014 0x000F0003	/* fref_clk0_out / fref_clk3_req */
++		>;
++	};
++};
++
++/* Give the TWL's MSECURE pad setting a consumer on a device that always probes. */
++&twl {
++	pinctrl-names = "default";
++	pinctrl-0 = <&twl6030_pins &playbook_twl_wkup_pins>;
++};
++
 +&omap4_pmx_core {
 +	mcspi4_pins: mcspi4-pins {
 +		pinctrl-single,pins = <
@@ -802,9 +1034,21 @@
 +	};
 +};
 +
++/*
++ * Do not reset the GPIO2 module at probe.  Its DATAOUT holds the reference's
++ * steady-state outputs — including GPIO2_22, the WL1283 enable — and the reset
++ * drops every one of them to 0 for the duration of the probe.  On the reference
++ * the line is never low after boot, and a bare low->high on it does not bring
++ * the WL1283 back (session 29), so the glitch is worth removing: ti-sysc's
++ * reset is skipped and the hogs below re-assert the same values anyway.
++ */
++&gpio2_target {
++	ti,no-reset-on-init;
++};
++
 +&gpio2 {
 +	pinctrl-names = "default";
-+	pinctrl-0 = <&panel_en_pins>;
++	pinctrl-0 = <&panel_en_pins &wl1283_ctrl_pins>;
 +
 +	/* LM3532 / panel I2C gate — measured (report 120) */
 +	panel-en-hog {
@@ -847,10 +1091,15 @@
 +	};
 +
 +	/*
-+	 * gpio_52 / gpio_53 (GPIO2_20 / GPIO2_21): the reference configures
-+	 * both balls as GPIO outputs and its GPIO2_DATAOUT does not set
-+	 * either bit, so they are driven LOW.  We used to leave them in safe
-+	 * mode, i.e. high.  See bridge_pins above for the measured values.
++	 * gpio_52 (GPIO2_20): the reference configures it as a GPIO output and
++	 * its GPIO2_DATAOUT does not set the bit, so it is driven LOW.  We used
++	 * to leave it in safe mode, i.e. high.  See bridge_pins above.
++	 *
++	 * gpio_53 (GPIO2_21) is NOT an output: it is the WL1283's interrupt
++	 * line (session 29, report 180 — the QNX driver sets it as an input
++	 * with a falling-edge detect, `omap4_gpio_set_direction(53, 1)`).
++	 * Driving it low fights the chip's own driver; leave it to the MMC
++	 * pwrseq/DT and do not hog it.
 +	 */
 +	disp-en-20-hog {
 +		gpio-hog;
@@ -858,11 +1107,54 @@
 +		output-low;
 +		line-name = "gpio2-20";
 +	};
-+	disp-en-21-hog {
++
++	/*
++	 * WL1283 WLAN/BT enable, gpio_54 = GPIO2_22 (pad gpmc_nwp 0x07c).  The
++	 * loader leaves it LOW and the QNX driver raises it; hold it high here so
++	 * the chip is powered for the UART2/HCI probe.
++	 */
++	wl1283-en-hog {
 +		gpio-hog;
-+		gpios = <21 GPIO_ACTIVE_HIGH>;
-+		output-low;
-+		line-name = "gpio2-21";
++		gpios = <22 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "wl1283-enable";
++	};
++
++};
++
++/*
++ * GPIO4_5 / _8 / _28 / _31: the reference drives all four high
++ * (`GPIO4_OE = 0x6ffffe1c`, `GPIO4_DATAOUT = 0x90000120`, report 118 §10.1,
++ * re-measured session 29), and our boot leaves the whole bank at its reset
++ * state (`OE = 0xffffffff`, `DATAOUT = 0`) — the only GPIO output difference
++ * from the reference that the readable banks do not explain.  Report 118 §10.1
++ * listed them as untested display candidates; the display works now, so they
++ * are more likely the combo's board-level enables.  Mirror the reference.
++ */
++&gpio4 {
++	ref-hog-5 {
++		gpio-hog;
++		gpios = <5 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "gpio4-5";
++	};
++	ref-hog-8 {
++		gpio-hog;
++		gpios = <8 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "gpio4-8";
++	};
++	ref-hog-28 {
++		gpio-hog;
++		gpios = <28 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "gpio4-28";
++	};
++	ref-hog-31 {
++		gpio-hog;
++		gpios = <31 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "gpio4-31";
 +	};
 +};
 +
@@ -885,6 +1177,26 @@
 +		pinctrl-single,pins = <
 +			OMAP4_IOPAD(0x190, 0x0003)	/* gpio_2  (GPIO1_2)  */
 +			OMAP4_IOPAD(0x1b4, 0x0003)	/* gpio_14 (GPIO1_14) */
++		>;
++	};
++
++	/* FAN5702 EN = GPIO1_13, pad 0x1b0 (TRM mux 3 = gpio_13) */
++	fan5702_pins: fan5702-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x1b0, 0x0003)
++		>;
++	};
++
++	/*
++	 * WL1283 control lines.  gpio_54 (GPIO2_22, pad gpmc_nwp 0x07c) is the
++	 * WLAN enable; the reference leaves that pad at 0x0003 (mux 3 = gpio,
++	 * no pulls) with GPIO2_DATAOUT bit 22 set.  gpio_53 (GPIO2_21, pad
++	 * gpmc_ncs3 0x07a) is the WLAN interrupt and is already muxed by
++	 * bridge_pins above as an input.
++	 */
++	wl1283_ctrl_pins: wl1283-ctrl-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x07c, 0x0003)	/* gpmc_nwp = gpio_54 (WL_EN) */
 +		>;
 +	};
 +};
@@ -3717,7 +4029,7 @@
  #include <linux/irq.h>
  #include <linux/regulator/consumer.h>
  #include <linux/pinctrl/consumer.h>
-@@ -211,6 +212,55 @@
+@@ -211,6 +212,63 @@
  	u8 controller_flags;
  };
  
@@ -3740,6 +4052,14 @@
 + */
 +static bool pb_trace;
 +module_param_named(trace, pb_trace, bool, 0644);
++/*
++ * Override the 400 kHz init clock on MMC5 only.  The QNX SDIO driver runs
++ * its CMD0/CMD5/CMD3/CMD7 sequence with SYSCTL.CLKD = 2 on a 96 MHz clock
++ * (12-24 MHz), not at 400 kHz; set this and rebind 480d5000.mmc to test
++ * whether the WL1283 needs the faster init rate.
++ */
++static unsigned int pb_init_hz;
++module_param_named(init_hz, pb_init_hz, uint, 0644);
 +MODULE_PARM_DESC(trace, "PlayBook: log MMC requests and IRQs (PBREQ/PBIRQ)");
 +static u64 pb_req_ns;
 +
@@ -3773,7 +4093,25 @@
  static void omap_hsmmc_start_dma_transfer(struct omap_hsmmc_host *host);
  
  static int omap_hsmmc_enable_supply(struct mmc_host *mmc)
-@@ -539,7 +589,9 @@
+@@ -522,7 +580,16 @@
+ 	u16 dsor = 0;
+ 
+ 	if (ios->clock) {
+-		dsor = DIV_ROUND_UP(clk_get_rate(host->fclk), ios->clock);
++		unsigned int clk = ios->clock;
++
++		if (pb_init_hz && clk == 400000 &&
++		    host->mmc->parent &&
++		    strstr(dev_name(host->mmc->parent), "480d5000")) {
++			clk = pb_init_hz;
++			pr_info("PBCLK: %s init override %u -> %uHz\n",
++				mmc_hostname(host->mmc), ios->clock, clk);
++		}
++		dsor = DIV_ROUND_UP(clk_get_rate(host->fclk), clk);
+ 		if (dsor > CLKD_MAX)
+ 			dsor = CLKD_MAX;
+ 	}
+@@ -539,7 +606,9 @@
  
  	dev_vdbg(mmc_dev(host->mmc), "Set clock to %uHz\n", ios->clock);
  
@@ -3783,7 +4121,7 @@
  
  	regval = OMAP_HSMMC_READ(host->base, SYSCTL);
  	regval = regval & ~(CLKD_MASK | DTO_MASK);
-@@ -550,10 +602,12 @@
+@@ -550,10 +619,12 @@
  		OMAP_HSMMC_READ(host->base, SYSCTL) | ICE);
  
  	/* Wait till the ICS bit is set */
@@ -3796,7 +4134,7 @@
  
  	/*
  	 * Enable High-Speed Support
-@@ -578,6 +632,8 @@
+@@ -578,6 +649,8 @@
  	}
  
  	omap_hsmmc_start_clock(host);
@@ -3805,7 +4143,7 @@
  }
  
  static void omap_hsmmc_set_bus_width(struct omap_hsmmc_host *host)
-@@ -718,15 +774,29 @@
+@@ -718,15 +791,29 @@
  	unsigned long timeout;
  
  	disable_irq(host->irq);
@@ -3835,7 +4173,7 @@
  
  	OMAP_HSMMC_WRITE(host->base, CON,
  		OMAP_HSMMC_READ(host->base, CON) & ~INIT_STREAM);
-@@ -1068,10 +1138,31 @@
+@@ -1068,10 +1155,31 @@
  	struct omap_hsmmc_host *host = dev_id;
  	int status;
  
@@ -3868,7 +4206,7 @@
  
  		if (status & CIRQ_EN)
  			mmc_signal_sdio_irq(host->mmc);
-@@ -1423,6 +1514,26 @@
+@@ -1423,6 +1531,26 @@
  	struct omap_hsmmc_host *host = mmc_priv(mmc);
  	int err;
  
@@ -3895,7 +4233,7 @@
  	BUG_ON(host->req_in_progress);
  	BUG_ON(host->dma_ch != -1);
  	if (host->reqs_blocked)
-@@ -1454,6 +1565,10 @@
+@@ -1454,6 +1582,10 @@
  	struct omap_hsmmc_host *host = mmc_priv(mmc);
  	int do_send_init_stream = 0;
  
@@ -3906,7 +4244,7 @@
  	if (ios->power_mode != host->power_mode) {
  		switch (ios->power_mode) {
  		case MMC_POWER_OFF:
-@@ -1471,7 +1586,9 @@
+@@ -1471,7 +1603,9 @@
  
  	/* FIXME: set registers based only on changes to ios */
  
@@ -3916,7 +4254,7 @@
  
  	if (host->pdata->controller_flags & OMAP_HSMMC_SUPPORTS_DUAL_VOLT) {
  		/* Only MMC1 can interface at 3V without some flavor
-@@ -1491,12 +1608,23 @@
+@@ -1491,12 +1625,40 @@
  		}
  	}
  
@@ -3936,12 +4274,29 @@
 +	}
  
  	omap_hsmmc_set_bus_mode(host);
++	/*
++	 * Do NOT read other modules here.  This runs on every set_ios,
++	 * including a runtime unbind/bind long after probe, and a cached
++	 * ioremap of another target is not guaranteed live then: it faulted
++	 * in bind_store -> mmc_power_up and took the shell (and the console)
++	 * down with interrupts disabled (session 29, trap 100).  The GPIO
++	 * bank dump lives in omap_hsmmc_probe() instead, which runs once.
++	 */
++	pr_info("PBD: %s CON=%08x HCTL=%08x SYSCTL=%08x CAPA=%08x STAT=%08x PSTATE=%08x SYSSTATUS=%08x\n",
++		mmc_hostname(mmc),
++		OMAP_HSMMC_READ(host->base, CON),
++		OMAP_HSMMC_READ(host->base, HCTL),
++		OMAP_HSMMC_READ(host->base, SYSCTL),
++		OMAP_HSMMC_READ(host->base, CAPA),
++		OMAP_HSMMC_READ(host->base, STAT),
++		OMAP_HSMMC_READ(host->base, PSTATE),
++		OMAP_HSMMC_READ(host->base, SYSSTATUS));
 +	pr_info("PBSIO: %s done\n", mmc_hostname(mmc));
 +	pb_event(0x1800);
  }
  
  static void omap_hsmmc_enable_sdio_irq(struct mmc_host *mmc, int enable)
-@@ -1771,6 +1899,9 @@
+@@ -1771,6 +1933,9 @@
  	const struct omap_mmc_of_data *data;
  	void __iomem *base;
  
@@ -3951,7 +4306,7 @@
  	match = of_match_device(of_match_ptr(omap_mmc_of_match), &pdev->dev);
  	if (match) {
  		pdata = of_get_hsmmc_pdata(&pdev->dev);
-@@ -1807,6 +1938,7 @@
+@@ -1807,6 +1972,7 @@
  	ret = mmc_of_parse(mmc);
  	if (ret)
  		goto err1;
@@ -3959,7 +4314,7 @@
  
  	host		= mmc_priv(mmc);
  	host->mmc	= mmc;
-@@ -1844,6 +1976,7 @@
+@@ -1844,6 +2010,7 @@
  		host->fclk = NULL;
  		goto err1;
  	}
@@ -3967,7 +4322,7 @@
  
  	if (host->pdata->controller_flags & OMAP_HSMMC_BROKEN_MULTIBLOCK_READ) {
  		dev_info(&pdev->dev, "multiblock reads disabled due to 35xx erratum 2.1.1.128; MMC read performance may suffer\n");
-@@ -1852,11 +1985,26 @@
+@@ -1852,11 +2019,26 @@
  
  	device_init_wakeup(&pdev->dev, true);
  	pm_runtime_enable(host->dev);
@@ -3994,7 +4349,7 @@
  
  	host->dbclk = devm_clk_get(&pdev->dev, "mmchsdb_fck");
  	/*
-@@ -1889,16 +2037,22 @@
+@@ -1889,16 +2071,22 @@
  
  	mmc->pm_caps |= mmc_pdata(host)->pm_caps;
  
@@ -4017,7 +4372,7 @@
  	if (IS_ERR(host->tx_chan)) {
  		dev_err(mmc_dev(host->mmc), "TX DMA channel request failed\n");
  		ret = PTR_ERR(host->tx_chan);
-@@ -1924,9 +2078,11 @@
+@@ -1924,9 +2112,11 @@
  		goto err_irq;
  	}
  
@@ -4029,17 +4384,40 @@
  
  	if (!mmc->ocr_avail)
  		mmc->ocr_avail = mmc_pdata(host)->ocr_mask;
-@@ -1945,7 +2101,9 @@
+@@ -1945,7 +2135,32 @@
  	if (!ret)
  		mmc->caps |= MMC_CAP_SDIO_IRQ;
  
 +	pr_info("PBM: %s add_host\n", dev_name(&pdev->dev));
  	ret = mmc_add_host(mmc);
 +	pr_info("PBM: %s add_host done\n", dev_name(&pdev->dev));
++	/*
++	 * One-shot board dump: the reference's GPIO4 outputs are part of the
++	 * WL1283 bring-up evidence (report 180).  Probe only, and only for the
++	 * combo's controller — see the note in omap_hsmmc_set_ios about why
++	 * this must not run per-request.
++	 */
++	if (strstr(dev_name(&pdev->dev), "480d5000")) {
++		int b;
++
++		for (b = 0; b < 5; b++) {
++			void __iomem *g = ioremap(0x48055000 + b * 0x2000, 0x1000);
++
++			if (!g) {
++				pr_info("PBGPIO: gpio%d: ioremap failed\n", b + 2);
++				continue;
++			}
++			pr_info("PBGPIO: gpio%d rev=%08x OE=%08x OUT=%08x IN=%08x\n",
++				b + 2, readl(g + 0x0000), readl(g + 0x0134),
++				readl(g + 0x013c), readl(g + 0x0138));
++			iounmap(g);
++		}
++	}
++
  	if (ret)
  		goto err_irq;
  
-@@ -2052,10 +2210,14 @@
+@@ -2052,10 +2267,14 @@
  	int ret = 0;
  
  	host = dev_get_drvdata(dev);
@@ -4054,7 +4432,7 @@
  	if ((host->mmc->caps & MMC_CAP_SDIO_IRQ) &&
  	    (host->flags & HSMMC_SDIO_IRQ_ENABLED)) {
  		/* disable sdio irq handling to prevent race */
-@@ -2083,7 +2245,9 @@
+@@ -2083,7 +2302,9 @@
  	}
  
  abort:
@@ -4064,7 +4442,7 @@
  	return ret;
  }
  
-@@ -2093,7 +2257,9 @@
+@@ -2093,7 +2314,9 @@
  	unsigned long flags;
  
  	host = dev_get_drvdata(dev);
@@ -4264,7 +4642,7 @@
  
 --- a/drivers/misc/pbmon.c
 +++ b/drivers/misc/pbmon.c
-@@ -0,0 +1,862 @@
+@@ -0,0 +1,1050 @@
 +/*
 + * pbmon — call the OMAP4430 secure monitor's RPMB block seal/unseal services.
 + *
@@ -4334,27 +4712,33 @@
 +#include <linux/uaccess.h>
 +#include <linux/delay.h>
 +
-+#define PBMON_LEN 0xE0
++#define PBMON_BLK 0xE0		/* 224-byte record block (plaintext/ciphertext) */
++#define PBMON_SEALED 0x100	/* 256 bytes on media: 224 ciphertext + 32 tag */
 +#define PBMON_PAGE 0x1000
 +
 +/*
-+ * Page layout, mirroring the live QNX page (report 143's dump):
-+ *   +0x020 key        the 0x33 preload slot QNX keeps the key in
-+ *   +0x400 command pages (0x33, 0x2F, 0x31, 0x12)
-+ *   +0x480 descriptor
++ * Page layout, mirroring the live QNX page (report 143's dump) with the
++ * extra slots the bootloader's two-stage transform addresses:
++ *   +0x020 keyA       the 0x2E descriptor's digest key
++ *   +0x060 keyB       the 0x33 preload key (used by 0x2F and 0x2E)
++ *   +0x400 command pages (0x33, 0x2F, 0x31, 0x2E)
++ *   +0x480 descriptor (0x2E: 8 words, 0x2F: 0x30 bytes)
 + *   +0x500 nonce buffer
-+ *   +0x700 input block (plaintext or ciphertext)
-+ *   +0x800 output block
-+ * The input must NOT overlap +0x020: if the monitor takes the key from the
-+ * fixed slot rather than the pointer, an input at +0x000 would hand it 16
-+ * bytes of ciphertext as the key — a ret=0 with garbage output, which is
-+ * exactly what the first identity-era seal test produced.
++ *   +0x600 0x2E digest output (32 bytes)
++ *   +0x700 input block (224 or 256)
++ *   +0x800 output block (224 or 256)
++ * The input must NOT overlap +0x020/+0x060: if the monitor takes the key from
++ * a fixed slot rather than the pointer, an input at +0x000 would hand it
++ * ciphertext as the key — a ret=0 with garbage output, which is exactly what
++ * the first identity-era seal test produced.
 + */
 +#define OFF_IN   0x700
 +#define OFF_OUT  0x800
++#define OFF_TAG  0x600
 +#define OFF_DESC 0x480
 +#define OFF_CMD  0x400
 +#define OFF_KEY  0x020
++#define OFF_KEY2 0x060
 +
 +#define CM2_PHYS 0x4A009000
 +#define CM2_L4SEC_CLKSTCTRL 0x580
@@ -4378,38 +4762,53 @@
 +#define PB_ORACLE_MAX 7
 +
 +/*
-+ * The 16-byte key the 0x33 service preloads, from the live page at +0x20
-+ * (report 144).  /dev/pbkey overrides it so the key/framing matrix can be run
-+ * in one boot; the default is QNX's value, restored by a reboot.
++ * The two key slots, and they are SEPARATE slots in the bootloader too:
++ * the 0x2E wrapper takes its digest key from the descriptor (page+0x20 there),
++ * while both wrappers preload the 0x33 slot (page+0x60) for the engine.
++ *
++ *   keyA — the descriptor's digest key.  PROVEN to be seed[0:16]: the block
++ *          tag is HMAC-SHA256(seed[0:16], C[0:0xE0]), verified offline and now
++ *          reproduced by the monitor on live media (session 27: unseal returns
++ *          the plaintext exactly when keyA = seed[0:16]).
++ *   keyB — the 0x33 preload, i.e. the engine's key input for the 0x2F cipher.
++ *          Content still unknown; the default follows QNX's own read path,
++ *          which preloads [obj+0x30] = the seed.
++ *
++ * They must be settable independently, or the cipher's key can never be varied
++ * while the tag stays valid — that is the whole point of /dev/pbkeys.
++ *
++ * The preload length is 16, not 32: the bootloader hardcodes 16, and a 32-byte
++ * preload makes the monitor refuse the call (-EIO) — measured, session 27.
 + */
-+static u8 pb_xf_key[16] = {
++static u8 pb_key_a[16] = {
++	0x15, 0x00, 0x00, 0x01, 0x4d, 0x43, 0x47, 0x41,
++	0x46, 0x41, 0x10, 0x00, 0x2b, 0xe1, 0x1d, 0xa8,
++};
++/* the measured cipher key, page+0x20 of the reference's rpmmb page */
++static u8 pb_key_b[16] = {
 +	0x86, 0x78, 0x7c, 0x2a, 0x63, 0x2f, 0xbe, 0x16,
 +	0x48, 0xec, 0xab, 0xa6, 0xd8, 0x84, 0x01, 0x09,
 +};
-+
 +/*
 + * ABI knobs for the known-pair sweep (/dev/pbctl: four bytes
 + * {op, kek, desc_mode, key_mode}).
 + *
-+ * op         descriptor op field (rpmb-omap4 accepts 0 and 2)
-+ * kek        which select_kek(0x31) precedes the transform
-+ *            (0 = none, 1 = index 0, 2 = index 1 — its read path uses 1)
-+ * desc_mode  addresses written into the descriptor: 0 = identity,
-+ *            1 = phys - 0x10000000 (what QNX puts there, measured)
-+ * key_mode   the 0x33 key pointer: 0 = identity, 1 = phys - 0x10000000
-+ *
-+ * The measured convention (session 20, live QNX page): the command page and
-+ * its arguments are TRUE physical addresses, while the descriptor's data/out
-+ * fields are stored 0x10000000 LOWER — the monitor adds 0x10000000 back when
-+ * it hands those to the crypto engine.  Passing identity addresses there made
-+ * the engine read the wrong buffer, which is why ret=0 came with garbage.
++ * op         the 0x2F descriptor's u16 op field (0 on this device)
++ * kek        which select_kek(0x31) opens the session
++ *            (0 = none — the DEFAULT, because id 1 breaks the transform;
++ *            1 = id 0, harmless; 2 = id 1, which changes the plaintext)
++ * klen_sel   reserved: the preload is 16 bytes and a 32-byte one is refused
++ *            by the monitor (-EIO, measured session 27)
++ * key_mode   reserved: the monitor's address view is identity (report 147)
 + */
 +static u8 pb_op = 0;
-+static u8 pb_kek = 2;
++static u8 pb_kek;		/* 0 = no 0x31: the measured-good default */
 +static u8 pb_desc_mode;
 +static u8 pb_key_mode;
++static u32 pb_dom = 5;	/* monitor domain for the transform: 5 = bootloader, 4 = QNX */
++static u32 pb_2e_op = 3;	/* the 0x2E digest descriptor's op (both call sites) */
 +
-+/* block 0x43: plaintext from rpmb-omap4 page+0x700, ciphertext from media */
++/* the reference's known pair (block 0x3B): plaintext and sealed 256 bytes */
 +#include "pbmon-pair.h"
 +/* the whole captured RpmbInit page, for the key-window sweep */
 +#include "pbmon-page.h"
@@ -4422,7 +4821,8 @@
 +static struct device *pb_dev;
 +static struct platform_device *pb_pdev;
 +static DEFINE_MUTEX(pb_lock);
-+static u8 pb_out[PBMON_LEN];
++static u8 pb_out[PBMON_SEALED];
++static size_t pb_out_len;
 +static bool pb_out_valid;
 +
 +static const u32 cm2_offs[6] = {
@@ -4522,14 +4922,10 @@
 +}
 +
 +/*
-+ * Descriptor data/out addresses.  QNX stores them as phys - 0x10000000 (the
-+ * monitor's engine view) while the command page and its arguments are true
-+ * physical addresses; pb_desc_mode selects which form we write.
++ * The transform now uses identity physical addresses everywhere (report 147),
++ * so the old "descriptor engine view" helper is gone with the bias.  The
++ * pbctl address-mode bytes are kept in the ABI but no longer change anything.
 + */
-+static u32 pb_eng_addr(u32 pa)
-+{
-+	return pb_desc_mode ? pb_mon_pa(pa) : pa;
-+}
 +
 +/*
 + * The 0x12 address oracle (report 146 "what to try next", report 145 §4.3).
@@ -4647,128 +5043,250 @@
 +}
 +
 +/*
-+ * The transform path.  Everything the monitor touches lives in the reserved
-+ * low page at PB_LOW_PA and is addressed by its true physical address: report
-+ * 147 pinned the monitor's view as identity, with a reachable window that
-+ * excludes 0xBF040000 (where a coherent allocation lands) and includes
-+ * 0xA0200000.  The session-19 bias is gone.
++ * The two-stage transform, transcribed from the bootloader with the corrected
++ * load base (report 173: the arm9000 section runs at 0x80000000 from media
++ * 0x9000, so the seal is 0x80007F58 and the unseal 0x80008048):
++ *
++ *   seal   : 0x31(id 1) -> 0x33(keyB) -> 0x2F encrypt 224
++ *            -> 0x33(keyB) -> 0x2E digest (32) -> 0x31(id 0)
++ *   unseal : 0x31(id 1) -> 0x33(keyB) -> 0x2E digest of the ciphertext
++ *            -> memcmp(digest, block tag)  (mismatch = tamper, abort)
++ *            -> 0x33(keyB) -> 0x2F decrypt 224 -> 0x31(id 0)
++ *
++ * 0x2F is the block cipher, not a digest: its descriptor carries src/len and
++ * dst/len (224 in, 224 out) and its +0x04 byte is the direction (1 = encrypt,
++ * 0 = decrypt).  It has NO key field — its key is the 0x33 preload (keyB).
++ * 0x2E is the digest: {u16 op=3, u16 0, src, srclen, dst, dstlen, key, keylen}
++ * with dstlen 32, its second SMC argument is the constant 1, and its key is
++ * keyA.  Reports 150/151 label these the other way round; the bytes do not.
++ *
++ * Everything the monitor touches lives in the reserved low page at PB_LOW_PA
++ * and is addressed by its true physical address (report 147).
 + */
++static void pb_zero_desc(void)
++{
++	memset(pb_low + OFF_DESC, 0, 0x30);
++}
++
++/* 0x2F: the block cipher, cd. dir 1 = encrypt (seal), 0 = decrypt (unseal) */
++static void pb_desc_2f(u32 dir, u32 src, u32 dst, u32 len)
++{
++	u32 *d = (u32 *)(pb_low + OFF_DESC);
++
++	pb_zero_desc();
++	((u16 *)d)[0] = 1;
++	((u16 *)d)[1] = 0x0400 | pb_op;
++	((u8 *)d)[4] = dir ? 1 : 0;
++	((u8 *)d)[5] = 0;
++	d[3] = len;			/* +0x0c */
++	d[4] = 0;			/* +0x10 handle (monitor-written) */
++	d[5] = 0;			/* +0x14 u16 op, u16 pad */
++	d[6] = src;			/* +0x18 */
++	d[7] = len;			/* +0x1c */
++	d[8] = dst;			/* +0x20 */
++	d[9] = len;			/* +0x24 */
++	d[10] = 0;			/* +0x28 */
++	d[11] = 0;			/* +0x2c */
++}
++
++/* 0x2E: the digest, 224 bytes -> 32 */
++static void pb_desc_2e(u32 src, u32 srclen, u32 dst, u32 dstlen,
++		       u32 key, u32 keylen)
++{
++	u32 *d = (u32 *)(pb_low + OFF_DESC);
++
++	pb_zero_desc();
++	((u16 *)d)[0] = pb_2e_op;
++	((u16 *)d)[1] = 0;
++	d[1] = src;			/* +0x04 */
++	d[2] = srclen;			/* +0x08 */
++	d[3] = dst;			/* +0x0c */
++	d[4] = dstlen;			/* +0x10 */
++	d[5] = key;			/* +0x14 */
++	d[6] = keylen;			/* +0x18 */
++}
++
 +static int pb_xform(const u8 *in, u8 *out, int dir)
 +{
 +	const u32 base = PB_LOW_PA;
-+	u32 *desc = (u32 *)(pb_low + OFF_DESC);
 +	u32 *cmd33 = (u32 *)(pb_low + OFF_CMD);
 +	u32 *cmd2f = (u32 *)(pb_low + OFF_CMD + 0x10);
 +	u32 *cmd31 = (u32 *)(pb_low + OFF_CMD + 0x20);
-+	u32 *cmd12 = (u32 *)(pb_low + OFF_CMD + 0x30);
-+	u32 r12, r31, r33, r2f;
++	u32 *cmd2e = (u32 *)(pb_low + OFF_CMD + 0x30);
++	u32 in_pa = base + OFF_IN, out_pa = base + OFF_OUT;
++	u32 tag_pa = base + OFF_TAG, keya_pa = base + OFF_KEY;
++	u32 keyb_pa = base + OFF_KEY2;
++	u32 r31 = 0, r33 = 0, r2e = 0, r2f = 0;
++	int ret = 0;
 +
-+	memcpy(pb_low + OFF_IN, in, PBMON_LEN);
-+	memcpy(pb_low + OFF_KEY, pb_xf_key, sizeof(pb_xf_key));
-+
-+	memset(desc, 0, 0x160);
-+	((u16 *)desc)[0] = 1;
-+	((u16 *)desc)[1] = pb_op | 0x0400;	/* op | key33 preload */
-+	((u8 *)desc)[4] = (u8)dir;
-+	((u8 *)desc)[5] = 0;
-+	desc[3] = PBMON_LEN;			/* +0x0c */
-+	desc[4] = 0;				/* +0x10 */
-+	desc[5] = 0;				/* +0x14 */
-+	desc[6] = pb_eng_addr(base + OFF_IN);	/* +0x18 data */
-+	desc[7] = PBMON_LEN;			/* +0x1c */
-+	desc[8] = pb_eng_addr(base + OFF_OUT);	/* +0x20 out */
-+	desc[9] = PBMON_LEN;			/* +0x24 */
++	memcpy(pb_low + OFF_KEY, pb_key_a, sizeof(pb_key_a));
++	memcpy(pb_low + OFF_KEY2, pb_key_b, sizeof(pb_key_b));
++	memcpy(pb_low + OFF_IN, in, dir ? PBMON_BLK : PBMON_SEALED);
++	memset(pb_low + OFF_TAG, 0xaa, 32);
++	memset(pb_low + OFF_OUT, 0xaa, PBMON_SEALED);
++	pb_zero_desc();
 +
 +	cmd33[0] = 2;
-+	cmd33[1] = pb_key_mode ? pb_mon_pa(base + OFF_KEY) : base + OFF_KEY;
-+	cmd33[2] = sizeof(pb_xf_key);
++	cmd33[1] = keyb_pa;
++	cmd33[2] = sizeof(pb_key_b);
 +	cmd2f[0] = 1;
 +	cmd2f[1] = base + OFF_DESC;
 +	cmd31[0] = 1;
-+	cmd31[1] = 1;				/* 0x31 index 1 */
-+	cmd12[0] = 2;
-+	cmd12[1] = base + 0x500;
-+	cmd12[2] = 16;
-+	memset(pb_low + 0x500, 0xaa, 16);
++	cmd31[1] = 1;				/* the bootloader's open id */
++	cmd2e[0] = 2;				/* {desc, 1} */
++	cmd2e[1] = base + OFF_DESC;
++	cmd2e[2] = 1;
 +
 +	mb();
 +	pb_clocks_on();
 +	mb();
-+	r12 = pb_smc(0x12, 0, 4, base + OFF_CMD + 0x30);
-+	mb();
++
 +	if (pb_kek) {
-+		cmd31[1] = pb_kek - 1;		/* 1 = index 0, 2 = index 1 */
++		cmd31[1] = pb_kek - 1;		/* 1 = id 0, 2 = id 1 */
 +		mb();
-+		r31 = pb_smc(0x31, 0, 4, base + OFF_CMD + 0x20);
++		r31 = pb_smc(0x31, 0, pb_dom, base + OFF_CMD + 0x20);
 +		mb();
-+	} else {
-+		r31 = 0;
++		/*
++		 * The bootloader aborts here when 0x31 fails.  We record it and
++		 * carry on: a refused open is worth a diagnostic line, and the
++		 * 0x33/0x2E/0x2F returns below still say what happened.
++		 */
 +	}
-+	r33 = pb_smc(0x33, 0, 4, base + OFF_CMD);
-+	mb();
-+	if (r33 == 0) {
-+		r2f = pb_smc(0x2F, 0, 4, base + OFF_CMD + 0x10);
++
++	if (dir) {
++		/* seal: plaintext -> ciphertext, then digest the ciphertext */
++		pb_desc_2f(1, in_pa, out_pa, PBMON_BLK);
 +		mb();
++		r33 = pb_smc(0x33, 0, pb_dom, base + OFF_CMD);
++		if (r33) {
++			ret = -EIO;
++			goto out_close;
++		}
++		mb();
++		r2f = pb_smc(0x2F, 0, pb_dom, base + OFF_CMD + 0x10);
++		mb();
++		if (r2f) {
++			ret = -EIO;
++			goto out_close;
++		}
++		pb_desc_2e(out_pa, PBMON_BLK, tag_pa, 32, keya_pa, 16);
++		mb();
++		r33 = pb_smc(0x33, 0, pb_dom, base + OFF_CMD);
++		if (r33) {
++			ret = -EIO;
++			goto out_close;
++		}
++		mb();
++		r2e = pb_smc(0x2E, 0, pb_dom, base + OFF_CMD + 0x30);
++		mb();
++		if (r2e) {
++			ret = -EIO;
++			goto out_close;
++		}
++		memcpy(out, pb_low + OFF_OUT, PBMON_BLK);
++		memcpy(out + PBMON_BLK, pb_low + OFF_TAG, 32);
 +	} else {
-+		r2f = 0xffffffff;
++		/* unseal: digest the ciphertext, check the tag, then decrypt */
++		pb_desc_2e(in_pa, PBMON_BLK, tag_pa, 32, keya_pa, 16);
++		mb();
++		r33 = pb_smc(0x33, 0, pb_dom, base + OFF_CMD);
++		if (r33) {
++			ret = -EIO;
++			goto out_close;
++		}
++		mb();
++		r2e = pb_smc(0x2E, 0, pb_dom, base + OFF_CMD + 0x30);
++		mb();
++		if (r2e) {
++			ret = -EIO;
++			goto out_close;
++		}
++		if (memcmp(pb_low + OFF_TAG, in + PBMON_BLK, 32)) {
++			ret = -EBADMSG;
++			goto out_close;
++		}
++		pb_desc_2f(0, in_pa, out_pa, PBMON_BLK);
++		mb();
++		r33 = pb_smc(0x33, 0, pb_dom, base + OFF_CMD);
++		if (r33) {
++			ret = -EIO;
++			goto out_close;
++		}
++		mb();
++		r2f = pb_smc(0x2F, 0, pb_dom, base + OFF_CMD + 0x10);
++		mb();
++		if (r2f) {
++			ret = -EIO;
++			goto out_close;
++		}
++		memcpy(out, pb_low + OFF_OUT, PBMON_BLK);
 +	}
-+	/* QNX's block path closes with select_kek(0) (rpmb-omap4 0x2bd0) */
++
++out_close:
++	/* the bootloader closes the session with 0x31(id 0) */
 +	if (pb_kek) {
 +		cmd31[1] = 0;
 +		mb();
-+		pb_smc(0x31, 0, 4, base + OFF_CMD + 0x20);
++		pb_smc(0x31, 0, pb_dom, base + OFF_CMD + 0x20);
 +		mb();
 +	}
 +	pb_clocks_off();
 +
-+	pr_err("pbmon: xform dir=%d op=%u kek=%u page=0x%08x 0x12=%u 0x31=%u 0x33=%u 0x2F=%u nonce=%*phN\n",
-+	       dir, pb_op, pb_kek, base, r12, r31, r33, r2f, 16,
-+	       (u8 *)(pb_low + 0x500));
-+	if (r33 != 0 || r2f != 0)
-+		return -EIO;
-+	memcpy(out, pb_low + OFF_OUT, PBMON_LEN);
-+	return 0;
++	pr_debug("pbmon: xform dir=%d op=%u op2e=%u kek=%u dom=%u page=0x%08x 0x31=%u 0x33=%u 0x2E=%u 0x2F=%u ret=%d\n",
++		 dir, pb_op, pb_2e_op, pb_kek, pb_dom, base, r31, r33, r2e,
++		 r2f, ret);
++	return ret;
 +}
 +
 +static int __init pb_selftest(void)
 +{
-+	u8 out[PBMON_LEN];
++	u8 out[PBMON_SEALED];
 +	int u = -1, s = -1;
 +
-+	u = pb_xform(pb_c67, out, 0);
-+	pr_info("pbmon: unseal(C67) -> %s\n",
-+		u ? "smc error" : (memcmp(out, pb_p67, PBMON_LEN) ?
-+				  "MISMATCH" : "PASS"));
-+	if (u == 0 && memcmp(out, pb_p67, PBMON_LEN))
++	u = pb_xform(pb_c3b, out, 0);
++	pr_info("pbmon: unseal(C3b) -> %s\n",
++		u ? (u == -EBADMSG ? "TAG MISMATCH" : "smc error") :
++		    (memcmp(out, pb_p3b, PBMON_BLK) ? "MISMATCH" : "PASS"));
++	if (u == 0 && memcmp(out, pb_p3b, PBMON_BLK))
 +		print_hex_dump(KERN_INFO, "pbmon: unsealed ", DUMP_PREFIX_NONE,
 +			       16, 1, out, 32, false);
 +
-+	s = pb_xform(pb_p67, out, 1);
-+	pr_info("pbmon: seal(P67)   -> %s\n",
-+		s ? "smc error" : (memcmp(out, pb_c67, PBMON_LEN) ?
++	s = pb_xform(pb_p3b, out, 1);
++	pr_info("pbmon: seal(P3b)   -> %s\n",
++		s ? "smc error" : (memcmp(out, pb_c3b, PBMON_SEALED) ?
 +				  "MISMATCH" : "PASS"));
-+	if (s == 0 && memcmp(out, pb_c67, PBMON_LEN))
++	if (s == 0 && memcmp(out, pb_c3b, PBMON_SEALED))
 +		print_hex_dump(KERN_INFO, "pbmon: sealed ", DUMP_PREFIX_NONE,
 +			       16, 1, out, 32, false);
 +
-+	return (u == 0 && s == 0 && !memcmp(out, pb_c67, PBMON_LEN)) ? 0 : -EIO;
++	return (u == 0 && s == 0 && !memcmp(out, pb_c3b, PBMON_SEALED)) ? 0
++								       : -EIO;
 +}
 +
++/*
++ * The unseal interface carries 256 bytes (224 ciphertext + its 32-byte tag)
++ * and yields 224; the seal takes the 224-byte plaintext and yields the whole
++ * 256-byte media block.  A tag mismatch is -EBADMSG, so userspace can tell a
++ * wrong key/descriptor (EIO) from a block that simply does not authenticate.
++ */
 +static int pb_xform_user(const char __user *ubuf, size_t n, int dir)
 +{
-+	u8 in[PBMON_LEN];
++	u8 in[PBMON_SEALED];
++	size_t want = dir ? PBMON_BLK : PBMON_SEALED;
 +	int ret;
 +
-+	if (n != PBMON_LEN)
++	if (n != want)
 +		return -EINVAL;
-+	if (copy_from_user(in, ubuf, PBMON_LEN))
++	if (copy_from_user(in, ubuf, want))
 +		return -EFAULT;
 +	mutex_lock(&pb_lock);
 +	ret = pb_xform(in, pb_out, dir);
-+	if (ret == 0)
++	if (ret == 0) {
 +		pb_out_valid = true;
++		pb_out_len = dir ? PBMON_SEALED : PBMON_BLK;
++	}
 +	mutex_unlock(&pb_lock);
-+	return ret ? ret : (int)n;
++	return ret ? ret : (int)want;
 +}
 +
 +static ssize_t pbseal_write(struct file *f, const char __user *u, size_t n,
@@ -4794,8 +5312,8 @@
 +		mutex_unlock(&pb_lock);
 +		return -EAGAIN;
 +	}
-+	if (n > PBMON_LEN)
-+		n = PBMON_LEN;
++	if (n > pb_out_len)
++		n = pb_out_len;
 +	ret = copy_to_user(u, pb_out, n) ? -EFAULT : (int)n;
 +	mutex_unlock(&pb_lock);
 +	return ret;
@@ -4816,16 +5334,17 @@
 +};
 +
 +/*
-+ * /dev/pbkey: read or replace the transform key (16 bytes).  Test-only knob
-+ * for the key/framing matrix; a reboot restores QNX's value.
++ * /dev/pbkey: read or replace keyA, the 0x2E descriptor's digest key (16
++ * bytes).  Test-only knob; a reboot restores the reference's seed[0:16].
++ * /dev/pbkeys does both slots at once: 32 bytes {keyA, keyB}.
 + */
 +static ssize_t pbkey_write(struct file *f, const char __user *u, size_t n,
 +			   loff_t *o)
 +{
-+	if (n != sizeof(pb_xf_key))
++	if (n != sizeof(pb_key_a))
 +		return -EINVAL;
 +	mutex_lock(&pb_lock);
-+	if (copy_from_user(pb_xf_key, u, n)) {
++	if (copy_from_user(pb_key_a, u, n)) {
 +		mutex_unlock(&pb_lock);
 +		return -EFAULT;
 +	}
@@ -4837,9 +5356,9 @@
 +{
 +	if (*o != 0)
 +		return 0;
-+	if (n > sizeof(pb_xf_key))
-+		n = sizeof(pb_xf_key);
-+	if (copy_to_user(u, pb_xf_key, n))
++	if (n > sizeof(pb_key_a))
++		n = sizeof(pb_key_a);
++	if (copy_to_user(u, pb_key_a, n))
 +		return -EFAULT;
 +	*o += n;
 +	return n;
@@ -4850,6 +5369,45 @@
 +};
 +static struct miscdevice pbkey_misc = {
 +	.minor = MISC_DYNAMIC_MINOR, .name = "pbkey", .fops = &pbkey_fops,
++};
++
++static ssize_t pbkeys_write(struct file *f, const char __user *u, size_t n,
++			    loff_t *o)
++{
++	u8 v[2 * 16];
++
++	if (n != sizeof(v))
++		return -EINVAL;
++	if (copy_from_user(v, u, n))
++		return -EFAULT;
++	mutex_lock(&pb_lock);
++	memcpy(pb_key_a, v, 16);
++	memcpy(pb_key_b, v + 16, 16);
++	mutex_unlock(&pb_lock);
++	return n;
++}
++
++static ssize_t pbkeys_read(struct file *f, char __user *u, size_t n, loff_t *o)
++{
++	u8 v[2 * 16];
++
++	if (*o != 0)
++		return 0;
++	memcpy(v, pb_key_a, 16);
++	memcpy(v + 16, pb_key_b, 16);
++	if (n > sizeof(v))
++		n = sizeof(v);
++	if (copy_to_user(u, v, n))
++		return -EFAULT;
++	*o += n;
++	return n;
++}
++
++static const struct file_operations pbkeys_fops = {
++	.owner = THIS_MODULE, .write = pbkeys_write, .read = pbkeys_read,
++};
++static struct miscdevice pbkeys_misc = {
++	.minor = MISC_DYNAMIC_MINOR, .name = "pbkeys", .fops = &pbkeys_fops,
 +};
 +
 +/* /dev/pbctl: four bytes {op, kek, desc_mode, key_mode} for the ABI sweep */
@@ -4893,62 +5451,63 @@
 +};
 +
 +/*
-+ * The known-pair test: unseal the captured media bytes of block 0x43 and
-+ * compare with the plaintext captured from QNX's page buffer, then seal the
-+ * plaintext and compare with the media.  This is the gate from report 144 §5:
-+ * if the seal reproduces the device's bytes, the ABI, the key and the framing
-+ * are all right.  The /dev/pbkey knob makes it a key candidate sweep.
++ * The known-pair test: unseal the reference's captured block-0x3B bytes and
++ * compare with its plaintext, then seal the plaintext and compare the two
++ * halves of the result separately — the ciphertext isolates the 0x2F stage,
++ * the tag the 0x2E stage.  `p=` is the first 4 bytes of the unsealed
++ * plaintext: comparing it across key candidates shows whether the cipher key
++ * is being used at all or whether the engine holds its own.
 + */
 +static int pb_pair(char *rep, size_t sz)
 +{
-+	u8 out[PBMON_LEN];
-+	int u, s, uok, sok;
++	u8 out[PBMON_SEALED], p0 = 0, p1 = 0, p2 = 0, p3 = 0;
++	int u, s, uok, ct, tag;
 +
-+	u = pb_xform(pb_c67, out, 0);
-+	uok = (u == 0 && !memcmp(out, pb_p67, PBMON_LEN));
-+	s = pb_xform(pb_p67, out, 1);
-+	sok = (s == 0 && !memcmp(out, pb_c67, PBMON_LEN));
-+	scnprintf(rep, sz, "pair: unseal=%d/%s seal=%d/%s\n",
-+		  u, uok ? "OK" : "DIFF", s, sok ? "OK" : "DIFF");
-+	return (uok && sok) ? 0 : 1;
++	u = pb_xform(pb_c3b, out, 0);
++	uok = (u == 0 && !memcmp(out, pb_p3b, PBMON_BLK));
++	if (u == 0) {
++		p0 = out[0]; p1 = out[1]; p2 = out[2]; p3 = out[3];
++	}
++	s = pb_xform(pb_p3b, out, 1);
++	ct = (s == 0 && !memcmp(out, pb_c3b, PBMON_BLK));
++	tag = (s == 0 && !memcmp(out + PBMON_BLK, pb_c3b + PBMON_BLK, 32));
++	scnprintf(rep, sz,
++		  "pair: unseal=%d/%s p=%02x%02x%02x%02x seal=%d ct=%s tag=%s\n",
++		  u, uok ? "OK" : (u == -EBADMSG ? "TAG" : "DIFF"),
++		  p0, p1, p2, p3,
++		  s, s ? "err" : ct ? "OK" : "DIFF",
++		  s ? "err" : tag ? "OK" : "DIFF");
++	return (uok && ct && tag) ? 0 : 1;
 +}
 +
 +/*
 + * /dev/pbwsweep: try every 16-byte window of the captured QNX page as the 0x33
-+ * key and ask whether any of them unseals the known ciphertext into the known
-+ * plaintext.  That is the "is the transform key anywhere in the page" question,
-+ * answered in one boot; both descriptor address conventions are tried.
++ * PRELOAD key (keyB) — the one input to the 0x2F cipher — with the proven
++ * digest key held at seed[0:16], and ask whether any window unseals the known
++ * block into its known plaintext.  That is "is the cipher key anywhere in the
++ * page", answered in one boot.  (The earlier version of this sweep varied the
++ * digest key, which is already proven; that question was the wrong one.)
 + */
 +static int pb_wsweep(char *rep, size_t sz)
 +{
-+	u8 out[PBMON_LEN], key_saved[16];
-+	u8 dm_saved = pb_desc_mode;
-+	int i, mode, hits = 0, ok = 0;
++	u8 out[PBMON_SEALED], key_saved[16];
++	int i, hits = 0;
 +	size_t n = 0;
 +
-+	memcpy(key_saved, pb_xf_key, sizeof(key_saved));
-+	for (mode = 0; mode < 2 && !hits; mode++) {
-+		pb_desc_mode = (u8)mode;
-+		for (i = 0; i + 16 <= (int)sizeof(pb_page); i += 16) {
-+			memcpy(pb_xf_key, pb_page + i, 16);
-+			if (pb_xform(pb_c67, out, 0))
-+				continue;
-+			ok++;
-+			if (!memcmp(out, pb_p67, PBMON_LEN)) {
-+				n += scnprintf(rep + n, sz - n,
-+					       "wsweep: HIT desc=%d off=0x%x unseal=OK\n",
-+					       mode, i);
-+				hits++;
-+				break;
-+			}
-+		}
++	memcpy(key_saved, pb_key_b, sizeof(key_saved));
++	for (i = 0; i + 16 <= (int)sizeof(pb_page); i += 16) {
++		memcpy(pb_key_b, pb_page + i, 16);
++		if (pb_xform(pb_c3b, out, 0) || memcmp(out, pb_p3b, PBMON_BLK))
++			continue;
++		n += scnprintf(rep + n, sz - n,
++			       "wsweep: HIT preload off=0x%x matches P3b\n", i);
++		hits++;
++		break;
 +	}
-+	memcpy(pb_xf_key, key_saved, sizeof(key_saved));
-+	pb_desc_mode = dm_saved;
++	memcpy(pb_key_b, key_saved, sizeof(key_saved));
 +	if (!hits)
 +		n += scnprintf(rep + n, sz - n,
-+			       "wsweep: no window matched (%d transforms ok)\n",
-+			       ok);
++			       "wsweep: no preload window matched the pair\n");
 +	return hits ? 0 : 1;
 +}
 +
@@ -5057,7 +5616,11 @@
 +
 +static int pbmon_selftest = 0;
 +module_param_named(selftest, pbmon_selftest, int, 0644);
-+MODULE_PARM_DESC(selftest, "run the block-0x43 seal selftest at probe (default 0)");
++module_param_named(dom, pb_dom, uint, 0644);
++module_param_named(op2e, pb_2e_op, uint, 0644);
++MODULE_PARM_DESC(dom, "monitor domain for the transform (default 5 = bootloader; 4 = QNX)");
++MODULE_PARM_DESC(op2e, "op field of the 0x2E digest descriptor (default 3)");
++MODULE_PARM_DESC(selftest, "run the block-0x3B seal selftest at probe (default 0)");
 +
 +static int pbmon_probe(struct platform_device *pdev)
 +{
@@ -5097,6 +5660,9 @@
 +	if (ret)
 +		return ret;
 +	ret = misc_register(&pbkey_misc);
++	if (ret)
++		return ret;
++	ret = misc_register(&pbkeys_misc);
 +	if (ret)
 +		return ret;
 +	ret = misc_register(&pbctl_misc);

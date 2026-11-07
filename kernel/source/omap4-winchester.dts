@@ -35,6 +35,29 @@
 		regulator-always-on;
 	};
 
+	/*
+	 * The WL1283 combo's SDIO I/O window (MMC5).  This does not switch a
+	 * rail — the chip is powered by the bootloader and has no host-side
+	 * regulator in RIM's own rail policy — it exists so the MMC core has a
+	 * non-zero `ocr_avail` (same reason as vemmc; without it
+	 * mmc_select_voltage() rejects the card with "no support for card's
+	 * volts").
+	 */
+	vwl1283: regulator-wl1283 {
+		compatible = "regulator-fixed";
+		regulator-name = "vwl1283";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		/*
+		 * Deliberately NOT gpio-controlled: the loader leaves WL_EN
+		 * (GPIO2_22) high, and the whole point of `ti,no-reset-on-init`
+		 * on gpio2_target is that nothing in this boot ever drops it —
+		 * which is exactly the reference's condition.  The supply exists
+		 * only to give the MMC core an ocr_avail window.
+		 */
+		regulator-always-on;
+	};
+
 	chosen {
 		/* No stdout-path: it makes the 8250 driver register ttyS2 as a
 		 * second console.  That console writes to the (dead) UART3 THR
@@ -240,6 +263,18 @@
 	};
 
 	/*
+	 * Capella CM3217 ambient light sensor, 0x10 (and 0x11 for the other
+	 * half of the count).  Not a cm32181: no register file, two slave
+	 * addresses, bare one-byte transfers - see report 181 and
+	 * drivers/iio/light/cm3217.c.  QNX drives it from `winchester-lc -d
+	 * ls-cm3217` at 400 kHz on this bus.
+	 */
+	light-sensor@10 {
+		compatible = "capella,cm3217";
+		reg = <0x10>;
+	};
+
+	/*
 	 * Fairchild FAN5702 status LED, 0x36.  GENERAL (0x10) bits
 	 * 1/2/3 = red/green/blue; EN = GPIO1_13 (low resets, a low->high
 	 * pulse enables).  From the QNX led-fan5702.so and LED-RE.md.
@@ -406,7 +441,29 @@
 	usb-supply = <&vusb>;
 };
 
-/* no external SD slot, no wifi SDIO brought up yet */
+/*
+ * UART2 (0x4806C000) is the WL1283 combo's Bluetooth transport: QNX runs
+ * `devc-seromap-winbt ... 0x4806c000^2,105` on it.  Enable it only to probe the
+ * chip's BT core with `pbhci` — a reply to HCI_Reset proves the chip is powered
+ * and its digital core runs, which is what the silent SDIO side cannot tell us
+ * (session 29, report 180 §6).  Pad values are the reference's own readback.
+ */
+&omap4_pmx_core {
+	uart2_pins: uart2-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x11c, 0x4118)	/* uart2_rx  (in, pull-up) */
+			OMAP4_IOPAD(0x11e, 0x0000)	/* uart2_tx  (out) */
+		>;
+	};
+};
+
+&uart2 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart2_pins>;
+};
+
+/* no external SD slot, and the combos are not on MMC1 (see MMC5 below) */
 &mmc1 {
 	status = "disabled";
 };
@@ -424,8 +481,48 @@
 &mmc4 {
 	status = "disabled";
 };
+
+/*
+ * MMC5 (0x480D5000) is the TI WL1283 combo's SDIO bus — measured, not inferred
+ * (session 29, trap 97).  io-pkt's process map (`pidin mem`) shows
+ * devnp-ti1283.so holding `/dev/mem 0x480d5000` (8 KiB, the hsmmc block) and
+ * the mmc5 interrupt attached as QNX vector 0x5b = GIC SPI 59, which is
+ * exactly `mmc5` in omap4-l4.dtsi.  The sdmmc5 pads 0x148-0x152 read 0x0118
+ * (mux 0, pull-up, input enable) on the running TabletOS while every sdmmc1
+ * and sdmmc3 pad is still 0x000f (safe mode), and QNX never instantiates the
+ * MMC1 controller at all.  Report 176's "mmc1" was the wrong controller.
+ *
+ * The I/O rail: the TWL's VMMC is switched OFF in RIM's own rail policy
+ * (`/etc/system/config/pmic-twl6030.cfg`, "set_state vmmc off app con mod") —
+ * that is the SD-slot rail and there is no SD slot.  The 1.8 V window below is
+ * the one every mainline wl12xx board describes (e.g. omap4-epson-embt2ws);
+ * the supply exists to give the MMC core an `ocr_avail` (as with vemmc), not to
+ * switch anything.
+ *
+ * Step one is enumeration only: no wlcore child node yet, so the card comes up
+ * as a bare SDIO device and the bus/power/pinctrl are the only variables.
+ */
+&omap4_pmx_core {
+	sdmmc5_pins: sdmmc5-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x148, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_clk */
+			OMAP4_IOPAD(0x14a, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_cmd */
+			OMAP4_IOPAD(0x14c, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_dat0 */
+			OMAP4_IOPAD(0x14e, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_dat1 */
+			OMAP4_IOPAD(0x150, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_dat2 */
+			OMAP4_IOPAD(0x152, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_dat3 */
+		>;
+	};
+};
+
 &mmc5 {
-	status = "disabled";
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&sdmmc5_pins &fref_clk_pins>;
+	vmmc-supply = <&vwl1283>;
+	bus-width = <4>;
+	ti,non-removable;
+	non-removable;
 };
 
 /*
@@ -494,6 +591,65 @@
  * The values are the reference's own readback, not a decoding of the pad
  * fields (§18.4.12.9.4 is opaque enough that copying is safer).
  */
+/*
+ * The WL1283's reference clock comes OUT of the SoC and is requested by the
+ * chip with CLK_REQ.  The vendor's own config says so:
+ * local/work/qnx-fw/tiwlan_winchester.ini, `STRFRefClock = 2` (38.4 MHz) with
+ * "Bit 3 - CLK_REQ type, 0 = wired-OR", and `STRFRefClockSettingTime = 5` —
+ * "the time from asserting CLK_REQ (low to high) to valid FREF clock on the
+ * device inputs".  A WiLink with no running reference clock has no running
+ * digital core: it cannot answer SDIO, cannot answer HCI on UART2 and its IRQ
+ * line never goes high, which is exactly what this unit does.
+ *
+ * These pads live in the WKUP padconf at 0x4A31E000 — a block this project had
+ * never compared with the reference.  The reference muxes the request half of
+ * each pair:
+ *
+ *   0x4A31E050  FREF_CLK0_OUT / FREF_CLK3_REQ   ours 0x01080000  ref 0x00080000
+ *   0x4A31E054  FREF_CLK0_OUT / FREF_CLK3_REQ   ours 0x010F0002  ref 0x000F0003
+ *   0x4A31E058  FREF_CLK3_OUT / FREF_CLK4_REQ   ours 0x0108010F  ref 0x000B0003
+ *   0x4A31E05C  FREF_CLK4_OUT / SYS_32K         ours 0x01000108  ref 0x0100000B
+ *
+ * The values are the reference's own readback, as with the display pads.
+ */
+&omap4_pmx_wkup {
+	/*
+	 * Offsets are relative to the pinmux node's own reg base (0x40), so the
+	 * reference's 0x4A31E050..0x05C are 0x10..0x1C here.
+	 */
+	/*
+	 * Pin 10 (0x4A31E050) is already claimed by the TWL6030 ("0-0048"),
+	 * which wants FREF_CLK0_OUT as its own 32 kHz/oscillator clock — so it
+	 * is not in this group.  The three the reference muxes differently and
+	 * nothing else owns are below.
+	 */
+	fref_clk_pins: fref-clk-pins {
+		pinctrl-single,pins = <
+			0x018 0x000B0003	/* FREF_CLK4_OUT / FREF_CLK4_REQ */
+		>;
+	};
+};
+
+/*
+ * The reference leaves the TWL6030 MSECURE ball on fref_clk0_out in
+ * MUX_MODE2 (0x000F0003), not in safe mode.  mainline's twl6030_omap4.dtsi
+ * claims this pin for exactly that mux, so it has to be expressed as a pad
+ * setting rather than folded into the group above (the pin is single-owner).
+ */
+&omap4_pmx_wkup {
+	playbook_twl_wkup_pins: twl-wkup-pins {
+		pinctrl-single,pins = <
+			0x014 0x000F0003	/* fref_clk0_out / fref_clk3_req */
+		>;
+	};
+};
+
+/* Give the TWL's MSECURE pad setting a consumer on a device that always probes. */
+&twl {
+	pinctrl-names = "default";
+	pinctrl-0 = <&twl6030_pins &playbook_twl_wkup_pins>;
+};
+
 &omap4_pmx_core {
 	mcspi4_pins: mcspi4-pins {
 		pinctrl-single,pins = <
@@ -715,9 +871,21 @@
 	};
 };
 
+/*
+ * Do not reset the GPIO2 module at probe.  Its DATAOUT holds the reference's
+ * steady-state outputs — including GPIO2_22, the WL1283 enable — and the reset
+ * drops every one of them to 0 for the duration of the probe.  On the reference
+ * the line is never low after boot, and a bare low->high on it does not bring
+ * the WL1283 back (session 29), so the glitch is worth removing: ti-sysc's
+ * reset is skipped and the hogs below re-assert the same values anyway.
+ */
+&gpio2_target {
+	ti,no-reset-on-init;
+};
+
 &gpio2 {
 	pinctrl-names = "default";
-	pinctrl-0 = <&panel_en_pins>;
+	pinctrl-0 = <&panel_en_pins &wl1283_ctrl_pins>;
 
 	/* LM3532 / panel I2C gate — measured (report 120) */
 	panel-en-hog {
@@ -760,10 +928,15 @@
 	};
 
 	/*
-	 * gpio_52 / gpio_53 (GPIO2_20 / GPIO2_21): the reference configures
-	 * both balls as GPIO outputs and its GPIO2_DATAOUT does not set
-	 * either bit, so they are driven LOW.  We used to leave them in safe
-	 * mode, i.e. high.  See bridge_pins above for the measured values.
+	 * gpio_52 (GPIO2_20): the reference configures it as a GPIO output and
+	 * its GPIO2_DATAOUT does not set the bit, so it is driven LOW.  We used
+	 * to leave it in safe mode, i.e. high.  See bridge_pins above.
+	 *
+	 * gpio_53 (GPIO2_21) is NOT an output: it is the WL1283's interrupt
+	 * line (session 29, report 180 — the QNX driver sets it as an input
+	 * with a falling-edge detect, `omap4_gpio_set_direction(53, 1)`).
+	 * Driving it low fights the chip's own driver; leave it to the MMC
+	 * pwrseq/DT and do not hog it.
 	 */
 	disp-en-20-hog {
 		gpio-hog;
@@ -771,11 +944,54 @@
 		output-low;
 		line-name = "gpio2-20";
 	};
-	disp-en-21-hog {
+
+	/*
+	 * WL1283 WLAN/BT enable, gpio_54 = GPIO2_22 (pad gpmc_nwp 0x07c).  The
+	 * loader leaves it LOW and the QNX driver raises it; hold it high here so
+	 * the chip is powered for the UART2/HCI probe.
+	 */
+	wl1283-en-hog {
 		gpio-hog;
-		gpios = <21 GPIO_ACTIVE_HIGH>;
-		output-low;
-		line-name = "gpio2-21";
+		gpios = <22 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "wl1283-enable";
+	};
+
+};
+
+/*
+ * GPIO4_5 / _8 / _28 / _31: the reference drives all four high
+ * (`GPIO4_OE = 0x6ffffe1c`, `GPIO4_DATAOUT = 0x90000120`, report 118 §10.1,
+ * re-measured session 29), and our boot leaves the whole bank at its reset
+ * state (`OE = 0xffffffff`, `DATAOUT = 0`) — the only GPIO output difference
+ * from the reference that the readable banks do not explain.  Report 118 §10.1
+ * listed them as untested display candidates; the display works now, so they
+ * are more likely the combo's board-level enables.  Mirror the reference.
+ */
+&gpio4 {
+	ref-hog-5 {
+		gpio-hog;
+		gpios = <5 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "gpio4-5";
+	};
+	ref-hog-8 {
+		gpio-hog;
+		gpios = <8 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "gpio4-8";
+	};
+	ref-hog-28 {
+		gpio-hog;
+		gpios = <28 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "gpio4-28";
+	};
+	ref-hog-31 {
+		gpio-hog;
+		gpios = <31 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "gpio4-31";
 	};
 };
 
@@ -805,6 +1021,19 @@
 	fan5702_pins: fan5702-pins {
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x1b0, 0x0003)
+		>;
+	};
+
+	/*
+	 * WL1283 control lines.  gpio_54 (GPIO2_22, pad gpmc_nwp 0x07c) is the
+	 * WLAN enable; the reference leaves that pad at 0x0003 (mux 3 = gpio,
+	 * no pulls) with GPIO2_DATAOUT bit 22 set.  gpio_53 (GPIO2_21, pad
+	 * gpmc_ncs3 0x07a) is the WLAN interrupt and is already muxed by
+	 * bridge_pins above as an input.
+	 */
+	wl1283_ctrl_pins: wl1283-ctrl-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x07c, 0x0003)	/* gpmc_nwp = gpio_54 (WL_EN) */
 		>;
 	};
 };

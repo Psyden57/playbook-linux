@@ -1,51 +1,48 @@
-# Handoff — session 28 (absolute)
+# Handoff — session 30 (absolute)
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§5).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — this handoff is for **absolute 28 = Linux-era 22**.  See
+`N+6` — this handoff is for **absolute 30 = Linux-era 24**.  See
 `docs/sessions/NUMBERING.md`.
 
-> **Session-28 update (read first).  ROADMAP item 5 is CLOSED.**  The region-1
-> root is a real BusyBox userland (BusyBox 1.36.1, init, 401 applet links,
-> `pbconsole`/`pbrpmb`, `/lib/modules/6.15.11`); the initramfs mounts it
-> **read-write**, bind-mounts /dev//proc//sys, chroots and execs `/sbin/init`.
-> The unit boots to `sh -l` on `/dev/ttyGS0` with `PS1='pb> '`, and
-> `insmod`/`modprobe` load a module.  Images: region 0
-> `local/images/kernel-0xAEDF68D0-rootuserland.img`; region 1
-> `local/images/rootfs-region1.ext4` (sha256 `e1ec2bf3…`, raw `0x29000000`).
-> The sealed 1917 IFS was flashed back and verified (`BOOTCTR_FCTRY = 0x32`).
-> **The `hd3` cut-over is PARKED (operator, session 28).**
+> **Session-29 update (read first).  The CM3217 now works; the WL1283 is
+> parked.**  Two reports are the session: **180** (WL1283) and **182** (CM3217).
 >
-> **The new focus is the device's own sensors and peripherals** (ROADMAP item 9,
-> report 176).  The sensor cluster is on OMAP **I²C4 `0x48350000`**, which the
-> board DTS disabled: BMA150 accel `0x38`, HMC5883L mag `0x1E`, MPU3050 gyro
-> `0x68`, CM3217 light `0x10`, FAN5702 LED `0x36`.  The BQ27541 gauge `0x55` and
-> TMP103 `0x77` are on I²C1; the WM8994 codec is on I²C4 `0x1a`; the TI WL1283
-> combo (WiFi/BT/GPS+AGPS) is SDIO/UART on `mmc1`.  Most mainline drivers exist
-> but are disabled; FAN5702, NCP5623, the Cypress CY8CTMA3 touch and the
-> OMAP4+WM8994 machine glue are real work.
+> **ROADMAP item 9 step 2 is COMPLETE.**  `cm3217.ko` binds `3-0010` and
+> `in_illuminance_input` reads **32–37 lux with the room lights off and 191 with
+> them on**.  The whole bug was **timing**: there is *no* settle delay — the count
+> is valid the instant `0x26` goes to 0x10, and every wait from 1 ms to 200 ms
+> reads back zero, so the driver polls for the first nonzero pair and then
+> restores the vendor idle state (`0x60`→0x11, `0x27`→0x10).  **Leaving the part
+> enabled wedges the panel's own automatic brightness** — any future tool that
+> pokes this chip must put it back.
 >
-> **Step 1 is DONE (report 177):** `&i2c4` is enabled and the BMA150
-> (`3-0038`, `input0`/evdev), HMC5883L (`3-001e`, IIO) and MPU3050 (`3-0068`,
-> IIO) all report live data.  **Step 2 (report 178):** the **TMP103**
-> (`hwmon0`, 37.0 °C) and the **BQ27541** gauge (`bq27541-0`: 100 %, 4.093 V,
-> 28.8 °C, 5.307 Ah, cycle 5) work; the **CM3217 light sensor is open** —
-> 0x10/0x11 ACK but read all-zero, the mainline `cm32181` accepts only
-> 0x18/0x81/0x82, and the QNX `ls-cm3217` disassembly gives 0x10, 400 kHz,
-> `devctl 0xC0100506` (trap 95).  **Step 3 (report 179): the FAN5702 status LED
-> works** — `leds-fan5702` probes `3-0036`, the three channels are in
-> `/sys/class/leds`, and EN = GPIO1_13 (pad `0x1b0`, safe mode at boot) is
-> driven by the driver's pinctrl + `enable-gpios`.  **Next: the WL1283 WiFi/BT/
-> GPS combo (step 4); the CM3217 RE and audio/touch (step 5) remain.**
-> **`tools/bbusb.py` is the flasher**, and both regions flash in one bootrom
-> session (`DECISIONS.md` §29).  Session 27's RPMB result stands (report 175):
-> items 4 and 6 are closed, the counter tops itself up at boot.
-
-**The job is the Linux bring-up again.**  The BB10 port and the PlayBook OS
-image (IFS/RCFS) work are **parked by the operator** for someone else to
-follow; their documents stay in the tree (`BB10-PORT.md`,
-`BB10-IMAGE-GUIDE.md`, `IFS-REBUILD.md`, `IMAGE-REBUILD-GUIDE.md`) but they are
-**not** this session's work.
+> **The WL1283 does not enumerate and is parked for fresh eyes.**  It is on
+> **MMC5 (`0x480D5000`)**, not MMC1; WL_EN = **GPIO2_22**, WL_IRQ = **GPIO2_21**
+> (input).  `&mmc5` probes and clocks and the card never answers CMD5
+> (`STAT=00018000` = CTO).  **Every SoC-side surface now matches the reference**
+> — pads CORE+WKUP, all six GPIO banks (GPIO4 mirrored), all 256 PMIC registers,
+> CM2/PRM (we hold *more* domains awake), the FREF mux — and the chip still does
+> nothing: no SDIO, no HCI answer on UART2, IRQ never driven.  Read report 180 §6
+> before touching it; it lists what is already falsified so it is not retried.
+>
+> **Two rules this session produced, both worth internalising:**
+> * **DECISIONS §30** — ask the reference OS what it maps (`pidin mem` /
+>   `pidin irq`) before writing a DT node.
+> * **Trap 103** — do not characterise a device on TabletOS if a QNX driver owns
+>   it; our accesses raced `ls-cm3217` and produced every false reading we had.
+>
+> **Working images:** region-0 **`0xFC32F008`**
+> (`local/images/kernel-0xFC32F008-cm3217.img`) + region-1
+> `local/images/rootfs-region1.ext4` (`0faeadff…`, 16 modules).
+> **MEDIA STATE: our Linux image is in region 0 — the 1917 IFS is NOT on media**
+> (the session ended on Linux, operator's call).  Restore it with
+> `tools/bbusb.py flash --component local/work/ifs-shim-sealed.ifs
+> --dest-block 0x825 --from-bootrom --password 0000 --apply`, and re-read
+> `BOOTCTR_FCTRY` — it was `0x32` at the last TabletOS boot and is **unverified**
+> since.
+> **`tools/bbusb.py` is the flasher**; pack both regions for one bootrom session
+> (`DECISIONS.md` §29).  Kernel patch re-exported: 5 703 lines / 34 files.
 
 ## 0. The job, and where it stands
 
@@ -61,16 +58,20 @@ image** (DSS/DSI, the TC358764 bridge, the Hitachi TCON table, the LM3532
 backlight) — and a **64 MiB ext4 BusyBox root in region 1** at raw
 `0x29000000`; the initramfs mounts it read-write, chroots and execs
 `/sbin/init`, the unit boots to a shell, and `insmod`/`modprobe` work.  The
-kernel patch is current: **5 137 lines / 34 files**
-(`kernel/patches/README.md`).
+peripherals so far: I²C4 motion sensors (BMA150/HMC5883L/MPU3050), TMP103 and
+the BQ27541 gauge, the FAN5702 status LED.  The kernel patch is current:
+**5 703 lines / 34 files** (`kernel/patches/README.md`).
 
-**Last known-good image:** **`0xB759C3A2`** (session 28: I²C4 motion sensors,
-TMP103/BQ27541 and the FAN5702 LED) with the region-1 root
-`local/images/rootfs-region1.ext4` (sha256 `0a55a170…`, 15 modules).  The
-earlier steps `0x1D9159E0`, `0x3E479F6F` and `0xAEDF68D0` are behind;
-`0x0D1DA0D3` is the clean pre-userland fallback.  **Build from this.**  (Image
-CRC convention: `zlib.crc32(image[0:-4])` in the container's last word; a
-rebuild with the same CRC has usually failed to link — trap 39.)
+**Last known-good image:** **`0xFC32F008`**
+(`local/images/kernel-0xFC32F008-cm3217.img`, session 29: everything above
+plus `&mmc5` for the WL1283, the WLAN enable hog, the FREF/TWL WKUP pinctrl and
+the one-shot `PBGPIO:`/`PBD:` dumps)
+with the region-1 root `local/images/rootfs-region1.ext4` (sha256 `0faeadff…`,
+16 modules).  `0xB759C3A2` (session 28) and the earlier steps `0x1D9159E0`,
+`0x3E479F6F` and `0xAEDF68D0` are behind; `0x0D1DA0D3` is the clean pre-userland
+fallback.  **Build from this.**  (Image CRC convention: `zlib.crc32(image[0:-4])`
+in the container's last word; a rebuild with the same CRC has usually failed to
+link — trap 39.)
 
 **Diagnostic images** (the `pbmon` RPMB work) are built from the current
 `local/kernel-tree` (which now carries the working two-stage transform);
@@ -128,80 +129,49 @@ From **our Linux image** the way back is the shorter one: flash
 
 ## 1. The one thing to do next
 
-**`ROADMAP.md` item 9 — the device's own sensors and peripherals** (report
-176).  Item 5 is closed; the `hd3` cut-over is **parked**.  One variable per
-boot:
+**`ROADMAP.md` item 9 — the device's own sensors and peripherals** (report 176).
+Item 5 is closed; the `hd3` cut-over is **parked**.  One variable per boot:
 
-1. ~~The sensor bus + BMA150/HMC5883L/MPU3050.~~  **DONE (report 177).**  `&i2c4`
-   is enabled; the three motion sensors report live data.  The IRQ GPIOs
-   (GPIO2 2/27/18) are still not described (polling/direct reads) — that is the
-   next variable if triggered sampling is wanted.
-2. ~~CM3217 `0x10`, TMP103 `0x77`, BQ27541 `0x55`.~~  **TMP103 + BQ27541 DONE
-   (report 178).**  The **CM3217 is OPEN**: 0x10/0x11 ACK but read all-zero;
-   the QNX `ls-cm3217` is the reference (0x10, 400 kHz,
-   `devctl 0xC0100506`, CMD/IT/cal_table) and the mainline `cm32181` needs an
-   ID of 0x18/0x81/0x82 (trap 95).  Static-RE it, then add a CM3217 ID/CMD
-   path or a small driver.
-3. ~~FAN5702 `0x36`.~~  **DONE (report 179):** `leds-fan5702` probes
-   `3-0036`; EN = GPIO1_13 (pad `0x1b0`) driven by the driver's pinctrl +
-   `enable-gpios`; `GENERAL 0x10` bits 1/2/3 = R/G/B.
-4. **WL1283** — enable `mmc1` SDIO + the power/32k GPIOs, `wl12xx`, and the
-   firmware/NVS from `/base/lib/firmware/ti1283`; then BT (UART3) and GPS/AGPS
-   (`devlp-ti128x`, `/base/lib/firmware/gps`).
+1. ~~The sensor bus + BMA150/HMC5883L/MPU3050.~~  **DONE (report 177).**
+2. ~~CM3217 `0x10`/`0x11`, TMP103 `0x77`, BQ27541 `0x55`.~~  **ALL DONE
+   (reports 178/182).**  The CM3217 works: 32–37 lux dark, 191 lit.
+3. ~~FAN5702 `0x36`.~~  **DONE (report 179).**
+4. **WL1283 — parked (report 180).**  Bus and wiring measured, enumeration
+   never happens; see §1a for what is already falsified.
 5. **Audio (WM8994 + ABE machine)** and **touch (Cypress CY8CTMA3,
-   Munin/Pegasus)** — the two big RE/driver tasks.
+   Munin/Pegasus)** — the two big RE/driver tasks.  **This is the natural next
+   work**, and the touch controller is also the only other plausible source of
+   an ambient-light input if the CM3217 route is ever doubted.
 
-### The one next experiment: does the WL1283 enumerate on `mmc1`?
+### The one next experiment: does the WL1283 answer when the reference clock is live?
 
-**Inputs.**  The unit is on TabletOS, so the QNX reference is readable:
-`/base/lib/dll/devnp-ti1283.so`, `/base/lib/firmware/ti1283/{firmware.bin,
-tiwlan_winchester.ini}` (pull them with `tools/pbscp.sh`; the `/base` files are
-root-readable).  The mainline modules are already built as `=m`: `wl12xx`,
-`wlcore`, `cfg80211`, `mac80211`.  The board DTS `&mmc1` is currently
-"no wifi SDIO brought up yet"; the WL1283 power/32k/enable lines and the SDIO
-IDs are what the static RE (`devnp-ti1283.so`) must give (subagent, static
-only).  The CM3217 RE (`ls-cm3217.so`, trap 95) is a parallel static task.
+Only when someone picks the WL1283 back up.  Everything else about it is
+measured; this is the one mechanism still untested.
 
-**Steps (one variable).**
-1. Enable `&mmc1` as an SDIO bus (non-removable, 4-bit), add the WL1283 card
-   node (`compatible = "ti,wl1283"`) and the regulator/GPIO enable lines from
-   the RE.
-2. Build the DTB/image, put `wl12xx`/`wlcore`/`cfg80211`/`mac80211` and the
-   firmware/NVS into the rootfs, flash **both** with one `bbusb.py` container,
-   boot.
-3. `dmesg | grep -i -E 'mmc1|wl12'`, `ls /sys/bus/sdio/devices`, `lsmod`.
+**Inputs.**  Report 180 §6 and this handoff's preamble.  The unit must be on
+TabletOS to read the reference (that route is only for *comparison* — do not
+characterise the chip from there, trap 103).  On our Linux image the knobs are:
+`/sys/module/omap_hsmmc/parameters/trace`, `init_hz`; `pbhci` and
+`devmem`.  The vendor config is `local/work/qnx-fw/tiwlan_winchester.ini`.
+
+**The experiment.**  The vendor ini says the chip wants a **38.4 MHz reference
+clock** (`STRFRefClock = 2`) with a **CLK_REQ** handshake.  The pads for that
+(`0x4A10019C` = `fref_clk2_out`, WKUP `0x4A31E054/058/05C`) are now muxed, but
+**muxing a pad does not enable its parent clock**.  So: enable the FREF_CLK2 /
+DPLL_PER-M5 output path in CM, then re-run `pbhci` on UART2 and rescan MMC5.
+
+**Steps (one variable).**  Change one clock enable, rebuild
+(`DEVELOPMENT.md` §3), flash **both** regions in one bootrom session
+(`pack -l both.lst -v 1,2 -s -f` + `flash --signed`), boot, then
+`dmesg | grep -E 'attach_sdio|new .*card'` and `/bin/pbhci /dev/ttyS1`.
 
 **Decision table.**
 
 | result | meaning | next |
 |---|---|---|
-| `mmc1: new SDIO card` and the SDIO device appears | bus, power and pinctrl are right | convert the firmware/NVS and load `wl12xx` |
-| `mmc1` probes, no card / timeout | the power/32k/enable or pinctrl is wrong | apply the RE GPIOs/regulators; check `vmmc` |
-| card enumerates, driver `-ENOENT` on firmware | the SDIO path is right, the blob format is not | convert `firmware.bin` → `wl128x-fw-4-sr.bin`, `tiwlan_winchester.ini` → `wl128x-nvs.bin` |
-| `mmc1` fails to probe at all | DTS/pinctrl/clock | check the MMC1 pins and the controller node |
-
-The Linux build/loop is `DEVELOPMENT.md` §3/§3a/§4: `tools/build_kernel_image.py`
-for region 0 and `tools/build_rootfs.py` (+ BusyBox) for region 1.  The working
-images are region-0 `0xB759C3A2` and region-1 `0a55a170…`.  **Flash with
-`tools/bbusb.py`** (`pack` + `--signed` writes both regions in one bootrom
-session; `--component` for one).  If a fresh 1917 boot is needed, the compressed
-IFS on media boots and the uncompressed `local/work/ifs-shim-sealed.ifs` is the
-conservative choice.
-
-Useful state from session 27, if anything RPMB-adjacent comes up again:
-
-```bash
-run /pbrpmb pairtest    # the transform: expect unseal=0/OK p=2dbc8359, ct=OK tag=OK
-run /pbrpmb keytest     # live block 0x43 round-trip
-run /pbrpmb blockscan   # 512/512 frames, 107/107 unseal, BOOTCTR_FCTRY@196
-run /pbrpmb prep 0x3a   # build the sealed top-up, write nothing
-```
-
-Seed the CRNG first (`entropy <hex>` from the console, trap 87) before any
-write; `pbrpmb` warns if it has to fall back to an unseeded nonce.
-
-Do **not** boot the mount probe (`0x984267D3`); it reset-loops.  Do not boot
-`local/images/ifs0.sealed.bin` on a 1917 media set (trap 84).
+| `pbhci` answers (`04 0E 04 01 03 0C 00`) | the chip's digital core runs — the clock was it | stop the WL1283 hunt at the source: `wlcore` + firmware, then BT/GPS |
+| SDIO enumerates (`attach_sdio` succeeds) but BT still silent | SDIO path right, BT needs its own enable/`.bts` | convert `firmware.bin` → `wl128x-fw-4-sr.bin`, `tiwlan_winchester.ini` → `wl128x-nvs.bin` |
+| both still silent | the clock is not the gap | stop: the next evidence must be a bus capture or the datasheet (report 180 §6) |
 
 ## 1a. Tools that make this cheap
 
@@ -266,7 +236,27 @@ Full text: `KNOWN-ISSUES.md` §2.  The ones that end sessions:
 87. **The initramfs CRNG is unseeded** (`random: … uninitialized urandom read`)
    — fix it before any RPMB write, whose replay protection is the nonce.
 88. **On our Linux image there is no door and no `/proc/boot/shutdown`**: reboot
-   with `tools/pbcon.py 'reboot'`, and start the flasher just before it.
+   with `tools/pbcon.py 'reboot -f'`, and start the flasher just before it.
+89–96. see `KNOWN-ISSUES.md` (monitor keys, the CRNG, the IIO module closure,
+   the CM3217, the FAN5702 pad).
+97. **The WL1283 is on MMC5, not MMC1**; WL_EN = GPIO2_22, WL_IRQ = GPIO2_21
+   (input).  (Session 29, report 180.)
+98. **`&mmc5` probes but the card never answers CMD5**; every SoC-side register
+   matches the reference, so the next evidence must come from the chip.
+   (Session 29, report 180 §6.)
+99. **Reading one register bank past GPIO6 (`0x4805F000`) aborts and, with
+   `panic=10`, reset-loops the unit** — one `BOOTCTR_FCTRY` unit per loop.
+100. **Never read another module's registers from `omap_hsmmc_set_ios()`** — it
+   faults on a runtime rebind and kills `sh` with irqs disabled.
+101. **A QNX `SIGBUS` on MMCHS5 is block-specific**, not a firewall and not
+   `ThreadCtl`; only io-pkt can read the SDIO host.
+102. **Synchronise a probe with the operator action it observes**, or record the
+   run as invalid rather than interpreting it.
+103. **Do not characterise a device on TabletOS if a QNX driver owns it** — our
+   accesses raced `ls-cm3217` and produced every false CM3217 reading.
+104. **The CM3217 needs no settle delay and must be left idle** — read
+   immediately (poll for nonzero) and restore `0x60`→0x11, `0x27`→0x10, or the
+   panel's automatic brightness wedges.
 
 Session-25/26/27 additions relevant here: the factory counter is read with
 `bbusb.py info --from-bootrom --password 0000 --keep-loader --json`
@@ -309,37 +299,44 @@ door ssh is root** (2026-11-05) and `devuser` cannot reboot or read `/dev/rpmb`;
 ## 5. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 29 (absolute; Linux-era 23)
+PlayBook (OMAP4430 "winchester") — session 30 (absolute; Linux-era 24)
 
 Workspace: this repository — a git checkout.  The earlier work tree
 $HOME/rea-work is READ-ONLY.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md,
-ROADMAP.md items 5 and 9, KNOWN-ISSUES.md (traps 9-93, especially 91-93),
-DEVELOPMENT.md section 3/3a/4, DECISIONS.md (17-28), report 176 (and 140/175),
-session-28.md, and any relevant documentation.
+ROADMAP.md item 9, KNOWN-ISSUES.md (traps 9-104, especially 91-104),
+DEVELOPMENT.md section 3/3a/4, DECISIONS.md (17-31), reports 180 and 182 (and
+176/177/178/179/181), sessions/session-29.md, and docs/contradictions/
+fan5702-safe-model-vs-cm3217-race.md.
 
-SCOPE: the LINUX bring-up, now the DEVICE'S OWN SENSORS AND PERIPHERALS.
-The hd3 cut-over, the BB10 port and the PlayBook OS image work are PARKED by
-the operator — do not work on them.
+SCOPE: the LINUX bring-up, the DEVICE'S OWN SENSORS AND PERIPHERALS.  The hd3
+cut-over, the BB10 port and the PlayBook OS image work are PARKED by the
+operator — do not work on them.
 
-PHYSICAL STATE (session 28 end): PlayBook OS 2.1.0.1917 is running (the
-restored uncompressed IFS local/work/ifs-shim-sealed.ifs, /base mounted),
-BOOTCTR_FCTRY = 0x32, door up with ROOT ssh.  The Linux images are region-0
-0xAEDF68D0 (local/images/kernel-0xAEDF68D0-rootuserland.img) and region-1
-local/images/rootfs-region1.ext4 (sha256 e1ec2bf3...) — re-flash both to return
-to Linux.  Do NOT restore local/images/ifs0.sealed.bin (2.0.0.4869, trap 84).
+PHYSICAL STATE (session 29 end): OUR LINUX IMAGE IS IN REGION 0 — region-0
+0xFC32F008 (local/images/kernel-0xFC32F008-cm3217.img) and region-1
+local/images/rootfs-region1.ext4 (sha256 0faeadff..., 16 modules including
+cm3217.ko).  The 1917 IFS is NOT on media: restore it with
+tools/bbusb.py flash --component local/work/ifs-shim-sealed.ifs
+--dest-block 0x825 --from-bootrom --password 0000 --apply, then re-read
+/dev/rpmb/BOOTCTR_FCTRY (0x32 at the last TabletOS boot, unverified since).
+Do NOT restore local/images/ifs0.sealed.bin (2.0.0.4869, trap 84).
 
-WHERE IT STANDS: ROADMAP item 5 is CLOSED — the region-1 root is a BusyBox
-userland; the initramfs mounts it read-write, chroots and execs /sbin/init;
-modules load.  The next work is ROADMAP item 9 / report 176.  The sensor
-cluster is on OMAP I2C4 0x48350000 (QNX /dev/i2c3), which the DTS currently
-DISABLES: BMA150 accel 0x38, HMC5883L mag 0x1E, MPU3050 gyro 0x68, CM3217 light
-0x10, FAN5702 LED 0x36; WM8994 codec 0x1a on the same bus.  BQ27541 0x55 and
-TMP103 0x77 on I2C1.  TI WL1283 (WiFi/BT/GPS+AGPS) on SDIO mmc1/UART3.  Most
-mainline drivers exist but are disabled; FAN5702, NCP5623, the Cypress
-CY8CTMA3 touch and the OMAP4+WM8994 machine glue are real work.  One variable
-per boot; start with the sensor bus + BMA150/HMC5883L/MPU3050.
+WHERE IT STANDS: ROADMAP item 9.  DONE: the I2C4 motion sensors (177), TMP103 +
+BQ27541 (178), the FAN5702 LED (179) and the CM3217 light sensor (182: 32-37 lux
+dark, 191 lit).  PARKED: the WL1283 — it is on OMAP MMC5 0x480D5000, WL_EN is
+GPIO2_22 and WL_IRQ GPIO2_21 (input); the controller probes and clocks and the
+card never answers CMD5, no HCI answer on UART2, IRQ never driven, and every
+SoC-side register now matches the reference.  Read report 180 §6 before
+touching it: the one untested mechanism is enabling the FREF reference-clock
+parent (this handoff section 1).  NEXT WORK: WM8994 audio and the Cypress
+CY8CTMA3 touch.
+
+Two rules from session 29: ask the reference OS what it maps (pidin mem /
+pidin irq) before writing a DT node (DECISIONS 30); and do NOT characterise a
+device on TabletOS if a QNX driver owns it — our accesses raced ls-cm3217 and
+produced every false CM3217 reading (DECISIONS 31, trap 103).
 
 An agent NEVER writes RPMB (SAFETY.md section 6); the CRNG needs `entropy
 <hex>` before any write (trap 87).
@@ -348,13 +345,17 @@ BENCH: door = 169.254.0.1 (host: ip addr add 169.254.0.2/16 dev <iface>);
 tools/pbssh.sh logs in as ROOT.  Start tools/door-hold.sh with setsid (never
 `pgrep -af door-hold`).  On our Linux image there is NO door: use
 tools/pbcon.py (the shell prompt is `pb> `), and reboot with
-tools/pbcon.py 'reboot' (trap 88).  Run the USB/flash tools as the USER — never
-pkexec; `pkexec chmod 666 /dev/ttyACM0` is the documented console step.  The
-device password is 0000, sent once, never retried.  The QNX oracle tools
-(pbi2c, pbdsi) are pushed to /tmp and wiped on reboot.
+tools/pbcon.py 'reboot -f'.  `pkexec chmod 666 /dev/ttyACM0` after EVERY boot
+and the operator must answer the prompt.  Run the USB/flash tools as the USER —
+never pkexec.  The device password is 0000, sent once, never retried.
+Rebuild the QNX oracle tools after `. tools/env.sh`: pbmem3 = `ntoarmv7-gcc -O2
+-o /tmp/pbmem3 tools/memdump3.c`, and /tmp is wiped on reboot.
 
-SAFETY: read SAFETY.md first.  One variable per boot; budget boots against
-BOOTCTR_FCTRY; restore 2.1.0.1917 and verify the counter at the end.
+SAFETY: read SAFETY.md first.  One variable per boot.  To return to Linux after
+a TabletOS session, flash BOTH regions in one bootrom session
+(`pack -l both.lst -v 1,2 -s -f` then `flash --signed`) — do not flash only
+region 1, or the unit boots TabletOS with no console node.  Operator's call when
+to stop; the operator also decides when to wrap up.
 
 SUBAGENTS: static RE only, no bench.  Skeleton first, exact paths, an explicit
 "stop when answered".

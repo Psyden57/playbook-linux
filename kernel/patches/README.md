@@ -61,7 +61,7 @@ carry probes.
   that recipe produced a patch three sessions out of date).
   The right side of the diff is `local/kernel-tree`, our **current modified
   tree**, the one the zImage is built from.
-  The file is **5 137 lines / 34 files** at the session-20 export; it was
+  The file is **5 703 lines / 34 files** at the session-20 export; it was
   verified then by extracting the tarball fresh, applying the patch
   (`patch -p1 --forward`, rc=0, no rejects) and then comparing the result
   against `local/kernel-tree` — **all 34 files compare byte-identical**.  Sessions 18–20 added the `pb_probe` gating, the `pb_reg`

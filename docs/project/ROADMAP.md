@@ -362,16 +362,39 @@ light sensor is **open**: 0x10/0x11 ACK but read all-zero and the mainline
 GPIO1_13 (pad `0x1b0`, safe mode at boot) is driven by the driver's pinctrl +
 `enable-gpios`.  Images: region-0 `0xB759C3A2`, region-1 `0a55a170…`.
 
+**Step 4 — the WL1283: bus and wiring MEASURED, enumeration open (report 180).**
+The combo is on **MMC5 (`0x480D5000`)**, not MMC1 — QNX's `pidin mem` shows
+`devnp-ti1283.so` holding that block and attaching GIC SPI 59, and the `sdmmc5`
+pads are the only sdmmc pads muxed on the reference.  **WL_EN = GPIO2_22
+(gpio 54)**, **WL_IRQ = GPIO2_21 (gpio 53, input, falling, active low)**; both
+are now in the DTS, and `&mmc5` probes and clocks.  **The card still does not
+answer CMD5** — enable line, pads, IRQ pin, every PMIC rail, `CLK32KG`, the OCR
+window and a power cycle are all eliminated (report 180 §4), and the chip scans
+fine under TabletOS.  Also eliminated: a 12 MHz init clock, WL_EN driven at MMC
+power-up, `ti,no-reset-on-init`, and 5 s of EN settling.  **The loader leaves
+WL_EN low and the QNX driver owns it**; with EN high our chip still does not
+drive its IRQ, so the next evidence has to come from the chip side (UART2/HCI
+probe, datasheet or a bus capture).  Images: region-0 `0xFC32F008`, region-1
+`0faeadff…`.
+
 **Plan (one variable per boot):**
 1. ~~enable `&i2c4`, add the BMA150/HMC5883L/MPU3050 nodes and their IRQ GPIOs;
    enable `INPUT_BMA150` and HMC5843, keep `MPU3050=m`; read via IIO.~~
    **DONE** (session 28).
 2. ~~add the CM3217, TMP103 and BQ27541 (I²C4/I²C1) and enable their drivers.~~
-   **TMP103 + BQ27541 DONE; the CM3217 is still open (RE, trap 95).**
+   **ALL DONE — the CM3217 WORKS (report 182):** `cm3217.ko` probes `3-0010`
+   and `in_illuminance_input` reads **32-37 lux (lights off) / 191 (lights on)**.
+   The two things that mattered: there is **no settle delay** (poll for the
+   first nonzero pair — every wait from 1 ms up reads zero), and the part must
+   be returned to its **idle** state or the panel's automatic brightness wedges.
+   Earlier QNX-side readings were race artefacts (trap 103).
 3. ~~the FAN5702 LED driver (no mainline driver; RE `led-fan5702.so`).~~
    **DONE** (report 179: `leds-fan5702`, EN = GPIO1_13).
-4. the WL1283: enable `mmc1` SDIO, the power/32k GPIOs, `wl12xx` + firmware/NVS;
-   then BT (`hci_ll`/TI ST) and GPS/AGPS.
+4. the WL1283: **bus/wiring done**; next is one of the two §6 experiments in
+   report 180 (clock rate first, then `MMCHS_CON`), then `wl12xx` + the
+   firmware/NVS (`wl128x-fw-5-sr.bin`, `wl128x-nvs.bin`, both in the host's
+   linux-firmware; `build_rootfs.py --firmware DIR` installs them), then BT
+   (`hci_ll`/TI ST on UART2 `0x4806c000`) and GPS/AGPS.
 5. audio (WM8994 MFD+codec + an OMAP4 machine driver) and the Cypress
    **CY8CTMA3** touch (QNX "Munin/Pegasus" firmware; no mainline Gen3 driver).
 

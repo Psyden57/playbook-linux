@@ -1,6 +1,74 @@
 # Current state
 
-## Current state — 2026-11-06 (session 28)
+## Current state — 2026-11-06 (session 29)
+
+**The WL1283's bus and board lines are measured (MMC5, WL_EN GPIO2_22, WL_IRQ
+GPIO2_21) and `&mmc5` probes, but the card still does not answer CMD5.  The unit
+was restored to PlayBook OS 2.1.0.1917 and `BOOTCTR_FCTRY = 0x32` verified.**
+
+* **Report 176's "mmc1" was wrong.**  The TI WL1283 combo is on **OMAP MMC5
+  (`0x480D5000`)**.  `pidin mem` on TabletOS shows io-pkt's `devnp-ti1283.so`
+  holding `/dev/mem 0x480d5000` (8 KiB) and `pidin irq` shows it attaching QNX
+  vector `0x5b` = **GIC SPI 59 = `mmc5`**; the `sdmmc5` pads (`0x148`–`0x152`)
+  read `0x0118` on the reference while every `sdmmc1`/`sdmmc3` pad is `0x000f`
+  (safe mode).  Trap 97, report 180 §1.
+* **WL_EN = gpio 54 = GPIO2_22** (pad `gpmc_nwp` `0x07c`, active high, 120 ms
+  before the chip is touched) and **WL_IRQ = gpio 53 = GPIO2_21** (pad
+  `gpmc_ncs3` `0x07a`, input, falling, active low).  From `devnp-ti1283.so`
+  **and** the live GPIO diff against report 118: the reference's
+  `GPIO2_DATAOUT` is `0x31413200` vs `0x31013200` — bit 22 is the only output
+  that changes when the WLAN driver runs.  The old DTS drove GPIO2_21 low as an
+  output; that hog is gone and GPIO2_22 now has an output-high hog.
+* **`&mmc5` works as a host**: 4-bit, `sdmmc5_pins` `0x0118`, a 1.8 V fixed
+  `vmmc` window (for `ocr_avail`), `HCTL=0x00000b00` (identical to QNX),
+  `CAPA=0x04e10080`, functional clock 48 MHz.  **The card never answers CMD5**
+  (`attach_sdio no` → `mmc4: Failed to initialize a non-removable card`).
+* **Eliminated, with evidence** (report 180 §4): the enable line (at boot and
+  re-pulsed at runtime), the pads (full padconf diff), the IRQ pin, **every
+  TWL6030 rail and `CLK32KG`** (register-for-register identical `CFG_STATE` to
+  QNX), the OCR window (1.8 V and 3.3 V) and a full power cycle.  The chip is
+  **alive**: TabletOS's own `wpa_supplicant_ti` logs `CTRL-EVENT-SCAN-RESULTS`
+  after the restore.
+* **Corrected the same session: `CON` is not a difference.**  QNX's
+  `0x000E0080` goes to `MMCHS_SYSCTL` (`CLKD = 2`, `DTO = 14`), not to `CON`;
+  `CON` is only `&= ~OD` in both, and our `HCTL` is byte-identical to QNX's.
+  Also eliminated since: a 12 MHz init clock (new `omap_hsmmc.init_hz` knob),
+  WL_EN driven by a regulator at MMC power-up, `ti,no-reset-on-init` on
+  `gpio2_target`, and 5 s of EN settling.  **What is left** needs the WL1283's
+  power-up requirements (datasheet/schematic) or a bus capture; a cheap next
+  probe is UART2/HCI (the combo's BT core) to split "not powered" from "SDIO
+  path broken".  The whole clock/power-manager space (`CM_PER`, `CM2`, `PRM`)
+  has now been diffed too and matches in the *safe* direction — the reference
+  idles in `HW_AUTO` while our boot holds more domains awake — so no clock is
+  missing (trap 101 also closes the "read MMCHS5 on QNX" route: only io-pkt
+  can).  **Two of this session's own probes were bugs and are now
+  traps**: 99 (a GPIO walk one bank past GPIO6 reset-looped the unit) and 100
+  (a register dump inside `omap_hsmmc_set_ios` faulted on a runtime rebind and
+  killed the console) — both fixed and both verified.  Trap 98, report 180 §6.
+* **Working image:** region-0 **`0xFC32F008`**
+  (`local/images/kernel-0xFC32F008-cm3217.img`) with the region-1 root
+  `local/images/rootfs-region1.ext4` (sha256 `0faeadff…`, 16 modules,
+  including `cm3217.ko`).  The kernel patch was **re-exported** (5 703 lines /
+  34 files).  **This image is on media** — region 0 holds it, not the 1917 IFS.
+* **The CM3217 works (report 182) and is the step-2 close:** `cm3217.ko` binds
+  `3-0010`, `in_illuminance_input` = **32–37 lux with the room lights off, 191
+  with them on**.  No settle delay (poll for the first nonzero pair); the part
+  must be left in its idle state (`0x60`→0x11, `0x27`→0x10) or the panel's own
+  automatic brightness wedges (trap 104).
+* **Method worth reusing (DECISIONS §30):** a peripheral's bus is identified from
+  the reference OS's own `pidin mem`/`pidin irq`, read-only, before any DT work.
+* **The CM3217 WORKS (report 182) — ROADMAP item 9 step 2 is complete.**
+  `cm3217.ko` probes `3-0010` (`capella,cm3217`) and
+  `in_illuminance_input` reads **32-37 lux with the room lights off and 191 with
+  them on**, stable and repeatable.  Two facts were the whole problem:
+  **there is no settle delay** (data is valid the instant `0x26` is written —
+  every wait from 1 ms to 200 ms reads 0, so the driver polls for the first
+  nonzero pair), and the part **must be returned to its idle state**
+  (`0x60`->0x11, `0x27`->0x10) or the panel's own automatic brightness wedges.
+  Earlier QNX-side readings were artefacts of racing RIM's driver on the same
+  bus (trap 103).
+
+## Previous state — 2026-11-06 (session 28)
 
 **ROADMAP item 5 is CLOSED: the region-1 root is a real BusyBox userland and the
 unit boots to a shell on it, with modules loadable.  The unit was restored to
@@ -258,13 +326,18 @@ this trial.
 | Panel identity | **Hitachi (definitive)** | on TabletOS: `GPIO6_DATAIN = 0x00010800` (bit 16 = 1), slog `LCD is Hitachi`.  Report 127 §1 |
 | **Image on the panel** | **WORKING** | With `0x8C146805` (and the same source as `0x068C867F`) the panel shows a clean, stable image: solid white, solid red, and the kernel console as legible text.  The three necessary fixes were the bridge delivery (VC0/HS null packet), the LVDS porches + TCON table at bring-up, and the DISPC core clock. Report 133 |
 | QNX oracle tool | **`tools/qnx-dsiread.c` → `tools/pbdsi`** | Reads any TC358764 register over DSI from a TabletOS user process (generic read request `0x24` on hw VC1, BTA, RX FIFO pop; response is a generic long read, DT `0x1A`).  Read-only.  This is how the reference values in this document were obtained. Report 132 §2 |
-| Kernel patch + config | **re-exported (session 20)** | `kernel/patches/0001-playbook-winchester-6.15.11.patch` is **5 137 lines / 34 files**, regenerated from `local/kernel-tree` against pristine 6.15.11 and verified by applying to a pristine copy (`patch -p1 --dry-run`, clean).  Session 18 added the `pb_probe` gating, the `pb_reg` driver group and the DSS clock fix (report 142); session 19 added `drivers/misc/pbmon.c` + `pbmon-pair.h` and the `drivers/misc/Makefile` line (reports 145/146); session 20 changes `pbmon.c` (CM_MPU_STATICDEP, identity low page, the read-only monitors) and the DTS (three `no-map` oracle pages) (reports 147/148) |
+| Kernel patch + config | **re-exported (session 29)** | `kernel/patches/0001-playbook-winchester-6.15.11.patch` is **5 703 lines / 34 files** (session 29 adds the `PBD:`/`PBGPIO:` MMC dumps, the MMC5/WL1283 DTS block and `drivers/iio/light/cm3217.c`), regenerated from `local/kernel-tree` against pristine 6.15.11 and verified by applying to a pristine copy (`patch -p1 --dry-run`, clean).  Session 18 added the `pb_probe` gating, the `pb_reg` driver group and the DSS clock fix (report 142); session 19 added `drivers/misc/pbmon.c` + `pbmon-pair.h` and the `drivers/misc/Makefile` line (reports 145/146); session 20 changes `pbmon.c` (CM_MPU_STATICDEP, identity low page, the read-only monitors) and the DTS (three `no-map` oracle pages) (reports 147/148) |
 
 ## Last known-good image
 
-**The current working image is `0xB759C3A2`** (`boot/chainloader/kernel.img`,
-session 28: I²C4 motion sensors + TMP103/BQ27541 + FAN5702) with the region-1
-root `local/images/rootfs-region1.ext4` (sha256 `0a55a170…`, 15 modules).
+**The current working image is `0xFC32F008`**
+(`local/images/kernel-0xFC32F008-cm3217.img`, session 29: the session-28 feature
+set + `&mmc5` for the WL1283 + the WLAN enable hog + the FREF/TWL WKUP pinctrl
++ the `PBD:`/`PBGPIO:` dumps + the CM3217) with the region-1 root
+`local/images/rootfs-region1.ext4` (sha256 `0faeadff…`, 16 modules).
+Session 29's intermediate images were `0x74FA74A3` (mmc5 only), `0xA7D3BC13`
+(+enable/IRQ wiring), `0x0005424F` (+dump), `0x4949969A` (3.3 V, reverted) and
+`0x224A189E` (FREF/TWL pinctrl); all superseded.
 **`0x0D1DA0D3` remains the clean pre-userland fallback.**  Session 19's images
 (`0x87FD6EED`, `0x9CE309CF`, `0xFCCE507A`, `0x65599D90`, `0xC462AE22`,
 `0x771355C0`, `0x94640F82`, `0x853C5323`, `0x96FC5CA9`) are RPMB/monitor
@@ -348,7 +421,7 @@ the I²C bus and resets the unit).
 | UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
 | `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; the restore boot left `BOOTCTR_FCTRY = 0x32`, which is the evidence it ran |
 | `BOOTCTR_FCTRY` | **`0x32`** (measured at session 28 end after the restore; the TabletOS startup script tops it up) |
-| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 `0a55a170…`, 15 modules; the initramfs mounts it **read-write** and chroots into it.  Left in place by the region-0 restore |
+| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 `0faeadff…`, 16 modules (session 29 adds `cm3217.ko`); the initramfs mounts it **read-write** and chroots into it.  Left in place by the region-0 restore |
 | TabletOS / OS | **PlayBook OS 2.1.0.1917 running** (`uname -a` measured), `/base` mounted, door up with root ssh |
 | device-side files | `/tmp/pbi2c` was re-pushed to TabletOS this session for the I²C scans; QNX `/tmp` is wiped by a reboot, so re-push before use |
 
@@ -360,12 +433,23 @@ exactly one unit and stays up until asked.
 
 ## The single current blocker
 
-**None.**  Items 4, 5 and 6 are closed (brightness, the real userland/`hd3`
-root story, the Linux `BOOTCTR_FCTRY` top-up).  The unit tops the counter up at
-boot, boots a real region-1 userland, and the 1917 way back is verified.  The
-next work is additive: the peripheral bring-up in report 176.  The `hd3`
-repurpose is **parked by the operator**; NVRAM and the MCT remain unwritable,
-and an agent never writes RPMB (`SAFETY.md` §6).
+**None — the CM3217 landed, and the WL1283 is parked rather than blocking.**
+Items 4, 5 and 6 stay closed; item 9 steps 1–3 (I2C4 motion sensors, TMP103 +
+BQ27541, FAN5702) are done and **step 2 now includes the CM3217** (32–37 lux
+dark / 191 lit, report 182).  The WL1283 never answers CMD5 and never runs its
+digital core, and **every SoC-side register now matches the reference** (pads
+CORE+WKUP, all six GPIO banks, all 256 PMIC registers, CM2/PRM, the FREF mux),
+so the next evidence has to come from the chip: a bus capture, the datasheet, or
+the one untested mechanism — enabling the FREF reference-clock parent
+(`HANDOFF.md` §1).  It is **parked for a session with fresh eyes**, not a
+blocker on anything else.  The `hd3` repurpose is **parked** by the operator;
+NVRAM and the MCT remain unwritable, and an agent never writes RPMB
+(`SAFETY.md` §6).
+
+**Media state: our Linux image is in region 0 — the 1917 IFS is not on media**,
+and `BOOTCTR_FCTRY` has not been re-read since the last TabletOS boot (`0x32`
+then).  Restore 1917 and verify the counter before treating the unit as
+recovered (`HANDOFF.md` preamble).
 
 ## What is next
 
@@ -374,12 +458,13 @@ is the **device's own sensors and peripherals**, with the `hd3` repurpose
 parked.  Report **176** is the inventory; **step 1 is done (report 177):** the
 I²C4 bus and BMA150/HMC5883L/MPU3050 work.  **Step 2 (report 178):** the
 TMP103 and the BQ27541 gauge work; **step 3 (report 179):** the FAN5702
-status LED works.  The **CM3217 is open** (all-zero/ENXIO, needs the
-`ls-cm3217` RE, trap 95).  Next: (4) the WL1283 WiFi/BT/GPS combo on `mmc1`;
-(5) the WM8994 audio machine and the Cypress CY8CTMA3 touch; and the CM3217
-RE.  Every step is one variable per boot and none needs an RPMB write.  The
-sensor IRQs (GPIO2 lines 2/27/18) are the next variable if triggered sampling
-is wanted.
+status LED works.  **Step 4 (report 180):** the WL1283 is on **MMC5** with
+WL_EN on GPIO2_22 and WL_IRQ on GPIO2_21, `&mmc5` probes, but the card does
+not enumerate; next are the functional-clock and `MMCHS_CON` experiments.
+Still open: the **CM3217** (trap 95), the WM8994 audio machine, the Cypress
+CY8CTMA3 touch.  Every step is one variable per boot and none needs an RPMB
+write.  The sensor IRQs (GPIO2 lines 2/27/18) are the next variable if
+triggered sampling is wanted.
 
 ## Workspace location
 

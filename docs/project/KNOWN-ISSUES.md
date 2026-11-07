@@ -289,8 +289,15 @@ report 121 §3/§11/§12.
     once then 0x00, a word read gives 0xff00, and a word write of CMD 0x0800
     returns **ENXIO**.  `ls_startup` writes the CMD from a config byte at
     `+0x40` (`ls_shutdown` ORs bit 0) — that byte and the ALS register pair are
-    the RE targets.  Do **not** poke further; the next step is a static RE of
-    that module followed by a small driver.  (Session 28, report 178.)
+    the RE targets.  **ANSWERED (session 29, report 181):** the part has **no
+    register file over I²C**.  `ls-cm3217.so` only ever sends a **bare 1-byte
+    read/write** to two slave addresses: **0x10** = MSB + command (`0x26`
+    enable, `0x27` = ALS off), **0x11** = LSB + config (`cmd2 = 0x60` at init).
+    The count is `(byte(0x10) << 8) | byte(0x11)`, needs ~200 ms after `0x26`,
+    and no ID is ever read.  `0xC0100506` is QNX `DCMD_I2C_RECV`, not a
+    message array.  A driver is ~30 lines with `i2c_smbus_read_byte(0x11)` /
+    `(0x10)` — **not** a `cm32181` ID patch, and never `regmap`.  (Sessions
+    28/29, reports 178/181.)
 
 96. **The FAN5702 EN is GPIO1_13 on pad `0x1b0`, and the pad boots in safe
     mode.**  Raw `devmem` writes of the pad/`GPIO_OE`/`SETDATAOUT` left the
@@ -302,6 +309,115 @@ report 121 §3/§11/§12.
     `0x30/0x40/0x50 = 0x36`; the vendor driver sets 100 kHz but 400 kHz works.
     Once the driver owns the client, `i2cget` says "Device or resource busy" —
     use `/sys/class/leds`.  (Session 28, report 179.)
+
+97. **The WL1283 combo is on MMC5 (`0x480D5000`), not MMC1, and its two board
+    lines are GPIO2_22 and GPIO2_21.**  Reports 176 / the session-28 DTS said
+    "mmc1"; the live QNX process map says otherwise: io-pkt's
+    `devnp-ti1283.so` holds `/dev/mem 0x480d5000` (8 KiB) and attaches QNX
+    vector `0x5b` = **GIC SPI 59 = mmc5**, while every `sdmmc1`/`sdmmc3` pad is
+    still `0x000f` (safe mode) on the reference and the `sdmmc5` pads
+    (`0x148`–`0x152`) read `0x0118`.  **WLAN_EN = gpio_54 = GPIO2_22** (pad
+    `gpmc_nwp`, `0x07c`, mux 3, active high, 120 ms before the chip is
+    touched); **WLAN_IRQ = gpio_53 = GPIO2_21** (pad `gpmc_ncs3`, `0x07a`, an
+    *input*, falling edge, active low) — the old DTS drove that line low as an
+    output, which is wrong and is now removed from the hogs.  Both come from
+    `devnp-ti1283.so` and are corroborated by the live GPIO diff: the
+    reference's `GPIO2_DATAOUT` is `0x31413200` today against `0x31013200` in
+    report 118, so bit 22 is the *only* output that changes when the WLAN driver
+    runs.  (Session 29, report 180.)
+
+98. **`&mmc5` probes and clocks but the WL1283 never answers CMD5 — and the
+    chip is alive.**  With `&mmc5` enabled (4-bit, `sdmmc5` pinctrl `0x0118`, a
+    1.8 V fixed `vmmc` window, WL_EN hogged high at boot) the controller probes
+    (`idlest=0`, `HCTL=0x00000b00` — byte-identical to what QNX writes) and the
+    core runs `sdio_reset`, then `attach_sdio`/`attach_sd`/`attach_mmc` all fail
+    and it prints `mmc4: Failed to initialize a non-removable card`.  Eliminated
+    with evidence: the enable line (hogged high and re-pulsed at runtime, host
+    unbound), the pads (full live padconf diff), the IRQ pin, every TWL6030 rail
+    and `CLK32KG` (register-for-register identical `CFG_STATE` to QNX), the OCR
+    window (1.8 V and 3.3 V), and a full power cycle.  TabletOS's own
+    `wpa_supplicant_ti` scans (`CTRL-EVENT-SCAN-RESULTS`) on the same boot, so
+    the part works; the gap is host-side.  The two measured differences left are
+    the **MMC5 functional clock (Linux 48 MHz, QNX 96 MHz)** and
+    **`MMCHS_CON` (reset `0x00000600` here, QNX writes `0x000E0080`)** — see
+    report 180 §6 for the order to try them.  Do not re-derive the wiring.
+    (Session 29.)
+
+99. **Reading one register bank past GPIO6 (`0x4805F000`) aborts the kernel, and
+    with `panic=10` that is a reset loop.**  A debug print that walked the LPER
+    GPIO banks from `0x48055000` in `0x2000` steps ran one bank too far: GPIO2–6
+    are five banks ending at `0x4805D000`, and `0x4805F000` is not a target.
+    The read raised an external abort at ~2.5 s — before the boot console is up
+    — the `panic=10` bootarg rebooted, the bootloader re-armed WDT2, and the
+    unit reset-looped through the bootrom, **spending a `BOOTCTR_FCTRY` unit per
+    loop**.  Recovery is the usual pre-OS flash: the bootrom reappears every
+    ~10 s, so `bbusb.py flash --component ... --from-bootrom` catches it and the
+    next boot's loader reset ends the loop.  Lesson: an instrumented kernel that
+    can fault before PID 1 has no console to report it — check every address a
+    new probe touches against the TRM's target map first, and prefer a read
+    behind a `devm_ioremap()` that can fail over a raw address arithmetic walk.
+    (Session 29.)
+
+100. **Never read another module's registers from `omap_hsmmc_set_ios()`.**
+    A debug dump that ioremapped the GPIO2–6 banks inside `set_ios` and read
+    them there faulted on a **runtime** `unbind`/`bind` of `480d5000.mmc`
+    (`ldr r3, [r1, #0x134]`, i.e. a GPIO `OE` read) *after* `mmc_power_up`, and
+    killed `sh[101]` "with irqs disabled" — which took the USB console down
+    with it while the kernel itself kept running (the unit still enumerated as
+    `0fca:8010`, so a reset loop was correctly ruled out).  `set_ios` runs on
+    every power-up/clock change, including long after probe, when a cached
+    mapping of a different target is not guaranteed live.  Put one-shot board
+    dumps in `*_probe()` and `iounmap` them; never touch a second module from a
+    hot path.  (Session 29.)
+
+101. **A QNX `SIGBUS` on MMCHS5 is not an L4 firewall and not `ThreadCtl`.**
+    `ThreadCtl(_NTO_TCTL_IO)` returns `-1/EINVAL` in an sshd session, but the
+    *same* session reads `0x4A100000`, `0x4A31E000`, `0x48055000` and
+    `0x4A009000` fine, and `procmgr_ability(ALLOW|AID_IO)` returning 0 does not
+    change it.  So the privilege is a red herring and the refusal is specific to
+    that block: **only io-pkt can read MMCHS5 on QNX**, and there is no way to
+    obtain the reference's live SDIO controller state from the bench.  Do not
+    spend another session on it; use the driver's own register writes instead
+    (report 180 §5).  `tools/qnx-iotest.c` is the tool that settles the question
+    in one run.  (Session 29.)
+
+102. **A probe run must be synchronised with the operator action it is meant to
+    observe.**  A cover/uncover test of the CM3217 was run as two unbounded
+    48-second probe loops; nothing marked when the operator covered the sensor,
+    so no sample could be attributed to a state, and the "covered" vs
+    "uncovered" split was inferred from the order the loops were *issued* —
+    which is not a measurement.  The numbers then looked suggestive (different
+    values dominate each loop), which is exactly how an artefact becomes a
+    finding.  Rule: when a probe depends on something the operator does, either
+    have them act on an explicit cue inside a single bounded run, or timestamp
+    both sides; otherwise record the run as **invalid** rather than
+    interpreting it.  (Session 29.)
+
+103. **Do not characterise a device on TabletOS if a QNX driver already owns
+    it.**  Every external I2C access we made to the CM3217 (0x10/0x11) while
+    `winchester-lc -d ls-cm3217.so` was running interleaved with that driver's
+    own transfers and broke its sequence: `/pps/services/light_controller`
+    reported `Lux::0000`, the panel's automatic brightness froze *for the
+    duration of the probing* and recovered when we stopped, and the values we
+    collected (`0x6a` plateaus, `0x00` gaps, apparently cover-dependent runs)
+    were artefacts of the race, not properties of the part.  The same part reads
+    a clean, stable **32 -> 191 lux** from Linux, where we are the only client
+    on the bus.  Rule: **characterise from the OS that owns the device, or stop
+    the vendor's driver first** — and treat any reading that contradicts a
+    direct operator observation as suspect until reconciled.  (Session 29,
+    report 182.)
+
+104. **The CM3217 needs no settle delay, and must be left in its idle state.**
+    Two facts that are easy to get wrong and were the whole of report 182's
+    difficulty: **(a) read immediately** — the count is valid the instant `0x26`
+    is written to 0x10, and every wait from 1 ms to 200 ms reads back zero, so a
+    driver must poll for the first nonzero `(hi, lo)` pair rather than sleep;
+    **(b) restore the idle state** (`0x60`→0x11, then `0x27`→0x10) after every
+    measurement, because leaving the ALS enabled wedges the panel's own
+    automatic-brightness path (measured: the panel froze while a probe left it
+    enabled, and recovered as soon as the idle state was written back).  On
+    Linux, our driver is the only client on that bus; on TabletOS our accesses
+    race RIM's `ls-cm3217` (trap 103).  (Session 29, report 182.)
 
 ## 3. Corrections to older reports
 
@@ -499,6 +615,23 @@ decrements `BOOTCTR_FCTRY`" was an incomplete caller audit — reports 89 §3.5 
   (`118` §8.2, `111` §8 item 4).  The corrections are applied *in place* in those
   two files and listed in §3; the other reports are left as written so the
   section-by-section citations elsewhere still resolve.
+
+### Fixed in session 29 (WL1283 bus, CM3217, two probe bugs)
+
+* **The WL1283's bus and board lines are known** (trap 97): MMC5, WL_EN on
+  GPIO2_22, WL_IRQ on GPIO2_21 as an input.  The session-28 DTS comment and
+  report 176's "mmc1" are corrected.
+* **The CM3217 works** (traps 95/104, report 182): `cm3217.ko` binds `3-0010`
+  and reads 32–37 lux (dark) / 191 (lit).  Trap 95's protocol question is
+  answered, and `CONFIG_CM3217=m` + the DTS node are in the tree.
+* **Two defects of this session's own making, both fixed and verified**
+  (traps 99/100): the GPIO walk one bank past GPIO6 that reset-looped the unit,
+  and the register dump inside `omap_hsmmc_set_ios()` that killed the console on
+  a runtime rebind.  The `PBGPIO:` dump now runs once, in probe, with `iounmap`.
+* **`ThreadCtl`/`SIGBUS` on MMCHS5 is understood** (trap 101): block-specific,
+  only io-pkt can read it.
+* **The QNX-side CM3217 readings are explained** (trap 103): they were races
+  against RIM's own driver, not properties of the part.
 
 ### Fixed in session 28 (userland, sensors, flasher)
 
