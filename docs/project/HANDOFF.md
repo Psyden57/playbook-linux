@@ -79,6 +79,8 @@ touched by this write.  After the boot: `tools/pbssh.sh 'uname -a; mount | grep
 base'` and `tools/pbssh.sh 'cat /dev/rpmb/BOOTCTR_FCTRY' | xxd -p` (expect
 `32000000`; the TabletOS `startup.sh` tops it up).  **Do not restore
 `local/images/ifs0.sealed.bin`** — it is the 2.0.0.4869 IFS (trap 84).
+**Not exercised in session 30** — the unit ended powered off on the dock; the
+last full run of this procedure was the session-27/28 restore.
 
 ## 1. The one thing to do next: the TWL6030 charger test
 
@@ -147,7 +149,8 @@ Report **176** is the inventory and bus map; DECISIONS §28 is the order.
   (`muninfw`, daemon `touch`).  The bus is either I²C2 `0x48072000` (QNX saw
   `0x65` there) or I²C3 `0x48060000` (the library's `/dev/i2c2`, and the
   controller QNX does not instantiate); settle it with `i2cdetect -y -r 2` and
-  `-r 3`.  See `docs/contradictions/touch-bus-i2c2-vs-i2c3.md`.
+  `-r 3` (these are the next bench commands; they were **not** run in session
+  30).  See `docs/contradictions/touch-bus-i2c2-vs-i2c3.md`.
 
 **Rules for both.**  One variable per boot; characterise a device only from the
 OS that owns it (DECISIONS §31, trap 103); ask the reference OS what it maps
