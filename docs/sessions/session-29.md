@@ -185,7 +185,8 @@ now works; the WL1283 is parked for a session with fresh eyes.**
   5 703 lines / 34 files, `patch -p1 --dry-run` clean against pristine 6.15.11.
 * `rootfs/hci.c` → `/bin/pbhci`; `rootfs/etc/init.d/rcS` loads `cm3217`.
 * `tools/qnx-cm3217.c` (bare-byte probe + delay sweep), `tools/qnx-iotest.c`
-  (`ThreadCtl`/block-read probe), `tools/build_rootfs.py --firmware DIR`.
+  (`ThreadCtl`/block-read probe), `tools/build_rootfs.py --firmware DIR`
+  (added, **UNTESTED** — no firmware tree was passed to it this session).
 * `local/logs/boot-20261107-095720.log` — first full console dump of this image.
 * Images: region-0 **`0xFC32F008`**
   (`local/images/kernel-0xFC32F008-cm3217.img`) + region-1
