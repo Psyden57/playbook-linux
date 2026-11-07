@@ -25,6 +25,7 @@ preserves evidence, and must not restate status.
 | `project/DECISIONS.md` | decisions with their evidence, and the open ones | current state |
 | `project/SETUP.md` | host toolchains, paths, prerequisites | status |
 | `project/DEVELOPMENT.md` | build → wrap → flash → boot loop, and the bench command reference | status |
+| `project/KERNEL-PORT.md` | the 6.15.11 → `linux-postmarketos-stable` 7.3.3 port: target verification, per-file risk, the checkpoint plan, and what counts as done | status |
 | `project/REPO-MANAGEMENT.md` | the private working tree vs the public snapshot, and the publish procedure | status |
 | `README.md` | this index and the ownership table | session counts or ranges |
 | root `README.md` | the project front page and quick start | status (point to `STATE.md`) |
@@ -50,6 +51,7 @@ preserves evidence, and must not restate status.
 | `DECISIONS.md` | decisions taken with their evidence, and the open ones (license, visibility, proprietary corpus) |
 | `SETUP.md` | host toolchains, paths, prerequisites |
 | `DEVELOPMENT.md` | build → wrap → flash → boot loop, and the bench console command reference |
+| `KERNEL-PORT.md` | the port of our patch set to `linux-postmarketos-stable` 7.3.3: the verified target, per-file rebase risk, the checkpoint order, and the 6.15.11 backup rule |
 | `REPO-MANAGEMENT.md` | the private/public repository split, `tools/publish_public.sh`, and the commit/push rules |
 
 ## `reports/` — the analysis this is built on

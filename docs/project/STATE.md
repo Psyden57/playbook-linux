@@ -453,18 +453,19 @@ recovered (`HANDOFF.md` preamble).
 
 ## What is next
 
-`ROADMAP.md` owns the ordered list.  Item 5 is **closed** (session 28); item 9
-is the **device's own sensors and peripherals**, with the `hd3` repurpose
-parked.  Report **176** is the inventory; **step 1 is done (report 177):** the
-I²C4 bus and BMA150/HMC5883L/MPU3050 work.  **Step 2 (report 178):** the
-TMP103 and the BQ27541 gauge work; **step 3 (report 179):** the FAN5702
-status LED works.  **Step 4 (report 180):** the WL1283 is on **MMC5** with
-WL_EN on GPIO2_22 and WL_IRQ on GPIO2_21, `&mmc5` probes, but the card does
-not enumerate; next are the functional-clock and `MMCHS_CON` experiments.
-Still open: the **CM3217** (trap 95), the WM8994 audio machine, the Cypress
-CY8CTMA3 touch.  Every step is one variable per boot and none needs an RPMB
-write.  The sensor IRQs (GPIO2 lines 2/27/18) are the next variable if
-triggered sampling is wanted.
+`ROADMAP.md` owns the ordered list.  **Item 10 is the operator's next focus:
+port the patch set to `linux-postmarketos-stable` 7.3.3** with 6.15.11 kept as
+backup/reference — plan, per-file risk and checkpoints in `KERNEL-PORT.md`.
+`kernel.org/releases.json` on 2026-11-07 confirms 7.3.3 is the current stable
+(released 2026-11-06; mainline 7.4-rc1).  **Nothing is ported yet.**
+
+Item 9 (the device's own peripherals) stands at: **steps 1–3 done** — the I²C4
+motion sensors (report 177), TMP103 + BQ27541 (178), the FAN5702 LED (179) and
+**the CM3217 light sensor (182: 32–37 lux dark, 191 lit)**.  **Step 4 is
+parked** (the WL1283, report 180).  Step 5 remains: the **WM8994** audio machine
+and the Cypress **CY8CTMA3** touch.  Every step is one variable per boot and
+none needs an RPMB write.  The sensor IRQs (GPIO2 lines 2/27/18) are the next
+variable if triggered sampling is wanted.
 
 ## Workspace location
 

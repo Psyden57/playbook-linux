@@ -129,7 +129,16 @@ From **our Linux image** the way back is the shorter one: flash
 
 ## 1. The one thing to do next
 
-**`ROADMAP.md` item 9 — the device's own sensors and peripherals** (report 176).
+**`ROADMAP.md` item 10 — port to `linux-postmarketos-stable` 7.3.3** (operator,
+session 29 end).  Full plan and risks: **`KERNEL-PORT.md`**.  Step 0 is all
+desk work, no bench: fetch upstream `linux-7.3.3.tar.xz` into
+`local/pristine/linux-7.3.3` (keep 6.15.11), copy `local/kernel-tree` aside as
+`local/kernel-tree-6.15.11`, and settle the one open question — whether
+`linux-postmarketos-stable` at 7.3.3-r0 still declares `arch="all !armhf
+!s390x"` (at 7.2.2 it does).  If it does, use **upstream 7.3.3** as the base
+with pmOS's `config-stable.armv7` as the config starting point, not the package.
+
+Then, for reference, the item 9 order that was in flight:
 Item 5 is closed; the `hd3` cut-over is **parked**.  One variable per boot:
 
 1. ~~The sensor bus + BMA150/HMC5883L/MPU3050.~~  **DONE (report 177).**
@@ -257,6 +266,11 @@ Full text: `KNOWN-ISSUES.md` §2.  The ones that end sessions:
 104. **The CM3217 needs no settle delay and must be left idle** — read
    immediately (poll for nonzero) and restore `0x60`→0x11, `0x27`→0x10, or the
    panel's automatic brightness wedges.
+105. **Your own knowledge is out of date — look external facts up and cite
+   them.**  Kernel versions, pmaports package contents, `arch=` lists and driver
+   internals drift; a session asserted `7.3.3` "doesn't match the 6.x series"
+   when `kernel.org/releases.json` shows it is the current stable.  DECISIONS
+   §32.
 
 Session-25/26/27 additions relevant here: the factory counter is read with
 `bbusb.py info --from-bootrom --password 0000 --keep-loader --json`
@@ -289,7 +303,10 @@ door ssh is root** (2026-11-05) and `devuser` cannot reboot or read `/dev/rpmb`;
 * **Do not budget work against a context window**; the operator decides when to
   stop.
 * **Static RE only for subagents** (one process owns the USB link).
-* **Never present a guess as a fact.**  Mark inferred claims.
+* **Never present a guess as a fact.**  Mark inferred claims — and note that
+  *recalled* knowledge about the outside world (kernel versions, package
+  contents, upstream driver internals) counts as a guess: look it up and cite
+  the source.  DECISIONS §32, trap 105.
 * **The whole-map diff is the highest-yield technique** — and ask the operator
   what the panel shows before building a theory.
 * **Update the docs as you go**; `STATE.md` and `KNOWN-ISSUES.md` go stale
@@ -305,14 +322,20 @@ Workspace: this repository — a git checkout.  The earlier work tree
 $HOME/rea-work is READ-ONLY.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md,
-ROADMAP.md item 9, KNOWN-ISSUES.md (traps 9-104, especially 91-104),
-DEVELOPMENT.md section 3/3a/4, DECISIONS.md (17-31), reports 180 and 182 (and
-176/177/178/179/181), sessions/session-29.md, and docs/contradictions/
-fan5702-safe-model-vs-cm3217-race.md.
+KERNEL-PORT.md, ROADMAP.md items 9 and 10, KNOWN-ISSUES.md (traps 9-104,
+especially 91-104), DEVELOPMENT.md section 3/3a/4, DECISIONS.md (17-31), reports
+180 and 182 (and 176/177/178/179/181), sessions/session-29.md, and
+docs/contradictions/fan5702-safe-model-vs-cm3217-race.md.
 
-SCOPE: the LINUX bring-up, the DEVICE'S OWN SENSORS AND PERIPHERALS.  The hd3
-cut-over, the BB10 port and the PlayBook OS image work are PARKED by the
-operator — do not work on them.
+FIRST TASK THIS SESSION (operator): **port our patch set to
+linux-postmarketos-stable 7.3.3-r0**, keeping 6.15.11 as backup/reference.  See
+KERNEL-PORT.md for the target verification, per-file risk and the checkpoint
+order, and ROADMAP item 10 for what closes it.  Do NOT delete
+local/pristine/linux-6.15.11, local/kernel-tree or the 6.15.11 patch — copy the
+working tree aside as local/kernel-tree-6.15.11 before starting.
+
+SCOPE: the LINUX bring-up.  The hd3 cut-over, the BB10 port and the PlayBook OS
+image work are PARKED by the operator — do not work on them.
 
 PHYSICAL STATE (session 29 end): OUR LINUX IMAGE IS IN REGION 0 — region-0
 0xFC32F008 (local/images/kernel-0xFC32F008-cm3217.img) and region-1

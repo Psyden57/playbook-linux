@@ -144,6 +144,14 @@ now works; the WL1283 is parked for a session with fresh eyes.**
 * **The IRQ-driven sensor path** (BMA150/HMC5883L/MPU3050 on GPIO2 2/18/27) is
   still polling-only — unchanged from session 28.
 
+* **My own knowledge was out of date, twice, and the operator caught it twice.**
+  I said kernel `7.3.3` "doesn't match the 6.x series" — wrong;
+  `kernel.org/releases.json` shows **7.3.3 as the current stable** (2026-11-06).
+  Earlier in the same session I read the operator's 2026-09-01 pmaports snapshot
+  as if it were current pmaports.  **New sessions: look external facts up and
+  cite them; treat recalled knowledge as a hypothesis** (DECISIONS §32, ROADMAP
+  working rule, trap 105).
+
 ## Superseded / uncertain
 
 * **The FREF pad muxing now in the DTS** (`0x4A10019C` = `fref_clk2_out`, WKUP
@@ -188,6 +196,9 @@ now works; the WL1283 is parked for a session with fresh eyes.**
   (`ThreadCtl`/block-read probe), `tools/build_rootfs.py --firmware DIR`
   (added, **UNTESTED** — no firmware tree was passed to it this session).
 * `local/logs/boot-20261107-095720.log` — first full console dump of this image.
+* `docs/project/KERNEL-PORT.md` — the operator's next focus: port the patch set
+  to `linux-postmarketos-stable` 7.3.3-r0, keeping 6.15.11 as backup.  Plan and
+  per-file risk only; **nothing ported, no boot spent**.
 * Images: region-0 **`0xFC32F008`**
   (`local/images/kernel-0xFC32F008-cm3217.img`) + region-1
   `local/images/rootfs-region1.ext4` sha256 `0faeadff…`.  Superseded

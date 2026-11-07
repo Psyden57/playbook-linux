@@ -791,6 +791,37 @@ SoC-side configuration, which is inert.
 
 ---
 
+## 32. Verify every external fact against a primary source, never recall (session 29)
+
+**Decision.**  Any fact that lives outside this repository — kernel versions,
+pmaports package contents and their `arch=` lists, upstream driver internals,
+dating of releases — is **looked up at the time it is needed and cited**, never
+asserted from the assistant's built-in knowledge.  Recalled facts are treated as
+hypotheses, and are labelled as such if they cannot be checked.
+
+**Why.**  The assistant's knowledge is frozen at its training date, and this
+project spans months of upstream movement.  In session 29 it asserted that a
+kernel version `7.3.3` "doesn't match the 6.x series I'd expect" and was wrong:
+`https://www.kernel.org/releases.json` fetched the same minute shows **`stable` =
+`7.3.3`, released 2026-11-06**, with mainline at `7.4-rc1` and longterm branches
+at `6.18.62`, `6.12.116`, `6.6.162`, `6.1.192`, `5.15.225`, `5.10.274`.  The
+operator had to correct it.  The same failure mode had already produced the
+session's *other* stale reading — the pmaports snapshot's `pkgver=7.2.2`
+`arch="all !armhf !s390x"` was mistaken for the current state of a package that
+had moved on.
+
+**Evidence.**  `docs/project/KERNEL-PORT.md` §0 (the fetched release list and
+the APKBUILD fields, both dated); the operator's correction in session 29.
+Recorded as a working rule in `ROADMAP.md` §"Working rules".
+
+**Constraint.**  The rule is about *external* facts.  Measurements from this
+unit (`devmem`, `pbmem3`, `pidin`, the TRM in `hardware/`) and statements in
+`docs/` remain the authorities for the device itself — but even there, prefer a
+fresh read over an older note when they disagree, and record the disagreement as
+a contradiction rather than silently picking one.
+
+---
+
 These were the open policy questions.  The licence and visibility are decided
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.

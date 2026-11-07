@@ -419,6 +419,18 @@ report 121 §3/§11/§12.
     Linux, our driver is the only client on that bus; on TabletOS our accesses
     race RIM's `ls-cm3217` (trap 103).  (Session 29, report 182.)
 
+105. **An assistant's recalled knowledge is stale — look external facts up.**
+    The built-in knowledge has a training cut-off and this project spans months
+    of upstream movement.  In session 29 an assistant asserted that kernel
+    `7.3.3` "doesn't match the 6.x series"; `kernel.org/releases.json` shows
+    **7.3.3 is the current stable** (released 2026-11-06, mainline 7.4-rc1).  In
+    the same session a 2026-09-01 pmaports snapshot was read as current
+    pmaports.  Both needed the operator to correct them.  Rule: fetch the
+    primary source (`kernel.org/releases.json`, the actual pmaports `APKBUILD`,
+    the tree you are about to build) and cite it; label anything recalled as a
+    hypothesis (DECISIONS §32).  This applies to register maps too — prefer a
+    live read or the local TRM over recollection.  (Session 29.)
+
 ## 3. Corrections to older reports
 
 These eighteen are preserved deliberately. Each is newer than the text it

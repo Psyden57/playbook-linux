@@ -402,6 +402,29 @@ probe, datasheet or a bus capture).  Images: region-0 `0xFC32F008`, region-1
 and survives a reboot; the touch and FAN5702 have a driver; WiFi/BT/GPS are
 enumerated, with firmware and calibration sourced from the QNX blobs.
 
+## 10. Port the patch set to linux-postmarketos-stable 7.3.3 — **the next focus (operator, session 29 end)**
+
+**Goal:** `local/kernel-tree` builds **`7.3.3`** instead of `6.15.11`,
+targeting **`linux-postmarketos-stable-7.3.3-r0`**, with the
+**6.15.11 tree, tarball and patch kept as the backup/reference**.  Six kernel
+series have passed since our base; the display and irqchip work in particular is
+tuned to 6.15 and should not be assumed to apply unchanged.
+
+**Target verified:** `kernel.org/releases.json` on 2026-11-07 says stable =
+**`7.3.3`**, released 2026-11-06 (mainline `7.4-rc1`).  The operator's pmaports
+snapshot carries the package at `pkgver=7.2.2` with **`arch="all !armhf
+!s390x"`**, so the 7.3.3-r0 package is newer than that snapshot **and may not
+cover 32-bit ARM at all** — settling that is step 0 of the port.
+
+**The work, in checkpoints** (full detail, per-file churn and risks:
+`KERNEL-PORT.md`): prerequisites → config merge → the load-bearing head.S /
+DEBUG_LL core → the board DTS → mmc/irq/bus → the display → the peripherals →
+re-export the patch.
+
+**Closes when:** the 7.3.3 tree boots the unit to the region-1 userland with a
+clean panel and working eMMC, a patch exports cleanly against pristine 7.3.3, and
+the 6.15.11 assets are still present and untouched.
+
 ## Out of scope for now
 
 SGX/GPU, IVA-HD, camera and the secure-world (TrustZone) path are all disabled
@@ -420,3 +443,13 @@ item 9 (report 176).
   own** data is allowed (session 18); NVRAM and the MCT are never written; RPMB
   is the **operator's** `0x32` top-up only (an agent never writes it); never
   `SYS_RST`, never `VAUX1`.
+* **Look up every external fact; do not trust recalled knowledge.**  The
+  assistant's built-in knowledge is frozen at its training date and this project
+  spans months of upstream movement: kernel versions, pmaports package contents,
+  `arch=` lists and driver internals all drift.  On 2026-11-07 a session
+  asserted that `7.3.3` "doesn't match the 6.x series" and was wrong —
+  `kernel.org/releases.json` showed 7.3.3 as the current *stable*, with mainline
+  at 7.4-rc1.  **Fetch the authoritative source** (`kernel.org/releases.json`,
+  the actual pmaports `APKBUILD`, the tree you are about to build) and cite it,
+  rather than reasoning from memory.  The same rule applies to register maps:
+  prefer a live read or the local TRM over recollection.
