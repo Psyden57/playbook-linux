@@ -150,10 +150,9 @@ static int fan5702_probe(struct i2c_client *client)
 		init_data.default_label = NULL;
 
 		ret = devm_led_classdev_register_ext(dev, &led->cdev, &init_data);
-		if (ret) {
-			fwnode_handle_put(child);
+		fwnode_handle_put(child);
+		if (ret)
 			return dev_err_probe(dev, ret, "led %u register\n", reg);
-		}
 		i++;
 	}
 

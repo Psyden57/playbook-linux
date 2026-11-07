@@ -79,6 +79,13 @@ tools/pbssh.sh 'dd if=/dev/hd1 bs=16 skip=65536 count=180193' | sha256sum
 
 ## 3. Build and wrap
 
+**The current base is Linux 7.3.3** (session 30).  `local/kernel-tree` is the
+7.3.3 tree; `local/kernel-tree-6.15.11` is the untouched reference.  Use
+**`kernel/winchester-7.3.3.config`** for a clean build (`kernel/winchester.config`
+is the 6.15.11 one), and keep **`CONFIG_KERNEL_XZ=y`**: the chainloader image
+must end below the region-0 IFS slot bound `0xB00000`, and gzip does not fit
+(0xB8ABB4).  Module release is **7.3.3**.
+
 **The binaries in `initramfs/root/` are NOT built by the kernel's build** — the
 kernel only packs the directory into the cpio — **and they are gitignored**
 (`initramfs/root/{init,console,pbrpmb}`; only the sources are tracked), so a
@@ -105,10 +112,11 @@ cp local/kernel-tree/drivers/misc/pbmon.c            kernel/source/pbmon.c
 cp local/kernel-tree/arch/arm/boot/dts/ti/omap/omap4-winchester.dts \
    kernel/source/omap4-winchester.dts
 
-# 3. kernel + DTB (rm the cpio — see below)
+# 3. kernel + DTB + modules (rm the cpio — see below)
 rm -f $K/usr/initramfs_data.cpio*
 make -C $K ARCH=arm CROSS_COMPILE=arm-linux- -j12 zImage
 make -C $K ARCH=arm CROSS_COMPILE=arm-linux- ti/omap/omap4-winchester.dtb
+make -C $K ARCH=arm CROSS_COMPILE=arm-linux- -j12 modules
 
 # 4. verify the cpio actually carries the binaries you just built
 (cd $K/usr && cpio -itv < initramfs_data.cpio | grep -E ' (init|console|pbrpmb)$')
@@ -185,7 +193,7 @@ cp rootfs/modules/pbhello.ko local/work/modules/
 python3 tools/build_rootfs.py --size-mb 64 \
   --busybox local/work/src/busybox-1.36.1/busybox \
   --busybox-links local/work/src/busybox-1.36.1/busybox.links \
-  --modules local/work/modules
+  --modules local/work/modules-7.3.3 --krel 7.3.3
 ```
 
 What it installs: `/bin/busybox` + 401 applet links, `/sbin/init` ->

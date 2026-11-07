@@ -1,4 +1,44 @@
-# Kernel patches — mainline 6.15.11 → PlayBook "winchester"
+# Kernel patches — PlayBook "winchester" (7.3.3 current; 6.15.11 reference)
+
+## Current base: 7.3.3 (session 30)
+
+`0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
+**6 648 lines / 42 files (34 modified + 8 new)** against pristine
+**linux-7.3.3**.  It is generated from the tree, not from the previous patch
+(trap 106), and it was verified by applying it to pristine 7.3.3 targets and
+comparing all 42 files byte-for-byte with `local/kernel-tree` — 0 rejects,
+0 mismatches.
+
+```bash
+# pristine 7.3.3, then:
+patch -p1 < 0001-playbook-winchester-7.3.3.patch
+cp winchester-7.3.3.config .config
+make ARCH=arm CROSS_COMPILE=<arm-linux-> -j$(nproc) zImage dtbs modules
+# then wrap it: python3 tools/build_kernel_image.py
+```
+
+`winchester-7.3.3.config` is the exact config the 7.3.3 image boots
+(sha256 `7e0aa261…`); it is also copied at `kernel/winchester-7.3.3.config`.
+The base had to be **upstream 7.3.3**, not the pmOS package: current pmaports
+still declares `linux-postmarketos-stable` as `arch="all !armhf !s390x"`.
+The kernel is **XZ-compressed** so the image fits the region-0 IFS slot
+(`0xB00000`): zImage 6 568 696 B, image 0x91AB20, CRC `0x0F6AC47F`.
+
+The charger preparation adds one modified file, `arch/arm/boot/dts/ti/omap/
+twl6030.dtsi` (the `gpadc` label), plus the `charger` node and the `battery`
+label in the board DTS.
+
+The eight new files are the ones the old export recipe silently dropped:
+`arch/arm/boot/dts/ti/omap/omap4-winchester.dts`,
+`arch/arm/include/debug/omap4bc.S`, `drivers/iio/light/cm3217.c`,
+`drivers/leds/leds-fan5702.c`, `drivers/misc/pbmon.c`, `pbmon-pair.h`,
+`pbmon-page.h` and `include/linux/pb_event.h`.  `patch -p1 --dry-run` alone does
+not prove an export: it must be applied and the result compared to the tree.
+
+## Reference base: 6.15.11
+
+This section is the **backup/reference** delta.  The project booted it until
+session 30 and keeps it for a bisect back; do not delete it.
 
 This directory contains the complete diff between **mainline Linux
 6.15.11** and the kernel tree the project actually builds and boots
@@ -159,48 +199,86 @@ does not yet reproduce the device's block-0x43 pair (report 148).  Do not enable
 `pbmon.selftest` at probe and do not issue an RPMB write until that is closed.
 `pbmon-pair.h` carries the known block-0x43 pair.
 
-## Regenerating this patch (do it whenever `local/kernel-tree` changes)
+## Regenerating the patch — derive the file list from the TREE, not the old patch
 
-There is no generator script; the patch is a **per-file** diff against the
-pristine tree, using the file list the patch already carries.  That keeps build
-output (`*.o`, `.config`, `usr/initramfs_data.cpio*`) out of it:
+**This is the session-30 fix for trap 106.**  The old recipe (kept at the bottom
+for history) took the file list from the previous patch's `+++ b/` lines, so
+every file added after an export was silently omitted — that is how
+`cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h` and `pbmon-page.h` disappeared from
+the 6.15.11 patch.  The list must come from a tree-vs-pristine walk:
 
 ```bash
 cd /home/psyden/SSDdrive/playbook-linux
 python3 - <<'EOF'
-import subprocess, os
-old = 'kernel/patches/0001-playbook-winchester-6.15.11.patch'
-pris, tree = 'local/pristine/linux-6.15.11', 'local/kernel-tree'
-files = [l[6:].strip() for l in open(old) if l.startswith('+++ b/')]
-out = []
-for f in files:
-    a, b = os.path.join(pris, f), os.path.join(tree, f)
-    if not os.path.exists(b):
-        continue
-    r = subprocess.run(['diff', '-u', '-N', '--label', 'a/' + f, '--label', 'b/' + f,
-                        a if os.path.exists(a) else '/dev/null', b],
-                       capture_output=True, text=True)
-    out.append(r.stdout)                     # returncode 1 = differences, 0 = none
-open('/tmp/new.patch', 'w').write(''.join(out))
+import os, subprocess
+P='local/pristine/linux-7.3.3'; T='local/kernel-tree'
+SKIP_DIRS=('include/generated','arch/arm/include/generated','usr','.tmp_versions','.git')
+GEN={'drivers/tty/vt/defkeymap.c','drivers/tty/vt/consolemap_deftbl.c',
+     'drivers/scsi/scsi_devinfo_tbl.c','drivers/memory/ti-emif-asm-offsets.h',
+     'arch/arm/mach-omap2/pm-asm-offsets.h','lib/crypto/arm/sha256-core.S',
+     'lib/crypto/arm/sha512-core.S','init/utsversion-tmp.h',
+     'drivers/of/empty_root.dtb.S'}
+NAME_SKIP={'.config','Module.symvers','System.map','vmlinux','vmlinux.o','.version'}
+EXT=('.c','.h','.S','.dts','.dtsi','.yaml','.sh','.pl')
+def wanted(rel):
+    b=os.path.basename(rel)
+    return (b in ('Kconfig','Makefile') or rel.endswith(EXT)) and \
+           b not in NAME_SKIP and rel not in GEN and not rel.endswith('.mod.c')
+out=[]; n=0
+for dp,dn,fn in os.walk(T):
+    rd=os.path.relpath(dp,T)
+    dn[:]=[d for d in dn if not any((os.path.join(rd,d) if rd!='.' else d)==s or
+          (os.path.join(rd,d) if rd!='.' else d).startswith(s+'/') for s in SKIP_DIRS)]
+    for f in fn:
+        rel=os.path.normpath(os.path.join(rd,f)) if rd!='.' else f
+        if not wanted(rel): continue
+        a=os.path.join(P,rel); b=os.path.join(T,rel)
+        if os.path.exists(a) and open(a,'rb').read()==open(b,'rb').read(): continue
+        r=subprocess.run(['diff','-u','-N','--label','a/'+rel,'--label','b/'+rel,
+                          a if os.path.exists(a) else '/dev/null', b],
+                         capture_output=True, text=True)
+        out.append(r.stdout); n+=1
+open('/tmp/new.patch','w').write(''.join(out))
+print('files', n)
 EOF
+```
 
-# verify it applies to pristine (copy just the targets, dry-run)
+Then **apply it to pristine targets and compare** — a `--dry-run` is not
+enough:
+
+```bash
 rm -rf /tmp/pcheck && mkdir -p /tmp/pcheck
 python3 - <<'EOF'
 import os, shutil
-for f in [l[6:].strip() for l in open('/tmp/new.patch') if l.startswith('+++ b/')]:
-    src = os.path.join('local/pristine/linux-6.15.11', f)
+P='local/pristine/linux-7.3.3'
+for l in open('/tmp/new.patch'):
+    if not l.startswith('+++ b/'): continue
+    f=l[6:].strip(); src=os.path.join(P,f)
     if os.path.exists(src):
-        dst = os.path.join('/tmp/pcheck', f)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy2(src, dst)
+        dst=os.path.join('/tmp/pcheck',f); os.makedirs(os.path.dirname(dst),exist_ok=True)
+        shutil.copy2(src,dst)
 EOF
-(cd /tmp/pcheck && patch -p1 --dry-run < /tmp/new.patch)    # every file "checking ...", no rejects
-cp /tmp/new.patch kernel/patches/0001-playbook-winchester-6.15.11.patch
-wc -l kernel/patches/0001-playbook-winchester-6.15.11.patch   # update this README and STATE.md
+(cd /tmp/pcheck && patch -p1 --forward < /tmp/new.patch)   # 0 rejects
+python3 - <<'EOF'
+import os
+for l in open('/tmp/new.patch'):
+    if not l.startswith('+++ b/'): continue
+    f=l[6:].strip()
+    if open('local/kernel-tree/'+f,'rb').read()!=open('/tmp/pcheck/'+f,'rb').read():
+        print('MISMATCH',f)
+EOF
+cp /tmp/new.patch kernel/patches/0001-playbook-winchester-7.3.3.patch
+wc -l kernel/patches/0001-playbook-winchester-7.3.3.patch
 ```
 
-Two gotchas that cost time in session 20: the `+++ b/` lines carry the trailing
-newline (`l[6:].strip()`), and `diff -N` needs `/dev/null` for a file that exists
-only in the kernel tree (new drivers), which is what produces the
-`@@ -0,0 +1,N @@` creation hunks `git apply` expects.
+Session 30's first export was 6 618 lines / 41 files; the charger prep adds twl6030.dtsi, so the current patch is 6 648 lines / 42 files and the comparison printed no
+mismatches.  Update this README and `STATE.md` when a new export lands.
+
+### The old (broken) recipe, for history
+
+It used `files = [... for l in open(old) if l.startswith('+++ b/')]` and was
+run whenever the tree changed; it cannot see new files.  Do not use it.  The
+session-20 gotchas it records are still true: the `+++ b/` lines carry the
+trailing newline (`l[6:].strip()`), and `diff -N` needs `/dev/null` for a new
+file to produce the `@@ -0,0 +1,N @@` creation hunk.
+

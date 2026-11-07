@@ -116,6 +116,15 @@ reading of `0x32` only means "topped up": while the top-up script was broken it
 wrote `0x00000000` (the brick
 value) and logged "ok" (`docs/contradictions/bootctr-drain-vs-session10-readings.md`).
 
+**Power is part of the budget.** A unit on a flat pack can brown out and
+warm-reset on its own, and each such boot spends a counter unit. Session 30
+measured **2.817 V / capacity 0 % / `Critical`** immediately before such a
+reset (`BOOTCTR_FCTRY 0x2E → 0x2D`).  Before a bench session read
+`/sys/class/power_supply/bq27541-0/uevent`; at **≤3.0 V** or capacity 0 %,
+stop and charge the unit with the proper charger (the PlayBook dock charges
+while the unit is off but blocks the USB port).  Do not reset-loop a low pack
+to "try again".  (Trap 108.)
+
 ## 3. The boot gate, so a failure can be read correctly
 
 The chain that decides whether our image runs (reports `71` §3, `75` §3,

@@ -210,6 +210,8 @@ static int cm3217_probe(struct i2c_client *client)
 	indio_dev->num_channels = ARRAY_SIZE(cm3217_channels);
 	indio_dev->info = &cm3217_info;
 
+	i2c_set_clientdata(client, indio_dev);
+
 	ret = devm_iio_device_register(&client->dev, indio_dev);
 	if (ret)
 		goto err_free_dummy;

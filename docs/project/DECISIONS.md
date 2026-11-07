@@ -822,6 +822,94 @@ a contradiction rather than silently picking one.
 
 ---
 
+## 33. The 7.3.3 base is upstream 7.3.3, and the zImage is XZ-compressed (session 30)
+
+**Decision.**  Build **upstream `linux-7.3.3`**, not the
+`linux-postmarketos-stable` package, and seed the config from the package's
+`config-stable.armv7` with `winchester.config` merged over it.  Compress the
+kernel with **`CONFIG_KERNEL_XZ`**.
+
+**Why.**  Current pmaports HEAD (2026-11-07, commit `d58ca1a2`) carries the
+package at exactly `7.3.3-r0`, but its `arch="all !armhf !s390x"` still excludes
+our 32-bit ARM SoC (the APKBUILD comment: pmbootstrap cannot dynamically choose
+a defconfig for armhf).  The package's `config-stable.armv7` is still the best
+starting point, but it has `OMAP2_DSS_DSI` **off** and `DRM_OMAP=m`; our merged
+config forces both on.  With gzip the chainloader image was **0xB8ABB4**, over
+the region-0 IFS-slot bound `0xB00000` (the base container is 0x2BFE10, so the
+zImage budget is ~8.6 MB); XZ took the zImage from 9 124 816 B to 6 568 696 B
+and the image to **0x91AB20 (CRC `0x0F6AC47F`)**.
+
+**Evidence.**  `git clone https://gitlab.postmarketos.org/postMarketOS/pmaports`
+(blobless, depth 1) and `git show HEAD:device/main/linux-postmarketos-stable/APKBUILD`
+— `pkgver=7.3.3`, `pkgrel=0`, `arch="all !armhf !s390x"`; the config checks in
+`KERNEL-PORT.md` §0a; the three 7.3.3 boots and the exported 41-file patch in
+§7.  `kernel.org/releases.json` on 2026-11-07: stable = 7.3.3.
+
+**Constraint.**  Keep the 6.15.11 tree/tarball/patch untouched as the
+backup/reference.  XZ is a packaging choice only: any future need to bisect a
+compression-sensitive bug should re-test with gzip once the image budget allows
+it.  The 1917 IFS is still not on media after this session (the operator ended on
+our image), so the way back remains the documented IFS flash.
+
+---
+
+## 34. PlayBook hardware facts come from OS 2.x dumps, never from BB10 (session 30)
+
+**Decision.**  Reverse-engineer the PlayBook's hardware and configuration only
+from **OS 2.x** sources: the live 2.1.0.1917 oracle, the 1917 `/base` QNX6 image
+(`local/work/rcfs-1917.rcfs`, mounted read-only with
+`local/vendor/bb10mt/bb10mt qnx6 mount`), the 1917 IFS tree, and the 2.0.0.4869
+IFS dump.  Do **not** use BB10/10.x images for PlayBook hardware facts.
+
+**Why (operator correction, session 30).**  I cited
+`local/work/bb10/win1103-base/scripts/startup-support/startup_variables` for the
+audio driver argument.  BB10 is for newer devices; its Winchester branch is a
+*porting target*, not the PlayBook's own shipping configuration.  The same
+argument is already attested from the live 1917 oracle (report 176:
+`io-audio -d omap4abe-wm8994 aif=0,secure_capture`), so nothing was lost — but
+the method was wrong, and the trees differ concretely: BB10 carries
+`lib/libaudio_config.so.1`, the 1917 `/base` does not.
+
+**Constraint.**  The 1917 `.rcfs` file is a **QNX6 filesystem image**, not an
+r-c-f-s container despite the name; mount it with `bb10mt qnx6 mount` and treat
+it as read-only.  BB10 documents remain valid for the parked BB10 port itself,
+not for PlayBook hardware.
+
+---
+
+## 35. Instantiate the TWL6030 BCI charger; the board had no charger node (session 30)
+
+**Decision.**  Use the mainline **TWL6030 BCI charger** driver
+(`CONFIG_CHARGER_TWL6030=m`) and instantiate it from the board DTS: a `charger`
+child under `&twl` with `interrupts = <2>, <5>`,
+`io-channels = <&twl_gpadc 10>`, `io-channel-names = "vusb"` and
+`monitored-battery = <&battery>`.  Add the module and `twl6030-gpadc.ko` to the
+region-1 rootfs and modprobe them in `rcS`.
+
+**Why.**  The board includes `twl6030.dtsi` (regulators, USB comparator, GPADC)
+but had **no charger child**, so the built driver never probed and the module
+was not in the rootfs at all.  Nothing configured the BCI under Linux: the pack
+ran flat on USB and the unit browned out at 2.817 V / 0 % (trap 108).  The
+operator's hypothesis — power management missing in our image — was correct.
+
+**Evidence.**  Board DTS before the change: `&twl` with no charger child;
+`CONFIG_CHARGER_TWL6030=m` in `.config`; the 15-module rootfs closure had no
+`twl6030_charger.ko`.  The binding
+(`Documentation/devicetree/bindings/power/supply/ti,twl6030-charger.yaml`)
+requires `compatible`, `interrupts` and `monitored-battery`; the driver's probe
+also takes the optional `vusb` IIO channel.  GPADC channel 10 is the TWL6030
+internal VBUS channel (`drivers/iio/adc/twl6030-gpadc.c`, and the TWL6032
+mainline board uses it).  The DTB with the node compiles and the node is in the
+blob.  Candidate images: `0x91AF34DF` + rootfs `ba275807…`.
+
+**Constraint.**  This is **prepared and untested** as of session 30 end: the
+unit must charge first, then the test is one variable (see `HANDOFF.md` §1).
+If the BCI does not charge, fall back to the values the bootloader left in
+`CHARGERUSB_CTRLLIMIT1/2`, and check the actual GPADC channel before changing
+the node.
+
+---
+
 These were the open policy questions.  The licence and visibility are decided
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.

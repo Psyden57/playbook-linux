@@ -428,8 +428,71 @@ report 121 §3/§11/§12.
     pmaports.  Both needed the operator to correct them.  Rule: fetch the
     primary source (`kernel.org/releases.json`, the actual pmaports `APKBUILD`,
     the tree you are about to build) and cite it; label anything recalled as a
-    hypothesis (DECISIONS §32).  This applies to register maps too — prefer a
-    live read or the local TRM over recollection.  (Session 29.)
+   hypothesis (DECISIONS §32).  This applies to register maps too — prefer a
+   live read or the local TRM over recollection.  (Session 29.)
+
+106. **The patch-regeneration recipe cannot discover new files — it only
+     re-emits the files the previous patch listed.**  `kernel/patches/README.md`
+     derives the file list from the old patch's `+++ b/` lines, so a file added
+     to `local/kernel-tree` in a later session is silently absent from every
+     re-export unless someone adds it by hand.  Session 29's "5 703 lines / 34
+     files" patch therefore **omits `drivers/iio/light/cm3217.c`,
+     `drivers/leds/leds-fan5702.c`, `drivers/misc/pbmon-pair.h` and
+     `drivers/misc/pbmon-page.h`** (and the `Kconfig`/`Makefile` lines and the
+     `arch/arm/boot/dts/ti/omap/Makefile` `omap4-winchester.dtb` entry was only
+     saved by a context rebase).  Evidence (session 30): `grep '^--- a/'` lists
+     34 files with none of those; a pristine-vs-tree walk prints them as
+     `ONLY-NEW`; the 7.3.3 port failed with
+     `drivers/misc/pbmon.c:167: fatal error: pbmon-pair.h: No such file or
+     directory`.  **Fix before the next export:** build the list from the tree
+     (`diff -ruN` over tracked source files, plus every `Only in` source file),
+     not from the old patch, and verify by applying to a pristine tree *and*
+     building it.  (Session 30.)
+
+107. **`cm3217_remove()` oopses: probe never calls `i2c_set_clientdata()`.**
+     The remove path does `i2c_get_clientdata(client)` and `iio_priv()` on it,
+     but nothing ever set the client data, so the pointer is NULL and removing
+     the client (e.g. `echo 0x10 > /sys/bus/i2c/devices/i2c-3/delete_device`,
+     or an unbind) faults in kernel context.  Measured on 7.3.3 (session 30):
+     the console showed the exception and the `sh` on ttyGS0 was respawned, so
+     the following shell commands — including `reboot -f` — never ran and the
+     flasher could not catch the bootrom.  Fixed by
+     `i2c_set_clientdata(client, indio_dev)` in `cm3217_probe()`.  **The same
+     bug is in the 6.15.11 reference tree/patch**; do not unbind or delete this
+     driver on a build older than the fix.  (Session 30.)
+
+108. **A PlayBook on a nearly empty battery warm-resets on its own — check the
+     gauge before blaming software.**  At the end of session 30 the unit had
+     been up ~24 min on USB when it disconnected, sat in the bootrom for 14 s
+     and re-booted the *same* image (host log 12:50:17 → 12:50:46).  The
+     BQ27541 then read **2.817 V, capacity 0 %, `Critical`, Discharging** — it
+     had read 3.153 V / 71 % eleven minutes earlier.  That is a power brownout,
+     not a kernel/WDT reset (a WDT reset would come from a stall; a flash looks
+     different again — the bootrom stays open while the payload is written).
+     It also spent one `BOOTCTR_FCTRY` unit (`0x2E → 0x2D`).  Before diagnosing
+     a spontaneous reboot, read
+     `/sys/class/power_supply/bq27541-0/uevent`; at ≤3.0 V stop bench work and
+     charge with the proper charger.  (Session 30.)
+
+109. **Subagents share this session's shell; "static RE only" is an instruction,
+     not a sandbox.**  In session 30 two general subagents were asked to
+     disassemble QNX libraries.  Their shell calls are logged under
+     `/tmp/commandcode/shellout/`; the audit found only `objdump` output (no
+     `pbcon`/`ttyACM`/`bbusb`/`devmem` strings, no call after 12:47:54), but they
+     *could* have run `tools/pbcon.py`, `bbusb.py` or `ssh`.  Rule: while the
+     bench is connected, give subagents file-only tasks, audit every shell-output
+     log they produce, and never let them run a `tools/` script; if a task needs
+     no shell, say so explicitly.  The reset in that window was power (trap 108),
+     not the agents — but the exposure was real.  (Session 30.)
+
+110. **Do not reverse-engineer PlayBook hardware from BB10 images.**  BB10/10.x
+     targets newer devices; its Winchester branch is a porting target, not the
+     PlayBook's shipping configuration.  Use OS 2.x only: the live 1917 oracle,
+     the 1917 `/base` QNX6 image (`local/work/rcfs-1917.rcfs`, a QNX6
+     filesystem despite the name — mount with `bb10mt qnx6 mount`), the 1917
+     IFS tree and the 4869 IFS dump.  Concrete difference: BB10 has
+     `libaudio_config.so.1`, the 1917 `/base` does not.  (Operator, session 30;
+     `DECISIONS.md` §34.)
 
 ## 3. Corrections to older reports
 
@@ -614,12 +677,13 @@ decrements `BOOTCTR_FCTRY`" was an incomplete caller audit — reports 89 §3.5 
 * **The shipped patch carries temporary instrumentation.**  `PB_SMC_PROBES`
   (report 105's SMC liveness probe) is compiled out (`#define PB_SMC_PROBES 0`),
   and `PBVOLT:`/`PBOCR:` `pr_info`s in the MMC2 path still print on every boot
-  (`kernel/clean-kernel-6.15.11-changes.patch`, `drivers/mmc/host/omap_hsmmc.c`).
-  **`PBREQ`/`PBIRQ` no longer do**: since session 17 they are behind the
-  `trace` module parameter (default off), because per-request printk to fbcon
-  was itself the write-path bottleneck (trap 52, report 136).  The remaining
-  PB prints belong in the bring-up instrumentation list, not in a publishable
-  patch — see `ROADMAP.md`.
+  (`drivers/mmc/host/omap_hsmmc.c`).  **`PBREQ`/`PBIRQ` no longer do**: since
+  session 17 they are behind the `trace` module parameter (default off), because
+  per-request printk to fbcon was itself the write-path bottleneck (trap 52,
+  report 136).  Session 30 carried the whole set (including the `init/main.c`,
+  `async.c`, `dd.c` and `runtime.c` breadcrumbs) into the 7.3.3 tree
+  deliberately, because the first 7.3.3 boot used them.  Pruning is a separate,
+  testable change — see `ROADMAP.md`.
 * **`A/B` and `0x2074` material in `docs/reports/85-*`** plans a two-region
   staging the factory path does not do; the correction is in
   `docs/contradictions/85-ab-fallback-vs-factory-region0.md`, not in the report.
@@ -627,6 +691,20 @@ decrements `BOOTCTR_FCTRY`" was an incomplete caller audit — reports 89 §3.5 
   (`118` §8.2, `111` §8 item 4).  The corrections are applied *in place* in those
   two files and listed in §3; the other reports are left as written so the
   section-by-section citations elsewhere still resolve.
+
+### Fixed in session 30 (7.3.3 port, CM3217 remove, patch export)
+
+* **The CM3217 remove path no longer dereferences NULL** (trap 107):
+  `i2c_set_clientdata(client, indio_dev)` was added in `cm3217_probe()`, in
+  `local/kernel-tree` and `kernel/source/cm3217.c`.  Verified by an
+  unbind/bind cycle on 7.3.3 (shell alive, lux 30).
+* **The patch export is tree-derived** (trap 106): `kernel/patches/README.md`
+  now takes the file list from the tree and the verification applies the patch
+  and compares every file.  The current 7.3.3 patch is **42/42 files
+  byte-identical**.  The 6.15.11 patch remains incomplete by history and is
+  reference-only.
+* **The kernel base is 7.3.3** (ROADMAP item 10): boot, panel, eMMC and the
+  peripheral regression were verified on `0x0F6AC47F`.
 
 ### Fixed in session 29 (WL1283 bus, CM3217, two probe bugs)
 

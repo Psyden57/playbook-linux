@@ -378,6 +378,13 @@ probe, datasheet or a bus capture).  Images: region-0 `0xFC32F008`, region-1
 `0faeadff…`.
 
 **Plan (one variable per boot):**
+0. **Power/charging — the TWL6030 BCI (found at session 30 end).**  The board
+   DTS had no `charger` child, so `CONFIG_CHARGER_TWL6030=m` built but never
+   probed and the pack ran flat on USB (trap 108).  The node
+   (`interrupts = <2>, <5>`, GPADC channel 10 for VBUS, `monitored-battery`)
+   and the two modules are prepared: image `0x91AF34DF` + rootfs `ba275807…`
+   (17 modules).  **Test this first** when the unit is charged: expect a
+   `twl6030_usb` power supply, a positive BQ27541 current and rising voltage.
 1. ~~enable `&i2c4`, add the BMA150/HMC5883L/MPU3050 nodes and their IRQ GPIOs;
    enable `INPUT_BMA150` and HMC5843, keep `MPU3050=m`; read via IIO.~~
    **DONE** (session 28).
@@ -402,13 +409,34 @@ probe, datasheet or a bus capture).  Images: region-0 `0xFC32F008`, region-1
 and survives a reboot; the touch and FAN5702 have a driver; WiFi/BT/GPS are
 enumerated, with firmware and calibration sourced from the QNX blobs.
 
-## 10. Port the patch set to linux-postmarketos-stable 7.3.3 — **the next focus (operator, session 29 end)**
+## 10. Port the patch set to linux-postmarketos-stable 7.3.3 — **CLOSED 2026-11-07 (session 30)**
 
-**Goal:** `local/kernel-tree` builds **`7.3.3`** instead of `6.15.11`,
-targeting **`linux-postmarketos-stable-7.3.3-r0`**, with the
-**6.15.11 tree, tarball and patch kept as the backup/reference**.  Six kernel
-series have passed since our base; the display and irqchip work in particular is
-tuned to 6.15 and should not be assumed to apply unchanged.
+**Closed.**  `local/kernel-tree` is **7.3.3**, it boots the unit to the
+region-1 BusyBox userland, the operator confirmed a clean panel (console text,
+solid white, console text redrawn), eMMC and the ext4 root work, and the
+exported `kernel/patches/0001-playbook-winchester-7.3.3.patch` (6 648 lines /
+42 files) applies to pristine 7.3.3 with **0 rejects** and reproduces all 42
+files byte-identically.  Working images: region-0 **`0x0F6AC47F`**
+(`local/images/kernel-0x0F6AC47F-7.3.3.img`) + region-1
+`local/images/rootfs-region1-7.3.3.ext4` (sha256 `0b3b83e8…`, 15 modules,
+`/lib/modules/7.3.3`).  The config is `kernel/winchester-7.3.3.config`.
+
+The target question was settled first: current pmaports HEAD (2026-11-07) has
+`linux-postmarketos-stable` at **7.3.3-r0** but still `arch="all !armhf
+!s390x"`, so the base is **upstream 7.3.3** with pmOS's `config-stable.armv7`
+as the config seed and `winchester.config` merged over it.  Full log:
+`KERNEL-PORT.md` §7.  The 6.15.11 assets are untouched:
+`local/pristine/linux-6.15.11`, `local/kernel-tree-6.15.11`, and the 6.15.11
+patch file.  Two defects were found and fixed on the way (traps 106/107): the
+patch export silently omitted every file added after the previous export, and
+`cm3217_remove()` dereferenced NULL because probe never set the client data.
+
+**Original goal and plan (kept for the trail):** `local/kernel-tree` builds
+**`7.3.3`** instead of `6.15.11`, targeting
+**`linux-postmarketos-stable-7.3.3-r0`**, with the **6.15.11 tree, tarball and
+patch kept as the backup/reference**.  Six kernel series have passed since our
+base; the display and irqchip work in particular is tuned to 6.15 and should not
+be assumed to apply unchanged.
 
 **Target verified:** `kernel.org/releases.json` on 2026-11-07 says stable =
 **`7.3.3`**, released 2026-11-06 (mainline `7.4-rc1`).  The operator's pmaports

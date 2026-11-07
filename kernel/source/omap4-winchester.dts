@@ -208,7 +208,7 @@
 	 * driver reads the standard command set; no battery profile is needed
 	 * for capacity/voltage/temperature.
 	 */
-	battery@55 {
+	battery: battery@55 {
 		compatible = "ti,bq27541";
 		reg = <0x55>;
 	};
@@ -1127,5 +1127,24 @@
 				remote-endpoint = <&tc358764_out>;
 			};
 		};
+	};
+};
+
+/*
+ * TWL6030 BCI charger.  The board carried no charger child at all, so
+ * CONFIG_CHARGER_TWL6030=m built but never probed and the pack ran flat on
+ * USB (session 30, trap 108).  The mainline binding needs the two charger
+ * interrupts and the monitored battery; VBUS voltage is GPADC channel 10 (the
+ * channel the TWL6032 mainline board uses too).  QNX's power service owns the
+ * BCI on the reference, so the charge limits the bootloader left in
+ * CHARGERUSB_CTRLLIMIT1/2 are the fallback when the gauge reports none.
+ */
+&twl {
+	charger {
+		compatible = "ti,twl6030-charger";
+		interrupts = <2>, <5>;
+		io-channels = <&twl_gpadc 10>;
+		io-channel-names = "vusb";
+		monitored-battery = <&battery>;
 	};
 };
