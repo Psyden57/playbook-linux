@@ -18,11 +18,13 @@ Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolut
 > RPMB top-up test succeeded.  The unit is back on the known-good
 > **`0xE36C679A`** (region 0 only restored), `BOOTCTR_FCTRY = 0x31`, pack
 > **Full, 4.126 V, +265 mA, ISL9519 `Charging`**.  **The operator has kept the
-> WL1283 open (session 34) and asked for a fresh-eyes dossier (report 190);
-> next: H1 (CMD0 → CMD5 only, 24 MHz, arg `0x00FFFF00`) and H2 (restore the
-> 1.8 V dummy OCR window, verify `HCTL = 0x00000B00`), then the chip-side
-> measurements.**  **Do not repeat the closed experiments** (traps 116–120,
-> 124, 126–131).  `hd3`, BB10 and the PlayBook OS image work remain parked.
+> WL1283 open (session 34) and had two external reviews done (report 191).
+> Next: audit the QNX `startup-playbook`/TWL/GPIO state, bisect the QNX-only
+> GPIO outputs, run H1 (CMD0 → CMD5 only, 24 MHz, arg `0x00FFFF00`), then the
+> chip-side measurements.  H2's "revert 3.3 V" is withdrawn (MMC5 has no
+> `ti,dual-volt`; 3.3 V is OCR only).**  **Do not repeat the closed
+> experiments** (traps 116–134).  `hd3`, BB10 and the PlayBook OS image work
+> remain parked.
 
 ## 0. The job, and where it stands
 
@@ -223,6 +225,13 @@ results (MAC `14:74:11:8f:9c:c3`), `sloginfo` shows `TIWLAN SDIO probe WAS
 CALLED`, `SDIO clock ... 24Mhz`, `sdioAdapt_ConnectBus: Send commands sequence:
 0, 5, 3, 7`.  So the chip works under QNX with exactly the software/board state
 we have reproduced; the remaining difference is not in a QNX file.
+
+**Not in the list above (new in report 191): the QNX `startup-playbook`/BSP.**
+The 1917 boot image contains a `startup-playbook` binary (`0x44008` bytes at
+image offset `0x908`, source `hwi_omap4430.c`) that was never audited.  It is
+the likely source of the QNX-only GPIO outputs (GPIO1 bits 0/4/15/18/28/31,
+GPIO2 bits 5/7) and possibly the TWL `CLK32KG` setup.  This is the next static
+task.
 
 **Do not re-open this list.**  If none of it yields a WLAN rail/clock (it does
 not), the remaining evidence is the chip's BGA pins or the MMC5 bus — a
@@ -469,6 +478,7 @@ Full text: `KNOWN-ISSUES.md` §2.  The ones that end sessions:
 | tools | `tools/` (see `tools/README.md`); the QNX hwinfo dumper is `tools/qnx-hwi.c` |
 | QNX-side WL1283 RE | `docs/reports/189-wl1283-qnx-side-re-2026-11-08.md` |
 | WL1283 fresh-eyes dossier | `docs/reports/190-wl1283-dossier-2026-11-08.md` |
+| WL1283 external review + next plan | `docs/reports/191-wl1283-external-review-2026-11-08.md` |
 | images, sealed IFS, backups | `local/images/` (gitignored) |
 | 6.15.11 reference tree | `local/kernel-tree-6.15.11/` |
 | OMAP4430 TRM (text) | `hardware/swpu231ap.pdf.txt` (untracked/local) |
@@ -531,23 +541,35 @@ tools/bbusb.py flash --component local/work/ifs-shim-sealed.ifs
 /dev/rpmb/BOOTCTR_FCTRY.  Do NOT restore local/images/ifs0.sealed.bin
 (2.0.0.4869, trap 84).
 
-NEXT WORK: the WL1283 is KEPT OPEN by the operator (session 34).  Report 190
-is the fresh-eyes dossier; start with its H1 and H2:
-  H1. For the 480d5000 host, send CMD0 -> CMD5 ONLY: set
+NEXT WORK: the WL1283 is KEPT OPEN by the operator (session 34).  Read reports
+190 (dossier) and 191 (external review + corrections).  Work in this order:
+  S1. Audit the QNX `startup-playbook` binary (1917 boot image, offset 0x908,
+      size 0x44008, source hwi_omap4430.c) for GPIO1/GPIO2/TWL/CLK32KG init.
+      It never runs under our chainloader and is the likely source of the
+      QNX-only GPIO outputs.
+  S2. Decode the TWL6030 0xBC-0xBE (CLK32KG group/transition/state) and the
+      other 9 differences (0x00,0x01,0x20,0x2D,0xB0,0xB1,0xB2,0xE4,0xF4,0xFA)
+      on both OSes.  The datasheet is hardware/twl6030.pdf.
+  S3. On the live 1917, bisect the QNX-only GPIO outputs one at a time
+      (GPIO1 bits 0/4/15/18/28/31, GPIO2 bits 5/7): flip OE to input, check
+      ti0/DATAIN bit 21/scan results, restore with ifconfig ti0 down/up.
+  H1. For the 480d5000 host, send CMD0 -> CMD5 ONLY: re-add the custom
+      NO_SDIO_RESET quirk at the sdio_reset() call site (it is NOT upstream
+      and not in the current tree), set
       MMC_CAP2_NO_SDIO_RESET | MMC_CAP2_NO_SD | MMC_CAP2_NO_MMC, plus
       omap_hsmmc.init_hz=24000000 and omap_hsmmc.sdio_ocr_quirk=1 (CMD5 arg
-      0x00FFFF00).  The session-33 CMD52-skip test still sent CMD8; QNX sends
-      no CMD52 and no CMD8.
-  H2. Restore the known-good 1.8 V dummy vwl1283 OCR window (the current
-      tree/patch has 3.3 V) and verify HCTL = 0x00000B00 (SDVS18 | SDBP).
+      0x00FFFF00).  Do NOT set MMC_CAP2_NO_SDIO (it skips CMD5).  Record
+      HCTL/CAPA/SYSCTL/PSTATE/STAT before/after and the raw R4 response.
+      H2 is withdrawn: MMC5 has no ti,dual-volt, so it always uses SDVS18;
+      the 3.3 V dummy vmmc is OCR only.  Verify HCTL=0x00000B00 and CAPA VS18.
 Then the chip-side measurements (VBAT/TCXO/SLOW_CLK, MMC5_CLK/CMD/DAT0) with
-a board view or logic analyser.  The QNX software surface is COMPLETE (report
-189): no rail/clock/pad; the live syspage WLAN node is only
-WLAN_EN_GPIO=54,WLAN_INT_GPIO=53.  Do NOT repeat the closed experiments
-(traps 116-131).  If the WL1283 is later stopped, step 5 (WM8994 audio +
-CY8CTMA3 touch, report 176) follows.  The USB warm-reset regression was the
-session-32 WL_EN reset pulse and is fixed by removing it (trap 130).
-hd3/BB10/PlayBook OS work remain parked.
+a board view or logic analyser.  The QNX software surface is otherwise COMPLETE
+(report 189): no rail/clock/pad; the live syspage WLAN node is only
+WLAN_EN_GPIO=54,WLAN_INT_GPIO=53.  Do NOT repeat traps 116-134.  If the
+WL1283 is later stopped, step 5 (WM8994 audio + CY8CTMA3 touch, report 176)
+follows.  The USB warm-reset regression was the session-32 WL_EN reset pulse
+and is fixed by removing it (trap 130).  hd3/BB10/PlayBook OS work remain
+parked.
 
 HARDWARE RE RULE: OS 2.x only (live 1917 oracle, the 1917 /base QNX6 image,
 the 1917 IFS tree, the 4869 IFS dump).  Never use BB10 images for PlayBook

@@ -1138,10 +1138,12 @@ software stop condition is met.**  Every file session 33 left open was read:
 No QNX software layer names a WLAN rail or clock.  The remaining candidate is
 the chip's non-exposed VBAT/TCXO pins or OMAP HSMMC sampling, which needs a
 schematic/board view or a logic analyser (report 189 §6).  **The operator has
-kept the item open (session 34) and asked for a fresh-eyes dossier (report
-190); the next tests are H1 (CMD0 → CMD5 only) and H2 (1.8 V dummy OCR window +
-`HCTL = 0x00000B00`).**  If it is later stopped, item 9 step 5 (audio/touch)
-follows.
+kept the item open (session 34); report 190 is the dossier and report 191
+records two external reviews.**  The next work is the QNX
+`startup-playbook`/TWL/GPIO audit, the QNX-only GPIO bisect, and H1 (CMD0 →
+CMD5 only).  H2's "revert 3.3 V" is withdrawn: MMC5 has no `ti,dual-volt`, so
+it always uses SDVS18; the 3.3 V `vmmc` is OCR only.  If it is later stopped,
+item 9 step 5 (audio/touch) follows.
 
 ---
 

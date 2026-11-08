@@ -30,11 +30,16 @@ numbers, and the live syspage `WLAN` node is only
 `WLAN_EN_GPIO=54,WLAN_INT_GPIO=53` with an empty `location`).  The syspage
 read is **done** (`tools/qnx-hwi.c`, built this session); it cannot change the
 power/clock conclusion.  **The operator has kept the item open (session 34)**
-and asked for a fresh-eyes dossier (**report 190**); the next tests are H1
-(a Linux rescan that sends **CMD0 → CMD5 only** — no CMD52 and no CMD8, 24
-MHz, CMD5 arg `0x00FFFF00`) and H2 (restore the known-good **1.8 V** dummy
-OCR window and verify `HCTL = 0x00000B00`), because the current tree/patch
-carries 3.3 V.  The remaining
+and had a fresh-eyes dossier (**report 190**) plus two external reviews
+(**report 191**) produced.  The next work is: (S1) audit the QNX
+**`startup-playbook`**/BSP for GPIO1/GPIO2/TWL/`CLK32KG` init; (S2) decode
+TWL **`0xBC`–`0xBE`** (`CLK32KG`) and the other 9 differences; (S3) bisect the
+**QNX-only GPIO outputs** on the live 1917; (H1) the exact QNX sequence —
+CMD0 → CMD5 only, no CMD52 *and no CMD8*, 24 MHz, arg `0x00FFFF00` — which
+needs the custom `NO_SDIO_RESET` quirk re-added (**do not set
+`MMC_CAP2_NO_SDIO`**).  **H2's "revert 3.3 V" is withdrawn:** MMC5 has no
+`ti,dual-volt`, so it always uses SDVS18; the 3.3 V `vmmc` is OCR only.
+The remaining
 candidates — VBAT/TCXO at the chip's BGA pins and
 MMC5 signal sampling — require a schematic/board view or a logic analyser.
 If the WL1283 is later stopped, **step 5 (audio/touch) is next**.  The

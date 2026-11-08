@@ -4,8 +4,10 @@
 
 **The QNX-side WL1283 RE is complete and names no WLAN rail, clock or extra
 pad.  The operator has kept the item open (session 34) and asked for a
-fresh-eyes dossier (report 190); the next tests are the QNX-exact resequence
-and the 1.8 V revert.  The unit is back on the known-good Linux image
+fresh-eyes dossier (report 190) plus two external reviews (report 191).  The
+reviews found a real GPIO OE difference (QNX-only outputs), the unaudited QNX
+`startup-playbook` binary and the TWL `CLK32KG` lead, and corrected the
+SDVS/`vmmc` reasoning.  The unit is back on the known-good Linux image
 `0xE36C679A` and charging.**
 
 * **Every HANDOFF §1.4 target is read (report 189).**  `hw_info_pps` publishes
@@ -55,13 +57,19 @@ and the 1.8 V revert.  The unit is back on the known-good Linux image
   reproduces the tree byte-for-byte; config `kernel/winchester-7.3.3.config`
   (`CONFIG_CHARGER_ISL9519=y`, `CONFIG_KERNEL_XZ=y`).
 * **Next: the operator has kept the item open (session 34).**  Report **190**
-  is the fresh-eyes dossier: every experiment, the QNX/board comparisons, the
-  remaining unknowns and ranked next tests.  The first two are cheap: (H1) a
-  Linux rescan that sends **CMD0 → CMD5 only** (no CMD52 *and no CMD8*, 24 MHz,
-  CMD5 arg `0x00FFFF00`) — the session-33 CMD52-skip test still sent CMD8; and
-  (H2) restore the **1.8 V** dummy OCR window (the known-good image) and verify
-  `HCTL = 0x00000B00` (SDVS18 + SDBP), because the current tree/patch carries
-  3.3 V.  Do not repeat the closed experiments (traps 116–120, 124, 126–131).
+  is the fresh-eyes dossier; report **191** records two external reviews and
+  the verified corrections.  The next work is, in order: (1) audit the QNX
+  **`startup-playbook`** binary (GPIO1/GPIO2/TWL/`CLK32KG` init — it never runs
+  under our chainloader); (2) decode the TWL **`0xBC`–`0xBE`** (`CLK32KG`)
+  group/transition/state and the other 9 differences; (3) bisect the
+  **QNX-only GPIO outputs** on the live 1917 (GPIO1 bits 0/4/15/18/28/31,
+  GPIO2 bits 5/7) one at a time; (4) run **H1**, the exact QNX sequence —
+  CMD0 → CMD5 only, no CMD52 *and no CMD8*, 24 MHz, CMD5 arg `0x00FFFF00`
+  (this needs the session-33 `NO_SDIO_RESET` quirk re-added; **do not set
+  `MMC_CAP2_NO_SDIO`**).  **H2 is corrected:** MMC5 has no `ti,dual-volt`, so
+  the 3.3 V `vmmc` is an OCR advertisement only; do not blindly revert it —
+  verify `HCTL = 0x00000B00` and `CAPA` VS18.  Do not repeat traps 116–120,
+  124, 126–134.
 
 ## Previous state — 2026-11-08 (session 33)
 
@@ -797,9 +805,11 @@ empty `location`; the pad/GPIO database, the powerman preset, `devpm-omap4.so`,
 The remaining candidates are the chip's non-exposed VBAT/TCXO pins or OMAP
 HSMMC sampling — a schematic/board view or logic analyser is needed.  The
 operator has **kept the item open** (session 34); report **190** is the
-fresh-eyes dossier and lists the next tests (H1: CMD0 → CMD5 only; H2: 1.8 V
-dummy OCR window + `HCTL = 0x00000B00`).  Do not re-run the closed experiments
-(traps 116–120, 124, 126–131).
+fresh-eyes dossier and report **191** records the two external reviews and
+verified corrections.  The next tests are the QNX `startup-playbook`/TWL/
+GPIO audit, the QNX-only GPIO bisect, and H1 (CMD0 → CMD5 only); H2's
+"revert 3.3 V" is withdrawn (MMC5 has no `ti,dual-volt`; 3.3 V is OCR only).
+Do not re-run the closed experiments (traps 116–134).
 
 **Media state: the known-good `0xE36C679A` is in region 0** (restored after
 the session-34 QNX read); region 1 is the 7.3.3 charger rootfs (`ba275807…`).
@@ -810,13 +820,22 @@ is removed and the final image enumerates by itself (trap 130).
 
 ## What is next
 
-1. **Continue the WL1283 (kept open by the operator).**  Report **190** is the
-   fresh-eyes dossier.  The first two tests are (H1) a Linux rescan that sends
-   **CMD0 → CMD5 only** — no CMD52 and no CMD8, 24 MHz, CMD5 arg
-   `0x00FFFF00`; and (H2) restore the **1.8 V** dummy OCR window and verify
-   `HCTL = 0x00000B00` (SDVS18 + SDBP).  Then the chip-side measurements
-   (VBAT/TCXO/SLOW_CLK, MMC5_CLK/CMD/DAT0) with a board view or logic
-   analyser.  Do not repeat traps 116–120, 124, 126–131.
+1. **Continue the WL1283 (kept open by the operator).**  Read reports **190**
+   (dossier) and **191** (external review + corrections).  The next work is, in
+   order:
+   (a) audit the QNX **`startup-playbook`** binary (GPIO1/GPIO2/TWL/`CLK32KG`
+   init; it never runs under our chainloader);
+   (b) decode the TWL **`0xBC`–`0xBE`** (`CLK32KG`) group/transition/state and
+   the other 9 differences;
+   (c) bisect the **QNX-only GPIO outputs** on the live 1917 (GPIO1 bits
+   0/4/15/18/28/31, GPIO2 bits 5/7) one at a time;
+   (d) run **H1**, the exact QNX sequence — CMD0 → CMD5 only, no CMD52 *and no
+   CMD8*, 24 MHz, CMD5 arg `0x00FFFF00` — which needs the session-33
+   `NO_SDIO_RESET` quirk re-added (**do not set `MMC_CAP2_NO_SDIO`**).  Record
+   `HCTL`/`CAPA` before/after; MMC5 always uses SDVS18 (no `ti,dual-volt`),
+   so the 3.3 V `vmmc` is OCR only and H2's "revert to 1.8 V" is withdrawn.
+   Then the chip-side measurements (VBAT/TCXO/SLOW_CLK, MMC5_CLK/CMD/DAT0)
+   with a board view or logic analyser.  Do not repeat traps 116–134.
 2. **If the WL1283 is later stopped: item 9 step 5** — the WM8994 audio machine
    and the Cypress CY8CTMA3 touch (report 176 is the inventory).  Item 9 steps
    0–3 are done (charger, reports 177/178/179/182, re-verified on 7.3.3 in

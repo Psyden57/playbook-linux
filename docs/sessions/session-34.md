@@ -95,14 +95,49 @@ on the bench-visible exhaustion alone:
   operator reset it for the RPMB top-up test.  No agent console or flash
   command was issued until the operator said the test was complete.
 
+### External review (same session, report 191)
+
+The operator supplied two independent reviews of report 190
+(`response3.txt`, `response4.txt`).  The verified corrections:
+
+* **The GPIO OE banks are not identical.**  QNX drives GPIO1 bits
+  0/4/15/18/28/31 and GPIO2 bits 5/7 that Linux leaves as inputs; Linux drives
+  GPIO2 bit 20 (the hog).  `GPIO2` bit 21 (WL_IRQ) is **1 (input) in both** —
+  the dossier's "bit 21 = 0" was wrong.  GPIO1_31 is `gpio_wk31` on WKUP pad
+  `0x4A31E058` (mux 3, input buffer off): QNX drives it low, Linux leaves it
+  floating.  This is a real, untested lead.  [report 191 §1.1]
+* **The QNX `startup-playbook`/BSP was never audited.**  The 1917 boot image
+  contains `startup-playbook` (`0x44008` bytes at image offset `0x908`, source
+  `hwi_omap4430.c`); it never runs under our chainloader and is the likely
+  source of the QNX-only GPIO outputs.  [report 191 §1.3]
+* **TWL `0xBD`/`0xBE` may be the `CLK32KG` resource.**  The datasheet confirms
+  `CLK32KG` is a software-controlled 32 kHz clock; the 12-register difference
+  list includes `0xBD`/`0xBE`.  The actual values were not recorded, so this
+  is unresolved.  [report 191 §1.2]
+* **MMC5 has no `ti,dual-volt`; it always uses SDVS18.**  `ti,dual-volt` is on
+  `mmc1` only (`omap4-l4.dtsi:2164`), so the 3.3 V dummy `vwl1283` is an OCR
+  advertisement, not the signalling voltage.  The dossier's H2 ("3.3 V can
+  select SDVS33; revert to 1.8 V") is withdrawn; verify
+  `HCTL = 0x00000B00` and `CAPA` VS18 instead.  [report 191 §1.4]
+* **`MMC_CAP2_NO_SDIO_RESET` is a session-33 custom bit, not upstream and not
+  in the current tree.**  H1 needs the quirk re-added; do not set
+  `MMC_CAP2_NO_SDIO` (it skips CMD5).  [report 191 §1.5]
+* **Pad numbering:** `0x078` = gpio_52, `0x07A` = gpio_53 (WL_IRQ); the
+  dossier's §3.2 was off by one.  [report 191 §1.6]
+* **WL_IRQ is active-low:** a low level can be asserted or floating, not
+  independent proof of "unpowered"; the QNX/Linux `DATAIN` difference and the
+  rightmost pad following `ti0` remain the indicator.  [report 191 §1.7]
+
 ## Inferred (reasoning from evidence, not directly measured)
 
-* **The QNX software surface is exhausted.**  Five independent layers
-  (powerman preset, devpm plugin, MMC driver, board pad/GPIO database, WLAN
-  `.ini`) name no WLAN rail or clock; the only WLAN-adjacent pads are the six
-  known lines and the two FREF pads.  The remaining difference is at the chip's
-  non-exposed power/clock pins or in OMAP HSMMC sampling.  *Strength: strong
-  (static, cross-checked against the live reads of reports 185/188).*
+* **The QNX software surface is nearly exhausted, but the startup/BSP is not
+  audited.**  Five independent layers (powerman preset, devpm plugin, MMC
+  driver, board pad/GPIO database, WLAN `.ini`) name no WLAN rail or clock;
+  the only WLAN-adjacent pads are the six known lines and the two FREF pads.
+  The remaining difference is at the chip's non-exposed power/clock pins or in
+  OMAP HSMMC sampling.  *Strength: strong for those five layers; the QNX
+  `startup-playbook`/BSP (report 191) remains unread, and it is the likely
+  source of the QNX-only GPIO outputs.*
 * **The syspage `WLAN` node was the last software fact, and the live dump
   confirmed it is only a pin description.**  `devnp-ti1283.so` uses it only for
   `WLAN_EN_GPIO`/`WLAN_INT_GPIO`; its whole-binary audit touches no
@@ -140,6 +175,16 @@ on the bench-visible exhaustion alone:
   The unit was seen in the bootrom (`0fca:0001`) during the operator's reset
   and came back; this is a normal boot transient, not a new regression, and no
   agent action was taken.  (Session log.)
+* **"GPIO1/GPIO2 are matched."**  Wrong: the OE banks differ (QNX-only outputs
+  GPIO1 bits 0/4/15/18/28/31 and GPIO2 bits 5/7; Linux-only GPIO2 bit 20).
+  GPIO1_31 is `gpio_wk31` on `0x4A31E058`, input buffer off; QNX drives it low,
+  Linux leaves it floating.  (Report 191 §1.1.)
+* **"The 3.3 V `vmmc` can select SDVS33."**  Wrong: `ti,dual-volt` is on
+  `mmc1` only; MMC5 always uses SDVS18.  The 3.3 V is OCR only.  (Report 191
+  §1.4.)
+* **"The QNX software surface is fully read."**  The QNX
+  `startup-playbook`/BSP was not; it is the likely source of the GPIO outputs.
+  (Report 191 §1.3.)
 
 ## Unknown / open questions
 
@@ -154,6 +199,13 @@ on the bench-visible exhaustion alone:
   Every QNX software layer is read and names no rail/clock (report 189); the
   remaining candidates are the non-exposed VBAT/TCXO/reset pins and OMAP HSMMC
   sampling.  *Would settle it:* the two measurements above.
+* **What does the QNX `startup-playbook` set?**  GPIO1/GPIO2 outputs, TWL
+  I²C writes, `CLK32KG`, pads?  *Would settle it:* disassemble it (report 191
+  §1.3).
+* **What are TWL `0xBC`–`0xBE` (`CLK32KG`) on both OSes?**  *Would settle it:*
+  read and decode them (report 191 §1.2).
+* **Which QNX-only GPIO output matters?**  *Would settle it:* the QNX bisect
+  (report 191 §1.1).
 
 ## Superseded / uncertain
 
@@ -165,16 +217,24 @@ on the bench-visible exhaustion alone:
   This does not change the static conclusion (all firmware-time), but do not
   quote "1.8 V TCXO supply" as a PlayBook fact without this qualification.
 * **"The remaining software surface is the QNX power manager / hwinfo / MMC
-  driver."**  All three are now read; the software surface is closed.  The
-  remaining difference is chip-side or host-sampling, requiring external
-  equipment.  (Report 189.)
+  driver."**  All three are now read; **but report 191 shows the QNX
+  `startup-playbook`/BSP, the GPIO OE banks and the TWL `CLK32KG` resource
+  still need reading.**  The surface is *nearly* closed, not closed.
+* **The dossier's H2 ("revert the 3.3 V dummy OCR window to 1.8 V") is
+  withdrawn.**  MMC5 has no `ti,dual-volt`, so it always uses SDVS18; the
+  3.3 V `vmmc` is an OCR advertisement.  Verify `HCTL = 0x00000B00` and
+  `CAPA` VS18 instead.  (Report 191 §1.4.)
 
 ## Artefacts produced
 
+* Report **191** (`docs/reports/191-wl1283-external-review-2026-11-08.md`) —
+  the two external reviews (`response3.txt`, `response4.txt`), the verified
+  corrections, and the ordered next-session plan.
 * Report **190** (`docs/reports/190-wl1283-dossier-2026-11-08.md`) — the
   fresh-eyes dossier: every experiment, comparison, QNX RE result, remaining
   unknown and ranked hypothesis.  It also records the known-good-vs-current
-  DTB difference (1.8 V vs 3.3 V dummy WLAN OCR window, FREF2 pad mux).
+  DTB difference (1.8 V vs 3.3 V dummy WLAN OCR window, FREF2 pad mux) and
+  the inline corrections from report 191.
 * Report **189** (`docs/reports/189-wl1283-qnx-side-re-2026-11-08.md`) — the
   five-layer static RE, the pad/GPIO table decode, and the conclusion.
 * `tools/qnx-hwi.c` — the read-only syspage hwinfo dumper; built **static**
@@ -185,26 +245,41 @@ on the bench-visible exhaustion alone:
   4.126 V / +265 mA) and the revised blocker/next sections.
 * `docs/project/ROADMAP.md` — the "priority after session 34" paragraph and a
   session-34 paragraph in item 9 step 4.
-* `docs/project/KNOWN-ISSUES.md` — **trap 131**: the PPS inventory has no WLAN
-  node; the syspage `WLAN` node is the only place, it carries EN/INT only, and
-  the tool must be built `-static`.
-* Commits `52716e6` (report 189 + `qnx-hwi.c` + ROADMAP/KNOWN-ISSUES) and
-  `0a6e18f` (session note + NUMBERING + tools index), plus the wrap-up commit
-  with the live result and STATE.
+* `docs/project/KNOWN-ISSUES.md` — traps **131** (PPS inventory has no WLAN
+  node; syspage node is EN/INT only; build `qnx-hwi` `-static`), **132**
+  (`NO_SDIO_RESET` is custom; never set `NO_SDIO`), **133** (MMC5 has no
+  `ti,dual-volt`; 3.3 V `vmmc` is OCR only) and **134** (GPIO OE banks differ;
+  `DATAIN` on an input-buffer-off pad is meaningless; audit
+  `startup-playbook`).
+* Commits `52716e6` (report 189 + `qnx-hwi.c` + ROADMAP/KNOWN-ISSUES),
+  `0a6e18f` (session note + NUMBERING + tools index), `c03202a` (live read +
+  restore), `04e611c` (handoff/docs), `4bfd532` (report 190), and the public
+  push `e35534e` on `Psyden57/playbook-linux`; plus the wrap-up commit with
+  report 191 and traps 132–134.
 * Images: region 0 restored to **`0xE36C679A`** (0x91A748, sha256 `bdbaf5fc…`)
   after the QNX read; region 1 unchanged.  No kernel, DTS or driver changes.
 
 ## Next
 
-**The operator has kept the WL1283 open** (session 34) and asked for a
-fresh-eyes dossier — report **190**.  The QNX software surface is closed
-(report 189); the remaining evidence is chip-side (VBAT/TCXO/SLOW_CLK at the
-BGA pins) or the MMC5 bus waveform, which needs a schematic/board view or a
-logic analyser.  The dossier's first two tests are cheap and untested:
-**H1** — a Linux rescan that sends **CMD0 → CMD5 only** (no CMD52 *and no
-CMD8*; the session-33 CMD52-skip test still sent CMD8), 24 MHz, CMD5 arg
-`0x00FFFF00`; **H2** — restore the known-good **1.8 V** dummy OCR window and
-verify `HCTL = 0x00000B00` (the current tree/patch carries 3.3 V).  If the
-WL1283 is later stopped, **item 9 step 5** (WM8994 audio + CY8CTMA3 touch,
-report 176) follows.  Do not re-run the closed experiments (traps 116–120,
-124, 126–131).
+**The operator has kept the WL1283 open** (session 34).  Read reports **190**
+(dossier) and **191** (external review + corrections).  Work in this order:
+
+1. **Audit the QNX `startup-playbook`/BSP** (1917 boot image, offset `0x908`,
+   size `0x44008`, source `hwi_omap4430.c`) for GPIO1/GPIO2/TWL/`CLK32KG`
+   init.  It never runs under our chainloader and is the likely source of the
+   QNX-only GPIO outputs.
+2. **Decode TWL `0xBC`–`0xBE`** (`CLK32KG` group/transition/state) and the
+   other 9 differences on both OSes.
+3. **Bisect the QNX-only GPIO outputs** on the live 1917 (GPIO1 bits
+   0/4/15/18/28/31, GPIO2 bits 5/7) one at a time.
+4. **H1:** the exact QNX sequence — CMD0 → CMD5 only, no CMD52 *and no CMD8*,
+   24 MHz, arg `0x00FFFF00`.  Re-add the custom `NO_SDIO_RESET` quirk; do not
+   set `MMC_CAP2_NO_SDIO`.  Record `HCTL`/`CAPA` and the raw R4 response.
+   **H2 is withdrawn:** MMC5 has no `ti,dual-volt`; the 3.3 V `vmmc` is OCR
+   only, so verify `HCTL = 0x00000B00`/`CAPA` VS18 rather than reverting it.
+5. Then the chip-side measurements (VBAT/TCXO/SLOW_CLK, MMC5_CLK/CMD/DAT0)
+   with a board view or logic analyser.
+
+If the WL1283 is later stopped, **item 9 step 5** (WM8994 audio + CY8CTMA3
+touch, report 176) follows.  Do not re-run the closed experiments (traps
+116–134).

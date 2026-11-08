@@ -723,6 +723,35 @@ report 121 §3/§11/§12.
      build dies with `ldd:FATAL: Unresolved symbol "hwi_off2tag"`.
      (Session 34, report 189.)
 
+132. **`MMC_CAP2_NO_SDIO_RESET` is not upstream, and `MMC_CAP2_NO_SDIO` must
+     not be used to skip CMD52.**  The bit was a session-33 custom patch
+     (image `0xAC98BCAD`) and is not in the current tree.  H1 needs the quirk
+     at the `sdio_reset()` call site
+     (`if (!(caps2 & MMC_CAP2_NO_SDIO) && !(caps2 & MMC_CAP2_NO_SDIO_RESET))
+     sdio_reset(host);`); setting `MMC_CAP2_NO_SDIO` would skip the CMD5 probe
+     entirely.  (Session 34, report 191 §1.5.)
+
+133. **MMC5 has no `ti,dual-volt`; it always uses SDVS18, and the 3.3 V
+     `vwl1283` `vmmc` is an OCR advertisement, not the signalling voltage.**
+     `ti,dual-volt` is on `mmc1` only (`omap4-l4.dtsi:2164`); `&mmc5` lacks
+     it, so `omap_hsmmc` takes the non-dual-volt branch (`hctl = SDVS18;
+     capa = VS18;`).  Do not "fix" the 3.3 V window by blindly reverting to
+     1.8 V; verify `HCTL = 0x00000B00` (SDVS18 | SDBP) and `CAPA` VS18.  The
+     known-good 1.8 V vs current 3.3 V DTB difference is a tree-state
+     difference, not a 3.3 V-signalling hazard.  (Session 34, report 191
+     §1.4.)
+
+134. **The GPIO OE banks are not identical, and a `DATAIN` read on a pad with
+     the input buffer off proves nothing.**  QNX drives GPIO1 bits
+     0/4/15/18/28/31 and GPIO2 bits 5/7 that Linux leaves as inputs (Linux
+     drives GPIO2 bit 20, the hog).  GPIO1_31 is `gpio_wk31` on WKUP pad
+     `0x4A31E058` (mux 3, input buffer off), so QNX drives it low and Linux
+     leaves it floating; the dossier's "reads low either way" is meaningless.
+     The QNX `startup-playbook` binary (`local/work/ifs1917.imagefs` offset
+     `0x908`, size `0x44008`, source `hwi_omap4430.c`) was never audited and
+     is the likely source of these outputs; audit it before treating the GPIO
+     banks as matched.  (Session 34, report 191 §1.1/§1.3.)
+
 ## 3. Corrections to older reports
 
 These twenty are preserved deliberately. Each is newer than the text it
