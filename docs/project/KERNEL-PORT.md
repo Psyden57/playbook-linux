@@ -69,6 +69,38 @@ git -C pmaports log -1   # d58ca1a2, 2026-11-07
 (`diff -rq`: 0 differences); `local/pristine/linux-6.15.11` and
 `kernel/patches/0001-playbook-winchester-6.15.11.patch` are untouched.
 
+## 0b. What pmOS/nura actually patches at these versions (checked at HEAD)
+
+The base is **plain upstream 7.3.3 + our own 42-file patch**; no pmOS/nura
+kernel patch is applied.  That is not a shortcut — the packages were checked:
+
+* **`linux-postmarketos-stable` 7.3.3-r0** contains **only two powerpc build
+  patches** (`0001-WIP-arch-powerpc-boot-Support-LLVM-1-in-wrapper-scri.patch`,
+  `0002-WIP-arch-powerpc-boot-Add-z-norelro.patch`) plus the configs.  There is
+  **no mobile/WL1283 patch set** in it; its value is `config-stable.armv7`
+  (which we use as the config seed) and the package plumbing.
+* **`linux-postmarketos-omap`** is the **armv7** OMAP kernel
+  (`device/community/linux-postmarketos-omap`, `pkgver=7.1.5`, `pkgrel=1`,
+  `arch="armv7"`).  It carries 11 patches, mostly for other boards:
+  `iio-rescale` logic revert, HSI DMA, **TWL6030 power button**, Barnes & Noble
+  Encore DTS + panel, OMAP4 CFI, Samsung P30 extcon + driver, musb omap2430
+  initial-ID, **TWL6030 USB-PHY extcon/external VBUS**, and Espresso USB OTG.
+  Relevance to the PlayBook: the TWL6030 pwrbutton **driver** is already in
+  7.3.3 (only a DTS node is board-specific); the TWL6030 USB-PHY extcon/VBUS
+  patch is **not** in 7.3.3 but is aimed at host-mode ID/extcon, not our
+  device-mode charger; the rest are device-specific or unused.
+* **Consequence for the nura goal.**  What a future nura/pmOS port needs is not
+  a patch set to inherit but **a PlayBook device package plus an
+  armv7-buildable kernel package** — the stable package refuses armhf by design.
+  Our 42-file patch + `winchester-7.3.3.config` is already in that shape, so the
+  kernel can be packaged on top of a nura tree without re-porting.  Do not
+  substitute `linux-postmarketos-omap` 7.1.5 wholesale: it is an older base and
+  none of its patches targets this board.
+
+Fetched from the same blobless pmaports clone (§0a), 2026-11-07:
+`git ls-tree HEAD:device/main/linux-postmarketos-stable` and
+`git ls-tree HEAD:device/community/linux-postmarketos-omap`.
+
 ## 1. The target question — ANSWERED: case (b)
 
 **Is `linux-postmarketos-stable` packaged for armv7/armhf at 7.3.3-r0?  No.**
