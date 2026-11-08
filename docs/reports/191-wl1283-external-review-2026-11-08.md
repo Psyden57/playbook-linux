@@ -45,7 +45,8 @@ SDIO sequence first; external measurement only after those.
 ### 1.1 GPIO OE banks are not identical — **CONFIRMED, real lead**
 
 The dossier's §7.2 presented GPIO1/GPIO2 as "matched".  That is wrong.  Using
-`OE 0 = output, 1 = input`:
+`OE 0 = output, 1 = input` (the OE words are from report 185 §1; the bit deltas
+were computed this session):
 
 | bank | QNX `OE` | Linux `OE` | QNX output → Linux input | Linux output → QNX input |
 |---|---|---|---|---|
@@ -85,7 +86,8 @@ session-29 comparison recorded `0xBD` and `0xBE` among the 12 non-rail
 differences; the external review's FreeBSD-based claim is that the
 `CLK32KG` group/transition/state registers are at `0xBC`/`0xBD`/`0xBE`.
 That is plausible but **not verified in this tree** — the actual values were
-not recorded in the reports.
+not recorded in the reports.  **Recorded as a contradiction:**
+`docs/contradictions/twl-clk32kg-on-both-vs-0xbd-be-difference.md`.
 
 **Why it matters.**  If QNX configures the `CLK32KG` resource differently
 (e.g. always-on vs off in sleep, or a different group), the 32.768 kHz slow

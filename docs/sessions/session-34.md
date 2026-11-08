@@ -105,15 +105,16 @@ The operator supplied two independent reviews of report 190
   GPIO2 bit 20 (the hog).  `GPIO2` bit 21 (WL_IRQ) is **1 (input) in both** —
   the dossier's "bit 21 = 0" was wrong.  GPIO1_31 is `gpio_wk31` on WKUP pad
   `0x4A31E058` (mux 3, input buffer off): QNX drives it low, Linux leaves it
-  floating.  This is a real, untested lead.  [report 191 §1.1]
+  floating.  This is a real, untested lead.  The OE words are from report 185
+  §1; the bit deltas were computed this session.  [report 191 §1.1]
 * **The QNX `startup-playbook`/BSP was never audited.**  The 1917 boot image
   contains `startup-playbook` (`0x44008` bytes at image offset `0x908`, source
   `hwi_omap4430.c`); it never runs under our chainloader and is the likely
   source of the QNX-only GPIO outputs.  [report 191 §1.3]
 * **TWL `0xBD`/`0xBE` may be the `CLK32KG` resource.**  The datasheet confirms
-  `CLK32KG` is a software-controlled 32 kHz clock; the 12-register difference
-  list includes `0xBD`/`0xBE`.  The actual values were not recorded, so this
-  is unresolved.  [report 191 §1.2]
+  `CLK32KG` is a software-controlled 32 kHz clock; the session-29
+  12-register difference list includes `0xBD`/`0xBE`.  The actual values were
+  not recorded, so this is unresolved.  [report 191 §1.2]
 * **MMC5 has no `ti,dual-volt`; it always uses SDVS18.**  `ti,dual-volt` is on
   `mmc1` only (`omap4-l4.dtsi:2164`), so the 3.3 V dummy `vwl1283` is an OCR
   advertisement, not the signalling voltage.  The dossier's H2 ("3.3 V can
@@ -230,6 +231,9 @@ The operator supplied two independent reviews of report 190
 * Report **191** (`docs/reports/191-wl1283-external-review-2026-11-08.md`) —
   the two external reviews (`response3.txt`, `response4.txt`), the verified
   corrections, and the ordered next-session plan.
+* `docs/contradictions/twl-clk32kg-on-both-vs-0xbd-be-difference.md` — the
+  unresolved `CLK32KG` "on in both" vs TWL `0xBD`/`0xBE` question, indexed in
+  `docs/contradictions/README.md`.
 * Report **190** (`docs/reports/190-wl1283-dossier-2026-11-08.md`) — the
   fresh-eyes dossier: every experiment, comparison, QNX RE result, remaining
   unknown and ranked hypothesis.  It also records the known-good-vs-current
