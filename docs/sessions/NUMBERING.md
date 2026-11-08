@@ -1,13 +1,13 @@
 # Session numbering
 
-The project spans **thirty-three sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **thirty-four sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-33`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-34`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
 * **Linux-era** ("session 1…27") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
@@ -45,6 +45,7 @@ So:
 | **31** | **25** | **the charger is the ISL9519 and WDT2 matches the reference**: the TWL6030 BCI probe was fixed (trap 111) but is not the board's charger — the Intersil ISL9519 at I²C1 0x09 is driven by a new minimal driver (`CONFIG_CHARGER_ISL9519=y`), and the pack charges at ~0.4 A; WDT2 is reprogrammed to the reference's 58.6 s window with a 10 s pet (`WWPS` polling, trap 115).  Reports 183/184; patch 7 103 lines / 45 files |
 | **32** | **26** | **the WL1283 second opinion**: `FREF_CLK2_REQ` is unused by the reference (`0x4A31E058 = 0x000B0003`, pad0 `gpio_wk31`); the one real SoC-side difference, the FREF2 output (SCRM `AUXCLK1`, 12.8 MHz), was matched on Linux without effect; QNX's 24 MHz / CMD5 arg `0x00FFFF00` protocol was tested and CMD5 still times out (`err=-110`).  The second-opinion software audit then showed the default Linux attempt is one 400 kHz try with CMD52 → CMD0 → CMD8 → CMD5(arg 0), and the card is silent from CMD52.  The SoC-side is exhausted; the next step is the multimeter checks and a boot-time WL_EN reset pulse.  Reports 185/186 |
 | **33** | **27** | **the WL1283 bench-visible road is exhausted**: the QNX `winchester` powerman preset has no WLAN rail/clock (report 187); the chip is alive under QNX (WL_IRQ 1) and not under Linux (WL_IRQ 0), WL_EN is not exposed, VIO is 1.8 V, and no 3.3 V chip rail is exposed; a 200 ms MMC5 settle and a CMD52 skip are negative (report 188).  The USB warm-reset regression was the session-32 WL_EN pulse and is fixed; the final image is `0x0353A241`.  The QNX-side RE is not complete (hw_info inventory, hwio arrays, devb-mmcsd powerman, devpm tables; HANDOFF §1.4) |
+| **34** | **28** | **the QNX-side WL1283 RE is complete, negative** (report 189): `hw_info_pps` publishes no WLAN node (runtime-probed inventory; the node is in the syspage — trap 131); `hwio-config-winchester.so` contains only the six WLAN pads (sdmmc5 mux 0, WL_EN/WL_IRQ mux 3, FREF2_OUT mux 0) and WKUP `0x058` mux 3 on both halves; `devb-mmcsd-winchester`'s powerman client is only `-power on/off`; `devpm-omap4.so` registers only `iva_opp` and never touches MMCHS5; the WLAN `.ini` clock/power fields are firmware-time.  `tools/qnx-hwi.c` built for the one live syspage read.  The remaining difference is chip-side (VBAT/TCXO) or OMAP HSMMC sampling |
 
 ## Anchors (evidence for the mapping)
 

@@ -19,11 +19,25 @@ Item 7 (packaging) is untouched. The 1917 image work is complete and lives in
 `IFS-REBUILD.md` / `IMAGE-REBUILD-GUIDE.md`. **Item 8 (BB10) and the image
 work are parked by the operator (session 25 end).**
 
-**Priority after session 33 (operator's call):** the **WL1283 (item 9 step
+**Priority after session 34 (operator's call):** the **WL1283 (item 9 step
 4)** has no further bench-visible test with the available equipment (reports
-187/188).  The remaining candidates — VBAT/TCXO at the chip's BGA pins and
+187/188).  The QNX-side RE that HANDOFF §1.4 left open is now **complete**
+(report 189): the powerman preset, `devpm-omap4.so`, the MMC driver's powerman
+client, the board pad/GPIO database and the WLAN `.ini` all name **no WLAN rail
+or clock** beyond the six known lines; the PPS `hw_info` inventory has no WLAN
+node at all (the node lives in the syspage and only supplies EN/INT pin
+numbers, and the live syspage `WLAN` node is only
+`WLAN_EN_GPIO=54,WLAN_INT_GPIO=53` with an empty `location`).  The syspage
+read is **done** (`tools/qnx-hwi.c`, built this session); it cannot change the
+power/clock conclusion.  **The operator has kept the item open (session 34)**
+and asked for a fresh-eyes dossier (**report 190**); the next tests are H1
+(a Linux rescan that sends **CMD0 → CMD5 only** — no CMD52 and no CMD8, 24
+MHz, CMD5 arg `0x00FFFF00`) and H2 (restore the known-good **1.8 V** dummy
+OCR window and verify `HCTL = 0x00000B00`), because the current tree/patch
+carries 3.3 V.  The remaining
+candidates — VBAT/TCXO at the chip's BGA pins and
 MMC5 signal sampling — require a schematic/board view or a logic analyser.
-If the WL1283 is formally stopped, **step 5 (audio/touch) is next**.  The
+If the WL1283 is later stopped, **step 5 (audio/touch) is next**.  The
 closed experiments are not repeated: `CM_DIV_M5 = 0x329` (trap 116), the FREF
 request input (trap 117), the FREF2 output as a CMD5 fix (trap 118), the init
 clock (trap 119), a runtime MMC5 `unbind`/`bind` (trap 120), the WL_EN reset
@@ -460,6 +474,43 @@ re-run the closed experiments (traps 116–120, 124, 126–130).  The final imag
 `0x0353A241` has the FREF2 enable and the WL_EN reset pulse removed; it
 enumerates by itself on a warm reboot (the pulse was the USB regression, trap
 130).  The patch is **7 258 lines / 47 files**, sha256 `e7b7fc2e…`.
+
+**Session-34 QNX-side RE — complete, negative (report 189).**  Every target
+HANDOFF §1.4 listed was read statically:
+
+* `hw_info_pps` publishes only `/pps/services/hw_info/inventory`, built at
+  runtime from `confstr(_CS_MACHINE)`, `/dev/hd0` devctls, `/proc` and ALSA;
+  it has **no WLAN node and no HWI library**, and there is no static hwinfo
+  database in the 1917 trees.  The `WLAN` node is in the **syspage**, consumed
+  by `devnp-ti1283.so`'s own `hwi_find`/`hwi_tag_find`; `tools/qnx-hwi.c`
+  (new, built static) dumped it live: `WLAN_EN_GPIO=54,WLAN_INT_GPIO=53`, an
+  empty `location` tag, and nothing else.
+* `hwio-config-winchester.so` (`pad_config` 248 × 20 B, `gpio_config`
+  72 × 32 B; resolver in `hwio-omap4.so`) contains the six WLAN lines and
+  nothing else WLAN-specific: sdmmc5 pads at mux 0 (signals `0x52`–`0x57`),
+  WL_IRQ `0x07A` mux 3/signal `0x59`, WL_EN `0x07C` mux 3/signal `0x58`,
+  0x07E mux 3/signal `0x5D`, FREF2_OUT `0x19C` mux 0, and WKUP `0x4A31E058`
+  **mux 3 on both halves** (static corroboration of trap 117).  GPIO 53 is
+  input/pull/falling, GPIO 54 output/no-pull, and no other GPIO maps to a
+  WLAN signal.
+* `devb-mmcsd-winchester` has a powerman client, but it registers only a
+  binary `-power on/off` mode (cost 3) and requests **no voltage, clock rate
+  or bus power**.  Its init sets `SDBP = 1`/`SDVS18`, enables the
+  `CM2_L3INIT` MMC1/2 module clocks and clears `PRM_L3INIT` `LOSTCONTEXT`; it
+  writes no CM divider/DPLL and touches no regulator.  Its base constants are
+  MMC1/MMC2 only, and the WL1283 is on MMC5 (owned by `devnp-ti1283.so`).
+* `devpm-omap4.so` registers exactly one powerman device, `iva_opp`; it has no
+  `system/power/dev` literal, no MMCHS5/`CM_L4PER_HSMMC5` write and no WLAN
+  rail.  The `sdmmc5_*`/`gpmc_*` names are mmap-only globals, never read; the
+  OSWR wake table (Winchester2) uses the WL_IRQ pad only on OSWR entry/exit.
+* `tiwlan_winchester.ini`'s clock/power fields are all firmware-time:
+  `TCXO_Clk = 1` (26 MHz), `STRFRefClock = 2` (38.4 MHz wired-OR), settling
+  5 ms, `ClockValidOnWakeup = 0`, `TCXO_LDO_Voltage = 0` (2.5 V internal LDO),
+  `Platform_configuration = 2` (4 mA SDIO drive, no level shifter/EEPROM).
+
+**So no QNX software layer names a WLAN rail, clock or extra pad.  The
+remaining difference is the chip's non-exposed power/clock pins or OMAP HSMMC
+sampling; a schematic/board view or logic analyser is required.**
 
 **Plan (one variable per boot):**
 0. **Power/charging — CLOSED 2026-11-08 (session 31).**  The board's charger

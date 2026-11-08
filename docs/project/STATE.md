@@ -1,6 +1,69 @@
 # Current state
 
-## Current state — 2026-11-08 (session 33)
+## Current state — 2026-11-08 (session 34)
+
+**The QNX-side WL1283 RE is complete and names no WLAN rail, clock or extra
+pad.  The operator has kept the item open (session 34) and asked for a
+fresh-eyes dossier (report 190); the next tests are the QNX-exact resequence
+and the 1.8 V revert.  The unit is back on the known-good Linux image
+`0xE36C679A` and charging.**
+
+* **Every HANDOFF §1.4 target is read (report 189).**  `hw_info_pps` publishes
+  only `/pps/services/hw_info/inventory`, built at runtime from
+  `confstr(_CS_MACHINE)`, `/dev/hd0` devctls, `/proc` and ALSA; it has **no
+  WLAN node and no HWI library**, and there is no static hwinfo database in
+  the 1917 trees.  The `WLAN` node is in the **syspage**, and the live dump is
+  `WLAN_EN_GPIO=54,WLAN_INT_GPIO=53` with an empty `location` tag — no rail,
+  clock or second enable.
+* **The board pad/GPIO database contains only the six known lines.**
+  `hwio-config-winchester.so` (`pad_config` 248 × 20 B, `gpio_config`
+  72 × 32 B; resolver in `hwio-omap4.so`): sdmmc5 pads at mux 0 (signals
+  `0x52`–`0x57`), WL_IRQ `0x07A` mux 3/signal `0x59`, WL_EN `0x07C`
+  mux 3/signal `0x58`, 0x07E mux 3/signal `0x5D`, FREF2_OUT `0x19C` mux 0,
+  and WKUP `0x4A31E058` **mux 3 on both halves**.  GPIO 53 is
+  input/pull/falling, GPIO 54 output/no-pull; no other GPIO maps to a WLAN
+  signal.
+* **`devb-mmcsd-winchester` has a powerman client but only `-power on/off`.**
+  It requests no voltage, clock rate or bus power; its init sets
+  `SDBP = 1`/`SDVS18`, enables `CM2_L3INIT` MMC1/2 module clocks and clears
+  `PRM_L3INIT` `LOSTCONTEXT`, but writes no CM divider/DPLL and touches no
+  regulator.  Its base constants are MMC1/MMC2 only; the WL1283 is on MMC5
+  (owned by `devnp-ti1283.so`).
+* **`devpm-omap4.so` registers only `iva_opp`.**  No `system/power/dev`
+  literal, no MMCHS5/`CM_L4PER_HSMMC5` write and no WLAN rail; the
+  `sdmmc5_*`/`gpmc_*` names are mmap-only globals, never read, and the OSWR
+  wake table (Winchester2) uses the WL_IRQ pad only on OSWR entry/exit.
+* **The WLAN `.ini` clock/power fields are firmware-time:** `TCXO_Clk = 1`
+  (26 MHz), `STRFRefClock = 2` (38.4 MHz wired-OR), settling 5 ms each,
+  `ClockValidOnWakeup = 0`, `TCXO_LDO_Voltage = 0` (2.5 V internal LDO),
+  `Platform_configuration = 2` (4 mA SDIO drive, no level shifter/EEPROM).
+* **The live 1917 boot confirmed the chip works on QNX:** `/pps/services/
+  wifi/status` has `wifi_power::on`, `wifi_interface::ti0`, MAC
+  `14:74:11:8f:9c:c3` and 40+ scan results; `ifconfig ti0` is UP/RUNNING;
+  `sloginfo` shows `TIWLAN SDIO probe WAS CALLED`, `SDIO clock ... 24Mhz`,
+  `sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7`.
+* **The operator's Linux RPMB top-up test succeeded** (the boot-time
+  `pbrpmb topup` wrote once at/below the threshold and the value read back);
+  the 1917 boot then topped `BOOTCTR_FCTRY` to `0x32`, and the restored Linux
+  boot reads **`0x31`** (`0x31 >= threshold 0x1e, no write`).
+* **Media:** region 0 = **`0xE36C679A`** (the known-good 7.3.3 image with the
+  ISL9519 charger and the 58.6 s WDT2 policy, restored after the QNX read);
+  region 1 = `rootfs-region1-7.3.3-charger.ext4` (`ba275807…`, 17 modules).
+  The 1917 IFS is **not** on media.  Pack **Full, 4.126 V, +265 mA,
+  `Charging`** (ISL9519 `STATUS=Charging`, 640 mA / 4208 mV / 384 mA).
+* **The 7.3.3 patch is 7 258 lines / 47 files**, sha256 `e7b7fc2e…`, and
+  reproduces the tree byte-for-byte; config `kernel/winchester-7.3.3.config`
+  (`CONFIG_CHARGER_ISL9519=y`, `CONFIG_KERNEL_XZ=y`).
+* **Next: the operator has kept the item open (session 34).**  Report **190**
+  is the fresh-eyes dossier: every experiment, the QNX/board comparisons, the
+  remaining unknowns and ranked next tests.  The first two are cheap: (H1) a
+  Linux rescan that sends **CMD0 → CMD5 only** (no CMD52 *and no CMD8*, 24 MHz,
+  CMD5 arg `0x00FFFF00`) — the session-33 CMD52-skip test still sent CMD8; and
+  (H2) restore the **1.8 V** dummy OCR window (the known-good image) and verify
+  `HCTL = 0x00000B00` (SDVS18 + SDBP), because the current tree/patch carries
+  3.3 V.  Do not repeat the closed experiments (traps 116–120, 124, 126–131).
+
+## Previous state — 2026-11-08 (session 33)
 
 **The last software layer is closed: the QNX `winchester` power-manager preset
 does not switch a WLAN rail or clock, and the chip-side electrical comparison
@@ -562,7 +625,7 @@ this trial.
 | WDT2 | **working — 58.6 s window, 10 s pet (session 31)** | The loader arms `WLDR = 0xFFFC1800` (7.8125 s); the kernel reprograms it to the reference's `0xFFE2B400` (58.6 s) at the late initcall via `WSPR` (`0xAAAA`→`0x5555` stop, write `WLDR`, `0xBBBB`→`0x4444` start), **polling `WWPS`** after each write, and pets every 10 s (`TGR` read→invert→write); fallback 2 s if the readback fails.  Verified on `0xE36C679A` by `WCRR` reload timing (~10 s) and uptime >275 s.  The expected dmesg line is missing on 7.3.3 (printk anomaly).  Report 109 §8.1 + correction; trap 115; decision §38 |
 | eMMC (MMC2) | **reads proven; writes healthy — but writers must use large blocks** | `mmcblk1` = MCGAFA 59.4 GiB, `boot0`/`boot1`/`rpmb`; needs the `vemmc` fixed supply for `ocr_avail` (report 109 §9).  Session 16 read a freshly flashed 11 152 064-byte image back **byte-exactly** and matched a pre-flash TabletOS capture (report 134); the MMC2 functional clock is 96 MHz.  Session 17 measured the write path (report 136): the driver has no request-size limit — an O_DIRECT write gives **256 KiB `CMD25`s, 5.5–7.0 MB/s** (4 KiB chunks: 0.93 MB/s), one `CMD13` per request (normal `mmc_blk_card_busy`).  The old 17–32 KB/s was `recv`'s tiny buffered writes plus 4–7 unthrottled `printk`s per request to **fbcon**.  Use ≥64 KiB (ideally 256 KiB–1 MiB) writes with the MMC trace off.  **Session 18: region 1 now holds a bootable Linux root** (32 MiB ext4 at raw `0x29000000`), written through the pre-OS `0xF7` loop (2055 frames) and read back byte-exactly (QNX `dd` and Linux `blk sumb`); it mounts read-only via a loop and its `/init` runs (report 140). |
 | USB device + gadget | **working, but not a bulk transport** | enumerates `0fca:8010`, CDC-ACM, product string "PlayBook (Linux bring-up)"; `/dev/ttyACM0` ↔ `/dev/ttyGS0`; High Speed (480 Mbps), 512-byte bulk packets.  **Drains at only ~134 KB/s and drops bytes when the host blasts** (report 136 §3.3), so it is a control/debug channel: do not send multi-MB images through `recv`.  Report 114, 136 |
-| **WL1283 (MMC5)** | **SoC-side matched; chip does not answer CMD5 (session 32)** | Bus, pads, WL_EN/IRQ, PMIC rails, MMC5 CON/HCTL/SYSCTL and the clock manager all match the reference.  `0x4A31E058 = 0x000B0003` on QNX (pad0 **mux 3 `gpio_wk31`**, not `fref_clk2_req`); the reference's `fref_clk2_out` (`AUXCLK1 = 0x00020100`, 12.8 MHz, pad `0x19C` mux 0) was reproduced on Linux without effect.  QNX enumerates at 24 MHz with CMD5 arg `0x00FFFF00`; Linux tests at 24 MHz and with arg `0x00FFFF00` still time out (`err=-110`, no response).  The remaining gap is the chip's 26 MHz TCXO/power/reset — needs an electrical measurement (report 185) |
+| **WL1283 (MMC5)** | **QNX software surface exhausted; chip does not answer CMD5 (session 34)** | Bus, pads, WL_EN/IRQ, PMIC rails, MMC5 CON/HCTL/SYSCTL and the clock manager all match the reference.  `0x4A31E058 = 0x000B0003` on QNX (pad0 **mux 3 `gpio_wk31`**, not `fref_clk2_req`); the reference's `fref_clk2_out` (`AUXCLK1 = 0x00020100`, 12.8 MHz, pad `0x19C` mux 0) was reproduced on Linux without effect.  QNX enumerates at 24 MHz with CMD5 arg `0x00FFFF00`; Linux tests at 24 MHz and with arg `0x00FFFF00` still time out (`err=-110`, no response).  **Session 34 (report 189):** the powerman preset, `devpm-omap4.so`, `devb-mmcsd-winchester`'s powerman client, the board pad/GPIO database and the WLAN `.ini` all name **no WLAN rail or clock**; the live syspage `WLAN` node is only `WLAN_EN_GPIO=54,WLAN_INT_GPIO=53` with an empty `location`.  The remaining gap is the chip's 26 MHz TCXO/power/reset or OMAP HSMMC sampling — needs a schematic/board view or logic analyser |
 | Userspace (initramfs) | **working, minimal** | `/init` = PID 1, mounts, creates the configfs ACM gadget, forks `/console` in the fallback path.  **No auto-reboot since session 15** — PID 1 reboots only on request (the timer spent a `BOOTCTR_FCTRY` unit per iteration).  **Session 28:** after the gadget and the boot-time top-up, `/init` mounts the region-1 ext4 root **read-write**, bind-mounts /dev//proc//sys, chroots and execs `/sbin/init`; with no `/sbin/init` it falls back to the console.  Report 176, session-28 note |
 | Userspace (region-1 root) | **working — a real BusyBox userland** | 64 MiB ext4 at raw `0x29000000`; BusyBox 1.36.1 + init + 401 applet links + `pbconsole`/`pbrpmb` + `/lib/modules/6.15.11`; boots to `sh -l` on `/dev/ttyGS0`; `insmod`/`modprobe` proven.  `local/images/rootfs-region1.ext4` sha256 `e1ec2bf3…`, kernel image `0xAEDF68D0` |
 | Console | **working** | `help ls cat peek poke kick disp bl i2c i2c16 spi fb kmsg grep blk recv sink blkwr qnx6 rootfs write reboot`; `spi tcon` (low-first) and `spi tconbe` (high-first); `blk info/sum/sumb/rd` is read-only FNV-1a64 over `/dev/mmcblk1` (**`blk info` prints size 0 B — `fstat` bug, see KNOWN-ISSUES**), `grep <substr> <path>` scans any-size text (for `clk_summary`); `sink <len>` measures the link, `blkwr <off> <len> [chunk]` is a timed O_DIRECT write with a deterministic pattern (report 136); `qnx6 [off-hex]` mounts hd3 read-only (report 138); `rootfs [off-hex]` mounts the region-1 ext4 root read-only on `/rootfs` (report 140); argument limit 24.  `pb_reg` op set is now `w a:v` / `r a` / `t a` (16 reads, re-arm) / `u a` (16 reads, no re-arm) / `d from:to` (range dump) / `v` (video liveness).  Every hardware access forks with a bounded wait |
@@ -707,13 +770,13 @@ the I²C bus and resets the unit).
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **the session-32 test image `0xAF4FC103`**, flashed at block `0x825`.  The known-good baseline is `0xE36C679A` (`local/images/kernel-0xE36C679A-wdt58s.img`).  **The 1917 IFS is not on media**; the way back is `local/work/ifs-shim-sealed.ifs` (7,900,548 B, sha256 `b52195bb…`) at block `0x825` (region 0 only).  The compressed `local/work/ifs1917-compressed.ifs` (3,466,232 B, sha256 `f14db207…`) is the session-27 alternative |
+| region-0 IFS on media | **the known-good `0xE36C679A`** (`local/images/kernel-0xE36C679A-wdt58s.img`, 0x91A748 bytes, sha256 `bdbaf5fc…`), restored after the session-34 QNX read.  **The 1917 IFS is not on media**; the way back is `local/work/ifs-shim-sealed.ifs` (7,900,548 B, sha256 `b52195bb…`) at block `0x825` (region 0 only).  The compressed `local/work/ifs1917-compressed.ifs` (3,466,232 B, sha256 `f14db207…`) is the session-27 alternative |
 | region-0 RCFS (`/base`) | **still the 1917 RCFS at region-0 offset 0xC00000** — outside the 7.3.3 image (which ends at 0x91A748) and not touched this session; not readable as `/base` without the 1917 IFS |
 | UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
-| `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it ran during the session-32 TabletOS oracle boot and topped `BOOTCTR_FCTRY` back to `0x32` |
-| `BOOTCTR_FCTRY` | **`0x2A`** on the final boot: the session-32 TabletOS oracle boot topped it to `0x32`, and the eight Linux test boots spent eight.  `0x2A >= threshold 0x1E`, so `pbrpmb topup` wrote nothing |
+| `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it ran during the session-34 TabletOS oracle boot and topped `BOOTCTR_FCTRY` back to `0x32` |
+| `BOOTCTR_FCTRY` | **`0x31`** on the final boot after the session-34 QNX trip: the 1917 boot topped it to `0x32`, and the restored Linux boot spent one.  The operator's Linux top-up test succeeded (one write at/below the threshold, read back).  `0x31 >= threshold 0x1E`, so `pbrpmb topup` wrote nothing |
 | region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 `ba275807…`, **17 modules under `/lib/modules/7.3.3`** (incl. `twl6030_charger.ko`, `twl6030-gpadc.ko`); the initramfs mounts it **read-write** and chroots into it |
-| TabletOS / OS | **not running** — the unit is **on our Linux 7.3.3 test image `0xAF4FC103`**, console over ttyGS0 (no door — trap 88), **pack Full: 100 %, 4.149 V, +81 mA**.  The last TabletOS boot was the session-32 WLAN oracle (1917 IFS + door + root SSH) |
+| TabletOS / OS | **not running** — the unit is **on our Linux 7.3.3 known-good image `0xE36C679A`**, console over ttyGS0 (no door — trap 88), **pack Full: 100 %, 4.126 V, +265 mA, ISL9519 `Charging`** (640 mA / 4208 mV / 384 mA).  The last TabletOS boot was the session-34 WLAN hwinfo oracle (1917 IFS + door + root SSH) |
 | device-side files | none needed on Linux; QNX `/tmp` tools must be re-pushed after a TabletOS restore |
 
 The factory boot budget is real and one-way: every successful factory/CRC boot
@@ -724,49 +787,43 @@ exactly one unit and stays up until asked.
 
 ## The single current blocker
 
-**The WL1283 is silent under Linux while it works under QNX, and every
-accessible SoC/board state matches.**  The powerman preset is closed: it has
-no WLAN rail or clock (report 187).  The chip is alive under QNX (`ti0` UP,
+**The WL1283's remaining difference is not visible in software: the QNX-side
+RE is complete (report 189) and no layer names a WLAN rail, clock or extra
+pad.**  The chip is alive under QNX (`ti0` UP/RUNNING, 40+ scan results,
 `GPIO2_DATAIN` bit 21 = 1) and not under Linux with WL_EN high (bit 21 = 0);
-WL_EN is not brought out, VIO is 1.8 V, and no 3.3 V chip rail is exposed
-(report 188).  A 200 ms MMC5 post-power-on settle and a CMD52 skip are both
-negative.  The remaining candidates are the chip's non-exposed VBAT/TCXO pins
-or OMAP HSMMC sampling — a schematic/board view or logic analyser is needed.
+the live syspage `WLAN` node is only `WLAN_EN_GPIO=54,WLAN_INT_GPIO=53` with an
+empty `location`; the pad/GPIO database, the powerman preset, `devpm-omap4.so`,
+`devb-mmcsd-winchester`'s powerman client and the WLAN `.ini` are all read.
+The remaining candidates are the chip's non-exposed VBAT/TCXO pins or OMAP
+HSMMC sampling — a schematic/board view or logic analyser is needed.  The
+operator has **kept the item open** (session 34); report **190** is the
+fresh-eyes dossier and lists the next tests (H1: CMD0 → CMD5 only; H2: 1.8 V
+dummy OCR window + `HCTL = 0x00000B00`).  Do not re-run the closed experiments
+(traps 116–120, 124, 126–131).
 
-**The QNX-side RE is not complete.**  The next session must read
-`/pps/services/hw_info/inventory` on the live 1917 (`hw_info_pps`), decode
-`hwio-config-winchester.so`'s `pad_config`/`gpio_config`, RE
-`devb-mmcsd-winchester`'s powerman client (does it set the MMC5 functional
-clock/voltage or bus power?), decode `devpm-omap4.so`'s `system/power/dev`
-registration and OSWR tables, and check the full `tiwlan_winchester.ini`
-clock/power fields.  HANDOFF §1.4 is the list; the cheapest first step is one
-TabletOS boot and the PPS inventory read.  Do not re-run the closed
-experiments (traps 116–120, 124, 126–130).
-
-**Media state: the final session-33 image `0x0353A241` is in region 0**; the
-known-good baseline is `0xE36C679A`.  The 1917 IFS is not on media.
-`BOOTCTR_FCTRY = 0x27`.  Region 1 holds the 7.3.3 charger rootfs
-(`ba275807…`).  NVRAM and the MCT remain unwritable, and an agent never writes
-RPMB (`SAFETY.md` §6).  The USB warm-reset re-enumeration regression was the
-session-32 WL_EN reset pulse; it is removed and the final image enumerates by
-itself (trap 130).
+**Media state: the known-good `0xE36C679A` is in region 0** (restored after
+the session-34 QNX read); region 1 is the 7.3.3 charger rootfs (`ba275807…`).
+The 1917 IFS is not on media.  `BOOTCTR_FCTRY = 0x31`.  NVRAM and the MCT
+remain unwritable, and an agent never writes RPMB (`SAFETY.md` §6).  The USB
+warm-reset re-enumeration regression was the session-32 WL_EN reset pulse; it
+is removed and the final image enumerates by itself (trap 130).
 
 ## What is next
 
-1. **Finish the QNX-side WL1283 RE (HANDOFF §1.4).**  One TabletOS boot:
-   read `/pps/services/hw_info/inventory` and the hwinfo `WLAN` node; then
-   decode `hwio-config-winchester.so`'s pad/gpio arrays, RE
-   `devb-mmcsd-winchester`'s powerman client, decode `devpm-omap4.so`'s
-   `system/power/dev`/OSWR tables, and check the full `tiwlan_winchester.ini`.
-   This is the last unexplored QNX-side evidence; do it before concluding the
-   chip is unreachable.
-2. **Then the chip-side evidence** (VBAT/TCXO at the BGA pins, or OMAP HSMMC
-   sampling) needs a schematic/board view or a logic analyser; a multimeter
-   cannot settle it.  If the WL1283 is formally stopped, go to step 5.
-3. **Item 9 step 5: the WM8994 audio machine and the Cypress CY8CTMA3 touch**
-   (report 176 is the inventory).  Item 9 steps 0–3 are done (charger, reports
-   177/178/179/182, re-verified on 7.3.3 in session 30); every step is one
-   variable per boot and none needs an RPMB write.
+1. **Continue the WL1283 (kept open by the operator).**  Report **190** is the
+   fresh-eyes dossier.  The first two tests are (H1) a Linux rescan that sends
+   **CMD0 → CMD5 only** — no CMD52 and no CMD8, 24 MHz, CMD5 arg
+   `0x00FFFF00`; and (H2) restore the **1.8 V** dummy OCR window and verify
+   `HCTL = 0x00000B00` (SDVS18 + SDBP).  Then the chip-side measurements
+   (VBAT/TCXO/SLOW_CLK, MMC5_CLK/CMD/DAT0) with a board view or logic
+   analyser.  Do not repeat traps 116–120, 124, 126–131.
+2. **If the WL1283 is later stopped: item 9 step 5** — the WM8994 audio machine
+   and the Cypress CY8CTMA3 touch (report 176 is the inventory).  Item 9 steps
+   0–3 are done (charger, reports 177/178/179/182, re-verified on 7.3.3 in
+   session 30); every step is one variable per boot and none needs an RPMB
+   write.
+3. **The unit is on the known-good `0xE36C679A` and charging**; region 0 only
+   was restored, region 1 is unchanged.
 
 ## Workspace location
 

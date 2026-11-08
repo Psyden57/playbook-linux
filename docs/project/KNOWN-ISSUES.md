@@ -702,6 +702,27 @@ report 121 §3/§11/§12.
      `soft_connect` disconnect/connect re-enumerates the host (Device 117 →
      118) and remains a fallback.  (Session 33, report 188.)
 
+131. **`/pps/services/hw_info/inventory` does not contain a WLAN node, and
+     there is no static HWI database to read.**  `hw_info_pps` builds the
+     inventory at runtime from `confstr(_CS_MACHINE)`, `/dev/hd0` devctls,
+     `/proc` and the ALSA mixer; its attributes are `AudioCodec_Name`,
+     `Processor_*`, `Board_*`, `eMMC_*`, `CPU_Type`, `RAM_Size` and
+     `Processor_Numbers`.  It links no HWI library, and no `etc/hwi*`, `hw*`
+     or `board.tdf` file carries the node.  The `WLAN` hwinfo node is in the
+     boot-time **syspage**, and only `devnp-ti1283.so` (which carries its own
+     `hwi_find`/`hwi_tag_find`/`hwi_off2tag`) reads it.  Use
+     `tools/qnx-hwi.c` on a live TabletOS boot to dump it (`/tmp/qnx-hwi WLAN`
+     or `all`); do not spend a boot expecting the PPS inventory to answer the
+     WLAN question.  **Confirmed live (session 34, report 189 §8):** the node
+     exists at syspage offset `0x344` with `itemsize=13`, an empty `location`
+     tag (base/len/regshift/addrspace all 0) and exactly one `optstr`:
+     `WLAN_EN_GPIO=54,WLAN_INT_GPIO=53`.  There is no rail, clock or second
+     enable in it.  **Build the tool with `-static`** — the device's 2014 libc
+     does not export `hwi_off2tag`/`__hwi_find_string`/`hwi_next_tag`/
+     `hwi_next_item` (the driver carries its own), so a dynamically linked
+     build dies with `ldd:FATAL: Unresolved symbol "hwi_off2tag"`.
+     (Session 34, report 189.)
+
 ## 3. Corrections to older reports
 
 These twenty are preserved deliberately. Each is newer than the text it

@@ -1117,6 +1117,32 @@ separate (trap 130) and does not authorise touching the WLAN power path.
 (the QNX/Linux electrical comparison, the two test images and the USB
 regression); traps 126–130.
 
+**Addendum (session 34, report 189) — the QNX-side RE is complete, and the
+software stop condition is met.**  Every file session 33 left open was read:
+
+* `hw_info_pps` publishes only the runtime-probed
+  `/pps/services/hw_info/inventory` (board/eMMC/CPU/audio); it has **no WLAN
+  node**, no HWI library, and there is no static hwinfo database in the 1917
+  trees.  The `WLAN` node is in the **syspage**; the live dump is
+  `WLAN_EN_GPIO=54,WLAN_INT_GPIO=53` with an empty `location` (report 189 §8).
+* `hwio-config-winchester.so` (`pad_config` 248 × 20 B, `gpio_config`
+  72 × 32 B) contains only the six known WLAN lines (sdmmc5 pads mux 0,
+  WL_EN/WL_IRQ mux 3, FREF2_OUT mux 0) and WKUP `0x4A31E058` mux 3 both
+  halves; no rail/clock pad.
+* `devb-mmcsd-winchester`'s powerman client registers only `-power on/off`;
+  no voltage, clock rate or bus power.
+* `devpm-omap4.so` registers only `iva_opp`; no MMCHS5/`CM_L4PER_HSMMC5` write
+  and no WLAN rail; its `sdmmc5_*` globals are mmap-only and never read.
+* `tiwlan_winchester.ini`'s clock/power fields are all firmware-time.
+
+No QNX software layer names a WLAN rail or clock.  The remaining candidate is
+the chip's non-exposed VBAT/TCXO pins or OMAP HSMMC sampling, which needs a
+schematic/board view or a logic analyser (report 189 §6).  **The operator has
+kept the item open (session 34) and asked for a fresh-eyes dossier (report
+190); the next tests are H1 (CMD0 → CMD5 only) and H2 (1.8 V dummy OCR window +
+`HCTL = 0x00000B00`).**  If it is later stopped, item 9 step 5 (audio/touch)
+follows.
+
 ---
 
 ## 41. The WL_EN reset pulse is removed: it broke USB warm-reset enumeration (session 33)

@@ -45,6 +45,7 @@ than doing something wrong.
 | `pb_ring.py` | dumps the DRAM console ring (`--ring 88000000`) and decodes the event log |
 | `pb_events.py` | decodes the printk-free event ring (timestamps, resolved symbols) |
 | `qnx-i2c.c` / `pbi2c` | **QNX-side** I²C probe (`probe / rd / rdw / wr / scan / dump / dumpw`), built with the qnx660 toolchain; push it to `/tmp` on the unit and run it there.  `rdw`/`dumpw` read 2-byte SMBus words (LO first) and are what the ISL9519 needs.  Source is the documentation |
+| `qnx-hwi.c` | **QNX-side** syspage hwinfo dumper: `ntoarmv7-gcc -std=gnu99 -O2 -o /tmp/qnx-hwi tools/qnx-hwi.c`, then `/tmp/qnx-hwi WLAN` (or `all`) on a live TabletOS boot.  It implements the by-name search (`hwi_find` is a driver-local helper, not in libc) and prints every tag; read-only.  Built for the WL1283 `WLAN` node (report 189) |
 | `memdump3.c`, `memw32.c`, `memtest.c` | QNX-side memory reader / writer / tester sources (built for QNX ARM; the device copies live outside this repo) |
 | `build_crc_image.py`, `89-crc_tool.py`, `90-nvram2074.py` | earlier CRC/NVRAM tooling from the boot-chain phase.  `89-crc_tool.py reseal` sets `os_type` and the CRC; `--length auto --append-os-trailer` now also appends the 8-byte OS trailer and patches `LoadEnd` (`image+0x08`) for a differently-sized image (IFS-REBUILD.md milestone 3) |
 | `ramloader-commands.txt` | the boot-ROM/ramloader command map recovered during the boot-chain work |
