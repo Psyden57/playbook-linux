@@ -599,12 +599,14 @@ exactly one unit and stays up until asked.
 ## The single current blocker
 
 **None.**  The charger is closed (ISL9519, ~0.4 A, pack recovering) and the
-WDT2 policy now matches the reference (58.6 s window, 10 s pet).  The WL1283
-(step 4) is **blocked on external evidence**: the FREF route was tested and
-closed (trap 116), so the next input must be the chip datasheet/schematic or a
-bus capture.  **The next unblocked work is ROADMAP item 9 step 5: the WM8994
-audio machine and the Cypress CY8CTMA3 touch** (report 176).  NVRAM and the
-MCT remain unwritable, and an agent never writes RPMB (`SAFETY.md` §6).
+WDT2 policy now matches the reference (58.6 s window, 10 s pet).  **The WL1283
+(step 4) is the next task**, resumed with the operator's second opinion
+(report 184): the untested `FREF_CLK2_REQ` input (`0x4A31E058`), the
+TCXO-vs-FREF clock distinction, the SDIO init-frequency checks and an
+electrical comparison.  The FREF **output** experiment stays closed (trap 116)
+and is not repeated.  **Step 5 (WM8994 audio + CY8CTMA3 touch, report 176) is
+the follow-on.**  NVRAM and the MCT remain unwritable, and an agent never
+writes RPMB (`SAFETY.md` §6).
 
 **Media state: our Linux image `0xE36C679A` is in region 0** (flashed this
 session); the 1917 IFS is not on media.  `BOOTCTR_FCTRY` read **`0x2D`** on
@@ -613,14 +615,17 @@ charger rootfs (`ba275807…`).
 
 ## What is next
 
-1. **ROADMAP item 9 step 5: the WM8994 audio machine and the Cypress
-   CY8CTMA3 touch** (report 176 is the inventory).  The WL1283 (step 4) is
-   **blocked on external evidence** — the FREF route was tested and closed in
-   session 31, so the next input must be the chip datasheet/schematic or a bus
-   capture (report 180 §6/§8, trap 116).
-2. Item 9 steps 0–3 are done (charger, reports 177/178/179/182, re-verified on
-   7.3.3 in session 30); every step is one variable per boot and none needs an
-   RPMB write.
+1. **ROADMAP item 9 step 4: the WL1283, with the second opinion (report 184).**
+   Read the canonical docs first, then the opinion in full.  Start with the
+   read-only `0x4A31E058` comparison (QNX with WLAN working vs Linux), then the
+   ball-AD4/CLK_REQ routing, the TCXO-vs-FREF distinction, the SDIO
+   init-frequency checks, and the electrical comparison.  Do not repeat the
+   `CM_DIV_M5 = 0x329` write (trap 116); report 180 §4/§6 lists what is already
+   eliminated.
+2. **Then item 9 step 5: the WM8994 audio machine and the Cypress CY8CTMA3
+   touch** (report 176 is the inventory).  Item 9 steps 0–3 are done (charger,
+   reports 177/178/179/182, re-verified on 7.3.3 in session 30); every step is
+   one variable per boot and none needs an RPMB write.
 
 ## Workspace location
 

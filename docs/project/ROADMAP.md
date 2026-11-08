@@ -4,12 +4,21 @@ Ordered. Each item states the evidence that would close it, so "done" is not a
 matter of opinion. Items 1–3 and 3a–3d are closed (the display works), as are
 items 4 (brightness), 5 (the region-1 root), 6 (the RPMB top-up) and 10 (the
 7.3.3 port). The current work is **item 9**: steps 0–3 are done (ISL9519
-charger, I²C4 motion sensors, TMP103/BQ27541, FAN5702, CM3217), **step 4
-(WL1283) is blocked on external evidence** after its FREF route was tested and
-closed (session 31), and **step 5 (WM8994 audio + CY8CTMA3 touch) is next**.
+charger, I²C4 motion sensors, TMP103/BQ27541, FAN5702, CM3217).  **Step 4
+(WL1283) is the next task**, resumed with the operator's second opinion
+(report 184) after its FREF output route was tested and closed; **step 5
+(WM8994 audio + CY8CTMA3 touch) follows**.
 Item 7 (packaging) is untouched. The 1917 image work is complete and lives in
 `IFS-REBUILD.md` / `IMAGE-REBUILD-GUIDE.md`. **Item 8 (BB10) and the image
 work are parked by the operator (session 25 end).**
+
+**Priority moved after session 31 (operator):** the **WL1283 (item 9 step 4)
+is the next task**, resumed with a second opinion (report 184) that adds the
+untested `FREF_CLK2_REQ` input (`0x4A31E058`), the TCXO-vs-FREF clock
+distinction, the SDIO init-frequency checks and an electrical-comparison plan.
+The closed `CM_DIV_M5 = 0x329` output experiment is not repeated (trap 116).
+**Step 5 (audio/touch) follows** when the WL1283 yields or is formally
+stopped.
 
 ## 1. Force the complete QNX timing set as ONE experiment — **DONE, negative**
 
@@ -414,13 +423,19 @@ blocked on external evidence, not on another register diff.
    Earlier QNX-side readings were race artefacts (trap 103).
 3. ~~the FAN5702 LED driver (no mainline driver; RE `led-fan5702.so`).~~
    **DONE** (report 179: `leds-fan5702`, EN = GPIO1_13).
-4. **WL1283 — bus/wiring done; FREF tested and closed (session 31); blocked
-   on the datasheet/schematic or a bus capture.**  The live experiment (pad
-   muxed, `CM_DIV_M5 = 0x329`, WL_EN high) still gave no CMD5 and no HCI, and
-   the divider turned out to be the DSS clock (trap 116, report 180 §8).  Do
-   not retry it.  When external evidence arrives, the rest is `wl12xx` + the
-   firmware/NVS (`wl128x-fw-5-sr.bin`, `wl128x-nvs.bin`, both in the host's
-   linux-firmware; `build_rootfs.py --firmware DIR` installs them), then BT
+4. **WL1283 — NEXT (operator, session 31 end), with the second opinion
+   (report 184).**  Bus/wiring done; the FREF **output** test closed (trap
+   116).  The opinion adds the untested **`FREF_CLK2_REQ` input**: WKUP pad
+   `0x4A31E058`, mux `0x1 = fref_clk2_req` (TRM Table 18-673).  Read it on
+   QNX with WLAN working and on Linux, establish whether ball AD4 is routed to
+   the WL1283 CLK_REQ, then do the clock-source distinction (TCXO vs FREF),
+   the SDIO init-frequency checks (400 kHz, `f_min`/`f_init`/`ios.clock`) and
+   the electrical comparison (MMC5 CLK/CMD/DAT0, WL_EN, CLK_REQ, 32k/ref,
+   VBAT/VIO on both OSes).  Deliver the first measurable difference between
+   QNX and Linux; do not repeat the `CM_DIV_M5` write.  When the bus answers,
+   the rest is `wl12xx` + the firmware/NVS (`wl128x-fw-5-sr.bin`,
+   `wl128x-nvs.bin`, both in the host's linux-firmware;
+   `build_rootfs.py --firmware DIR` installs them), then BT
    (`hci_ll`/TI ST on UART2 `0x4806c000`) and GPS/AGPS.
 5. audio (WM8994 MFD+codec + an OMAP4 machine driver) and the Cypress
    **CY8CTMA3** touch (QNX "Munin/Pegasus" firmware; no mainline Gen3 driver).

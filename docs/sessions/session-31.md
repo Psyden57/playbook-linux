@@ -194,6 +194,16 @@ there was no `charger` node, so the BCI never probed.
   this session's negative (the forced-pad/CM test was still silent), but it
   means the reference-clock hypothesis rests on the vendor `.ini` until a
   fresh reference read or the schematic settles it.
+* **Operator's second opinion (after the session, report 184):** it points at
+  the **`FREF_CLK2_REQ` input** on the WKUP pad `0x4A31E058` (mux 1 =
+  `fref_clk2_req`), which the output-clock experiments never configured, and
+  at the **TCXO-vs-FREF** distinction (TCXO is the WL128x main clock; FREF is
+  sync/special-TCXO modes and is selected after SDIO enumeration), plus an
+  SDIO init-frequency and electrical-comparison plan.  The register/decode
+  claims were checked against the local TRM and driver source when the opinion
+  was recorded; the ball-AD4 routing and the QNX register value are **not**
+  verified.  The operator makes this the next session's work; it does not
+  reopen the closed `CM_DIV_M5 = 0x329` output test.
 
 ### The ISL9519 Linux driver works
 
@@ -278,6 +288,11 @@ there was no `charger` node, so the BCI never probed.
 * **What did 2.0.0.4869 do differently on a PC USB port?**  It reportedly kept
   the pack charged.  *Would settle it:* the 4869 `.ifs`/`.rcfs` battery
   binaries, or an input-limit comparison.
+* **Is the WL1283 `FREF_CLK2_REQ` input (`0x4A31E058`) connected and
+  configured?**  The second opinion's concrete candidate; the reference value
+  is unknown and the local TRM only confirms the mux table.  *Would settle it:*
+  read the register on QNX with WLAN working and on Linux, and establish the
+  ball-AD4 routing.
 * **Does the loader configure the ISL9519 while it charges the pack off the
   dock?**  The yellow low-battery indication implies a charge path in the
   loader.  *Would settle it:* read the ISL registers while docked (needs a
@@ -325,8 +340,12 @@ there was no `charger` node, so the BCI never probed.
   sha256 `26babb10…`, verified 0 rejects / 0 mismatches against pristine
   7.3.3.
 * Report **183** — the ISL9519 discovery, the register fields and the driver.
+* Report **184** — the operator's external second opinion on the WL1283
+  (`FREF_CLK2_REQ` at `0x4A31E058`, the TCXO/FREF distinction, the SDIO
+  init-frequency and electrical-comparison plan), recorded verbatim with our
+  verification notes.
 * Boot-time state: `BOOTCTR_FCTRY = 0x2D` on the current boot; the unit was
   left **on image `0xE36C679A` and charging** (operator decision).
-* **Item 9 step 5 (WM8994 audio, CY8CTMA3 touch) was not started**; it is the
-  next task.  The WL1283 (step 4) is blocked on external evidence after the
-  FREF route was closed.
+* **The next session's first task is the WL1283 (item 9 step 4), after reading
+  the canonical docs and then report 184**; item 9 step 5 (WM8994 audio,
+  CY8CTMA3 touch) was not started and follows.

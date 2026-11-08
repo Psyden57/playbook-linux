@@ -16,8 +16,13 @@ Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolut
 > glitches the panel (trap 116); the chip now needs its datasheet/schematic or
 > a bus capture.  The unit is **on our image, charging** at session end.
 >
-> **Next: ROADMAP item 9 step 5 — the WM8994 audio machine and the Cypress
-> CY8CTMA3 touch.**  `hd3`, BB10 and the PlayBook OS image work remain parked.
+> **Next: read the canonical docs in order, then the operator's second opinion
+> (`docs/reports/184-wl1283-second-opinion-2026-11-08.md`), then work the
+> WL1283.**  The opinion adds the previously untested **`FREF_CLK2_REQ` input**
+> (`0x4A31E058`) and an electrical-comparison plan.  **Do not repeat the
+> `CM_DIV_M5 = 0x329` output-clock experiment** (trap 116).  Step 5
+> (audio/touch) follows when the WL1283 yields or is formally stopped.
+> `hd3`, BB10 and the PlayBook OS image work remain parked.
 
 ## 0. The job, and where it stands
 
@@ -56,9 +61,10 @@ byte-for-byte.  Config: `kernel/winchester-7.3.3.config` (includes
 `0xB00000`).
 
 **Parked by the operator:** the `hd3` cut-over, BB10, and the PlayBook OS image
-work.  **The WL1283 (item 9 step 4) is blocked, not parked:** its FREF route
-was tested and closed in session 31, so the next input must be the chip
-datasheet/schematic or a bus capture of CLK/CMD/DAT/EN (report 180 §6/§8).
+work.  **The WL1283 (item 9 step 4) is the next task**, resumed with the
+operator's second opinion (report 184).  Its FREF **output** route stays closed
+(trap 116); the opinion adds the `FREF_CLK2_REQ` **input** and an electrical
+comparison.  Step 5 (audio/touch) is the follow-on.
 
 ## 0a. The way back (the unit is on our Linux image, the 1917 IFS is not on media)
 
@@ -80,45 +86,87 @@ base'` and read `/dev/rpmb/BOOTCTR_FCTRY` (expect `0x32` after the TabletOS
 top-up).  **Do not restore `local/images/ifs0.sealed.bin`** — it is the
 2.0.0.4869 IFS (trap 84).
 
-## 1. The next task: item 9 step 5
+## 1. The next task: the WL1283 (item 9 step 4), with the second opinion
 
-Report **176** is the inventory and bus map; DECISIONS §28 is the order.
-**One variable per boot.**
+**Read first:** the canonical docs in the kickoff order, then the operator's
+second opinion, recorded verbatim in
+`docs/reports/184-wl1283-second-opinion-2026-11-08.md` (original:
+`/home/psyden/SSDdrive/response.txt`).  Its concrete claims were checked at
+recording: the `0x4A31E058` mux table is in the local TRM, the WL128x
+TCXO/FREF distinction is in the driver source, `init_hz` does not change
+`f_min`, and Linux's `mmc_attach_sdio()` sends CMD5 first.  The ball AD4
+routing and the QNX-side register values are **not** verified.
 
-### 1.1 WM8994 audio
+**State in one paragraph.**  The combo is on **MMC5 (`0x480D5000`)**;
+**WL_EN = GPIO2_22** (gpio 54, active high) and **WL_IRQ = GPIO2_21** (gpio 53,
+input, falling).  `&mmc5` probes and clocks; the card never answers CMD5
+(`STAT=0x00018000`, CTO) and the BT HCI probe is silent.  The enable line,
+pads, IRQ pin, every TWL rail, `CLK32KG`, the OCR window, a power cycle, a
+12 MHz init clock, EN-at-power-up, `ti,no-reset-on-init`, 5 s settling, the
+GPIO4 candidates and the full PMIC/CM diff are all eliminated with evidence
+(report 180 §4/§6).  The FREF **output** test (pad mux + `CM_DIV_M5 = 0x329`)
+was negative and the write glitched the display (trap 116) — **do not repeat
+it**.  **One variable per boot.**
 
-* **Where:** WM8994 MFD + codec on **I²C4 `0x48350000`** (Linux `i2c-3`),
-  7-bit **`0x1a`**; the codec is in the board DTS's `&i2c4` block but the
-  mainline **`CONFIG_MFD_WM8994` / `CONFIG_SND_SOC_WM8994` are not enabled**.
-* **What the 1917 driver does:** `deva-ctrl-omap4abe-wm8994.so` — McBSP +
-  **ABE** DSP (`mcbsp=[0..4]`, protocol default i2s, ABE firmware in
-  `/base/lib/libabe.so`); no separate audio config file.
-* **Likely Linux path:** bypass the ABE DSP with `simple-audio-card` + McBSP.
-  The blocker: McBSP lives in the disabled **`&l4_abe`** segment and the
-  WD_TIMER3 target hangs on enable, so enable the segment with the non-audio
-  targets disabled.  The McBSP instance is probably **2** (the parser's default
-  table), but **confirm it** — this is the open question.
-* **First steps:** enable the two symbols, add the codec node under `&i2c4`,
-  probe the ID (`i2cget -f -y 3 0x1a 0x0000 w`? the codec is 16-bit register),
-  then the machine link.  Speakers, the 3.5 mm jack and the mics are all
-  behind this one codec.
+### 1.1 The concrete untested candidate: FREF_CLK2_REQ (`0x4A31E058`)
 
-### 1.2 Cypress CY8CTMA3 touch (Gen3)
+* TRM Table 18-673: WKUP pad `0x058` (`FREF_CLK3_OUT`/`FREF_CLK4_REQ`), mux
+  `0x1 = fref_clk2_req`, `0x3 = gpio_wk31`, reset `0x7 = safe_mode`.  Our boot
+  leaves it in safe mode; the reference value is **unknown** — the docs
+  disagree (`docs/contradictions/fref-clk2-pad-reference-decode.md`).
+* **First measurement (read-only):** read `0x4A31E058` on QNX with WLAN
+  working and on Linux; compare the whole register (mux, input enable, pull,
+  wakeup bits).
+* Establish whether ball AD4 is physically routed to the WL1283 CLK_REQ
+  (schematic/continuity).  **Do not force mux 1 until the routing is known.**
+* If connected: capture CLK_REQ level and transitions at WL_EN on both OSes.
+* Decision: not routed → discard; routed and QNX differs → fix the request
+  path; identical → go to §1.4.
 
-* **Part:** CY8CTMA3 TrueTouch Gen3; mainline has Gen2 `cyttsp_core` and Gen5
-  `cyttsp5`, not this part.  RIM's stack: `libmtouch-munin.so.1` /
-  `libmtouch-pegasus.so`, `muninfw`, daemon `/base/usr/bin/touch`, firmware
-  `/base/lib/firmware/munin/{Pegasus_50,Pegasus2_50,Pegasus_D4_A}.hex`.
-* **1917 facts:** slave **`0x65`**, **400 kHz**; **GPIO4_8 = reset**
-  (active low), **GPIO1_14** pulsed low 500 ms then high (power/enable).
-* **The bus is unresolved:** I²C2 `0x48072000` (QNX saw `0x65` there) vs
-  I²C3 `0x48060000` (the library's `/dev/i2c2`, the controller QNX does not
-  instantiate).  See `docs/contradictions/touch-bus-i2c2-vs-i2c3.md`.
-  **First bench step:** `i2cdetect -y -r 2` and `i2cdetect -y -r 3` on the
-  running image (never run in session 30/31).
-* **Next:** confirm the bus and whether the part answers before its firmware
-  is loaded, then decide between a new driver and the Gen2 core with a Gen3
-  protocol layer.  This is the largest remaining driver/RE task.
+### 1.2 The clock-source distinction (do not assume `STRFRefClock=2`)
+
+* The WL128x has **TCXO** (main clock) and **FREF** (GPS/cellular sync; the
+  WLAN/BT main clock only when the TCXO is 16.368/32.736 MHz or in XTAL modes:
+  `wl128x_boot_clk()`, `drivers/net/wireless/ti/wl12xx/main.c`).  Clock
+  selection runs during firmware init, **after SDIO enumeration**.
+* Establish what is physically on the TCXO input, whether it runs while WL_EN
+  is asserted, and whether FREF is connected at all.  The vendor `.ini` is a
+  clue, not proof that FREF must run before CMD5.
+
+### 1.3 SDIO protocol and init frequency
+
+* The default image initialises at **400 kHz**: `omap_hsmmc.init_hz` only
+  overrides a 400 kHz request while the module parameter is set (default 0)
+  and does not change `f_min`.
+* Report and record `host->f_min`, `f_max`, `f_init`, `ios.clock`,
+  `SYSCTL.CLKD` and the actual SDCLK at the pin.
+* Linux `mmc_attach_sdio()` calls `mmc_send_io_op_cond()` (CMD5) first; compare
+  with QNX's CMD0/CMD5/CMD3/CMD7 sequence and the response timing.
+
+### 1.4 The electrical comparison (highest value)
+
+Capture a cold boot on **both** OSes with a logic analyser: `MMC5_CLK`,
+`MMC5_CMD`, `MMC5_DAT0`, `WL_EN`, `CLK_REQ`, the 32.768 kHz and the fast clock,
+plus VBAT/VIO at the chip.
+
+| observation | suggestion |
+|---|---|
+| QNX gets R4, Linux does not | compare startup timing, clocks, enable and command sequence |
+| the chip never drives CMD low on Linux | power, reset, clock, strap or initialization |
+| it drives a response but Linux times out | host sampling, pinmux, voltage or controller config |
+| CLK_REQ changes on QNX but not Linux | the request input and clock-gating path |
+| rails or clocks differ at the chip | board-level sequencing |
+
+A PMIC register read proves programming, not the waveform at the chip.
+
+### 1.5 Stop condition
+
+* Request pin not connected → eliminate that hypothesis.
+* Electrical traces identical and valid but CMD5 still differs → investigate
+  OMAP HSMMC sampling and the initialization protocol.
+* Do not make speculative clock changes that affect the DSS.
+* Deliver **the first measurable difference between QNX and Linux**, not another
+  list of registers that match.
 
 ## 1a. Tools that make this cheap
 
@@ -136,6 +184,35 @@ Report **176** is the inventory and bus map; DECISIONS §28 is the order.
 * **`tools/pbi2c`** — the QNX-side I²C tool, now with `rdw`/`dumpw` for 16-bit
   SMBus words (the ISL9519/charger work).  Push it to `/tmp` on TabletOS.
 * `tools/env.sh` — both cross-toolchains; `tools/env.sh --check`.
+
+## 1b. The follow-on: item 9 step 5 (audio + touch)
+
+Report **176** is the inventory and bus map; DECISIONS §28 is the order.
+**One variable per boot.**
+
+**WM8994 audio.**  MFD + codec on **I²C4 `0x48350000`** (Linux `i2c-3`),
+7-bit **`0x1a`**; the codec node exists but `CONFIG_MFD_WM8994` /
+`CONFIG_SND_SOC_WM8994` are **not enabled**.  The 1917 driver
+(`deva-ctrl-omap4abe-wm8994.so`) is McBSP + **ABE** (`mcbsp=[0..4]`, protocol
+default i2s, ABE firmware in `/base/lib/libabe.so`).  The likely Linux path is
+to bypass the ABE with `simple-audio-card` + McBSP; the blocker is that McBSP
+lives in the disabled `&l4_abe` segment (WD_TIMER3 hangs on enable), so enable
+the segment with the non-audio targets disabled.  The McBSP instance is
+probably **2** (the parser's default table) — confirm it.  First steps: enable
+the two symbols, probe the codec ID, then the machine link.  Speakers, the
+3.5 mm jack and the mics are all behind this codec.
+
+**Cypress CY8CTMA3 touch (Gen3).**  Mainline has Gen2 `cyttsp_core` and Gen5
+`cyttsp5`, not this part.  RIM's stack: `libmtouch-munin.so.1` /
+`libmtouch-pegasus.so`, `muninfw`, daemon `/base/usr/bin/touch`, firmware
+`/base/lib/firmware/munin/{Pegasus_50,Pegasus2_50,Pegasus_D4_A}.hex`.  1917
+facts: slave **`0x65`**, 400 kHz; **GPIO4_8 = reset** (active low),
+**GPIO1_14** pulsed low 500 ms then high (power/enable).  **The bus is
+unresolved:** I²C2 `0x48072000` (QNX saw `0x65` there) vs I²C3 `0x48060000`
+(the library's `/dev/i2c2`); see `docs/contradictions/touch-bus-i2c2-vs-i2c3.md`.
+First bench step: `i2cdetect -y -r 2` and `-r 3` on the Linux image, never run
+in sessions 30/31.  Then decide between a new driver and the Gen2 core with a
+Gen3 protocol layer.
 
 ## 2. Build and flash (7.3.3)
 
@@ -307,6 +384,12 @@ KNOWN-ISSUES.md (traps 9-116, especially 105-116), DEVELOPMENT.md sections
 3/3a/4, DECISIONS.md (17-38), reports 176, 180/181/182 and 183,
 sessions/session-31.md.
 
+THEN, after all of the above, read the operator's second opinion in full:
+docs/reports/184-wl1283-second-opinion-2026-11-08.md (original at
+/home/psyden/SSDdrive/response.txt; the opinion body is verbatim, the
+verification notes at its top are ours).  Act on it with the WL1283 task
+below.
+
 WHERE IT STANDS: the patch set is on Linux 7.3.3 and the unit boots it.
 The last tested image is region-0 0xE36C679A
 (local/images/kernel-0xE36C679A-wdt58s.img) + region-1
@@ -328,14 +411,20 @@ tools/bbusb.py flash --component local/work/ifs-shim-sealed.ifs
 /dev/rpmb/BOOTCTR_FCTRY.  Do NOT restore local/images/ifs0.sealed.bin
 (2.0.0.4869, trap 84).
 
-NEXT WORK: ROADMAP item 9 step 5 — the WM8994 audio machine (MFD+codec on
-I2C4 0x1a, McBSP + ABE; the driver's mcbsp default still to pin down) and
-the Cypress CY8CTMA3 touch (Gen3; QNX Munin/Pegasus firmware; the bus is
-either I2C2 0x48072000 or I2C3 0x48060000 — settle it with i2cdetect -y -r
-2 and -r 3).  Report 176 is the inventory.  The WL1283 (step 4) is BLOCKED
-on external evidence: its FREF route was tested and closed (the CM_DIV_M5
-divider is the DSS clock; trap 116), so it needs the chip datasheet or a
-bus capture.  hd3/BB10/PlayBook OS work remain parked.
+NEXT WORK: the WL1283 (ROADMAP item 9 step 4), with that second opinion.
+First measurement: read 0x4A31E058 (WKUP pad FREF_CLK3_OUT/FREF_CLK4_REQ;
+mux 1 = fref_clk2_req, mux 3 = gpio_wk31; reset safe_mode) on QNX with WLAN
+working and on Linux, and compare the whole register.  Establish whether
+ball AD4 is routed to the WL1283 CLK_REQ before changing anything.  Then
+the clock-source distinction (TCXO is the main clock; FREF is sync/special
+TCXO modes and is selected after SDIO enumeration — do not assume
+STRFRefClock=2), the SDIO init-frequency checks (f_min/f_init/ios.clock/
+SYSCTL.CLKD, 400 kHz), and the electrical comparison (MMC5 CLK/CMD/DAT0,
+WL_EN, CLK_REQ, 32k/ref clock, VBAT/VIO at the chip) on both OSes.  Do NOT
+repeat the CM_DIV_M5=0x329 output write (trap 116).  Report 180 §4/§6 lists
+what is already eliminated; deliver the first measurable difference between
+QNX and Linux.  Step 5 (WM8994 audio + CY8CTMA3 touch, report 176) is the
+follow-on.  hd3/BB10/PlayBook OS work remain parked.
 
 HARDWARE RE RULE: OS 2.x only (live 1917 oracle, the 1917 /base QNX6 image,
 the 1917 IFS tree, the 4869 IFS dump).  Never use BB10 images for PlayBook
