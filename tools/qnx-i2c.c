@@ -92,10 +92,13 @@ int main(int argc, char **argv)
 		fprintf(stderr,
 			"usage: %s probe <bus> <addr7>\n"
 			"       %s rd    <bus> <addr7> <reg>\n"
+			"       %s rdw   <bus> <addr7> <reg>      (2-byte SMBus word)\n"
 			"       %s wr    <bus> <addr7> <reg> <val>\n"
 			"       %s scan  <bus>\n"
-			"       %s dump  <bus> <addr7> <from> <to>\n",
-			argv[0], argv[0], argv[0], argv[0], argv[0]);
+			"       %s dump  <bus> <addr7> <from> <to>\n"
+			"       %s dumpw <bus> <addr7> <from> <to>  (2-byte words)\n",
+			argv[0], argv[0], argv[0], argv[0], argv[0], argv[0],
+			argv[0]);
 		return 2;
 	}
 
@@ -135,8 +138,10 @@ int main(int argc, char **argv)
 		return rc ? 1 : 0;
 	}
 
-	if (!strcmp(argv[1], "rd") || !strcmp(argv[1], "dump")) {
-		if (!strcmp(argv[1], "rd")) {
+	if (!strcmp(argv[1], "rd") || !strcmp(argv[1], "dump") ||
+	    !strcmp(argv[1], "rdw") || !strcmp(argv[1], "dumpw")) {
+		int word = (!strcmp(argv[1], "rdw") || !strcmp(argv[1], "dumpw"));
+		if (argv[1][0] == 'r') {
 			if (argc < 5 || !parse_hex(argv[4], &reg)) {
 				fprintf(stderr, "bad register\n");
 				return 2;
@@ -149,10 +154,14 @@ int main(int argc, char **argv)
 			}
 		}
 		for (reg = from; reg <= to; reg++) {
-			rc = i2c_read(fd, addr, reg, buf, 1);
-			if (rc == 0)
-				printf("0x%02x[0x%02x] = 0x%02x\n", addr, reg, buf[0]);
-			else
+			rc = i2c_read(fd, addr, reg, buf, word ? 2 : 1);
+			if (rc == 0) {
+				if (word)
+					printf("0x%02x[0x%02x] = 0x%04x (lo=0x%02x hi=0x%02x)\n",
+					       addr, reg, buf[0] | (buf[1] << 8), buf[0], buf[1]);
+				else
+					printf("0x%02x[0x%02x] = 0x%02x\n", addr, reg, buf[0]);
+			} else
 				printf("0x%02x[0x%02x] ERR %s\n", addr, reg, strerror(errno));
 		}
 		close(fd);

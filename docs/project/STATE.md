@@ -1,6 +1,77 @@
 # Current state
 
-## Current state — 2026-11-07 (session 30)
+## Current state — 2026-11-08 (session 31)
+
+**The board's charger is an Intersil ISL9519 at I²C1 `0x48070000`, slave
+`0x09` — not the TWL6030 BCI.  A minimal Linux driver charges the pack at
+~0.4 A from a host USB port (`CONFIG_CHARGER_ISL9519=y`).  The kernel also
+reprograms WDT2 to the reference's 58.6 s window and pets it every 10 s
+(image **`0xE36C679A`**).  Region 0 holds that image; region 1 the 7.3.3
+charger rootfs.**
+
+* **The charger, measured on the running 1917 (report 183):** ISL9519
+  VendorID `0xFE = 0x0049` ('I'), DeviceID `0xFF = 0x0003`;
+  `0x14 = 0x0280` (charge current **640 mA**), `0x15 = 0x1070` (max system
+  voltage **4208 mV**), `0x3F = 0x0180` (input current limit **384 mA**),
+  `0x44 = 0x0000` (control).  The `/pps/services/power/charger` values match
+  exactly (`ChargeCurrent 640`, `MaxSystemVoltage 4208`,
+  `InputCurrentLimit 384`, `ChargingState CC`, source `USB HOST`).  RIM's
+  `/base/bin/battery_win` drives it (`isl_9519_init`).
+* **The TWL6030 BCI is not used by the stock OS:** MAIN_CHARGE still holds the
+  bootloader's reset values (`CONTROLLER_CTRL1 = 0x00`, `VOREG = 0x02`,
+  `VICHRG = 0x04`, `CINLIMIT = 0x01`); QNX only writes
+  `CONTROLLER_INT_MASK = 0xDC` for VBUS/VAC detection.  The session-31 BCI
+  probe fix (`0x306E3DA5`, battery-profile node) is correct but cannot charge
+  this pack.
+* **The pack is healthy:** QNX says **SoC 7 %, 3.683 V, `StateOfHealth 90`,
+  `StateOfBattery::OK`**; it charged on the dock.  Linux's `HEALTH=Dead` was
+  the gauge's SOC-final flag at 2 %, not a pack fault.
+* **Why 1917 does not appear to charge from a PC port:** its host-port input
+  limit is **384 mA** while `InputCurrentMonitor` reads **430 mA**, so the
+  gauge sits at `AverageCurrent = -16 mA` and the icon stays "not charging".
+  The operator remembers 2.0.0.4869 charging from a PC port — a different
+  input-limit policy.
+* **A minimal ISL9519 driver works (report 183 §3):** `drivers/power/supply/
+  isl9519.c` (built-in, `CONFIG_CHARGER_ISL9519=y`, DTS `charger@9` under
+  `&i2c1`) verifies VendorID/DeviceID, writes `0x3E`, `0x15`, `0x14`, `0x3F`
+  in RIM's order with the **masked field** steps (`0x14`/`0x3F` 128 mA/LSB,
+  `0x15` 16 mV/LSB, `0x3E` 256 mV/LSB), and refreshes every 5 s for the part's
+  175 s watchdog.  Measured: **BQ27541 `CURRENT_NOW` +358 → +397 mA**,
+  `STATUS=Charging`, `VOLTAGE_NOW` 3.775 → 3.794 V, capacity 8 → 9 %;
+  register read-back `0x14=0x0280`, `0x15=0x1070`, `0x3E=0x0D00`,
+  `0x3F=0x0180`.
+* **WDT2 is now the reference's 58.6 s window, petted every 10 s.**  The
+  kernel reprograms `WLDR = 0xFFE2B400` at the late initcall via the `WSPR`
+  stop/start sequence, polling **`WWPS`** after each write (the TRM requires
+  it; fixed delays silently dropped half the sequence), and falls back to the
+  2 s pet if the readback does not match.  Verified on image `0xE36C679A` by
+  sampling `WCRR`: it reloads every **~10 s**, and the unit is alive past
+  275 s.  The expected `PLAYBOOK WDT` dmesg line does not appear on 7.3.3
+  (an unexplained printk anomaly — verify by registers).  Trap 115,
+  decision §38.
+* **Counter:** **`0x2D`** on the current boot (`0x30` → three WDT-test boots).
+  Pack now **13 %, 3.842 V, +393 mA, `Charging`**.
+* **Patch:** `kernel/patches/0001-playbook-winchester-7.3.3.patch` is now
+  **7 103 lines / 45 files** (36 modified + 9 new), sha256 `26babb10…`,
+  re-exported from the tree and verified 0 rejects / 0 mismatches.  Config:
+  `kernel/winchester-7.3.3.config` includes **`CONFIG_CHARGER_ISL9519=y`**
+  (copied to `kernel/patches/winchester-7.3.3.config`).
+* **Media state:** region 0 = **`0xE36C679A`** (our Linux image with the
+  ISL9519 driver and the 58.6 s WDT2 policy, flashed this session); region 1 =
+  `rootfs-region1-7.3.3-charger.ext4` (`ba275807…`, 17 modules).  The 1917 IFS
+  is **not** on media; restore it with `local/work/ifs-shim-sealed.ifs` at
+  block `0x825`.  Region 0 is the only region that changed in the return trip.
+* **WL1283 (step 4): the FREF route is tested and closed.**  Session 31 muxed
+  the FREF pad and forced `CM_DIV_M5_DPLL_PER` to the reference's `0x329` with
+  WL_EN high; MMC5 still did not answer CMD5 and UART2 HCI still got nothing.
+  The write also **changes the DSS clock** (`dpll_per_m5x2_ck` is the DSS
+  parent) and glitched the panel; `0x204` recovers it, and the cause was
+  isolated command-by-command (trap 116, report 180 §8).  **Do not retry it.**
+  The WL1283 now needs the chip datasheet/schematic or a bus capture
+  (report 180 §6).
+* **Audio/touch (step 5) is untouched.**
+
+## Previous state — 2026-11-07 (session 30)
 
 **The patch set is ported to Linux 7.3.3 and the unit boots it: region-0
 `0x0F6AC47F` + region-1 `rootfs-region1-7.3.3.ext4` (`0b3b83e8…`, 15 modules).
@@ -372,7 +443,7 @@ this trial.
 | Chainloader image (CRC path) | **working** | 828 B loader at image `+0x800` = `0x80100000`; copies zImage/DTB high, checks the DTB magic `0xEDFE0DD0`, jumps (`r0=0`, `r1=~0`, `r2=DTB`). Report 109 §8.1, 103 §5.2 |
 | DRAM / memory map | **working** | 1 GB at `0x80000000`; kernel runs from `0x84000000`-loaded zImage, decompressed to `0x80008000`; DTS comment |
 | Kernel self-capture | **working** | DRAM ring at PA `0x88000000` (32 KB) + breadcrumb/event log; `tools/pb_ring.py`, `tools/pb_events.py`. Bootstrap §3 |
-| WDT2 | **working** | Petted from a 2 s `timer_list` (`TGR` kick; `LDR` writes are dropped); heartbeat 14 510 ms measured. Report 109 §8.1 |
+| WDT2 | **working — 58.6 s window, 10 s pet (session 31)** | The loader arms `WLDR = 0xFFFC1800` (7.8125 s); the kernel reprograms it to the reference's `0xFFE2B400` (58.6 s) at the late initcall via `WSPR` (`0xAAAA`→`0x5555` stop, write `WLDR`, `0xBBBB`→`0x4444` start), **polling `WWPS`** after each write, and pets every 10 s (`TGR` read→invert→write); fallback 2 s if the readback fails.  Verified on `0xE36C679A` by `WCRR` reload timing (~10 s) and uptime >275 s.  The expected dmesg line is missing on 7.3.3 (printk anomaly).  Report 109 §8.1 + correction; trap 115; decision §38 |
 | eMMC (MMC2) | **reads proven; writes healthy — but writers must use large blocks** | `mmcblk1` = MCGAFA 59.4 GiB, `boot0`/`boot1`/`rpmb`; needs the `vemmc` fixed supply for `ocr_avail` (report 109 §9).  Session 16 read a freshly flashed 11 152 064-byte image back **byte-exactly** and matched a pre-flash TabletOS capture (report 134); the MMC2 functional clock is 96 MHz.  Session 17 measured the write path (report 136): the driver has no request-size limit — an O_DIRECT write gives **256 KiB `CMD25`s, 5.5–7.0 MB/s** (4 KiB chunks: 0.93 MB/s), one `CMD13` per request (normal `mmc_blk_card_busy`).  The old 17–32 KB/s was `recv`'s tiny buffered writes plus 4–7 unthrottled `printk`s per request to **fbcon**.  Use ≥64 KiB (ideally 256 KiB–1 MiB) writes with the MMC trace off.  **Session 18: region 1 now holds a bootable Linux root** (32 MiB ext4 at raw `0x29000000`), written through the pre-OS `0xF7` loop (2055 frames) and read back byte-exactly (QNX `dd` and Linux `blk sumb`); it mounts read-only via a loop and its `/init` runs (report 140). |
 | USB device + gadget | **working, but not a bulk transport** | enumerates `0fca:8010`, CDC-ACM, product string "PlayBook (Linux bring-up)"; `/dev/ttyACM0` ↔ `/dev/ttyGS0`; High Speed (480 Mbps), 512-byte bulk packets.  **Drains at only ~134 KB/s and drops bytes when the host blasts** (report 136 §3.3), so it is a control/debug channel: do not send multi-MB images through `recv`.  Report 114, 136 |
 | Userspace (initramfs) | **working, minimal** | `/init` = PID 1, mounts, creates the configfs ACM gadget, forks `/console` in the fallback path.  **No auto-reboot since session 15** — PID 1 reboots only on request (the timer spent a `BOOTCTR_FCTRY` unit per iteration).  **Session 28:** after the gadget and the boot-time top-up, `/init` mounts the region-1 ext4 root **read-write**, bind-mounts /dev//proc//sys, chroots and execs `/sbin/init`; with no `/sbin/init` it falls back to the console.  Report 176, session-28 note |
@@ -388,11 +459,32 @@ this trial.
 | Panel identity | **Hitachi (definitive)** | on TabletOS: `GPIO6_DATAIN = 0x00010800` (bit 16 = 1), slog `LCD is Hitachi`.  Report 127 §1 |
 | **Image on the panel** | **WORKING** | With `0x8C146805` (and the same source as `0x068C867F`) the panel shows a clean, stable image: solid white, solid red, and the kernel console as legible text.  The three necessary fixes were the bridge delivery (VC0/HS null packet), the LVDS porches + TCON table at bring-up, and the DISPC core clock. Report 133 |
 | QNX oracle tool | **`tools/qnx-dsiread.c` → `tools/pbdsi`** | Reads any TC358764 register over DSI from a TabletOS user process (generic read request `0x24` on hw VC1, BTA, RX FIFO pop; response is a generic long read, DT `0x1A`).  Read-only.  This is how the reference values in this document were obtained. Report 132 §2 |
-| Kernel patch + config | **7.3.3 (session 30); 6.15.11 kept as reference** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **6 648 lines / 42 files** (34 modified + 8 new), generated from the tree against pristine 7.3.3, applied with 0 rejects and **42/42 files byte-identical**.  Config: `kernel/winchester-7.3.3.config` (sha256 `7e0aa261…`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; note it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
+| Kernel patch + config | **7.3.3 (session 31); 6.15.11 kept as reference** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **7 034 lines / 45 files** (36 modified + 9 new), sha256 `266501c0…`, generated from the tree against pristine 7.3.3, applied with 0 rejects and **45/45 files byte-identical**.  Config: `kernel/winchester-7.3.3.config` (sha256 `9274c809…`, includes `CONFIG_CHARGER_ISL9519=y`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; note it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
+| **ISL9519 charger** | **WORKING under Linux (session 31)** | I²C1 `0x48070000`, slave `0x09`; VendorID `0x0049`, DeviceID `0x0003`.  `isl9519.c` (built-in, DTS `charger@9`) sets the four registers in RIM's order with the masked fields and refreshes every 5 s.  Measured **+358 → +397 mA**, 3.775 → 3.794 V, capacity 8 → 9 %, `Charging`; still on at 197 s (watchdog).  Registers read back `0x14=0x0280`, `0x15=0x1070`, `0x3E=0x0D00`, `0x3F=0x0180`.  Report 183 |
+| TWL6030 BCI | **probes after the session-31 fix; NOT the board's charger** | `twl6030_charger` probes with the `simple-battery` profile and sets `CONTROLLER_CTRL1=0x10`, `VOREG=0x21`, `VICHRG=0x08`, `CINLIMIT=0x09`, but the stock OS leaves the whole block at bootloader reset values — it charges through the ISL9519.  The BCI node/modules are inert; `twl6030_usb` reports `ONLINE=1`, VBUS 4.81–4.91 V |
 
 ## Last known-good image
 
-**The current working image is `0x0F6AC47F` on the 7.3.3 base**
+**The current image is `0xE36C679A` on the 7.3.3 base**
+(`local/images/kernel-0xE36C679A-wdt58s.img`, sha256 `bdbaf5fc…`, 0x91A748
+bytes) — the
+`0x0F6AC47F` feature set plus the battery-profile DTS node, the ISL9519
+charger driver/config, and the WDT2 58.6 s/10 s pet policy.  It boots to the
+region-1 userland, the BCI and ISL9519 probe, **the pack charges at ~0.4 A**,
+and WDT2 reloads every ~10 s in the 58.6 s window.  The region-1 root for it
+is the charger rootfs `local/images/rootfs-region1-7.3.3-charger.ext4`
+(`ba275807…`, 17 modules).
+
+**The previous session-31 image is `0xA0B75C43`**
+(`local/images/kernel-0xA0B75C43-isl9519.img`, sha256 `a608a579…`, 0x91A1F0
+bytes) — the charger driver without the WDT2 change.
+
+**The earlier intermediate is `0x306E3DA5`**
+(`local/images/kernel-0x306E3DA5-battery-profile.img`, sha256 `b42f9272…`,
+0x91AC14 bytes) — the battery-profile node only; the BCI probes, charging was
+still unresolved.
+
+**The last full-regression image is `0x0F6AC47F` on the 7.3.3 base**
 (`local/images/kernel-0x0F6AC47F-7.3.3.img`, sha256 `fcddda8d…`, 0x91AB20
 bytes) with the region-1 root
 `local/images/rootfs-region1-7.3.3.ext4` (sha256 `0b3b83e8…`, 15 modules,
@@ -489,13 +581,13 @@ the I²C bus and resets the unit).
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **our Linux 7.3.3 image** `0x0F6AC47F`, flashed at block `0x825` in session 30 (both regions in one bootrom session).  **The 1917 IFS is not on media.**  `local/work/ifs-shim-sealed.ifs` (7,900,548 B, sha256 `b52195bb…`) is the way back; the compressed `local/work/ifs1917-compressed.ifs` (3,466,232 B, sha256 `f14db207…`) is the session-27 alternative |
-| region-0 RCFS (`/base`) | **still the 1917 RCFS at region-0 offset 0xC00000** — outside the 7.3.3 image (which ends at 0x91AB20) and not touched this session; not readable as `/base` without the 1917 IFS |
+| region-0 IFS on media | **our Linux image `0xE36C679A`**, flashed at block `0x825` in session 31.  **The 1917 IFS is not on media**; the way back is `local/work/ifs-shim-sealed.ifs` (7,900,548 B, sha256 `b52195bb…`) at block `0x825` (region 0 only).  The compressed `local/work/ifs1917-compressed.ifs` (3,466,232 B, sha256 `f14db207…`) is the session-27 alternative |
+| region-0 RCFS (`/base`) | **still the 1917 RCFS at region-0 offset 0xC00000** — outside the 7.3.3 image (which ends at 0x91A748) and not touched this session; not readable as `/base` without the 1917 IFS |
 | UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
-| `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; not exercised this session (no TabletOS boot) |
-| `BOOTCTR_FCTRY` | **`0x2D`** (post-reset boot; the planned boot read `0x2E`, then the power brownout spent one more).  `0x2D >= threshold 0x1E`, so `pbrpmb topup` wrote nothing |
-| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 `0b3b83e8…`, **15 modules under `/lib/modules/7.3.3`**; the initramfs mounts it **read-write** and chroots into it |
-| TabletOS / OS | **not running** — the unit is **powered off and docked on the rapid charger** at session end; its last boot was our Linux 7.3.3 image (`uname` 7.3.3), console over ttyGS0, door unavailable (trap 88) |
+| `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it ran during the session-31 TabletOS boot and topped `BOOTCTR_FCTRY` back to `0x32` |
+| `BOOTCTR_FCTRY` | **`0x2D`** on the final boot (`0x28` at session start → TabletOS top-up to `0x32` → five Linux boots).  `0x2D >= threshold 0x1E`, so `pbrpmb topup` wrote nothing |
+| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 `ba275807…`, **17 modules under `/lib/modules/7.3.3`** (incl. `twl6030_charger.ko`, `twl6030-gpadc.ko`); the initramfs mounts it **read-write** and chroots into it |
+| TabletOS / OS | **not running** — the unit is **on our Linux 7.3.3 image `0xE36C679A`**, console over ttyGS0 (no door — trap 88), **charging at ~0.4 A** (pack 13 % and rising at session end).  The last TabletOS boot was the charger cross-check earlier in session 31 |
 | device-side files | none needed on Linux; QNX `/tmp` tools must be re-pushed after a TabletOS restore |
 
 The factory boot budget is real and one-way: every successful factory/CRC boot
@@ -506,36 +598,29 @@ exactly one unit and stays up until asked.
 
 ## The single current blocker
 
-**None.**  ROADMAP item 10 closed in session 30: the unit boots the 7.3.3 base
-to the region-1 userland with a clean panel and working eMMC, and the 42-file
-patch reproduces the tree from pristine 7.3.3.  Item 9 steps 1–3 (I²C4 motion
-sensors, TMP103 + BQ27541, FAN5702, CM3217) all work on 7.3.3; the WL1283 is
-**the second task, after the charger test** (operator, session 30 end; report
-180 §6), and the `hd3` repurpose, BB10 and the PlayBook OS
-image work are parked by the operator.  NVRAM and the MCT remain unwritable, and
-an agent never writes RPMB (`SAFETY.md` §6).  **The next action is the prepared
-TWL6030 charger test** (item 9 step 1.1 in `HANDOFF.md`); the unit must charge
-first.
+**None.**  The charger is closed (ISL9519, ~0.4 A, pack recovering) and the
+WDT2 policy now matches the reference (58.6 s window, 10 s pet).  The WL1283
+(step 4) is **blocked on external evidence**: the FREF route was tested and
+closed (trap 116), so the next input must be the chip datasheet/schematic or a
+bus capture.  **The next unblocked work is ROADMAP item 9 step 5: the WM8994
+audio machine and the Cypress CY8CTMA3 touch** (report 176).  NVRAM and the
+MCT remain unwritable, and an agent never writes RPMB (`SAFETY.md` §6).
 
-**Media state: our Linux 7.3.3 image is in region 0 — the 1917 IFS is not on
-media**, and `BOOTCTR_FCTRY` reads **`0x2D`** (no top-up was needed).  Restore
-1917 and verify the counter before treating TabletOS as recovered.
+**Media state: our Linux image `0xE36C679A` is in region 0** (flashed this
+session); the 1917 IFS is not on media.  `BOOTCTR_FCTRY` read **`0x2D`** on
+the final boot (TabletOS had topped it to `0x32`).  Region 1 holds the 7.3.3
+charger rootfs (`ba275807…`).
 
 ## What is next
 
-`ROADMAP.md` owns the ordered list.  **Item 10 is closed (7.3.3 port).**  The
-next work is **ROADMAP item 9 step 0: test the prepared TWL6030 charger fix**
-(image `0x91AF34DF` + rootfs `ba275807…`), because the pack ran flat with no
-BCI instance (trap 108); **then step 4: resume the WL1283** (the FREF
-reference-clock parent, report 180 §6 / `HANDOFF.md` §1.2); **then item 9 step
-5**, the **WM8994** audio machine and the Cypress **CY8CTMA3** touch, on the
-7.3.3 base.  Item 9 stands at:
-**steps 1–3 done** — the I²C4 motion sensors (report 177), TMP103 + BQ27541
-(178), the FAN5702 LED (179) and **the CM3217 light sensor (182: 32–37 lux
-dark, 191 lit)**, all re-verified on 7.3.3 in session 30.  **Step 4 is no
-longer parked** — it is the operator's second task.  Every step is one variable
-per boot and none needs an RPMB write.  The sensor IRQs (GPIO2 lines 2/27/18)
-are the next variable if triggered sampling is wanted.
+1. **ROADMAP item 9 step 5: the WM8994 audio machine and the Cypress
+   CY8CTMA3 touch** (report 176 is the inventory).  The WL1283 (step 4) is
+   **blocked on external evidence** — the FREF route was tested and closed in
+   session 31, so the next input must be the chip datasheet/schematic or a bus
+   capture (report 180 §6/§8, trap 116).
+2. Item 9 steps 0–3 are done (charger, reports 177/178/179/182, re-verified on
+   7.3.3 in session 30); every step is one variable per boot and none needs an
+   RPMB write.
 
 ## Workspace location
 

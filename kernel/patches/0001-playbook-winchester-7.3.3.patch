@@ -2079,7 +2079,15 @@
  obj-$(CONFIG_CM3605)		+= cm3605.o
 --- a/drivers/irqchip/irq-gic.c
 +++ b/drivers/irqchip/irq-gic.c
-@@ -28,6 +28,7 @@
+@@ -18,6 +18,7 @@
+  * registers are banked per-cpu for these sources.
+  */
+ #include <linux/init.h>
++#include <linux/delay.h>
+ #include <linux/kernel.h>
+ #include <linux/kstrtox.h>
+ #include <linux/err.h>
+@@ -28,6 +29,7 @@
  #include <linux/cpu_pm.h>
  #include <linux/cpumask.h>
  #include <linux/io.h>
@@ -2087,7 +2095,7 @@
  #include <linux/of.h>
  #include <linux/of_address.h>
  #include <linux/of_irq.h>
-@@ -35,6 +36,7 @@
+@@ -35,6 +37,7 @@
  #include <linux/irqdomain.h>
  #include <linux/interrupt.h>
  #include <linux/percpu.h>
@@ -2095,7 +2103,7 @@
  #include <linux/seq_file.h>
  #include <linux/slab.h>
  #include <linux/irqchip.h>
-@@ -331,6 +333,323 @@
+@@ -331,6 +334,384 @@
  	return !gic_irq_set_irqchip_state(data, IRQCHIP_STATE_PENDING, true);
  }
  
@@ -2141,33 +2149,37 @@
 +}
 +
 +/*
-+ * WDT2 policy for bring-up (report 109 §8.1)
-+ * ------------------------------------------
++ * WDT2 policy for bring-up (report 109 §8.1, corrected in session 31)
++ * -------------------------------------------------------------------
 + * The bootloader arms the always-on watchdog with LDR = 0xfffc1800 (7.812 s)
-+ * and that value cannot be changed from our side: LDR writes are dropped,
-+ * measured from both the chainloader and the kernel.  The TGR kick *does*
-+ * reload CRR (QNX's own kicker is exactly read TGR -> invert -> write), so we
-+ * pet it instead:
++ * on the chainloader jump path.  The reference runs it at LDR = 0xffe2b400
++ * (58.6 s).  WLDR is writable only while the timer is stopped: the TRM's WSPR
++ * sequences are 0xAAAA -> 0x5555 (stop) and 0xBBBB -> 0x4444 (start).  We
++ * reprogram it to the reference's 58.6 s at GIC init and then pet it:
 + *
-+ *   - once at gic init, which covers the ~0.8 s before any timer exists;
-+ *   - from a 2 s timer_list thereafter.  It must be a timer, not a tick: as
-+ *     soon as userspace goes idle the kernel is tickless, and a tick-driven
-+ *     kick was measured running only ~36x/s and missing its slot (the board
-+ *     still reset at 8.64 s).
++ *   - the load write is verified by reading WLDR back; if it did not take we
++ *     fall back to a 2 s pet for the loader's 7.812 s window;
++ *   - the pet is a timer_list, not a tick: as soon as userspace goes idle the
++ *     kernel is tickless, and a tick-driven kick was measured missing its slot
++ *     (the board still reset at 8.64 s);
++ *   - one kick at GIC init covers the ~0.8 s before any timer exists; with
++ *     the 58.6 s window the 10 s pet leaves ~48 s of hang tolerance.
 + *
-+ * We deliberately do not use omap_wdt: it only arms the watchdog when
-+ * userspace opens /dev/watchdog, so it cannot pet an already-running
-+ * bootloader-armed timer across kernel boot.  A future step can hand over to
-+ * it once PID 1 pets /dev/watchdog.
++ * The kick itself is unchanged: read TGR -> invert -> write (QNX's own kicker
++ * does exactly that).  The stop window is ~200 us per WSPR step, so a hang
++ * inside it is not watched — acceptable for a bring-up kernel.
 + *
 + * CM_WKUP_WDTIMER2_CLKCTRL (0x4A307830 = WKUP_CM 0x4A307800 + 0x30) already
 + * reads MODULEMODE=HW_AUTO, IDLEST=0, so the module clock was never the issue.
 + * (0x4A31C030, used in an earlier attempt, is the *keypad* target-module.)
 + */
-+#define PB_WDT_KICK_HZ	2
-+#define PB_CM_WKUP	0x4a307000
++#define PB_WDT_KICK_SEC		10
++#define PB_WDT_KICK_SEC_FAST	2
++#define PB_WDT_LOAD		0xffe2b400	/* 58.6 s at 32.768 kHz */
++#define PB_CM_WKUP		0x4a307000
 +
 +static struct timer_list pb_wdt_timer;
++static bool pb_wdt_58s;
 +
 +static inline void pb_wdt_kick(void)
 +{
@@ -2175,38 +2187,95 @@
 +		__raw_writel(~__raw_readl(pb_wdt2 + 0x30), pb_wdt2 + 0x30);
 +}
 +
++/*
++ * WDT functional registers are posted through the L4 clock domain: TRM
++ * §22.3.4.13 requires polling the matching WWPS bit before the next write.
++ *   bit 4 W_PEND_WSPR, bit 3 W_PEND_WTGR, bit 2 W_PEND_WLDR
++ */
++#define PB_WDT_WWPS		0x34
++#define PB_WDT_PEND_WSPR	(1u << 4)
++#define PB_WDT_PEND_WTGR	(1u << 3)
++#define PB_WDT_PEND_WLDR	(1u << 2)
++
++static void __init pb_wdt_wait(u32 bit)
++{
++	int i;
++
++	for (i = 0; i < 1000; i++) {
++		if (!(readl_relaxed(pb_wdt2 + PB_WDT_WWPS) & bit))
++			return;
++		udelay(10);
++	}
++}
++
++/* Stop, rewrite WLDR, start.  Returns true if the new load read back. */
++static bool __init pb_wdt_reprogram(void)
++{
++	if (!pb_wdt2)
++		return false;
++
++	__raw_writel(0xaaaa, pb_wdt2 + 0x48);	/* WSPR: stop, step 1 */
++	pb_wdt_wait(PB_WDT_PEND_WSPR);
++	__raw_writel(0x5555, pb_wdt2 + 0x48);	/* stop, step 2 */
++	pb_wdt_wait(PB_WDT_PEND_WSPR);
++	__raw_writel(PB_WDT_LOAD, pb_wdt2 + 0x2c);	/* WLDR */
++	pb_wdt_wait(PB_WDT_PEND_WLDR);
++	__raw_writel(0xbbbb, pb_wdt2 + 0x48);	/* start, step 1 */
++	pb_wdt_wait(PB_WDT_PEND_WSPR);
++	__raw_writel(0x4444, pb_wdt2 + 0x48);	/* start, step 2 */
++	pb_wdt_wait(PB_WDT_PEND_WSPR);
++	pb_wdt_kick();				/* reload from the new WLDR */
++	pb_wdt_wait(PB_WDT_PEND_WTGR);
++
++	return readl_relaxed(pb_wdt2 + 0x2c) == PB_WDT_LOAD;
++}
++
 +static void pb_wdt_kick_fn(struct timer_list *t)
 +{
 +	pb_wdt_kick();
-+	mod_timer(&pb_wdt_timer, jiffies + PB_WDT_KICK_HZ * HZ);
++	mod_timer(&pb_wdt_timer,
++		  jiffies + (pb_wdt_58s ? PB_WDT_KICK_SEC : PB_WDT_KICK_SEC_FAST) * HZ);
 +}
 +
++/*
++ * The GIC probe runs first (pb_state_init maps WDT2), but the reprogram is
++ * done here: this initcall is the path we can prove runs, while the inlined
++ * GIC probe did not execute on the 7.3.3 base.  The loader's 7.812 s window
++ * covers the gap (gic init ~0.8 s, this initcall ~2.3 s).
++ */
 +static int __init pb_wdt_timer_init(void)
 +{
++	u32 ldr_in;
++
 +	if (!pb_wdt2)
 +		return 0;
++
++	ldr_in = readl_relaxed(pb_wdt2 + 0x2c);
++	pb_wdt_58s = pb_wdt_reprogram();
++	pr_emerg("PLAYBOOK WDT: ldr %08x->%08x (%s), pet %ds\n",
++		 ldr_in, readl_relaxed(pb_wdt2 + 0x2c),
++		 pb_wdt_58s ? "58.6 s window" : "reprogram failed",
++		 pb_wdt_58s ? PB_WDT_KICK_SEC : PB_WDT_KICK_SEC_FAST);
++
 +	timer_setup(&pb_wdt_timer, pb_wdt_kick_fn, 0);
-+	mod_timer(&pb_wdt_timer, jiffies + PB_WDT_KICK_HZ * HZ);
++	mod_timer(&pb_wdt_timer,
++		  jiffies + (pb_wdt_58s ? PB_WDT_KICK_SEC : PB_WDT_KICK_SEC_FAST) * HZ);
 +	return 0;
 +}
 +late_initcall(pb_wdt_timer_init);
 +
-+/* One-shot: confirm the module clock state and that the kick reloads CRR. */
++/* Early covered kick: the GIC probe still kicks once if the timer exists. */
 +static void __init pb_wdt_probe(void)
 +{
-+	void __iomem *cm, *wdt = pb_wdt2;
-+	u32 clk, ldr, crr0, crr1;
++	u32 crr0, crr1;
 +
-+	if (!wdt || !(cm = ioremap(PB_CM_WKUP, 0x1000)))
++	if (!pb_wdt2)
 +		return;
 +
-+	clk = readl_relaxed(cm + 0x830);
-+	ldr = readl_relaxed(wdt + 0x2c);
-+	crr0 = readl_relaxed(wdt + 0x28);
++	crr0 = readl_relaxed(pb_wdt2 + 0x28);
 +	pb_wdt_kick();
-+	crr1 = readl_relaxed(wdt + 0x28);
-+	pr_emerg("PLAYBOOK WDT: clk=%08x ldr=%08x crr %08x->%08x (%s)\n",
-+		 clk, ldr, crr0, crr1,
++	crr1 = readl_relaxed(pb_wdt2 + 0x28);
++	pr_emerg("PLAYBOOK WDT: crr %08x->%08x (%s)\n", crr0, crr1,
 +		 crr1 < crr0 ? "kicked" : "KICK FAILED");
 +}
 +
@@ -2419,7 +2488,7 @@
  static void __exception_irq_entry gic_handle_irq(struct pt_regs *regs)
  {
  	u32 irqstat, irqnr;
-@@ -367,7 +686,23 @@
+@@ -367,7 +748,23 @@
  			this_cpu_write(sgi_intid, irqstat);
  		}
  
@@ -2443,7 +2512,7 @@
  	} while (1);
  }
  
-@@ -1471,6 +1806,9 @@
+@@ -1471,6 +1868,9 @@
  	struct gic_chip_data *gic;
  	int irq, ret;
  
@@ -2453,7 +2522,7 @@
  	if (WARN_ON(!node))
  		return -ENODEV;
  
-@@ -1499,6 +1837,10 @@
+@@ -1499,6 +1899,10 @@
  	if (!gic_cnt) {
  		gic_init_physaddr(node);
  		gic_of_setup_kvm_info(node);
@@ -3345,7 +3414,7 @@
  
 --- a/arch/arm/boot/dts/ti/omap/omap4-winchester.dts
 +++ b/arch/arm/boot/dts/ti/omap/omap4-winchester.dts
-@@ -0,0 +1,1150 @@
+@@ -0,0 +1,1181 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * BlackBerry PlayBook (RIM "winchester", OMAP4430 ES2.2 HS).
@@ -3508,6 +3577,19 @@
 +	};
 +
 +	/*
++	 * Intersil ISL9519 narrow-VDC charger, 7-bit 0x09 (report 183).  This
++	 * is the board's real charger: the stock 1917 OS leaves it here and
++	 * drives it, while the TWL6030 BCI stays at its bootloader reset
++	 * values.  The driver writes 0x14/0x15 non-zero (the output is
++	 * disabled while both are zero) and refreshes them every 60 s for the
++	 * part's 175 s watchdog.
++	 */
++	charger@9 {
++		compatible = "intersil,isl9519";
++		reg = <0x9>;
++	};
++
++	/*
 +	 * Backlight LED driver, same bus, 7-bit 0x38 (report 111 §4.2 — this is
 +	 * NOT the TC358764; the bridge is programmed over DSI generic writes,
 +	 * not I2C).
@@ -3553,10 +3635,14 @@
 +
 +	/*
 +	 * BQ27541-class fuel gauge at 0x55 (QNX `battery_win`).  The bq27xxx
-+	 * driver reads the standard command set; no battery profile is needed
-+	 * for capacity/voltage/temperature.
++	 * driver reads the standard command set; capacity/voltage/temperature
++	 * need no profile.  The charger's `monitored-battery` must NOT point
++	 * here: power_supply_get_battery_info() only accepts a node whose
++	 * compatible is "simple-battery" (or a static Samsung battery), so it
++	 * returned -ENODEV with this node (session 31).  See the battery
++	 * profile at the end of the file.
 +	 */
-+	battery: battery@55 {
++	battery@55 {
 +		compatible = "ti,bq27541";
 +		reg = <0x55>;
 +	};
@@ -4485,7 +4571,7 @@
 + * interrupts and the monitored battery; VBUS voltage is GPADC channel 10 (the
 + * channel the TWL6032 mainline board uses too).  QNX's power service owns the
 + * BCI on the reference, so the charge limits the bootloader left in
-+ * CHARGERUSB_CTRLLIMIT1/2 are the fallback when the gauge reports none.
++ * CHARGERUSB_CTRLLIMIT1/2 are the fallback when the profile reports none.
 + */
 +&twl {
 +	charger {
@@ -4494,6 +4580,20 @@
 +		io-channels = <&twl_gpadc 10>;
 +		io-channel-names = "vusb";
 +		monitored-battery = <&battery>;
++	};
++};
++
++/*
++ * Battery profile for the charger, deliberately separate from the bq27541
++ * gauge node: power_supply_get_battery_info() resolves `monitored-battery` and
++ * requires compatible = "simple-battery", otherwise the BCI probe fails with
++ * -ENODEV (measured in session 31).  No properties on purpose: the driver then
++ * falls back to the bootloader's CHARGERUSB_CTRLLIMIT1/2, measured on this
++ * unit as 0x21 -> 4.16 V and 0x08 -> 900 mA, both inside its accepted ranges.
++ */
++/ {
++	battery: battery {
++		compatible = "simple-battery";
 +	};
 +};
 --- a/arch/arm/include/debug/omap4bc.S
@@ -6646,3 +6746,358 @@
  		compatible = "ti,twl6030-gpadc";
  		interrupts = <3>;
  		#io-channel-cells = <1>;
+--- a/drivers/power/supply/Kconfig
++++ b/drivers/power/supply/Kconfig
+@@ -103,6 +103,17 @@
+ 	  This driver can be built as a module. If so, the module will be
+ 	  called adp5061.
+ 
++config CHARGER_ISL9519
++	tristate "Intersil ISL9519 battery charger driver"
++	depends on I2C
++	help
++	  Say Y here to enable support for the Intersil ISL9519 narrow-VDC
++	  battery charger with SMBus interface.  This is the charger on the
++	  BlackBerry PlayBook.
++
++	  This driver can be built as a module. If so, the module will be
++	  called isl9519.
++
+ config BATTERY_ACT8945A
+ 	tristate "Active-semi ACT8945A charger driver"
+ 	depends on MFD_ACT8945A || COMPILE_TEST
+--- a/drivers/power/supply/Makefile
++++ b/drivers/power/supply/Makefile
+@@ -21,6 +21,7 @@
+ 
+ obj-$(CONFIG_BATTERY_88PM860X)	+= 88pm860x_battery.o
+ obj-$(CONFIG_CHARGER_ADP5061)	+= adp5061.o
++obj-$(CONFIG_CHARGER_ISL9519)	+= isl9519.o
+ obj-$(CONFIG_BATTERY_ACT8945A)	+= act8945a_charger.o
+ obj-$(CONFIG_BATTERY_AXP20X)	+= axp20x_battery.o
+ obj-$(CONFIG_CHARGER_AXP20X)	+= axp20x_ac_power.o
+--- a/drivers/power/supply/isl9519.c
++++ b/drivers/power/supply/isl9519.c
+@@ -0,0 +1,322 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Intersil ISL9519 narrow-VDC battery charger - BlackBerry PlayBook (winchester)
++ *
++ * This is the board's charger: an SMBus part at I2C1 0x48070000, 7-bit slave
++ * 0x09, driven by RIM's battery_win on TabletOS (report 183).  The TWL6030
++ * BCI is present but the stock OS leaves it disabled; it is not the charger.
++ *
++ * Register facts used here (measured on the live 1917 unit and Intersil
++ * AN1570, the ISL9519TQFNEVAL2Z user guide):
++ *
++ *   - 16-bit SMBus words, LO byte first (i2c_smbus_read_word_data() and
++ *     i2c_smbus_write_word_data() already use that order)
++ *   - the value registers are masked engineering fields (static RE of RIM's
++ *     battery_win, session 31):
++ *       0x14 charge current     bits 12:7, 128 mA/LSB
++ *       0x15 max system voltage bits 13:4,  16 mV/LSB
++ *       0x3E min system voltage bits 14:8, 256 mV/LSB
++ *       0x3F input current      bits 12:7, 128 mA/LSB
++ *     so 640 mA is 0x0280, 4208 mV is 0x1070, 384 mA is 0x0180 and
++ *     3328 mV is 0x0D00 — exactly the values the stock 1917 OS uses.
++ *   - RIM writes 0x3E, 0x15, 0x14, 0x3F in that order every ~1 s; 0x44 is
++ *     never touched (the "Control" register the vendor reads is 0x3D)
++ *   - the output is disabled while 0x14 and 0x15 are zero, so both must be
++ *     written non-zero to start charging
++ *   - the part shuts down unless 0x14 or 0x15 is rewritten at least every
++ *     175 s: the delayed work below refreshes all four every 5 s
++ *   - 0xFE VendorID reads 0x0049 ('I'), 0xFF DeviceID reads 0x0003
++ */
++
++#include <linux/delay.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/power_supply.h>
++#include <linux/workqueue.h>
++
++#define ISL9519_REG_CHARGE_CURRENT	0x14
++#define ISL9519_REG_MAX_SYSTEM_VOLTAGE	0x15
++#define ISL9519_REG_MIN_SYSTEM_VOLTAGE	0x3E
++#define ISL9519_REG_INPUT_CURRENT	0x3F
++#define ISL9519_REG_VENDOR_ID		0xFE
++#define ISL9519_REG_DEVICE_ID		0xFF
++
++#define ISL9519_VENDOR_ID		0x0049
++#define ISL9519_DEVICE_ID		0x0003
++
++/* Field positions and steps, from RIM's battery_win (battery.c). */
++#define ISL9519_CHARGE_CURRENT_SHIFT	7	/* 128 mA/LSB, 6 bits */
++#define ISL9519_MAX_SYSTEM_SHIFT	4	/* 16 mV/LSB, 10 bits */
++#define ISL9519_MIN_SYSTEM_SHIFT	8	/* 256 mV/LSB, 7 bits */
++#define ISL9519_INPUT_CURRENT_SHIFT	7	/* 128 mA/LSB, 6 bits */
++
++#define ISL9519_CHARGE_CURRENT_STEP_MA	128
++#define ISL9519_MAX_SYSTEM_STEP_MV	16
++#define ISL9519_MIN_SYSTEM_STEP_MV	256
++#define ISL9519_INPUT_CURRENT_STEP_MA	128
++
++/* The part's watchdog is 175 s; RIM rewrites every ~1 s, we use 5 s. */
++#define ISL9519_REFRESH_MS		5000
++
++/* The stock 1917 host-port values (PPS: 640 mA / 4208 / 3328 / 384). */
++#define ISL9519_CHARGE_CURRENT_MA	640
++#define ISL9519_MAX_SYSTEM_MV		4208
++#define ISL9519_MIN_SYSTEM_MV		3328
++#define ISL9519_INPUT_CURRENT_MA	384
++
++static unsigned int isl9519_field(unsigned int val, unsigned int step,
++				  unsigned int shift)
++{
++	return (val / step) << shift;
++}
++
++struct isl9519 {
++	struct i2c_client *client;
++	struct power_supply *psy;
++	struct delayed_work refresh;
++	unsigned int charge_current_ma;
++	unsigned int max_system_mv;
++	unsigned int min_system_mv;
++	unsigned int input_current_ma;
++};
++
++static int isl9519_write(struct isl9519 *data, u8 reg, unsigned int val)
++{
++	int ret;
++
++	ret = i2c_smbus_write_word_data(data->client, reg, val);
++	if (ret < 0)
++		dev_err(&data->client->dev, "write 0x%02x=0x%04x failed: %d\n",
++			reg, val, ret);
++	return ret;
++}
++
++/*
++ * RIM's order: min system voltage, max system voltage, charge current, input
++ * current.  Charge current and max system voltage both have to be non-zero
++ * for the output to be enabled, and rewriting those two is the watchdog kick.
++ */
++static int isl9519_program(struct isl9519 *data)
++{
++	int ret;
++
++	ret = isl9519_write(data, ISL9519_REG_MIN_SYSTEM_VOLTAGE,
++			    isl9519_field(data->min_system_mv,
++					  ISL9519_MIN_SYSTEM_STEP_MV,
++					  ISL9519_MIN_SYSTEM_SHIFT));
++	if (ret)
++		return ret;
++
++	ret = isl9519_write(data, ISL9519_REG_MAX_SYSTEM_VOLTAGE,
++			    isl9519_field(data->max_system_mv,
++					  ISL9519_MAX_SYSTEM_STEP_MV,
++					  ISL9519_MAX_SYSTEM_SHIFT));
++	if (ret)
++		return ret;
++
++	ret = isl9519_write(data, ISL9519_REG_CHARGE_CURRENT,
++			    isl9519_field(data->charge_current_ma,
++					  ISL9519_CHARGE_CURRENT_STEP_MA,
++					  ISL9519_CHARGE_CURRENT_SHIFT));
++	if (ret)
++		return ret;
++
++	return isl9519_write(data, ISL9519_REG_INPUT_CURRENT,
++			     isl9519_field(data->input_current_ma,
++					   ISL9519_INPUT_CURRENT_STEP_MA,
++					   ISL9519_INPUT_CURRENT_SHIFT));
++}
++
++static void isl9519_refresh_work(struct work_struct *work)
++{
++	struct isl9519 *data = container_of(to_delayed_work(work),
++					    struct isl9519, refresh);
++
++	isl9519_program(data);
++
++	schedule_delayed_work(&data->refresh,
++			      msecs_to_jiffies(ISL9519_REFRESH_MS));
++}
++
++static enum power_supply_property isl9519_props[] = {
++	POWER_SUPPLY_PROP_STATUS,
++	POWER_SUPPLY_PROP_ONLINE,
++	POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT,
++	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
++	POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE_MAX,
++};
++
++static int isl9519_get_property(struct power_supply *psy,
++				enum power_supply_property psp,
++				union power_supply_propval *val)
++{
++	struct isl9519 *data = power_supply_get_drvdata(psy);
++
++	switch (psp) {
++	case POWER_SUPPLY_PROP_STATUS:
++		val->intval = POWER_SUPPLY_STATUS_CHARGING;
++		break;
++	case POWER_SUPPLY_PROP_ONLINE:
++		val->intval = 1;
++		break;
++	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
++		val->intval = data->input_current_ma * 1000;
++		break;
++	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
++		val->intval = data->charge_current_ma * 1000;
++		break;
++	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE_MAX:
++		val->intval = data->max_system_mv * 1000;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++static int isl9519_set_property(struct power_supply *psy,
++				enum power_supply_property psp,
++				const union power_supply_propval *val)
++{
++	struct isl9519 *data = power_supply_get_drvdata(psy);
++	int ret;
++
++	switch (psp) {
++	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
++		data->input_current_ma = val->intval / 1000;
++		ret = isl9519_write(data, ISL9519_REG_INPUT_CURRENT,
++				    data->input_current_ma);
++		break;
++	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
++		data->charge_current_ma = val->intval / 1000;
++		ret = isl9519_write(data, ISL9519_REG_CHARGE_CURRENT,
++				    data->charge_current_ma);
++		break;
++	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE_MAX:
++		data->max_system_mv = val->intval / 1000;
++		ret = isl9519_write(data, ISL9519_REG_MAX_SYSTEM_VOLTAGE,
++				    data->max_system_mv);
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	return ret;
++}
++
++static int isl9519_property_is_writeable(struct power_supply *psy,
++					 enum power_supply_property psp)
++{
++	switch (psp) {
++	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
++	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
++	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE_MAX:
++		return 1;
++	default:
++		return 0;
++	}
++}
++
++static const struct power_supply_desc isl9519_desc = {
++	.name			= "isl9519",
++	.type			= POWER_SUPPLY_TYPE_USB,
++	.properties		= isl9519_props,
++	.num_properties		= ARRAY_SIZE(isl9519_props),
++	.get_property		= isl9519_get_property,
++	.set_property		= isl9519_set_property,
++	.property_is_writeable	= isl9519_property_is_writeable,
++};
++
++static int isl9519_probe(struct i2c_client *client)
++{
++	struct power_supply_config psy_cfg = {};
++	struct isl9519 *data;
++	int vendor, device, ret;
++
++	vendor = i2c_smbus_read_word_data(client, ISL9519_REG_VENDOR_ID);
++	if (vendor < 0)
++		return dev_err_probe(&client->dev, vendor,
++				     "cannot read VendorID\n");
++	device = i2c_smbus_read_word_data(client, ISL9519_REG_DEVICE_ID);
++	if (device < 0)
++		return dev_err_probe(&client->dev, device,
++				     "cannot read DeviceID\n");
++
++	if (vendor != ISL9519_VENDOR_ID || device != ISL9519_DEVICE_ID)
++		return dev_err_probe(&client->dev, -ENODEV,
++				     "not an ISL9519 (vendor 0x%04x device 0x%04x)\n",
++				     vendor, device);
++
++	data = devm_kzalloc(&client->dev, sizeof(*data), GFP_KERNEL);
++	if (!data)
++		return -ENOMEM;
++
++	data->client = client;
++	data->charge_current_ma = ISL9519_CHARGE_CURRENT_MA;
++	data->max_system_mv = ISL9519_MAX_SYSTEM_MV;
++	data->min_system_mv = ISL9519_MIN_SYSTEM_MV;
++	data->input_current_ma = ISL9519_INPUT_CURRENT_MA;
++	i2c_set_clientdata(client, data);
++
++	ret = isl9519_program(data);
++	if (ret)
++		return ret;
++
++	psy_cfg.drv_data = data;
++	psy_cfg.fwnode = dev_fwnode(&client->dev);
++	data->psy = devm_power_supply_register(&client->dev, &isl9519_desc,
++					       &psy_cfg);
++	if (IS_ERR(data->psy))
++		return dev_err_probe(&client->dev, PTR_ERR(data->psy),
++				     "cannot register power supply\n");
++
++	INIT_DELAYED_WORK(&data->refresh, isl9519_refresh_work);
++	schedule_delayed_work(&data->refresh,
++			      msecs_to_jiffies(ISL9519_REFRESH_MS));
++
++	dev_info(&client->dev,
++		 "ISL9519 charger: %u mA charge, %u/%u mV system, %u mA input\n",
++		 data->charge_current_ma, data->min_system_mv,
++		 data->max_system_mv, data->input_current_ma);
++	return 0;
++}
++
++static void isl9519_remove(struct i2c_client *client)
++{
++	struct isl9519 *data = i2c_get_clientdata(client);
++
++	cancel_delayed_work_sync(&data->refresh);
++
++	/* Explicitly disable the output (also stops the 175 s watchdog). */
++	isl9519_write(data, ISL9519_REG_CHARGE_CURRENT, 0);
++	isl9519_write(data, ISL9519_REG_MAX_SYSTEM_VOLTAGE, 0);
++}
++
++static const struct i2c_device_id isl9519_id[] = {
++	{ "isl9519" },
++	{ }
++};
++MODULE_DEVICE_TABLE(i2c, isl9519_id);
++
++static const struct of_device_id isl9519_of_match[] = {
++	{ .compatible = "intersil,isl9519" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, isl9519_of_match);
++
++static struct i2c_driver isl9519_driver = {
++	.driver = {
++		.name = "isl9519",
++		.of_match_table = isl9519_of_match,
++	},
++	.probe = isl9519_probe,
++	.remove = isl9519_remove,
++	.id_table = isl9519_id,
++};
++module_i2c_driver(isl9519_driver);
++
++MODULE_AUTHOR("PlayBook Linux bring-up");
++MODULE_DESCRIPTION("Intersil ISL9519 narrow-VDC battery charger");
++MODULE_LICENSE("GPL");

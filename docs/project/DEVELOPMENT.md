@@ -258,6 +258,13 @@ for i in $(seq 1 40); do ls /dev/ttyACM0 >/dev/null 2>&1 && break; sleep 2; done
 timeout 15 pkexec chmod 666 /dev/ttyACM0
 ```
 
+**Going back from TabletOS to our Linux image: restore region 0 only when only
+region 0 changed** (`flash --component boot/chainloader/kernel.img --dest-block
+0x825`).  Flash **both** regions in one bootrom session only when both were
+updated (a kernel *and* rootfs change).  Never flash only region 1 while the
+unit boots TabletOS — that leaves TabletOS on media with no console node.
+(Operator correction, session 31.)
+
 **The plan line's "media 0x…" is a loader-block address, not a raw device
 offset.**  Loader block `N` is raw `mmcblk1`/`hd0` offset
 `(N - 0x15) * 0x10000`: the IFS at "block `0x825`, media `0x8250000`" is raw <!-- audit-ok: names the old wrong value -->

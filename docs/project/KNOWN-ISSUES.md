@@ -474,16 +474,15 @@ report 121 §3/§11/§12.
      `/sys/class/power_supply/bq27541-0/uevent`; at ≤3.0 V stop bench work and
      charge with the proper charger.  (Session 30.)
 
-109. **Subagents share this session's shell; "static RE only" is an instruction,
-     not a sandbox.**  In session 30 two general subagents were asked to
-     disassemble QNX libraries.  Their shell calls are logged under
-     `/tmp/commandcode/shellout/`; the audit found only `objdump` output (no
-     `pbcon`/`ttyACM`/`bbusb`/`devmem` strings, no call after 12:47:54), but they
-     *could* have run `tools/pbcon.py`, `bbusb.py` or `ssh`.  Rule: while the
-     bench is connected, give subagents file-only tasks, audit every shell-output
-     log they produce, and never let them run a `tools/` script; if a task needs
-     no shell, say so explicitly.  The reset in that window was power (trap 108),
-     not the agents — but the exposure was real.  (Session 30.)
+109. **Subagents share this session's shell, so keep them off the bench.**  In
+     session 30 two general subagents were asked to disassemble QNX libraries;
+     they *could* have run `tools/pbcon.py`, `bbusb.py` or `ssh` while the unit
+     was connected.  The reset in that window turned out to be the low battery
+     (trap 108), **not** the agents.  Rule: while the bench is connected, give
+     subagents file-only tasks and never let them run a `tools/` script.  The
+     `/tmp/commandcode/shellout/` audit requirement added after that scare is
+     **dropped** (operator, session 31) — it was a one-off misdiagnosis.
+     (Session 30; revised session 31.)
 
 110. **Do not reverse-engineer PlayBook hardware from BB10 images.**  BB10/10.x
      targets newer devices; its Winchester branch is a porting target, not the
@@ -494,9 +493,102 @@ report 121 §3/§11/§12.
      `libaudio_config.so.1`, the 1917 `/base` does not.  (Operator, session 30;
      `DECISIONS.md` §34.)
 
+111. **The TWL6030 charger's `monitored-battery` must point at a
+     `simple-battery` profile, not at the fuel gauge.**  `twl6030_charger`
+     calls `power_supply_get_battery_info(charger->usb, …)`, which resolves the
+     phandle in `monitored-battery` and then **requires the target node's
+     `compatible` to be `simple-battery`** (or a static Samsung battery);
+     anything else returns `-ENODEV` and the probe fails with
+     `Failed to get battery info`.  The session-30 prepared DTS pointed it at
+     `battery@55` (`ti,bq27541`), so the driver built, probed and died — the
+     node and module were present, which is what made it look like a binding
+     problem.  Fix: keep the gauge node label-free and add
+     `battery { compatible = "simple-battery"; };`.  With no properties the
+     driver falls back to the bootloader's `CHARGERUSB_CTRLLIMIT1/2`
+     (measured `0x21` → 4.16 V, `0x08` → 900 mA), both inside its accepted
+     ranges.  (Session 31.)
+
+112. **`twl6030_usb` = `Charging` does not prove the pack is charging — read the
+     gauge.**  After the session-31 fix the supply registered and reported
+     `ONLINE=1`, VBUS 4.81–4.91 V and `STATUS=Charging`, while the BQ27541 read
+     **0 mA**, and with the panel on it read **−132 mA, Discharging** (the
+     supply then flipped to `Not charging`).  The driver's `input_current_limit`
+     is fixed at **500 mA** on probe; the running system can consume all of it,
+     leaving nothing for the battery.  Judge the charge path by a positive
+     `CURRENT_NOW` on `bq27541-0`, not by the charger supply's status.  The
+     pack in session 31 was also flagged `HEALTH=Dead` (the gauge's SOC-final
+     flag at 2 %), so a negative result needs the TabletOS cross-check before
+     blaming the driver.  (Session 31, `DECISIONS.md` §35.)
+
+113. **The PlayBook's charger is an Intersil ISL9519 at I²C1 `0x48070000`
+     slave `0x09` — not the TWL6030 BCI.**  Measured on the running 1917:
+     VendorID (reg `0xFE`) = `0x0049` ('I'), DeviceID (reg `0xFF`) = `0x0003`;
+     `0x14 = 0x0280` (charge current 640 mA), `0x15 = 0x1070` (max system
+     voltage 4208 mV), `0x3F = 0x0180` (input current limit 384 mA),
+     `0x44 = 0x0000` (control).  The `/pps/services/power/charger` values match
+     exactly.  The stock OS leaves the TWL MAIN_CHARGE block at its bootloader
+     reset values (`CONTROLLER_CTRL1 = 0x00`) and only masks/unmasks its
+     VBUS/VAC interrupts (`CONTROLLER_INT_MASK = 0xDC`).  **So a working
+     `twl6030_charger` probe does not charge this pack**; the 1917 charger is
+     the ISL9519.  Its host-port policy (384 mA input limit) is below the
+     system load (~430 mA), which is why 1917 shows no charging on a PC port;
+     the pack charged on the rapid-charger dock (2 % → 7 %).  (Session 31,
+     report 183.)
+
+114. **The ISL9519 needs non-zero `0x14`/`0x15` and a refresh at least every
+     175 s.**  Intersil AN1570 (ISL9519TQFNEVAL2Z user guide): the output is
+     disabled while the Charge Current and Max System Voltage registers are
+     `0x0000`, and **the part shuts down if it does not receive a
+     MaxSystemVoltage or ChargeCurrent command every 175 s**.  SMBus words are
+     LO-byte first.  Registers `0x14`, `0x15`, `0x3F` and `0x44` are the four
+     the vendor's own tool writes (charge current, max system voltage, input
+     current, control).  A Linux driver must therefore set both non-zero
+     registers and refresh them on a timer; a one-shot write stops charging
+     after 175 s.  (Session 31, report 183.)
+
+115. **WDT2's load can be changed — but only while the timer is stopped via
+     `WSPR`.**  The loader arms WDT2 with `WLDR = 0xFFFC1800` (**7.8125 s**) on
+     the chainloader jump path; live QNX runs `LDR = 0xFFE2B400` (**58.6 s**).
+     Report 109 §8.1's "`LDR` writes are dropped" is true only while the timer
+     runs: TRM §22.3.4.8/§22.3.4.9 require **disable = `WSPR` `0xAAAA` →
+     `0x5555`**, then write `WLDR`, then **enable = `WSPR` `0xBBBB` →
+     `0x4444`**; the new load takes effect on the next `TGR` kick/overflow.
+     Verified live in session 31 (`WLDR` read back `0xFFE2B400`, `WCRR`
+     reloaded and counted in the 58.6 s window).  `WCLR = 0x20` (PTV 0,
+     PRE 1) and the period is `(0xFFFFFFFF − WLDR + 1)/32768`.  The kick is
+     still `TGR` read → invert → write; QNX's `wdtkick` never disables the
+     timer.  **The stage after the request:** successive writes to the WDT
+     functional registers are posted through the L4 clock domain, so **poll
+     `WWPS` (`0x34`) after every write** — bit 4 `W_PEND_WSPR`, bit 3
+     `W_PEND_WTGR`, bit 2 `W_PEND_WLDR` (TRM §22.3.4.13).  A fixed delay is
+     not enough: with `udelay(200)` the sequence silently stopped at
+     `WSPR=0xBBBB` and `WLDR` stayed `0xFFFC1800`.  The kernel now does the
+     repogram at the late initcall (the inlined GIC-probe path did not run on
+     the 7.3.3 base), pets every 10 s with a 2 s fallback, and the unit was
+     verified alive past 275 s with `WCRR` reloading every ~10 s
+     (image `0xE36C679A`).  The expected dmesg line does **not** appear on
+     7.3.3 — verify by `WLDR`/`WCRR` registers.  (Session 31; corrects
+     report 109 §8.1.)
+
+116. **`CM_DIV_M5_DPLL_PER` is the DSS clock divider — never write the
+     reference's `0x329`.**  The OMAP4 DSS functional clock's parent list
+     (`omap4_dss_dss_clk_parents[]` in `drivers/clk/ti/clk-44xx.c`) is
+     `dpll_per_m5x2_ck`, and the Linux clock framework runs M5 at `0x204`
+     (DIV 4) to produce the 96 MHz DSS clock.  Writing the reference's
+     `0x329` (GATE_CTRL=1, DIV=9) from the session-31 FREF experiment
+     **changed the display core clock and made the panel glitch
+     (timing-related)**.  **Confirmed by isolation (session 31):** the glitch
+     appears immediately on the `0x329` write, and writing `0x204` back
+     **recovers the panel without a reboot**.  The GPIO2_22, FREF-pad and
+     WDT2 writes were tested separately and are clean.  The reference's
+     divider value belongs with its own DPLL_PER rate/post-divider setup and
+     is not portable alone.  The same M5 output is the FREF source, so the
+     WL1283 reference-clock experiment cannot be done by poking this divider
+     without breaking the display.  (Session 31; report 180 + addendum.)
+
 ## 3. Corrections to older reports
 
-These eighteen are preserved deliberately. Each is newer than the text it
+These twenty are preserved deliberately. Each is newer than the text it
 contradicts, and the older reports have been corrected in place where they could
 be.
 
@@ -636,6 +728,21 @@ code address `A` there is really `A - 0x9000`.  This also withdraws report 151
 the table holds valid ranges (`0x800267C0`/`0x2B004`, `0x80025E78`/`0x948`).
 The data literals are correct as written.  Source: session 26, report 173
 §1–§3.
+
+**3.19 Report 176's unidentified `0x09` on I²C1 is the ISL9519 charger.**
+Report 176 §1.1 recorded `0x09` on `/dev/i2c0` as unidentified ("candidates:
+a board EEPROM/GPIO expander and the NCP5623").  It is the **Intersil
+ISL9519** battery charger: VendorID `0xFE = 0x0049`, DeviceID `0xFF = 0x0003`,
+charge-current/max-system-voltage registers `0x14`/`0x15`, input limit `0x3F`.
+The TWL6030 BCI is not the board's charger.  Source: report 183, session 31,
+traps 113/114.
+
+**3.20 Report 109 §8.1's "the WDT2 window cannot be lengthened" is
+incomplete.**  `WLDR` is write-protected only while the timer *runs*; the
+`WSPR` stop sequence (`0xAAAA` → `0x5555`) allows the load to be rewritten,
+and `0xBBBB` → `0x4444` restarts it.  Verified live in session 31:
+`WLDR = 0xFFE2B400` (58.6 s, QNX's value) read back and `WCRR` reloaded.
+Trap 115; the inline correction is in report 109 §8.1.
 
 **Also corrected elsewhere, for completeness:** `0x1cce0` in `winch_lcdctl` is a
 HAL parameter-block defaults initialiser, not the register programmer — the

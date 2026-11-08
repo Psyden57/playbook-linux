@@ -912,6 +912,27 @@ If the BCI does not charge, fall back to the values the bootloader left in
 `CHARGERUSB_CTRLLIMIT1/2`, and check the actual GPADC channel before changing
 the node.
 
+**Superseded in premise by §37 (session 31).**  The BCI is not the board's
+charger: the stock OS leaves it disabled and charges through the ISL9519 at
+I²C1 0x09.  The probe fix below is correct and harmless, but it cannot charge
+this pack.
+
+**Executed (session 31).**  The prepared node was **wrong in one detail and
+the driver failed**: `monitored-battery` pointed at the bq27541 gauge node
+(`compatible = "ti,bq27541"`), and `power_supply_get_battery_info()` only
+accepts a node whose compatible is **`simple-battery`** (or a static Samsung
+battery), so the probe returned `-ENODEV` (`Failed to get battery info`) and no
+supply appeared.  The fix is a separate label-free gauge node plus
+`battery { compatible = "simple-battery"; }` with **no properties**; the driver
+then falls back to `CHARGERUSB_CTRLLIMIT1/2` (measured on this unit `0x21` →
+4.16 V, `0x08` → 900 mA).  Image `0x306E3DA5` (sha256 `b42f9272…`) boots with
+`twl6030_usb` registered: `ONLINE=1`, VBUS 4.81–4.91 V, input limit 500 mA, and
+the driver sets `CONTROLLER_CTRL1=0x10` (EN_CHARGER), `VOREG=0x21`,
+`VICHRG=0x08`, `CINLIMIT=0x09`.  **The pack still showed no positive charge
+current** (0 mA, or −132 mA with the panel on), so the test passes on
+instantiation but **not on charging**; the TabletOS cross-check is the next
+measurement.  Traps 111/112.
+
 ---
 
 ## 36. Resume the WL1283 as the second task, after the charger confirmation (session 30 end)
@@ -936,6 +957,90 @@ operator's order at session 30 end.
 **Constraint.**  One variable per boot; do not characterise the chip from
 TabletOS (trap 103); a negative result must stop the hunt rather than spawn
 another register diff.
+
+**Executed (session 31) — negative, and the route is closed.**  The FREF pad
+was muxed (`0x4A10019C = 0x41000000`) and `CM_DIV_M5_DPLL_PER` forced to the
+reference's `0x329`, with WL_EN verified high; MMC5 still did not answer CMD5
+and UART2 HCI still got nothing.  The write also **changed the DSS clock**
+(`dpll_per_m5x2_ck` is the DSS parent) and glitched the panel until a clean
+boot restored `0x204`.  The reference's divider value is tied to its own
+DPLL_PER setup, so this is not a testable single variable and must not be
+retried (trap 116, report 180 §8).  The WL1283 now needs a bus capture or the
+chip datasheet, as report 180 §6 predicted.
+
+---
+
+## 37. The PlayBook's charger is the ISL9519; implement an ISL9519 driver (session 31)
+
+**Decision.**  Treat the **Intersil ISL9519** at I²C1 `0x48070000`, slave
+**`0x09`**, as the board's charger.  Write a minimal Linux power-supply driver
+for it: verify VendorID `0x0049` / DeviceID `0x0003`, set the charge current
+(`0x14`), max system voltage (`0x15`), input current limit (`0x3F`) and
+control (`0x44`), and **refresh `0x14`/`0x15` at least every 175 s**.  The
+TWL6030 BCI node/modules are no longer on the charge path; keep them only if
+they are inert, or drop them when convenient.
+
+**Why.**  The stock 1917 OS leaves the TWL6030 MAIN_CHARGE block at its
+bootloader reset values (`CONTROLLER_CTRL1 = 0x00`, `VOREG = 0x02`,
+`VICHRG = 0x04`, `CINLIMIT = 0x01`) and charges through the ISL9519: the live
+registers are `0x14 = 0x0280` (640 mA), `0x15 = 0x1070` (4208 mV),
+`0x3F = 0x0180` (384 mA), `0x44 = 0`, with VendorID `0x0049` and DeviceID
+`0x0003`, and `/pps/services/power/charger` publishes exactly those values.
+RIM's `battery_win` drives it (`isl_9519_init`).  The pack charged on the dock
+(2 % → 7 %, 3.33 → 3.683 V; SoH 90), so the pack and the chip work; Linux
+never configures the chip, so the output stays disabled and the pack drains
+(Intersil AN1570: the output is disabled while the charge-current and
+max-system-voltage registers are zero).
+
+**Executed (session 31).**  `drivers/power/supply/isl9519.c` (built-in,
+`CONFIG_CHARGER_ISL9519=y`, DTS `charger@9` under `&i2c1`) probes the part,
+checks VendorID/DeviceID, writes `0x3E`, `0x15`, `0x14`, `0x3F` in RIM's order
+with the masked field steps (charge/input 128 mA/LSB, max system 16 mV/LSB,
+min system 256 mV/LSB), and refreshes every 5 s.  Image `0xA0B75C43` charges
+the pack: `CURRENT_NOW` +358 → +397 mA, 3.775 → 3.794 V, capacity 8 → 9 %,
+still charging at 197 s uptime.  Static RE of RIM's `battery_win`
+(`isl_9519_init` @ 0xBB18, `isl_9519_update_regs` @ 0xB1B8) supplied the field
+steps, the write order and the ~1.07 s cadence.
+
+**Constraint.**  Words are LO-first.  The 175 s watchdog rules out a one-shot
+enable.  The CC/CV/complete decisions are the ISL's own open-loop ceilings
+here; a later policy layer (charge current vs temperature/source) can be added
+if needed.  One variable per boot; no RPMB write; the `hd3` repurpose, BB10
+and PlayBook OS work stay parked.
+
+**Evidence.**  Report 183; the live 1917 PPS and ISL9519 register reads; the
+`battery_win` strings; Intersil AN1570 and the ISL9519 data short (FN6773).
+Supersedes the premise of §35 (the TWL6030 BCI is not this board's charger).
+
+---
+
+## 38. WDT2: reprogram to the reference's 58.6 s window and pet every 10 s (session 31)
+
+**Decision.**  At boot the kernel reprograms the always-on WDT2 from the
+loader's `WLDR = 0xFFFC1800` (7.8125 s) to the reference's `0xFFE2B400`
+(58.6 s) and pets it from a 10 s `timer_list`
+(`drivers/irqchip/irq-gic.c`).  If the load readback does not match, the pet
+falls back to 2 s so the loader's shorter window is still covered.
+
+**Why.**  QNX kicks WDT2 only every ~60 s because its window is 58.6 s; our
+bootloader-armed 7.812 s window forced a 2 s pet.  A 10 s pet with the longer
+window saves five-sixths of the wakeups and tolerates a ~48 s stall before the
+watchdog fires (instead of ~5.8 s).  The load is writable only while the timer
+is stopped; the `WSPR` stop/start sequence does that, and the posted writes
+must be waited on via `WWPS`.
+
+**Constraint.**  `WWPS` polling after every WDT functional-register write is
+mandatory (a fixed delay silently dropped half the sequence).  The
+reprogram/pet runs from the **late initcall**, not the inlined GIC probe (that
+path did not execute on 7.3.3); the loader's 7.812 s window covers the gap.
+The pet is a timer, not a tick (the kernel is tickless at idle).  The expected
+`PLAYBOOK WDT` dmesg line is missing on 7.3.3 — verify by `WLDR`/`WCRR`.
+
+**Evidence.**  Session 31: live `WSPR`/`WLDR` writes (with the userland
+`devmem` timing) then the kernel implementation on image `0xE36C679A`;
+`WCRR` sampled every second reloads every ~10 s (`0xFFE7C494 → 0xFFE328B3`
+across a kick) and the unit is alive past 275 s.  Trap 115; report 109 §8.1 +
+correction.
 
 ---
 

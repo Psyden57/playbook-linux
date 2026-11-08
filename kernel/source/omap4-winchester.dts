@@ -205,10 +205,14 @@
 
 	/*
 	 * BQ27541-class fuel gauge at 0x55 (QNX `battery_win`).  The bq27xxx
-	 * driver reads the standard command set; no battery profile is needed
-	 * for capacity/voltage/temperature.
+	 * driver reads the standard command set; capacity/voltage/temperature
+	 * need no profile.  The charger's `monitored-battery` must NOT point
+	 * here: power_supply_get_battery_info() only accepts a node whose
+	 * compatible is "simple-battery" (or a static Samsung battery), so it
+	 * returned -ENODEV with this node (session 31).  See the battery
+	 * profile at the end of the file.
 	 */
-	battery: battery@55 {
+	battery@55 {
 		compatible = "ti,bq27541";
 		reg = <0x55>;
 	};
@@ -1137,7 +1141,7 @@
  * interrupts and the monitored battery; VBUS voltage is GPADC channel 10 (the
  * channel the TWL6032 mainline board uses too).  QNX's power service owns the
  * BCI on the reference, so the charge limits the bootloader left in
- * CHARGERUSB_CTRLLIMIT1/2 are the fallback when the gauge reports none.
+ * CHARGERUSB_CTRLLIMIT1/2 are the fallback when the profile reports none.
  */
 &twl {
 	charger {
@@ -1146,5 +1150,19 @@
 		io-channels = <&twl_gpadc 10>;
 		io-channel-names = "vusb";
 		monitored-battery = <&battery>;
+	};
+};
+
+/*
+ * Battery profile for the charger, deliberately separate from the bq27541
+ * gauge node: power_supply_get_battery_info() resolves `monitored-battery` and
+ * requires compatible = "simple-battery", otherwise the BCI probe fails with
+ * -ENODEV (measured in session 31).  No properties on purpose: the driver then
+ * falls back to the bootloader's CHARGERUSB_CTRLLIMIT1/2, measured on this
+ * unit as 0x21 -> 4.16 V and 0x08 -> 900 mA, both inside its accepted ranges.
+ */
+/ {
+	battery: battery {
+		compatible = "simple-battery";
 	};
 };

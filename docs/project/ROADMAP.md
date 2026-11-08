@@ -1,12 +1,15 @@
 # Roadmap
 
 Ordered. Each item states the evidence that would close it, so "done" is not a
-matter of opinion. Items 1–3 and 3a–3d are closed (the display works). The
-1917 image work is complete and lives in `IFS-REBUILD.md` /
-`IMAGE-REBUILD-GUIDE.md`. **Item 8 (BB10) and the image work are parked by the
-operator (session 25 end)** — their documents stay, but the work returns to
-the Linux items: **item 6 (the factory-counter top-up) is the blocker, then
-items 4, 5 and 7.**
+matter of opinion. Items 1–3 and 3a–3d are closed (the display works), as are
+items 4 (brightness), 5 (the region-1 root), 6 (the RPMB top-up) and 10 (the
+7.3.3 port). The current work is **item 9**: steps 0–3 are done (ISL9519
+charger, I²C4 motion sensors, TMP103/BQ27541, FAN5702, CM3217), **step 4
+(WL1283) is blocked on external evidence** after its FREF route was tested and
+closed (session 31), and **step 5 (WM8994 audio + CY8CTMA3 touch) is next**.
+Item 7 (packaging) is untouched. The 1917 image work is complete and lives in
+`IFS-REBUILD.md` / `IMAGE-REBUILD-GUIDE.md`. **Item 8 (BB10) and the image
+work are parked by the operator (session 25 end).**
 
 ## 1. Force the complete QNX timing set as ONE experiment — **DONE, negative**
 
@@ -362,7 +365,7 @@ light sensor is **open**: 0x10/0x11 ACK but read all-zero and the mainline
 GPIO1_13 (pad `0x1b0`, safe mode at boot) is driven by the driver's pinctrl +
 `enable-gpios`.  Images: region-0 `0xB759C3A2`, region-1 `0a55a170…`.
 
-**Step 4 — the WL1283: SECOND TASK after the charger (operator, session 30 end); bus and wiring MEASURED, enumeration open (report 180).**
+**Step 4 — the WL1283: bus and wiring MEASURED; FREF route tested and closed in session 31; enumeration open, blocked on external evidence (report 180 + §8).**
 The combo is on **MMC5 (`0x480D5000`)**, not MMC1 — QNX's `pidin mem` shows
 `devnp-ti1283.so` holding that block and attaching GIC SPI 59, and the `sdmmc5`
 pads are the only sdmmc pads muxed on the reference.  **WL_EN = GPIO2_22
@@ -376,21 +379,29 @@ WL_EN low and the QNX driver owns it**; with EN high our chip still does not
 drive its IRQ.  Images: region-0 `0xFC32F008`, region-1 `0faeadff…` (6.15.11;
 on 7.3.3 the base is `0x0F6AC47F`).
 
-**Next experiment — the FREF reference-clock parent.**  The vendor config says
-the chip wants a 38.4 MHz reference clock with a CLK_REQ handshake, and the
-pads are muxed (`0x4A10019C` = `fref_clk2_out`), but **muxing a pad does not
-enable its parent clock**; the CM enable path was never set by us.  Report 180
-§6's CM diff suggests the output may already run, so a negative result closes
-this route.  Procedure and decision table: `HANDOFF.md` §1.2.
+**FREF reference-clock parent — TESTED, NEGATIVE; route closed (session 31).**
+The vendor config says the chip wants a 38.4 MHz reference clock with a CLK_REQ
+handshake.  Session 31 forced the pad mux (`0x4A10019C = 0x41000000`) and
+`CM_DIV_M5_DPLL_PER` to the reference's `0x329`, with WL_EN verified high:
+MMC5 still did not answer CMD5 and UART2 HCI still got nothing.  The write also
+**changed the DSS clock** (`dpll_per_m5x2_ck` is the DSS parent) and glitched
+the panel; a clean boot restored `0x204` and the display.  Trap 116, report 180
+§8.  **Do not retry this write.**  The WL1283 now needs the chip datasheet /
+board schematic or a bus capture of CLK/CMD/DAT/EN (report 180 §6); it is
+blocked on external evidence, not on another register diff.
 
 **Plan (one variable per boot):**
-0. **Power/charging — the TWL6030 BCI (found at session 30 end).**  The board
-   DTS had no `charger` child, so `CONFIG_CHARGER_TWL6030=m` built but never
-   probed and the pack ran flat on USB (trap 108).  The node
-   (`interrupts = <2>, <5>`, GPADC channel 10 for VBUS, `monitored-battery`)
-   and the two modules are prepared: image `0x91AF34DF` + rootfs `ba275807…`
-   (17 modules).  **Test this first** when the unit is charged: expect a
-   `twl6030_usb` power supply, a positive BQ27541 current and rising voltage.
+0. **Power/charging — CLOSED 2026-11-08 (session 31).**  The board's charger
+   is the **Intersil ISL9519 at I²C1 `0x48070000`, slave `0x09`** (VendorID
+   `0x0049`, DeviceID `0x0003`), not the TWL6030 BCI (report 183).  A minimal
+   Linux driver (`drivers/power/supply/isl9519.c`, built-in,
+   `CONFIG_CHARGER_ISL9519=y`, DTS `charger@9`) sets the four registers in
+   RIM's order with the masked field steps (charge/input 128 mA/LSB, max
+   system 16 mV/LSB, min system 256 mV/LSB) and refreshes every 5 s for the
+   part's 175 s watchdog (AN1570; traps 113/114).  Image `0xA0B75C43`:
+   **BQ27541 `CURRENT_NOW` +358 → +397 mA**, voltage 3.775 → 3.794 V,
+   capacity 8 → 9 %, still charging at 197 s.  The BCI node/modules remain but
+   are inert.
 1. ~~enable `&i2c4`, add the BMA150/HMC5883L/MPU3050 nodes and their IRQ GPIOs;
    enable `INPUT_BMA150` and HMC5843, keep `MPU3050=m`; read via IIO.~~
    **DONE** (session 28).
@@ -403,10 +414,12 @@ this route.  Procedure and decision table: `HANDOFF.md` §1.2.
    Earlier QNX-side readings were race artefacts (trap 103).
 3. ~~the FAN5702 LED driver (no mainline driver; RE `led-fan5702.so`).~~
    **DONE** (report 179: `leds-fan5702`, EN = GPIO1_13).
-4. **Resume the WL1283 after the charger test** (operator order, session 30
-   end): bus/wiring done; the one untested mechanism is the **FREF
-   reference-clock parent** (report 180 §6, `HANDOFF.md` §1.2).  Then `wl12xx` +
-   the firmware/NVS (`wl128x-fw-5-sr.bin`, `wl128x-nvs.bin`, both in the host's
+4. **WL1283 — bus/wiring done; FREF tested and closed (session 31); blocked
+   on the datasheet/schematic or a bus capture.**  The live experiment (pad
+   muxed, `CM_DIV_M5 = 0x329`, WL_EN high) still gave no CMD5 and no HCI, and
+   the divider turned out to be the DSS clock (trap 116, report 180 §8).  Do
+   not retry it.  When external evidence arrives, the rest is `wl12xx` + the
+   firmware/NVS (`wl128x-fw-5-sr.bin`, `wl128x-nvs.bin`, both in the host's
    linux-firmware; `build_rootfs.py --firmware DIR` installs them), then BT
    (`hci_ll`/TI ST on UART2 `0x4806c000`) and GPS/AGPS.
 5. audio (WM8994 MFD+codec + an OMAP4 machine driver) and the Cypress

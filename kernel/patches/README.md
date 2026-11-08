@@ -3,10 +3,10 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**6 648 lines / 42 files (34 modified + 8 new)** against pristine
+**7 103 lines / 45 files (36 modified + 9 new)** against pristine
 **linux-7.3.3**.  It is generated from the tree, not from the previous patch
 (trap 106), and it was verified by applying it to pristine 7.3.3 targets and
-comparing all 42 files byte-for-byte with `local/kernel-tree` — 0 rejects,
+comparing all 45 files byte-for-byte with `local/kernel-tree` — 0 rejects,
 0 mismatches.
 
 ```bash
@@ -26,13 +26,23 @@ The kernel is **XZ-compressed** so the image fits the region-0 IFS slot
 
 The charger preparation adds one modified file, `arch/arm/boot/dts/ti/omap/
 twl6030.dtsi` (the `gpadc` label), plus the `charger` node and the `battery`
-label in the board DTS.
+label in the board DTS.  Session 31 moved that label onto a separate
+`compatible = "simple-battery"` profile node: `power_supply_get_battery_info()`
+rejects the bq27541 gauge node with `-ENODEV`, so the first prepared image
+probed the BCI and failed.  The profile has no properties on purpose — the
+driver then falls back to the bootloader's `CHARGERUSB_CTRLLIMIT1/2`
+(measured `0x21` → 4.16 V, `0x08` → 900 mA).  **The BCI turned out not to be
+the board's charger** (report 183): session 31 adds the real one,
+`drivers/power/supply/isl9519.c`, an Intersil ISL9519 at I²C1 0x09, and its
+`charger@9` node in the board DTS.  The BCI node/modules stay but are inert.
 
-The eight new files are the ones the old export recipe silently dropped:
+The nine new files are the ones the old export recipe silently dropped plus
+the session-31 charger driver:
 `arch/arm/boot/dts/ti/omap/omap4-winchester.dts`,
 `arch/arm/include/debug/omap4bc.S`, `drivers/iio/light/cm3217.c`,
 `drivers/leds/leds-fan5702.c`, `drivers/misc/pbmon.c`, `pbmon-pair.h`,
-`pbmon-page.h` and `include/linux/pb_event.h`.  `patch -p1 --dry-run` alone does
+`pbmon-page.h`, `include/linux/pb_event.h` and
+`drivers/power/supply/isl9519.c`.  `patch -p1 --dry-run` alone does
 not prove an export: it must be applied and the result compared to the tree.
 
 ## Reference base: 6.15.11

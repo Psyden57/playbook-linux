@@ -94,6 +94,11 @@ driver list obviously claims them (candidates: a board EEPROM/GPIO expander and
 the NCP5623, whose address the QNX module does not print).  They are recorded,
 not guessed.
 
+> **Corrected (session 31, report 183):** `0x09` on I²C1 is the **Intersil
+> ISL9519** battery charger — VendorID `0xFE = 0x0049`, DeviceID
+> `0xFF = 0x0003`; RIM's `battery_win` drives it and the TWL6030 BCI is not
+> the board's charger.
+
 ### 1.2 The driver set RIM loads
 
 `pidin ar` and `/base/lib/dll`:

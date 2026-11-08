@@ -1,15 +1,15 @@
 # Session numbering
 
-The project spans **thirty sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **thirty-one sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-30`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-31`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
-* **Linux-era** ("session 1…24") — used inside the reports and handoffs, because
+* **Linux-era** ("session 1…25") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
   started.  **Linux session N = absolute session N + 6.**
 
@@ -42,6 +42,7 @@ So:
 | **28** | **22** | **item 5 closed**: the region-1 root is a real BusyBox userland, the initramfs mounts it read-write and chroots/execs `/sbin/init`, and modules load.  Then the **peripheral inventory** (report 176) and the **I²C4 sensor bring-up** — BMA150/HMC5883L/MPU3050 live (report 177).  `tools/bbusb.py` becomes the flasher (`DECISIONS.md` §29).  The `hd3` cut-over is parked |
 | **29** | **23** | the WL1283's real bus and wiring measured (**MMC5**, WL_EN GPIO2_22, WL_IRQ GPIO2_21) but the card never answers CMD5 — **parked** (report 180); the **CM3217 works** (report 182: 32–37 lux dark, 191 lit; no settle delay, leave it idle).  Traps 97–105 |
 | **30** | **24** | **the kernel base moves to 7.3.3**: target settled (upstream 7.3.3, not the pmOS package), patch applied with 7 rebased rejects, XZ to fit the IFS slot, three boots, panel/eMMC/peripherals verified.  ROADMAP item 10 **closed**.  Traps 106/107 (patch-export omission, cm3217 NULL remove) |
+| **31** | **25** | **the TWL6030 BCI**: the prepared `0x91AF34DF` probes and fails (`-ENODEV` — `monitored-battery` must point at a `simple-battery` profile, trap 111); the fixed `0x306E3DA5` registers `twl6030_usb` and enables the charger, but the pack shows no positive current (trap 112).  TabletOS cross-check started; patch re-exported (6 666 lines / 42 files) |
 
 ## Anchors (evidence for the mapping)
 
