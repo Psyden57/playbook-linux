@@ -26,6 +26,7 @@ note after it is what a reader needs before opening the file.
 | `expired-counter-nuke-vs-retry-halt.md` | **open** — `0xFFFFFFFF` is selector 2; normal-path nuke vs retry-branch halt depends on the expired unit's `0x2801`, which was not read, and there is no sacrificial unit left |
 | `fan5702-safe-model-vs-cm3217-race.md` | **open as a rule, resolved for the CM3217** — readings taken from TabletOS of a device whose QNX driver is running are unreliable (our I2C accesses interleave with `ls-cm3217`); the same part reads a clean 32 → 191 lux from Linux.  DECISIONS §31, traps 103/104 (report 182) |
 | `fan5702-dimming-register-bits.md` | **open** — the datasheet-derived `0b11xxxxxx` dimming write vs the bootloader/QNX `0x36`; the on/off path (GENERAL `0x10`) is unaffected (report 179) |
+| `fref-clk2-pad-reference-decode.md` | **open** — report 180 reads the reference's `0x4A10019C` as `0x41000000` (mux 0 = `fref_clk2_out`), while the session-29 note says the reference leaves the FREF pads in mux 3 = GPIO high-Z and calls the earlier claim superseded.  Matters for the WL1283 reference-clock hypothesis, not for the closed FREF test |
 | `gpio2-24-resx-vs-datasheet.md` | **open** — report 122 calls `GPIO2_24` the bridge RESX (medium), but the reference reads that bit LOW during a working display while the datasheet says RESX is low-active; the pad's input path is disabled, so the `DATAIN` bit may be meaningless.  Not blocking: the display works |
 | `ldr01-0x10000-header.md` | **resolved — there is no header** — report 164's corrected addendum and the session-23 handoff give `file_offset = VA − 0x80100000`; session 22's note still records the `0x10000` belief and is left as written (evidence, not product) |
 | `open-dispc-dsi-timing-fields.md` | **resolved (falsified) 2026-10-28** — all four fields and the QNX PHY words were forced and read back identical; the panel stayed black (report 124), so the split was not the blocker.  The display was later fixed by the DISPC core clock (report 133) |
@@ -36,7 +37,7 @@ note after it is what a reader needs before opening the file.
 
 ## Still open — keep these in mind
 
-Six files have a genuinely open question left; none of them blocks the
+Seven files have a genuinely open question left; none of them blocks the
 IFS rebuild, but each changes how a result should be read:
 
 1. **`expired-counter-nuke-vs-retry-halt.md`** — what an out-of-range
@@ -63,6 +64,12 @@ IFS rebuild, but each changes how a result should be read:
    OMAP I²C2 `0x48072000` (where QNX saw `0x65`) or I²C3 `0x48060000` (the
    library's `/dev/i2c2`).  *Would settle it:* read-byte `i2cdetect -y -r 2`
    and `-r 3` on the Linux image, before and after the decoded reset pulse.
+7. **`fref-clk2-pad-reference-decode.md`** — whether the reference drives
+   `FREF_CLK2` out of `0x4A10019C` (report 180) or leaves it a high-Z GPIO
+   (session-29 note).  *Would settle it:* a fresh read of `0x4A10019C`,
+   `0x4A31E054/058/05C` and GPIO6 `OE`/`DATAOUT` on the live 1917 with Wi-Fi
+   up, or the schematic.  The WL1283 is blocked on external evidence either
+   way; do not retry the `CM_DIV_M5` write.
 
 Two smaller residuals, not contradictions in their own right:
 `66` still does not prove that the `0xDE` `count` field *is* the RPMB record, and

@@ -186,6 +186,14 @@ there was no `charger` node, so the BCI never probed.
 * The shell hung after the aborted command (echo only, no prompts); the
   operator power-cycled the unit, and a clean boot restored `CM_DIV_M5 =
   0x204`, the safe-mode FREF pad, `WLDR = 0xFFFC1800` and DSS `fck 96 MHz`.
+* **The reference's own FREF pad decode is contradictory:** report 180 reads
+  `0x4A10019C = 0x41000000` (mux 0, `fref_clk2_out`), while the session-29
+  note's "Superseded" section says the reference leaves those pads as mux 3
+  GPIO high-Z.  Recorded as
+  `docs/contradictions/fref-clk2-pad-reference-decode.md`; it does not change
+  this session's negative (the forced-pad/CM test was still silent), but it
+  means the reference-clock hypothesis rests on the vendor `.ini` until a
+  fresh reference read or the schematic settles it.
 
 ### The ISL9519 Linux driver works
 
