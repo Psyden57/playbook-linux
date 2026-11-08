@@ -5,25 +5,33 @@ matter of opinion. Items 1–3 and 3a–3d are closed (the display works), as ar
 items 4 (brightness), 5 (the region-1 root), 6 (the RPMB top-up) and 10 (the
 7.3.3 port). The current work is **item 9**: steps 0–3 are done (ISL9519
 charger, I²C4 motion sensors, TMP103/BQ27541, FAN5702, CM3217).  **Step 4
-(WL1283)** was resumed with the operator's second opinion (report 184):
-session 32 eliminated the `FREF_CLK2_REQ` input, matched the reference's
-`fref_clk2_out` generator, and tested the QNX SDIO protocol differences (24
-MHz, CMD5 arg `0x00FFFF00`); the chip still does not answer CMD5, so the next
-step is the **electrical comparison at the chip** (report 185).  **Step 5
-(WM8994 audio + CY8CTMA3 touch) follows**.
+(WL1283)** is at the end of the bench-visible road: session 32 eliminated the
+`FREF_CLK2_REQ` input, matched the reference's `fref_clk2_out` generator and
+tested the QNX SDIO protocol differences; session 33 closed the QNX power
+manager (report 187: no WLAN rail), made the electrical comparison (report
+188: the chip is up under QNX and not under Linux; WL_EN not exposed; VIO
+1.8 V; no 3.3 V chip rail), and tested a 200 ms post-power-on settle and a
+CMD52 skip — both negative.  The remaining difference is at the chip's
+non-exposed power/clock pins or in OMAP HSMMC sampling, which needs a
+schematic/board view or a logic analyser.  **Step 5 (WM8994 audio + CY8CTMA3
+touch) follows** when the WL1283 is formally stopped.
 Item 7 (packaging) is untouched. The 1917 image work is complete and lives in
 `IFS-REBUILD.md` / `IMAGE-REBUILD-GUIDE.md`. **Item 8 (BB10) and the image
 work are parked by the operator (session 25 end).**
 
-**Priority after session 32 (operator):** the **WL1283 (item 9 step 4)**
-continues with the **electrical comparison**: the second opinion's request
-input is eliminated (`0x4A31E058 = 0x000B0003`, pad0 `gpio_wk31`), the
-reference's `fref_clk2_out` is matched (12.8 MHz), and the SDIO protocol
-differences (24 MHz, CMD5 arg `0x00FFFF00`) are tested — all without a CMD5
-response.  The chip's TCXO/VBAT/VIO/reset and the bus waveforms are the next
-measurement (reports 184/185).  The closed `CM_DIV_M5 = 0x329` output
-experiment is not repeated (trap 116).  **Step 5 (audio/touch) follows** when
-the WL1283 yields or is formally stopped.
+**Priority after session 33 (operator's call):** the **WL1283 (item 9 step
+4)** has no further bench-visible test with the available equipment (reports
+187/188).  The remaining candidates — VBAT/TCXO at the chip's BGA pins and
+MMC5 signal sampling — require a schematic/board view or a logic analyser.
+If the WL1283 is formally stopped, **step 5 (audio/touch) is next**.  The
+closed experiments are not repeated: `CM_DIV_M5 = 0x329` (trap 116), the FREF
+request input (trap 117), the FREF2 output as a CMD5 fix (trap 118), the init
+clock (trap 119), a runtime MMC5 `unbind`/`bind` (trap 120), the WL_EN reset
+pulse alone (trap 124), the 200 ms settle and the CMD52 skip (traps 128/129).
+**The FREF2 enable and the WL_EN reset pulse are removed from the tree**: both
+are negative for CMD5, and the pulse caused the USB warm-reset enumeration
+regression (trap 130).  The final image `0x0353A241` enumerates by itself; the
+patch is **7 258 lines / 47 files**, sha256 `e7b7fc2e…`.
 
 ## 1. Force the complete QNX timing set as ONE experiment — **DONE, negative**
 
@@ -379,7 +387,7 @@ light sensor is **open**: 0x10/0x11 ACK but read all-zero and the mainline
 GPIO1_13 (pad `0x1b0`, safe mode at boot) is driven by the driver's pinctrl +
 `enable-gpios`.  Images: region-0 `0xB759C3A2`, region-1 `0a55a170…`.
 
-**Step 4 — the WL1283: bus and wiring MEASURED; the FREF request input is unused and the FREF2 output matched (session 32); the chip still does not answer CMD5 — the next step is electrical (reports 184/185).**
+**Step 4 — the WL1283: bus and wiring MEASURED; the FREF request input is unused and the FREF2 output matched (session 32); the QNX power manager and the electrical comparison are closed (session 33); the chip is alive under QNX and not under Linux, and the remaining evidence needs a schematic/analyser (reports 184/185/187/188).**
 The combo is on **MMC5 (`0x480D5000`)**, not MMC1 — QNX's `pidin mem` shows
 `devnp-ti1283.so` holding that block and attaching GIC SPI 59, and the `sdmmc5`
 pads are the only sdmmc pads muxed on the reference.  **WL_EN = GPIO2_22
@@ -431,6 +439,27 @@ outside the driver.  The chip-side candidate remains the **26 MHz TCXO /
 power**.  No logic analyser is available, so after the RE the next step is
 the multimeter checks (VBAT/VIO/WL_EN/WL_IRQ/SLOW_CLK; the Motorola 148603
 guide puts the 26 MHz TCXO on the chip's internal 1.8 V).
+
+**Session-33 powerman RE and electrical comparison — both closed (reports
+187/188).**  The `winchester` preset has **no WLAN rail or clock**: its WLAN
+authorities only gate the standby shutdown/OSWR decision, and
+`ldo_vaux1`/`ldo_vaux3` are the display/backlight rails (VAUX3 → LM3532,
+REGEN1/2 → panel).  `devpm-omap4.so` is the PRCM/voltage/DVFS plugin;
+`winchester_phy_ctrl` is the **USB** PHY.  On the bare board the chip is
+**alive under QNX** (`ti0` UP; `GPIO2_DATAIN = 0x08221018`, WL_IRQ bit 21 = 1)
+and **not under Linux** with WL_EN high (`DATAIN = 0x01000010`): the rightmost
+front pad follows `ti0` down/up (1.8 V ↔ 0 V), so it is the chip's IRQ, not a
+rail.  WL_EN is not brought out (toggled 90 s low, 5 s/5 s and 2 s/2 s; no
+point moved).  All WLAN pads match QNX, VIO is 1.8 V, and no 3.3 V chip rail
+is exposed (the ~4.7 V point is a VBUS-side resistor).  A **200 ms MMC5
+post-power-on settle** (image `0x0B38612D`) and a **CMD52 skip** (image
+`0xAC98BCAD`, CMD0 → CMD8 → CMD5) are both negative.  The remaining
+difference is at the chip's non-exposed power/clock pins or in OMAP HSMMC
+sampling — a schematic/board view or logic analyser is required.  Do not
+re-run the closed experiments (traps 116–120, 124, 126–130).  The final image
+`0x0353A241` has the FREF2 enable and the WL_EN reset pulse removed; it
+enumerates by itself on a warm reboot (the pulse was the USB regression, trap
+130).  The patch is **7 258 lines / 47 files**, sha256 `e7b7fc2e…`.
 
 **Plan (one variable per boot):**
 0. **Power/charging — CLOSED 2026-11-08 (session 31).**  The board's charger

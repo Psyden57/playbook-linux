@@ -1084,6 +1084,67 @@ Motorola 148603 guide.
 
 ---
 
+## 40. The powerman preset is not a WLAN power source; the WL1283 needs external evidence (session 33)
+
+**Decision.**  Close the QNX power-manager lead for the WL1283 and do not
+re-open it.  The `winchester` preset's WLAN authorities
+(`activity/wifi_driver/active|idle`, `air_needs_wifi`, `wlan_needs_DMA`,
+`WLAN_NEEDS_PREVENT_OSWR`) only gate the standby shutdown/OSWR decision;
+`ldo_vaux1`/`ldo_vaux3` are the display/backlight rails (VAUX3 → LM3532,
+REGEN1/2 → panel).  Do not repeat the closed bench experiments: the 200 ms
+MMC5 post-power-on settle and the CMD52 skip are both negative (traps 128/
+129), as are the earlier FREF/init-clock/reset-pulse tests (traps 116–120,
+124).  The next WL1283 step needs a schematic/board view or a logic analyser
+(the chip's non-exposed power/clock pins, or OMAP HSMMC sampling); if the
+operator formally stops the item, item 9 step 5 (audio/touch) follows.
+
+**Why.**  The preset is compiled into `powerman`: `winchester_environment`
+resolves to 94 authorities, 47 edges, 6 dependency groups and 35 initial
+states.  Only the standby groups reference the WLAN authorities, and their
+action is a PPS shutdown message; `devpm-omap4.so` is the OMAP4 PRCM/voltage/
+DVFS plugin and `winchester_phy_ctrl` is the USB PHY.  On the bare board the
+chip is alive under QNX (`ti0` UP, `GPIO2_DATAIN` bit 21 = 1) and not under
+Linux with WL_EN high (bit 21 = 0); the rightmost front pad follows the chip's
+IRQ (1.8 V ↔ 0 V), WL_EN is not brought out, VIO is 1.8 V, and no 3.3 V chip
+rail is exposed.  Matching the settle and the first-command sequence does not
+make CMD5 answer, so the remaining difference is not host-visible.
+
+**Constraint.**  No speculative rail or pin injection; no repeat of the closed
+register experiments.  The `soft_connect` USB re-enumeration workaround is
+separate (trap 130) and does not authorise touching the WLAN power path.
+
+**Evidence.**  Reports 187 (the preset tables and authority mapping) and 188
+(the QNX/Linux electrical comparison, the two test images and the USB
+regression); traps 126–130.
+
+---
+
+## 41. The WL_EN reset pulse is removed: it broke USB warm-reset enumeration (session 33)
+
+**Decision.**  Remove the session-32 `pb_wl1283_reset_pulse()` call (and the
+FREF2 `pb_enable_fref_clk2()` call) from `omap_hsmmc_probe()`; both were
+negative CMD5 experiments.  Keep the functions in the tree marked
+`__maybe_unused` until the next cleanup.  The final image is `0x0353A241`.
+
+**Why.**  The pulse (GPIO2_22 low 500 ms → high, `mdelay` in the MMC5 probe)
+made the USB host miss the gadget connect on a warm reboot; the host only
+enumerated on a physical re-plug.  The warm-reboot A/B is one variable:
+`0x90BDE221` (FREF off, pulse on) fails; `0x0353A241` (FREF off, pulse off)
+enumerates by itself in 14 s (gadget configured at 5.28 s).  The known-good
+`0xE36C679A` enumerates in 12–14 s.  The FREF2 enable is excluded (it is off in
+the failing `0x90BDE221`) and the session-33 MMC changes are confined to
+`480d5000`.
+
+**Constraint.**  Do not re-add the WL_EN reset pulse as a CMD5 experiment; it
+is negative and it disturbs the USB PHY.  A UDC `soft_connect` toggle remains
+the fallback if the warm-reset state ever recurs.  The pulse is not a
+substitute for the chip-side evidence (report 188).
+
+**Evidence.**  Report 188 §3; trap 130; the five test images and the warm-reboot
+A/B.
+
+---
+
 These were the open policy questions.  The licence and visibility are decided
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.

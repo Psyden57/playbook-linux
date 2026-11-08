@@ -659,6 +659,49 @@ report 121 §3/§11/§12.
      has `CONFIG_WL12XX_MENU` off.  Do not use its firmware, DT or power
      sequencing as a WL1283 comparison.  (Session 32, report 186.)
 
+126. **The QNX `winchester` powerman preset has no WLAN rail or clock.**  Its
+     WLAN authorities (`activity/wifi_driver/active|idle`, `air_needs_wifi`,
+     `wlan_needs_DMA`, `WLAN_NEEDS_PREVENT_OSWR`) only gate the standby
+     shutdown/OSWR decision; `ldo_vaux1`/`ldo_vaux3` are the display/backlight
+     rails, not WLAN.  `devpm-omap4.so` is the PRCM/voltage/DVFS plugin, and
+     `winchester_phy_ctrl` is the **USB** PHY.  Do not re-open the powerman
+     lead for WLAN power.  (Session 33, report 187.)
+
+127. **The WL1283's IRQ is the only accessible chip-alive indicator, and WL_EN
+     is not brought out.**  The rightmost front pad is GPIO2_21/WL_IRQ: it is
+     1.8 V when the chip is up (QNX, WLAN up) and 0 V when WL_EN is low; under
+     Linux with WL_EN high it stays 0 V, so the chip is not up.  GPIO2_22
+     (`WL_EN`, pad `0x4A10007C` mux 3) can be toggled from the shell with
+     `devmem 0x48055190/0x48055194 32 0x00400000`, but no accessible point
+     follows it.  The accessible DC points are 1.8 V and 0 V; no 3.3 V chip
+     rail is exposed.  (Session 33, report 188.)
+
+128. **A 200 ms MMC5 post-power-on settle does not make the chip answer.**
+     Image `0x0B38612D` (`post-power-on-delay-ms = <200>` on `&mmc5`) gives
+     `delay1 200ms`/`power_on delay 200ms` before the first command; CMD52/
+     CMD8/CMD5 still time out (`err=-110`) and the IRQ stays low.  The chip
+     had seconds of WL_EN in the baseline images anyway.  (Session 33, report
+     188.)
+
+129. **Skipping the SDIO reset (CMD52) does not make the chip answer.**
+     QNX's sequence is CMD0 → CMD5; Linux sends CMD52 first.  Image
+     `0xAC98BCAD` adds `MMC_CAP2_NO_SDIO_RESET` (bit 30) for the `480d5000`
+     host, yielding CMD0 → CMD8 → CMD5; CMD5 still times out.  The core's
+     CMD52 is not the cause.  (Session 33, report 188.)
+
+130. **The WL_EN reset pulse breaks USB warm-reset enumeration.**  The gadget
+     bound at ~5.6 s but the host only configured it on a physical re-plug
+     (~28.6 s).  The warm-reboot A/B isolates the session-32
+     `pb_wl1283_reset_pulse()` in `omap_hsmmc_probe()` (GPIO2_22 low 500 ms →
+     high): image `0x90BDE221` (FREF off, pulse on) fails, image `0x0353A241`
+     (FREF off, pulse off) enumerates by itself in 14 s (gadget configured at
+     5.28 s).  The FREF2 enable and the session-33 MMC changes are excluded
+     (`0x5920CAAC` with the session-32 code and `0x90BDE221` without FREF both
+     fail; the session-33 changes are confined to `480d5000`).  The pulse is
+     removed from the tree — it was also negative for CMD5.  A UDC
+     `soft_connect` disconnect/connect re-enumerates the host (Device 117 →
+     118) and remains a fallback.  (Session 33, report 188.)
+
 ## 3. Corrections to older reports
 
 These twenty are preserved deliberately. Each is newer than the text it
@@ -871,6 +914,19 @@ decrements `BOOTCTR_FCTRY`" was an incomplete caller audit — reports 89 §3.5 
   (`118` §8.2, `111` §8 item 4).  The corrections are applied *in place* in those
   two files and listed in §3; the other reports are left as written so the
   section-by-section citations elsewhere still resolve.
+
+### Fixed in session 33 (USB warm-reset regression, stale patch)
+
+* **The USB warm-reset re-enumeration regression is fixed** (trap 130).  The
+  host missed the gadget connect until a re-plug; the warm-reboot A/B isolated
+  the session-32 `pb_wl1283_reset_pulse()` (GPIO2_22 low 500 ms → high):
+  `0x90BDE221` (pulse on) fails, `0x0353A241` (pulse off) enumerates by itself
+  in 14 s (gadget configured 5.28 s).  The pulse and the FREF2 enable are
+  removed from the tree; the final image is `0x0353A241`.
+* **The 7.3.3 patch is current again**: re-exported with the removed calls,
+  **7 258 lines / 47 files**, sha256 `e7b7fc2e…`, 0 rejects and 47/47 files
+  byte-identical against pristine 7.3.3.  The session-33 MMC test knobs
+  (`post-power-on-delay-ms`, `MMC_CAP2_NO_SDIO_RESET`) are not in the patch.
 
 ### Fixed in session 30 (7.3.3 port, CM3217 remove, patch export)
 

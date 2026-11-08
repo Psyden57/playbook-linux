@@ -3,8 +3,8 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**7 257 lines / 47 files (38 modified + 9 new)** against pristine
-**linux-7.3.3** (sha256 `ad55511d…`).  It is generated from the tree, not from
+**7 258 lines / 47 files (38 modified + 9 new)** against pristine
+**linux-7.3.3** (sha256 `e7b7fc2e…`).  It is generated from the tree, not from
 the previous patch (trap 106), and it was verified by applying it to pristine
 7.3.3 targets and comparing all 47 files byte-for-byte with
 `local/kernel-tree` — 0 rejects, 0 mismatches.
@@ -51,8 +51,13 @@ probe-OCR quirk and `PBC: sdio` diagnostics) and `include/linux/mmc/host.h`
 omap_hsmmc.c` (the quirk for `480d5000`), `arch/arm/mach-omap2/omap4-common.c`
 (`playbook_fref_clk2_init`: SCRM `AUXCLK1` = `0x00020100`, 12.8 MHz) and the
 board DTS (`fref_clk2_out_pins`, `vwl1283` 3.3 V).  The SDIO quirk and the
-`PBC: sdio` prints are bring-up instrumentation; the FREF2 initcall matches
-the reference and is neutral (report 185).
+`PBC: sdio` prints are bring-up instrumentation.  **Session 33 removes the two
+hardware experiments from the calls:** `pb_enable_fref_clk2()` and
+`pb_wl1283_reset_pulse()` are both negative for CMD5 (report 185), and the
+WL_EN reset pulse also broke USB warm-reset enumeration (trap 130).  The
+functions remain in `omap_hsmmc.c` as `__maybe_unused` until the next cleanup;
+the session-33 MMC test knobs (`post-power-on-delay-ms`, CMD52 skip) are not
+in this patch.
 
 ## Reference base: 6.15.11
 

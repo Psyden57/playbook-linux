@@ -1,30 +1,29 @@
-# Handoff — session 33 (absolute)
+# Handoff — session 34 (absolute)
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§6).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — this handoff is for **absolute 33 = Linux-era 27**.  See
+`N+6` — this handoff is for **absolute 34 = Linux-era 28**.  See
 `docs/sessions/NUMBERING.md`.
 
-> **Session-32 result: the WL1283 is silent from the first SDIO command, and
-> every software-visible SoC-side difference is matched.**  A fresh QNX read
-> with WLAN up shows `0x4A31E058 = 0x000B0003`: pad0 is **mux 3 `gpio_wk31`**,
-> so `FREF_CLK2_REQ` is **not used**.  The reference's `fref_clk2_out`
-> (`AUXCLK1`, 12.8 MHz) was reproduced on Linux; the first test enabled it in
-> a `late_initcall` **after** the MMC5 probe, and the corrected in-probe test
-> is also negative.  The second opinion's software audit (report 186) shows
-> the default Linux attempt is **one 400 kHz try** with **CMD52 → CMD0 → CMD8
-> → CMD5(arg 0)**, and the card times out on every command except CMD0.  The
-> 24 MHz figure was a deliberate test, not the default; the boot-time WL_EN
-> reset pulse is also negative.
->
-> **Next: RE the QNX powerman `winchester` preset** (`bin/powerman` +
-> `devpm-omap4.so`: what `activity/wifi_driver`, `air_needs_wifi`,
-> `wlan_needs_dma`, `ldo_vaux3`/`ldo_vaux1` enable), then the multimeter DC
-> checks at the chip — VBAT/VIO/WL_EN/WL_IRQ/SLOW_CLK (Motorola 148603 guide:
-> VBAT 3.3 V, VIO 1.8 V, the 26 MHz TCXO from the internal 1.8 V).  Then step
-> 5 (audio/touch).  **Do not repeat the `CM_DIV_M5 = 0x329` write** (trap
-> 116) or a runtime MMC5 `unbind`/`bind` (trap 120).  `hd3`, BB10 and the
-> PlayBook OS image work remain parked.
+> **Session-33 result: the QNX power manager is closed and the WL1283 is alive
+> under QNX, dead under Linux.**  The `winchester` powerman preset has **no
+> WLAN rail or clock**: its WLAN authorities only gate the standby/OSWR
+> decision, and `ldo_vaux1`/`ldo_vaux3` are the display/backlight rails
+> (report 187).  On the bare board with the 1917 IFS, `ti0` is UP and
+> `GPIO2_DATAIN` bit 21 (WL_IRQ) is 1; under our image with WL_EN high, bit 21
+> is 0.  The rightmost front pad is that IRQ (1.8 V ↔ 0 V), WL_EN is not
+> exposed, VIO is 1.8 V, and no 3.3 V chip rail is visible.  A **200 ms MMC5
+> post-power-on settle** (image `0x0B38612D`) and a **CMD52 skip** (image
+> `0xAC98BCAD`, CMD0 → CMD8 → CMD5) are both negative (report 188).
+> **The remaining difference is at the chip's non-exposed power/clock pins or
+> in OMAP HSMMC sampling — a schematic/board view or a logic analyser is
+> needed.**  A USB warm-reset re-enumeration issue appeared this session
+> (gadget binds but the host needs a re-plug; `soft_connect` fixes it); the
+> trigger is undetermined (trap 130).  **Next: the operator's call — formally
+> stop the WL1283 and go to item 9 step 5 (audio/touch), or obtain a
+> schematic/analyser.**  Restore the known-good `0xE36C679A` or the 1917 IFS
+> before ending.  **Do not repeat the closed experiments** (traps 116–120,
+> 124, 126–129).  `hd3`, BB10 and the PlayBook OS image work remain parked.
 
 ## 0. The job, and where it stands
 
@@ -47,11 +46,14 @@ window with a 10 s pet.
 (`local/images/kernel-0xE36C679A-wdt58s.img`, 0x91A748 bytes) + region-1
 `local/images/rootfs-region1-7.3.3-charger.ext4` (17 modules).  The previous
 image `0xA0B75C43` is the same without the WDT2 change; `0x306E3DA5` is the
-battery-profile intermediate.  **Build from `0xE36C679A`'s source tree.**  The
-session-32 test image **`0xAF4FC103`** is what is on media at handoff (FREF2
-enable + WL_EN reset pulse inside the MMC5 probe, 3.3 V OCR, `PBCMD` trace;
-the CMD5 quirk is present but default-off); it boots and charges but is
-**not** a known-good baseline (reports 185/186).
+battery-profile intermediate.  **Build from `0xE36C679A`'s source tree plus the
+charger/WDT2 changes.**  The final session-33 image **`0x0353A241`** is what is
+on media at handoff (the session-32 tree with the FREF2 enable and the WL_EN
+reset pulse removed; the session-33 MMC experiments reverted); it is saved at
+`local/images/kernel-0x0353A241-final.img` (0x91A434) and enumerates by itself
+on a warm reboot, but it is **not** a known-good baseline (report 188).  The
+intermediates `0x0B38612D` (200 ms delay), `0xAC98BCAD` (CMD52 skip),
+`0x5920CAAC` (session-32 code), `0x90BDE221` (FREF off, pulse on) are superseded.
 
 **The 6.15.11 backup/reference is intact:** `local/pristine/linux-6.15.11`,
 `local/kernel-tree-6.15.11` (byte-exact copy of the old working tree) and
@@ -60,20 +62,27 @@ them.  The 6.15.11 patch is **incomplete** (trap 106); do not use it for a
 clean rebuild.
 
 **The 7.3.3 patch is `kernel/patches/0001-playbook-winchester-7.3.3.patch`** —
-**7 257 lines / 47 files** (38 modified + 9 new), sha256 `ad55511d…`, verified
-by applying to pristine 7.3.3 with 0 rejects and comparing all 47 files
-byte-for-byte.  Config: `kernel/winchester-7.3.3.config` (includes
+**7 258 lines / 47 files**, sha256 `e7b7fc2e…`, applied to pristine 7.3.3 with
+0 rejects and **47/47 files byte-identical**.  It is the session-32 tree with
+the FREF2 enable and the WL_EN reset pulse removed (both negative for CMD5;
+the pulse also caused the USB warm-reset regression), and with the session-33
+MMC experiments reverted.  Config: `kernel/winchester-7.3.3.config` (includes
 `CONFIG_CHARGER_ISL9519=y`; `CONFIG_KERNEL_XZ=y` keeps the image under
 `0xB00000`).
 
 **Parked by the operator:** the `hd3` cut-over, BB10, and the PlayBook OS image
-work.  **The WL1283 (item 9 step 4) is in progress:** the SoC-side comparison
-is exhausted (session 32, report 185); the next step is the **electrical
-comparison at the chip**.  The `FREF_CLK2_REQ` **input** is closed (trap 117)
-and the `fref_clk2_out` output is matched (trap 118).  Step 5 (audio/touch) is
-the follow-on.
+work.  **The WL1283 (item 9 step 4) is at the end of the bench-visible road:**
+the QNX power manager is closed (report 187), the electrical comparison is done
+(report 188: the chip is up under QNX and not under Linux), and the 200 ms
+settle and CMD52 skip are negative.  The remaining difference is at the chip's
+non-exposed power/clock pins or in OMAP HSMMC sampling — a schematic/board view
+or a logic analyser is needed.  **Step 5 (WM8994 audio + CY8CTMA3 touch) follows
+if the WL1283 is formally stopped.**  The USB warm-reset re-enumeration
+regression is **fixed**: it was the session-32 WL_EN reset pulse, isolated by
+a warm-reboot A/B and removed from the tree (trap 130); the final image
+enumerates by itself.
 
-## 0a. The way back (the unit is on the session-32 test image, the 1917 IFS is not on media)
+## 0a. The way back (the unit is on the session-33 test image, the 1917 IFS is not on media)
 
 To return to PlayBook OS 2.1.0.1917:
 
@@ -84,11 +93,11 @@ sleep 2; PBCON_TMO=10 ./tools/pbcon.py 'reboot -f'
 until grep -qE 'COMPLETE|done|error' /tmp/f.log; do sleep 2; done; tail -5 /tmp/f.log
 ```
 
-At session-32 handoff the media holds the **test image `0xAF4FC103`**, not the
+At session-33 handoff the media holds the **final image `0x0353A241`**, not the
 known-good baseline; to return to the baseline first, flash
 `local/images/kernel-0xE36C679A-wdt58s.img` with the same `--component`
-command.  `BOOTCTR_FCTRY` reads **`0x2A`** (the session-32 TabletOS oracle boot
-topped it to `0x32`, and the eight Linux test boots spent eight).
+command.  `BOOTCTR_FCTRY` reads **`0x27`** (the session-33 TabletOS comparison
+boot topped it to `0x32`, and the Linux test/A-B boots spent eleven).
 
 Region 0 is the **only** region that changed on this trip (the region-1 rootfs
 is unchanged), so restoring **region 0 only** is enough — the old "flash both
@@ -99,60 +108,39 @@ base'` and read `/dev/rpmb/BOOTCTR_FCTRY` (expect `0x32` after the TabletOS
 top-up).  **Do not restore `local/images/ifs0.sealed.bin`** — it is the
 2.0.0.4869 IFS (trap 84).
 
-## 1. The next task: the WL1283 (item 9 step 4) — the electrical comparison
+## 1. The WL1283 (item 9 step 4) — the bench-visible road is exhausted
 
-**Session-32 result (report 185).**  The second opinion's request-input
-question is **answered**: with WLAN up, QNX leaves `0x4A31E058` pad0 in
-**mux 3 `gpio_wk31`** (`0x000B0003`), not mux 1 `fref_clk2_req`.  The only
-real SoC-side difference was the SCRM **`AUXCLK1` / `fref_clk2_out`**
-generator: QNX `0x4A30A314 = 0x00020100` (SYS_CLK/3 = 12.8 MHz) and CORE pad
-`0x4A10019C` mux 0; Linux had both off.  It is now reproduced on Linux
-(images `0xF521AB06` / `0x18D49C22`) and **CMD5 still times out**.  The QNX
-driver enumerates at **24 MHz** with **CMD5 arg `0x00FFFF00`**; Linux tests at
-24 MHz and with that arg also time out (`err=-110`, `ocr=0`).  The BT driver is
-not the enable.  **Every software-visible SoC-side difference is matched; the
-chip does not respond at all.**
+**Session-33 result (reports 187/188).**  The QNX power manager is closed: the
+`winchester` preset has **no WLAN rail or clock** (its WLAN authorities only
+gate the standby/OSWR decision; `ldo_vaux1`/`ldo_vaux3` are the display/
+backlight rails; `devpm-omap4.so` is the PRCM/voltage/DVFS plugin;
+`winchester_phy_ctrl` is the USB PHY).  On the bare board the chip is **alive
+under QNX** (`ti0` UP; `GPIO2_DATAIN` bit 21 = 1) and **not under Linux** with
+WL_EN high (bit 21 = 0); the rightmost front pad is that IRQ (1.8 V ↔ 0 V),
+WL_EN is not exposed, VIO is 1.8 V, and no 3.3 V chip rail is visible.  A
+**200 ms MMC5 post-power-on settle** (image `0x0B38612D`) and a **CMD52 skip**
+(image `0xAC98BCAD`, CMD0 → CMD8 → CMD5) are both negative.  Every accessible
+pad matches QNX (`0x078 = 0x410B4103`, `0x07A = 0x0003410B`,
+`0x07C = 0x00030003`, `0x148/14C/150 = 0x01180118`), and `GPIO2_DATAOUT` is
+`0x31413200` (WL_EN high) on both.
 
-**Read first:** the canonical docs in the kickoff order, then reports **184**
-(the second opinion) and **185** (the session-32 result).  The opinion's
-`0x4A31E058` mux table is in the local TRM; its ball-AD4 routing is still not
-verifiable from the documents, but QNX's mux choice settles that the input is
-not used.
+**The remaining candidates are not bench-visible:** the chip's 26 MHz TCXO /
+VBAT at its BGA pins (the accessible points are 1.8 V and 0 V; the ~4.7 V point
+is a VBUS-side resistor), or OMAP HSMMC signal sampling.  A multimeter cannot
+measure the TCXO or see CMD; **a schematic/board view or a logic analyser is
+required.**  Do not inject rails or pins.
 
-**So the next measurement is electrical (report 184 §5 / report 185 §5).**
-**One variable per boot.**  Capture a cold boot on both OSes with a logic
-analyser/scope:
+### 1.1 What is closed (do not re-run)
 
-* `MMC5_CLK`, `MMC5_CMD`, `MMC5_DAT0` — does the chip drive CMD low at CMD5?
-* `WL_EN` — assertion timing and level **at the chip**.
-* the **26 MHz TCXO** at the chip (`TCXO_Clk = 1` in
-  `tiwlan_winchester.ini`; the main clock) and the 32.768 kHz.
-* VBAT and VIO at the chip, before and after WL_EN.
-* `CLK_REQ`/FREF only if the board routes them (QNX does not select the
-  `FREF_CLK2_REQ` mux; the FREF2 output is a 12.8 MHz `AUXCLK1` clock).
-
-Do **not** repeat the `CM_DIV_M5 = 0x329` write (trap 116) or a runtime MMC5
-`unbind`/`bind` (trap 120).  The reference's WLAN works, so the TCXO/power path
-exists on the board; the question is whether it runs under Linux.  **If the
-traces are identical and valid but CMD5 still differs,** investigate OMAP
-HSMMC sampling and the initialization protocol.  **If a TCXO/rail is
-missing,** fix that and re-test with one variable.
-
-### 1.1 What is already eliminated (do not re-run)
-
-* The FREF **request** input: QNX does not use it — `0x4A31E058 = 0x000B0003`,
-  pad0 mux 3 `gpio_wk31` with the input buffer off (session 32).
-* The FREF **output**: `AUXCLK1`/`fref_clk2_out` matched exactly
-  (`0x00020100`, 12.8 MHz); no effect on CMD5.
-* 400 kHz vs 24 MHz; CMD5 arg 0 vs `0x00FFFF00`; a 12 MHz init clock.
-* WL_EN level, at-power-up, 5 s settle, the 0/500 ms/1 reset pulse,
-  `ti,no-reset-on-init`.
-* Pads, IRQ pin, every TWL rail, `CLK32KG`, OCR windows (1.8 V and 3.3 V), a
-  full power cycle, the GPIO4 outputs.
-* The BT driver's GPIO2_23 `BT_EN` (low in both captures) and GPIO4_28
-  force-RTS (high in both).
-* Report 180 §4/§6 and report 185 for the evidence.  **A runtime MMC5
-  `unbind`/`bind` is not a safe rescan** (trap 120).
+* The powerman/devpm lead (trap 126): no WLAN rail or clock; the QNX services
+  are powerman (standby/OSWR), pmic (display rails) and phyctrl (USB).
+* The FREF request input (trap 117), the FREF2 output as a CMD5 fix (trap
+  118), the init clock/CMD5 argument (trap 119).
+* The WL_EN level/hog, the 0/500 ms/1 reset pulse alone (trap 124), a 200 ms
+  post-power-on settle (trap 128), and the CMD52 skip (trap 129).
+* `CM_DIV_M5 = 0x329` (trap 116) and a runtime MMC5 `unbind`/`bind` (trap 120).
+* The QNX/Linux pad, GPIO, PMIC-rail, OCR, power-cycle and BT-enable
+  comparisons (reports 180/185/188).
 
 ### 1.2 The clock-source distinction (settled)
 
@@ -160,93 +148,78 @@ missing,** fix that and re-test with one variable.
   `STRFRefClock = 2` = 38.4 MHz wired-OR CLK_REQ (the sync clock).**
 * `wl128x_boot_clk()` (`drivers/net/wireless/ti/wl12xx/main.c`) selects the
   TCXO unless the hardware reports FREF or the TCXO is 16.368/32.736 MHz; the
-  selection runs during firmware init, **after SDIO enumeration**.  FREF is
-  therefore not required before CMD5.
+  selection runs during firmware init, **after SDIO enumeration**.
 * The QNX driver does not configure or gate any TCXO/FREF; the board must
-  supply the 26 MHz.  **Whether that oscillator runs under Linux is the open
-  measurement** — it is not visible in any PMIC/SoC register already compared.
+  supply the 26 MHz.  Whether that oscillator runs under Linux is the open
+  measurement, and it is not visible in any PMIC/SoC register already
+  compared.
 
-### 1.3 SDIO protocol and init frequency — audited and negative
+### 1.3 If the WL1283 is formally stopped
 
-* The audit (report 186, image `0x9471F6C9`) shows the default Linux attempt
-  is **one try at 400 kHz**: `f_min = f_init = ios.clock = 400000`,
-  `SYSCTL.CLKD = 120` (48 MHz / 120; the TRM ratio is direct), actual
-  **400 kHz**.  The sequence is **CMD52 (`0x00000c00`/`0x80000c08`) → CMD0 →
-  CMD8 (`0x1aa`) → CMD5(arg 0)**; every command times out (`err=-110`)
-  except CMD0.  The card is silent from the first command.  The 24 MHz line in
-  report 185 was the deliberate `init_hz` test, not the default; report 184's
-  "no CMD52 before CMD5" note is corrected.
-* Static RE: QNX runs CMD0→CMD5(`0x00FFFF00`)→CMD3→CMD7 at **24 MHz**, with no
-  400 kHz phase.
-* A runtime `init_hz = 24000000` gave `SYSCTL = 0x000e0087` (CLKD = 2, exactly
-  QNX) and still `attach_sdio no`; the rebind wedged the console (trap 120).
-* A host quirk with CMD5 arg `0x00FFFF00`
-  (`MMC_CAP2_SDIO_OCR_PROBE_FFFF00`, now `omap_hsmmc.sdio_ocr_quirk`, default
-  off) and a 3.3 V dummy OCR window both still time out.  Do not re-litigate
-  this path (trap 119).
+Go to **item 9 step 5**: the WM8994 audio machine + the Cypress CY8CTMA3
+touch (report 176 is the inventory; the plan is in §1b).  The USB warm-reset
+re-enumeration regression was the session-32 WL_EN reset pulse; it is removed
+and the final image enumerates by itself (trap 130).  A `soft_connect`
+disconnect/connect in `/init` remains a proven fallback if it ever recurs.
 
-### 1.4 The next experiment: the QNX powerman `winchester` preset
+### 1.4 QNX-side RE still open (do this before concluding the chip is unreachable)
 
-This is the one remaining software layer that can turn on a WLAN rail or clock
-outside the driver we already audited.  **Inputs (all local, read-only):**
+The powerman preset is decoded, but these QNX files were **not** opened:
 
-* `local/work/rcfs-1917-mnt/bin/powerman` (QNX ARM, 1,109,116 B);
-* `local/work/rcfs-1917-mnt/lib/dll/devpm-omap4.so` (the `-c` plugin);
-* `local/work/rcfs-1917-mnt/etc/system/config/winchester.pm`
-  (`use_preset_config winchester`; the dependencies are compiled into the
-  binary);
-* `local/work/rcfs-1917-mnt/scripts/startup.sh` (the `powerman` line) and
-  `scripts/wifi.sh` (`devnp-ti1283.so -o nvram,firmdir=/var/ti1283`).
+* **`/pps/services/hw_info/inventory` on the live 1917** (`/base/bin/
+  hw_info_pps`) and the hwinfo/HWI tree.  The WL1283 driver looks up a `WLAN`
+  node with `hwi_find("WLAN")`/`hwi_tag_find`; the node may name the enable/IRQ
+  (the defaults 54/53 matched the live GPIO) and any power/clock.  Reading the
+  PPS inventory is read-only and cheap.
+* **`hwio-config-winchester.so`** (`lib/dll`): decode the `pad_config` and
+  `gpio_config` arrays (symbols and sizes are in `.dynsym`) for every
+  WLAN-adjacent pad/GPIO beyond `0x078`/`0x07A`/`0x07C`/`0x148`–`0x152`.
+* **`devb-mmcsd-winchester`** (`proc/boot`): its powerman client
+  (`system/power/mgr`, the `-power` and `clock` options).  Does it set the
+  MMC5 functional clock/voltage or the SDIO bus power?  Linux uses a 48 MHz
+  functional clock; QNX's `SYSCTL.CLKD = 2` on a 96 MHz clock was noted
+  (report 180); the 24 MHz card clock was tested, the 96 MHz parent was not.
+* **`devpm-omap4.so`**: its `system/power/dev/` device registration and the
+  OSWR/wakeup tables (the `sdmmc5_*` pad names).  Does any HSMMC5/WLAN device
+  state get set at boot, not only when entering OSWR?
+* **The full `tiwlan_winchester.ini`** clock/power fields: `TCXO_Clk = 1`
+  (26 MHz), `TCXO_SettlingTime = 5`, `TCXO_LDO_Voltage = 0` (2.5 V),
+  `ClockValidOnWakeup = 0`, `Platform_configuration = 2`.  They are
+  firmware-time (after enumeration), but confirm no pre-enumeration setting.
+* **The powerman preset's `devb-mmcsd = power` initial state**: what the MMC
+  driver does with it, and whether it changes the controller clock/power.
 
-**Questions:** what does the `winchester_environment` preset map
-`activity/wifi_driver/active`, `air_needs_wifi`, `wlan_needs_DMA` and
-`WLAN_NEEDS_PREVENT_OSWR` to?  What are `ldo_vaux3`/`ldo_vaux1` for, and does
-`devpm-omap4.so` implement them as TWL6030 I2C writes (which register/value)?
-Is there any other `ti128`/`wlan`/`wifi` device name?
+**The one experiment to run first (one TabletOS boot, read-only).**  Inputs:
+the 1917 IFS on region 0 (or restore `local/work/ifs-shim-sealed.ifs`), the
+door up (`tools/door-hold.sh` + `tools/pbssh.sh`), and the live PPS tree.
 
-**Method:** `ntoarmv7-objdump -d -C` + `strings -a -t x` on the two binaries
-(call the toolchain binary directly; do not source any `tools/` script).  The
-preset is data-driven: find the `winchester_environment` table and the string
-addresses for the authorities, then the devpm device names.
+```bash
+tools/pbssh.sh 'cat /pps/services/hw_info/inventory'
+tools/pbssh.sh 'pidin ar | grep -i "hw_info\|hwinfo"; pidin mem | grep -i hwinfo'
+tools/pbssh.sh 'ls -l /pps/services/hw_info /pps/services/hw_info/*'
+```
 
-**Decision table:**
-
-| result | next |
+| result | meaning / next |
 |---|---|
-| the preset names a rail/clock/GPIO for `wifi_driver` | read that register on QNX and Linux; if Linux differs, enable it as the one variable and re-test CMD52 |
-| the preset only prevents OSWR/CPU sleep (no WLAN rail) | close the powerman lead; the chip's TCXO/VIO is the remaining suspect → §1.5 |
-| `devpm-omap4.so` names a TWL6030/CM register | compare it live on QNX vs Linux (TWL via `pbi2c`, CM via `pbmem3`) |
-| no WLAN-specific dependency | close the lead; go to §1.5 |
+| the inventory names a WLAN power rail, clock or GPIO beyond EN 54/IRQ 53 | Read that register on Linux.  If it differs, enable/compare it as the one variable and re-test CMD52; record the register and value. |
+| the inventory repeats only the enable/IRQ (54/53) or has no WLAN node | Close the hwinfo lead; move to the static binaries (`hwio-config-winchester.so`, `devb-mmcsd-winchester`, `devpm-omap4.so`). |
+| the inventory is empty/unreadable | Use the IFS `hw_info_pps` binary and `startup.sh`; do not guess a node.  Record it as unreadable. |
+| it names the HSMMC5 functional clock (e.g. 96 MHz) | Compare with Linux's 48 MHz.  The 24 MHz card clock was tested; the 96 MHz parent was not.  Test the parent as one variable. |
 
-### 1.5 The multimeter checks (no analyser)
+If none of these yields a WLAN-specific rail/clock, the remaining evidence is
+the chip's BGA pins or the MMC5 bus — a schematic/board view or a logic
+analyser.  Stop the WL1283 there and go to step 5, or obtain the hardware.
 
-The operator has a multimeter, not a logic analyser/scope, so the waveform
-comparison is out.  Check at the chip (or the nearest accessible test point):
+### 1.5 Stop condition
 
-* VBAT ≈ **3.3 V**, VIO ≈ **1.8 V** (Motorola 148603 guide: VBAT 3.0–3.6 V,
-  VIO 1.71–1.89 V).
-* WL_EN ≈ 1.8 V when enabled (active high, default pull-down).
-* WL_IRQ level (active low; our SoC read is 0).
-* SLOW_CLK DC average ≈ 0.9 V if the 32.768 kHz is running; 0 or 1.8 V if
-  stuck.
-* The 26 MHz TCXO is powered from the chip's internal 1.8 V; if VIO is
-  missing the TCXO is dead with it.  A multimeter cannot check its frequency,
-  only the supply/bias.
-
-The **boot-time WL_EN 0/500 ms/1 reset pulse** was tested (image
-`0xAF4FC103`, in `omap_hsmmc_probe()` before `mmc_add_host()`) and is
-negative.  A PMIC register read proves programming, not the voltage at the
-chip.
-
-### 1.6 Stop condition
-
-* The request pin is **eliminated** (QNX does not select it; session 32).
-* If the electrical traces are identical and valid but CMD5 still differs,
-  investigate OMAP HSMMC sampling and the initialization protocol.
+* The accessible electrical state is identical and the chip still does not
+  answer; the remaining difference is at the chip's non-exposed pins or in
+  host sampling.
 * Do not make speculative clock changes that affect the DSS (trap 116).
-* **Delivered in session 32:** the first measurable difference is the FREF2
-  output generator (`AUXCLK1` 12.8 MHz + pad `0x19C`), now matched and not
-  causal.  The next deliverable is the electrical difference at the chip.
+* **Delivered in session 33:** the first direct QNX/Linux chip comparison —
+  the chip is up under QNX and not under Linux, and the IRQ pad is the
+  indicator.  The powerman lead is closed.  What remains needs external
+  evidence.
 
 ## 1a. Tools that make this cheap
 
@@ -426,6 +399,25 @@ Full text: `KNOWN-ISSUES.md` §2.  The ones that end sessions:
      enumeration.**  The chip's TCXO/power/reset is the remaining unknown.
 122. **Never retry `pkexec` after a failure on this host** — faillock can lock
      the host for 10 minutes; ask the operator.
+126. **The QNX `winchester` powerman preset has no WLAN rail or clock** — its
+     WLAN authorities only gate standby/OSWR; `ldo_vaux1`/`vaux3` are the
+     display rails; `devpm-omap4.so` is PRCM/voltage/DVFS; `winchester_phy_ctrl`
+     is the USB PHY.  Do not re-open the powerman lead (report 187).
+127. **The WL1283 IRQ is the accessible chip-alive indicator; WL_EN is not
+     brought out.**  Rightmost front pad = GPIO2_21/WL_IRQ: 1.8 V when the chip
+     is up, 0 V when WL_EN is low; it is 0 V under Linux with WL_EN high.  The
+     accessible DC points are 1.8 V and 0 V; no 3.3 V chip rail (report 188).
+128. **A 200 ms MMC5 post-power-on settle is negative** — `0x0B38612D` still
+     times out CMD52/CMD8/CMD5 (report 188).
+129. **Skipping the SDIO reset (CMD52) is negative** — `0xAC98BCAD` runs
+     CMD0 → CMD8 → CMD5 and CMD5 still times out (report 188).
+130. **The WL_EN reset pulse breaks USB warm-reset enumeration.**  The host
+     missed the gadget connect until a re-plug; the A/B isolates the session-32
+     `pb_wl1283_reset_pulse()`: `0x90BDE221` (FREF off, pulse on) fails,
+     `0x0353A241` (FREF off, pulse off) enumerates by itself in 14 s.  The FREF
+     enable and the session-33 MMC changes are excluded.  The pulse is removed
+     (it was also negative for CMD5); a UDC `soft_connect` toggle remains a
+     fallback (report 188).
 
 ## 4. Where things are in this workspace
 
@@ -466,56 +458,56 @@ Full text: `KNOWN-ISSUES.md` §2.  The ones that end sessions:
 ## 6. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 33 (absolute; Linux-era 27)
+PlayBook (OMAP4430 "winchester") — session 34 (absolute; Linux-era 28)
 
 Workspace: this repository — a git checkout.  The earlier work tree
 $HOME/rea-work is READ-ONLY.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md,
 KERNEL-PORT.md (especially §7), ROADMAP.md item 9 (steps 4 and 5),
-KNOWN-ISSUES.md (traps 9-122, especially 105-122), DEVELOPMENT.md sections
-3/3a/4, DECISIONS.md (17-39), reports 176, 180/181/182, 183, 184, 185 and
-186, sessions/session-31.md and session-32.md.
+KNOWN-ISSUES.md (traps 9-130, especially 105-130), DEVELOPMENT.md sections
+3/3a/4, DECISIONS.md (17-41), reports 176, 180/181/182, 183, 184, 185, 186,
+187 and 188, sessions/session-31.md, session-32.md and session-33.md.
 
 WHERE IT STANDS: the patch set is on Linux 7.3.3 and the unit boots it.
 The known-good image is region-0 0xE36C679A
 (local/images/kernel-0xE36C679A-wdt58s.img) + region-1
 local/images/rootfs-region1-7.3.3-charger.ext4 (17 modules).  The media
-currently holds the session-32 test image 0xAF4FC103 (FREF enable + WL_EN
-reset pulse inside the MMC5 probe + 3.3 V OCR + PBCMD trace; the CMD5 quirk
-is default-off); it boots and charges but is not a known-good baseline.  The charger is an Intersil ISL9519 at I2C1 0x09 (report 183);
-WDT2 runs the reference's 58.6 s window with a 10 s pet (trap 115).  The
-6.15.11 tree/tarball/patch are intact as the backup.  The 7.3.3 patch is
-7 257 lines / 47 files (sha256 ad55511d...) and reproduces the tree
-byte-for-byte; config kernel/winchester-7.3.3.config
-(CONFIG_CHARGER_ISL9519=y, CONFIG_KERNEL_XZ=y).  The session-32 source
-changes (FREF enable + WL_EN pulse in the MMC5 probe, CMD5 quirk + sdio.c/
-host.h, DTS) are in the patch.
+currently holds the final session-33 image 0x0353A241 (the session-32 tree
+with the FREF2 enable and the WL_EN reset pulse removed; the session-33 MMC
+experiments reverted); it boots, charges and enumerates by itself on a warm
+reboot, but it is not a known-good baseline.  The charger is an Intersil
+ISL9519 at I2C1 0x09 (report 183); WDT2 runs the reference's 58.6 s window
+with a 10 s pet (trap 115).  The 6.15.11 tree/tarball/patch are intact as the
+backup.  The 7.3.3 patch is 7 258 lines / 47 files (sha256 e7b7fc2e...) and
+reproduces the tree byte-for-byte; config kernel/winchester-7.3.3.config
+(CONFIG_CHARGER_ISL9519=y, CONFIG_KERNEL_XZ=y).
 
-PHYSICAL STATE: THE SESSION-32 TEST IMAGE 0xAF4FC103 IS IN REGION 0 — region
+PHYSICAL STATE: THE FINAL SESSION-33 IMAGE 0x0353A241 IS IN REGION 0 — region
 1 is the 7.3.3 charger rootfs; the 1917 IFS is NOT on media.
-BOOTCTR_FCTRY read 0x2A on the final boot; the pack is Full (100 %, 4.149 V).
+BOOTCTR_FCTRY read 0x27 on the final boot; the pack is Full (100 %, 4.155 V).
 Restore the known-good image or TabletOS by flashing region 0 only:
 tools/bbusb.py flash --component <image> --dest-block 0x825 --from-bootrom
 --password 0000 --apply, then re-read /dev/rpmb/BOOTCTR_FCTRY.  Do NOT
 restore local/images/ifs0.sealed.bin (2.0.0.4869, trap 84).
 
-NEXT WORK: the WL1283 chip-side checks (ROADMAP item 9 step 4).  FIRST, RE
-the QNX powerman `winchester` preset (local/work/rcfs-1917-mnt/bin/powerman +
-lib/dll/devpm-omap4.so; winchester.pm says `use_preset_config winchester`;
-strings `activity/wifi_driver`, `air_needs_wifi`, `wlan_needs_dma`,
-`ldo_vaux3`, `ldo_vaux1`) for a WLAN rail/clock.  Then the SoC-side
-comparison is exhausted: the reference does not use FREF_CLK2_REQ
-(0x4A31E058 = 0x000B0003, pad0 gpio_wk31), the corrected in-probe FREF2 test
-(AUXCLK1 = 0x00020100, 12.8 MHz, pad 0x4A10019C mux 0) is negative, and the
-audit (report 186) shows the default Linux attempt is one 400 kHz try with
-CMD52 -> CMD0 -> CMD8 -> CMD5(arg 0); the card times out on every command
-except CMD0 (err=-110).  The boot-time WL_EN 0/500 ms/1 reset pulse is also
-negative.  With the multimeter, check at the chip: VBAT ~3.3 V, VIO ~1.8 V,
-WL_EN ~1.8 V, WL_IRQ, SLOW_CLK DC average; the 26 MHz TCXO is powered from
-the chip's internal 1.8 V.  Do NOT repeat the CM_DIV_M5=0x329 write (trap
-116) or a runtime MMC5 unbind/bind (trap 120).
-Step 5 (WM8994 audio + CY8CTMA3 touch, report 176) follows.
+NEXT WORK: the operator's call on the WL1283 (ROADMAP item 9 step 4).  The
+bench-visible road is exhausted: the QNX powerman `winchester` preset has no
+WLAN rail or clock (report 187), the chip is alive under QNX and not under
+Linux (report 188: WL_IRQ 1 vs 0; WL_EN not exposed; VIO 1.8 V; no 3.3 V chip
+rail), and a 200 ms MMC5 post-power-on settle and a CMD52 skip are both
+negative.  Before concluding, finish the QNX-side RE that was NOT done
+(HANDOFF §1.4): read /pps/services/hw_info/inventory on the live 1917
+(hw_info_pps), decode hwio-config-winchester.so's pad_config/gpio_config, RE
+devb-mmcsd-winchester's powerman client (does it set the MMC5 functional
+clock/voltage or bus power?), devpm-omap4.so's system/power/dev registration
+and OSWR tables, and the full tiwlan_winchester.ini clock/power fields.
+Then the remaining candidates are the chip's non-exposed VBAT/TCXO pins or
+OMAP HSMMC sampling; a schematic/board view or logic analyser is required.
+If the WL1283 is formally stopped, step 5 (WM8994 audio + CY8CTMA3 touch,
+report 176) follows.  The USB warm-reset regression was the session-32 WL_EN
+reset pulse and is fixed by removing it (trap 130).  Do NOT repeat the closed
+experiments (traps 116-120, 124, 126-130).
 hd3/BB10/PlayBook OS work remain parked.
 
 HARDWARE RE RULE: OS 2.x only (live 1917 oracle, the 1917 /base QNX6 image,

@@ -6489,7 +6489,7 @@
 + * (device_initcall), so the first session-32 test was too late; do it here,
 + * before mmc_add_host() starts the rescan.
 + */
-+static void pb_enable_fref_clk2(void)
++static void __maybe_unused pb_enable_fref_clk2(void)
 +{
 +	struct of_phandle_args clkspec = { };
 +	struct device_node *np;
@@ -6519,7 +6519,7 @@
 + * the SDIO enumeration.  The gpio-hog leaves the line high from early boot,
 + * so repeat the reference's reset before mmc_add_host() starts the rescan.
 + */
-+static void pb_wl1283_reset_pulse(void)
++static void __maybe_unused pb_wl1283_reset_pulse(void)
 +{
 +	void __iomem *g;
 +	u32 v;
@@ -6628,15 +6628,16 @@
  
  	if (!mmc->ocr_avail)
  		mmc->ocr_avail = mmc_pdata(host)->ocr_mask;
-@@ -1942,7 +2191,39 @@
+@@ -1942,7 +2191,40 @@
  	if (!ret)
  		mmc->caps |= MMC_CAP_SDIO_IRQ;
  
 +	if (strstr(dev_name(&pdev->dev), "480d5000")) {
 +		if (pb_sdio_ocr_quirk)
 +			mmc->caps2 |= MMC_CAP2_SDIO_OCR_PROBE_FFFF00;
-+		pb_enable_fref_clk2();
-+		pb_wl1283_reset_pulse();
++		/* FREF2 (AUXCLK1) enable and the WL_EN reset pulse are both
++		 * disabled: neither is needed for CMD5 (report 185) and the
++		 * pulse is a suspect for the USB warm-reset regression. */
 +	}
 +
 +	pr_info("PBM: %s add_host\n", dev_name(&pdev->dev));
@@ -6668,7 +6669,7 @@
  	if (ret)
  		goto err_irq;
  
-@@ -2039,10 +2320,14 @@
+@@ -2039,10 +2321,14 @@
  	int ret = 0;
  
  	host = dev_get_drvdata(dev);
@@ -6683,7 +6684,7 @@
  	if ((host->mmc->caps & MMC_CAP_SDIO_IRQ) &&
  	    (host->flags & HSMMC_SDIO_IRQ_ENABLED)) {
  		/* disable sdio irq handling to prevent race */
-@@ -2070,7 +2355,9 @@
+@@ -2070,7 +2356,9 @@
  	}
  
  abort:
@@ -6693,7 +6694,7 @@
  	return ret;
  }
  
-@@ -2080,7 +2367,9 @@
+@@ -2080,7 +2368,9 @@
  	unsigned long flags;
  
  	host = dev_get_drvdata(dev);
