@@ -1,6 +1,65 @@
 # Current state
 
-## Current state — 2026-11-08 (session 31)
+## Current state — 2026-11-08 (session 32)
+
+**The WL1283's SoC-side comparison is exhausted: the `FREF_CLK2_REQ` input is
+not used by the reference, the one real difference (the `fref_clk2_out`
+generator) has been reproduced on Linux, and the chip still does not answer
+CMD5.  The remaining gap is at the chip's TCXO/power/reset and needs the
+electrical measurement report 184 recommended.**
+
+* **The fresh QNX capture (1917, WLAN up):** `0x4A31E058 = 0x000B0003` — pad0
+  **mux 3 = `gpio_wk31`**, input buffer off; the second opinion's mux 1
+  (`fref_clk2_req`) is **not selected**.  `0x4A10019C = 0x41000000` (pad0
+  `fref_clk2_out`), `0x4A30A314 = 0x00020100` (SCRM AUXCLK1: SYS_CLK/3 =
+  **12.8 MHz**, enabled).  Linux had the pad in safe mode and AUXCLK1 = 0.
+* **The FREF2 output is validly not causal.**  Images `0xF521AB06` (pad mux +
+  gate) and `0x18D49C22` (`AUXCLK1 = 0x00020100`, 12.8 MHz) both booted, but
+  the enable was a `late_initcall` (level 7) — **after** the `omap_hsmmc`
+  device-init probe (level 6), so the clock was not on for CMD5.  Image
+  `0xF38CF87E` moves the enable into `omap_hsmmc_probe()` before
+  `mmc_add_host()`; `PLAYBOOK: fref_clk2_out 12800000 Hz enable=0` prints at
+  2.567 s, and the card still times out.  The negative is now valid.
+* **The WL_EN reset pulse is also negative.**  Image `0xAF4FC103` drives
+  GPIO2_22 low for 500 ms and high again in `omap_hsmmc_probe()` before
+  `mmc_add_host()` (the reference's `hPlatform_hardResetTnetw`); CMD52/CMD8/
+  CMD5 still time out.
+* **The QNX SDIO protocol differs and was tested; the software audit settles
+  the Linux side.**  QNX enumerates at **24 MHz** (CLKD=2) with **CMD5 arg
+  `0x00FFFF00`** (static RE of `devnp-ti1283.so`; no 400 kHz phase).  Linux's
+  default is **one try at 400 kHz** (`f_min = f_init = ios.clock = 400000`,
+  `CLKD = 120`, actual 400 kHz) with the sequence **CMD52 → CMD0 → CMD8 →
+  CMD5(arg 0)**; every command times out except CMD0.  A runtime 24 MHz
+  attempt (`SYSCTL=0x000e0087`) and a host quirk with arg `0x00FFFF00` also
+  fail.  The card is silent from CMD52 onward — it never responds to any
+  command (report 186).
+* **The BT driver is not the missing enable:** `devc-seromap-winbt`'s
+  `gpio3_base` is GPIO4 (`0x48059000`); its automatic line is GPIO4 bit 28
+  (force RTS) high, which Linux matches; its `gpio_set_output` line is GPIO2
+  bit 23 (BT_EN), low in both captures.  It enables only the UART2 CM clock
+  and touches no PMIC/regulator.
+* **The remaining candidate is the 26 MHz TCXO / chip power / reset**
+  (`tiwlan_winchester.ini: TCXO_Clk = 1`; `wl128x_boot_clk()` selects it
+  unless the HW reports FREF or the TCXO is 16.368/32.736).  The Motorola
+  148603 guide says the TCXO is powered from the chip's **internal 1.8 V**:
+  VBAT 3.3 V, VIO 1.8 V, WL_EN active high, WL_IRQ active low, SLOW_CLK
+  32.768 kHz.  The QNX WLAN driver does not configure or gate any of them.
+  **Next: multimeter VBAT/VIO/WL_EN/WL_IRQ/SLOW_CLK at the chip.**  The
+  boot-time WL_EN reset pulse was already tested (negative, image
+  `0xAF4FC103`).  No logic analyser is available, so the waveform comparison
+  is out.
+* **The unit is on the session-32 test image `0xAF4FC103`** (FREF enable +
+  WL_EN reset pulse in the MMC5 probe, 3.3 V OCR, `PBCMD` trace; the CMD5
+  quirk is default-off); the known-good image remains **`0xE36C679A`**.
+  Region 1 is unchanged (the 7.3.3 charger rootfs).  The 1917 IFS is **not**
+  on media.  `BOOTCTR_FCTRY = 0x2A` (TabletOS topped it to `0x32`; eight Linux
+  boots).  Pack **100 %, 4.149 V, `Full`**.
+* **The test image boots and charges**, but it is not a "known good": it
+  carries the FREF enable, the WL_EN reset pulse, the 3.3 V dummy OCR window,
+  the `PBCMD` trace and the (default-off) CMD5 quirk.  Revert to `0xE36C679A`
+  for a clean regression.
+
+## Previous state — 2026-11-08 (session 31)
 
 **The board's charger is an Intersil ISL9519 at I²C1 `0x48070000`, slave
 `0x09` — not the TWL6030 BCI.  A minimal Linux driver charges the pack at
@@ -446,6 +505,7 @@ this trial.
 | WDT2 | **working — 58.6 s window, 10 s pet (session 31)** | The loader arms `WLDR = 0xFFFC1800` (7.8125 s); the kernel reprograms it to the reference's `0xFFE2B400` (58.6 s) at the late initcall via `WSPR` (`0xAAAA`→`0x5555` stop, write `WLDR`, `0xBBBB`→`0x4444` start), **polling `WWPS`** after each write, and pets every 10 s (`TGR` read→invert→write); fallback 2 s if the readback fails.  Verified on `0xE36C679A` by `WCRR` reload timing (~10 s) and uptime >275 s.  The expected dmesg line is missing on 7.3.3 (printk anomaly).  Report 109 §8.1 + correction; trap 115; decision §38 |
 | eMMC (MMC2) | **reads proven; writes healthy — but writers must use large blocks** | `mmcblk1` = MCGAFA 59.4 GiB, `boot0`/`boot1`/`rpmb`; needs the `vemmc` fixed supply for `ocr_avail` (report 109 §9).  Session 16 read a freshly flashed 11 152 064-byte image back **byte-exactly** and matched a pre-flash TabletOS capture (report 134); the MMC2 functional clock is 96 MHz.  Session 17 measured the write path (report 136): the driver has no request-size limit — an O_DIRECT write gives **256 KiB `CMD25`s, 5.5–7.0 MB/s** (4 KiB chunks: 0.93 MB/s), one `CMD13` per request (normal `mmc_blk_card_busy`).  The old 17–32 KB/s was `recv`'s tiny buffered writes plus 4–7 unthrottled `printk`s per request to **fbcon**.  Use ≥64 KiB (ideally 256 KiB–1 MiB) writes with the MMC trace off.  **Session 18: region 1 now holds a bootable Linux root** (32 MiB ext4 at raw `0x29000000`), written through the pre-OS `0xF7` loop (2055 frames) and read back byte-exactly (QNX `dd` and Linux `blk sumb`); it mounts read-only via a loop and its `/init` runs (report 140). |
 | USB device + gadget | **working, but not a bulk transport** | enumerates `0fca:8010`, CDC-ACM, product string "PlayBook (Linux bring-up)"; `/dev/ttyACM0` ↔ `/dev/ttyGS0`; High Speed (480 Mbps), 512-byte bulk packets.  **Drains at only ~134 KB/s and drops bytes when the host blasts** (report 136 §3.3), so it is a control/debug channel: do not send multi-MB images through `recv`.  Report 114, 136 |
+| **WL1283 (MMC5)** | **SoC-side matched; chip does not answer CMD5 (session 32)** | Bus, pads, WL_EN/IRQ, PMIC rails, MMC5 CON/HCTL/SYSCTL and the clock manager all match the reference.  `0x4A31E058 = 0x000B0003` on QNX (pad0 **mux 3 `gpio_wk31`**, not `fref_clk2_req`); the reference's `fref_clk2_out` (`AUXCLK1 = 0x00020100`, 12.8 MHz, pad `0x19C` mux 0) was reproduced on Linux without effect.  QNX enumerates at 24 MHz with CMD5 arg `0x00FFFF00`; Linux tests at 24 MHz and with arg `0x00FFFF00` still time out (`err=-110`, no response).  The remaining gap is the chip's 26 MHz TCXO/power/reset — needs an electrical measurement (report 185) |
 | Userspace (initramfs) | **working, minimal** | `/init` = PID 1, mounts, creates the configfs ACM gadget, forks `/console` in the fallback path.  **No auto-reboot since session 15** — PID 1 reboots only on request (the timer spent a `BOOTCTR_FCTRY` unit per iteration).  **Session 28:** after the gadget and the boot-time top-up, `/init` mounts the region-1 ext4 root **read-write**, bind-mounts /dev//proc//sys, chroots and execs `/sbin/init`; with no `/sbin/init` it falls back to the console.  Report 176, session-28 note |
 | Userspace (region-1 root) | **working — a real BusyBox userland** | 64 MiB ext4 at raw `0x29000000`; BusyBox 1.36.1 + init + 401 applet links + `pbconsole`/`pbrpmb` + `/lib/modules/6.15.11`; boots to `sh -l` on `/dev/ttyGS0`; `insmod`/`modprobe` proven.  `local/images/rootfs-region1.ext4` sha256 `e1ec2bf3…`, kernel image `0xAEDF68D0` |
 | Console | **working** | `help ls cat peek poke kick disp bl i2c i2c16 spi fb kmsg grep blk recv sink blkwr qnx6 rootfs write reboot`; `spi tcon` (low-first) and `spi tconbe` (high-first); `blk info/sum/sumb/rd` is read-only FNV-1a64 over `/dev/mmcblk1` (**`blk info` prints size 0 B — `fstat` bug, see KNOWN-ISSUES**), `grep <substr> <path>` scans any-size text (for `clk_summary`); `sink <len>` measures the link, `blkwr <off> <len> [chunk]` is a timed O_DIRECT write with a deterministic pattern (report 136); `qnx6 [off-hex]` mounts hd3 read-only (report 138); `rootfs [off-hex]` mounts the region-1 ext4 root read-only on `/rootfs` (report 140); argument limit 24.  `pb_reg` op set is now `w a:v` / `r a` / `t a` (16 reads, re-arm) / `u a` (16 reads, no re-arm) / `d from:to` (range dump) / `v` (video liveness).  Every hardware access forks with a bounded wait |
@@ -459,13 +519,22 @@ this trial.
 | Panel identity | **Hitachi (definitive)** | on TabletOS: `GPIO6_DATAIN = 0x00010800` (bit 16 = 1), slog `LCD is Hitachi`.  Report 127 §1 |
 | **Image on the panel** | **WORKING** | With `0x8C146805` (and the same source as `0x068C867F`) the panel shows a clean, stable image: solid white, solid red, and the kernel console as legible text.  The three necessary fixes were the bridge delivery (VC0/HS null packet), the LVDS porches + TCON table at bring-up, and the DISPC core clock. Report 133 |
 | QNX oracle tool | **`tools/qnx-dsiread.c` → `tools/pbdsi`** | Reads any TC358764 register over DSI from a TabletOS user process (generic read request `0x24` on hw VC1, BTA, RX FIFO pop; response is a generic long read, DT `0x1A`).  Read-only.  This is how the reference values in this document were obtained. Report 132 §2 |
-| Kernel patch + config | **7.3.3 (session 31); 6.15.11 kept as reference** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **7 034 lines / 45 files** (36 modified + 9 new), sha256 `266501c0…`, generated from the tree against pristine 7.3.3, applied with 0 rejects and **45/45 files byte-identical**.  Config: `kernel/winchester-7.3.3.config` (sha256 `9274c809…`, includes `CONFIG_CHARGER_ISL9519=y`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; note it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
+| Kernel patch + config | **7.3.3 (session 32 export); 6.15.11 kept as reference** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **7 257 lines / 47 files** (38 modified + 9 new), sha256 `ad55511d…`, generated from the tree against pristine 7.3.3, applied with 0 rejects and **47/47 files byte-identical** (session 32 adds `drivers/mmc/core/sdio.c` and `include/linux/mmc/host.h`; extends `omap_hsmmc.c`, `omap4-common.c` and the board DTS).  Config: `kernel/winchester-7.3.3.config` (sha256 `9274c809…`, includes `CONFIG_CHARGER_ISL9519=y`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; note it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
 | **ISL9519 charger** | **WORKING under Linux (session 31)** | I²C1 `0x48070000`, slave `0x09`; VendorID `0x0049`, DeviceID `0x0003`.  `isl9519.c` (built-in, DTS `charger@9`) sets the four registers in RIM's order with the masked fields and refreshes every 5 s.  Measured **+358 → +397 mA**, 3.775 → 3.794 V, capacity 8 → 9 %, `Charging`; still on at 197 s (watchdog).  Registers read back `0x14=0x0280`, `0x15=0x1070`, `0x3E=0x0D00`, `0x3F=0x0180`.  Report 183 |
 | TWL6030 BCI | **probes after the session-31 fix; NOT the board's charger** | `twl6030_charger` probes with the `simple-battery` profile and sets `CONTROLLER_CTRL1=0x10`, `VOREG=0x21`, `VICHRG=0x08`, `CINLIMIT=0x09`, but the stock OS leaves the whole block at bootloader reset values — it charges through the ISL9519.  The BCI node/modules are inert; `twl6030_usb` reports `ONLINE=1`, VBUS 4.81–4.91 V |
 
 ## Last known-good image
 
-**The current image is `0xE36C679A` on the 7.3.3 base**
+**The session-32 test image is `0xAF4FC103`** (0x91A23C bytes; the build that
+produced `boot/chainloader/kernel.img`) — the `0xE36C679A` base plus the
+`AUXCLK1` FREF2 enable **inside the MMC5 probe**, the WL_EN 0/500 ms/1 reset
+pulse, the (default-off) MMC5 CMD5 quirk, the 3.3 V dummy OCR window, the
+`PBCMD` command trace and the computed CLKD/actual print.  It boots and
+charges; it is **not** a known-good baseline (reports 185/186).  The previous
+test images were `0x9471F6C9` (audit), `0xF38CF87E` (FREF before probe) and
+`0xE6F77A9B`.
+
+**The known-good image is `0xE36C679A` on the 7.3.3 base**
 (`local/images/kernel-0xE36C679A-wdt58s.img`, sha256 `bdbaf5fc…`, 0x91A748
 bytes) — the
 `0x0F6AC47F` feature set plus the battery-profile DTS node, the ISL9519
@@ -581,13 +650,13 @@ the I²C bus and resets the unit).
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **our Linux image `0xE36C679A`**, flashed at block `0x825` in session 31.  **The 1917 IFS is not on media**; the way back is `local/work/ifs-shim-sealed.ifs` (7,900,548 B, sha256 `b52195bb…`) at block `0x825` (region 0 only).  The compressed `local/work/ifs1917-compressed.ifs` (3,466,232 B, sha256 `f14db207…`) is the session-27 alternative |
+| region-0 IFS on media | **the session-32 test image `0xAF4FC103`**, flashed at block `0x825`.  The known-good baseline is `0xE36C679A` (`local/images/kernel-0xE36C679A-wdt58s.img`).  **The 1917 IFS is not on media**; the way back is `local/work/ifs-shim-sealed.ifs` (7,900,548 B, sha256 `b52195bb…`) at block `0x825` (region 0 only).  The compressed `local/work/ifs1917-compressed.ifs` (3,466,232 B, sha256 `f14db207…`) is the session-27 alternative |
 | region-0 RCFS (`/base`) | **still the 1917 RCFS at region-0 offset 0xC00000** — outside the 7.3.3 image (which ends at 0x91A748) and not touched this session; not readable as `/base` without the 1917 IFS |
 | UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
-| `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it ran during the session-31 TabletOS boot and topped `BOOTCTR_FCTRY` back to `0x32` |
-| `BOOTCTR_FCTRY` | **`0x2D`** on the final boot (`0x28` at session start → TabletOS top-up to `0x32` → five Linux boots).  `0x2D >= threshold 0x1E`, so `pbrpmb topup` wrote nothing |
+| `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it ran during the session-32 TabletOS oracle boot and topped `BOOTCTR_FCTRY` back to `0x32` |
+| `BOOTCTR_FCTRY` | **`0x2A`** on the final boot: the session-32 TabletOS oracle boot topped it to `0x32`, and the eight Linux test boots spent eight.  `0x2A >= threshold 0x1E`, so `pbrpmb topup` wrote nothing |
 | region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 `ba275807…`, **17 modules under `/lib/modules/7.3.3`** (incl. `twl6030_charger.ko`, `twl6030-gpadc.ko`); the initramfs mounts it **read-write** and chroots into it |
-| TabletOS / OS | **not running** — the unit is **on our Linux 7.3.3 image `0xE36C679A`**, console over ttyGS0 (no door — trap 88), **charging at ~0.4 A** (pack 13 % and rising at session end).  The last TabletOS boot was the charger cross-check earlier in session 31 |
+| TabletOS / OS | **not running** — the unit is **on our Linux 7.3.3 test image `0xAF4FC103`**, console over ttyGS0 (no door — trap 88), **pack Full: 100 %, 4.149 V, +81 mA**.  The last TabletOS boot was the session-32 WLAN oracle (1917 IFS + door + root SSH) |
 | device-side files | none needed on Linux; QNX `/tmp` tools must be re-pushed after a TabletOS restore |
 
 The factory boot budget is real and one-way: every successful factory/CRC boot
@@ -598,30 +667,44 @@ exactly one unit and stays up until asked.
 
 ## The single current blocker
 
-**None.**  The charger is closed (ISL9519, ~0.4 A, pack recovering) and the
-WDT2 policy now matches the reference (58.6 s window, 10 s pet).  **The WL1283
-(step 4) is the next task**, resumed with the operator's second opinion
-(report 184): the untested `FREF_CLK2_REQ` input (`0x4A31E058`), the
-TCXO-vs-FREF clock distinction, the SDIO init-frequency checks and an
-electrical comparison.  The FREF **output** experiment stays closed (trap 116)
-and is not repeated.  **Step 5 (WM8994 audio + CY8CTMA3 touch, report 176) is
-the follow-on.**  NVRAM and the MCT remain unwritable, and an agent never
-writes RPMB (`SAFETY.md` §6).
+**The WL1283 is silent from the first SDIO command, and every software-visible
+SoC-side difference is now matched.**  The request input is not used by the
+reference (`0x4A31E058 = 0x000B0003`, pad0 `gpio_wk31`); the reference's
+`fref_clk2_out` is reproduced (`AUXCLK1 = 0x00020100`, pad `0x19C` mux 0); the
+audit (report 186) shows the default Linux attempt is one try at **400 kHz**
+with **CMD52 → CMD0 → CMD8 → CMD5(arg 0)**, and the card times out on every
+command except CMD0.  **The remaining unexamined software layer is the QNX
+power manager**: `/base/bin/powerman` runs with `winchester.pm`
+(`use_preset_config winchester`), and its strings include
+`activity/wifi_driver/active|idle`, `air_needs_wifi`, `wlan_needs_DMA`,
+`WLAN_NEEDS_PREVENT_OSWR` and `ldo_vaux3`/`ldo_vaux1`.  RE it +
+`devpm-omap4.so` for a WLAN rail/clock that the driver we audited does not
+touch.  The chip-side candidate remains the 26 MHz TCXO / VBAT / VIO; the
+Motorola 148603 guide gives the multimeter targets (**VBAT 3.3 V, VIO
+1.8 V, WL_EN 1.8 V, WL_IRQ, SLOW_CLK**).  The boot-time WL_EN 0/500 ms/1
+reset pulse was tested (image `0xAF4FC103`) and is negative.  No logic
+analyser is available, so the waveform comparison is out.
 
-**Media state: our Linux image `0xE36C679A` is in region 0** (flashed this
-session); the 1917 IFS is not on media.  `BOOTCTR_FCTRY` read **`0x2D`** on
-the final boot (TabletOS had topped it to `0x32`).  Region 1 holds the 7.3.3
-charger rootfs (`ba275807…`).
+**Media state: the session-32 test image `0xAF4FC103` is in region 0**; the
+known-good baseline is `0xE36C679A`.  The 1917 IFS is not on media.
+`BOOTCTR_FCTRY = 0x2A`.  Region 1 holds the 7.3.3 charger rootfs
+(`ba275807…`).  NVRAM and the MCT remain unwritable, and an agent never writes
+RPMB (`SAFETY.md` §6).
 
 ## What is next
 
-1. **ROADMAP item 9 step 4: the WL1283, with the second opinion (report 184).**
-   Read the canonical docs first, then the opinion in full.  Start with the
-   read-only `0x4A31E058` comparison (QNX with WLAN working vs Linux), then the
-   ball-AD4/CLK_REQ routing, the TCXO-vs-FREF distinction, the SDIO
-   init-frequency checks, and the electrical comparison.  Do not repeat the
-   `CM_DIV_M5 = 0x329` write (trap 116); report 180 §4/§6 lists what is already
-   eliminated.
+1. **ROADMAP item 9 step 4: the WL1283 chip-side checks.**
+   **First, RE the QNX power manager:** `bin/powerman` with
+   `winchester.pm`/`use_preset_config winchester` and `devpm-omap4.so`; find
+   what `activity/wifi_driver`, `air_needs_wifi`, `wlan_needs_DMA` and
+   `ldo_vaux3`/`ldo_vaux1` enable (a WLAN rail/clock outside the driver).
+   Then, with the multimeter, VBAT/VIO/WL_EN/WL_IRQ/SLOW_CLK at the chip (the
+   Motorola 148603 guide: VBAT 3.3 V, VIO 1.8 V, WL_EN active high, IRQ
+   active low, SLOW_CLK 32.768 kHz; the 26 MHz TCXO is powered from the chip's
+   internal 1.8 V).  The audit (report 186) rules out the init clock and the
+   CMD5 argument; the corrected FREF test and the boot-time WL_EN reset pulse
+   are both negative.  Do not repeat the `CM_DIV_M5 = 0x329` write (trap
+   116); the FREF request input is closed (report 185).
 2. **Then item 9 step 5: the WM8994 audio machine and the Cypress CY8CTMA3
    touch** (report 176 is the inventory).  Item 9 steps 0–3 are done (charger,
    reports 177/178/179/182, re-verified on 7.3.3 in session 30); every step is

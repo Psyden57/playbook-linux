@@ -46,8 +46,8 @@
 	vwl1283: regulator-wl1283 {
 		compatible = "regulator-fixed";
 		regulator-name = "vwl1283";
-		regulator-min-microvolt = <1800000>;
-		regulator-max-microvolt = <1800000>;
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
 		/*
 		 * Deliberately NOT gpio-controlled: the loader leaves WL_EN
 		 * (GPIO2_22) high, and the whole point of `ti,no-reset-on-init`
@@ -157,6 +157,19 @@
 	twl: twl@48 {
 		reg = <0x48>;
 		interrupts = <GIC_SPI 7 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	/*
+	 * Intersil ISL9519 narrow-VDC charger, 7-bit 0x09 (report 183).  This
+	 * is the board's real charger: the stock 1917 OS leaves it here and
+	 * drives it, while the TWL6030 BCI stays at its bootloader reset
+	 * values.  The driver writes 0x14/0x15 non-zero (the output is
+	 * disabled while both are zero) and refreshes them every 5 s for the
+	 * part's 175 s watchdog.
+	 */
+	charger@9 {
+		compatible = "intersil,isl9519";
+		reg = <0x9>;
 	};
 
 	/*
@@ -517,12 +530,18 @@
 			OMAP4_IOPAD(0x152, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_dat3 */
 		>;
 	};
+
+	fref_clk2_out_pins: fref-clk2-out-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x19c, 0x0000)	/* fref_clk2_out */
+		>;
+	};
 };
 
 &mmc5 {
 	status = "okay";
 	pinctrl-names = "default";
-	pinctrl-0 = <&sdmmc5_pins &fref_clk_pins>;
+	pinctrl-0 = <&sdmmc5_pins &fref_clk_pins &fref_clk2_out_pins>;
 	vmmc-supply = <&vwl1283>;
 	bus-width = <4>;
 	ti,non-removable;

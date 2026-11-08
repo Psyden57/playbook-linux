@@ -1,9 +1,20 @@
 # The reference's `FREF_CLK2` pad: mux 0 clock output vs mux 3 GPIO high-Z
 
-**Status: open.**  Discovered while reconciling the WL1283 notes during the
-session-31 wrap-up.
+**Status: RESOLVED (session 32, report 185).**  A fresh read-only dump of the
+running 1917 reference with Wi-Fi up confirms **claim (1)**: CORE pad
+`0x4A10019C` is `0x41000000` (pad0 mux 0, `fref_clk2_out`), and the SCRM
+`AUXCLK1` register `0x4A30A314` is `0x00020100` (source SYS_CLK, divide 3,
+enabled) — a real **12.8 MHz** output clock, not a high-Z GPIO.  Claim (2)'s
+"mux 3" decode was a **WKUP**-pad result (correct for `0x4A31E058` pad0) that
+was generalised to the CORE pad; it does not apply to `0x4A10019C`.
 
-## Claims
+Fresh session-32 values (1917, WLAN up): `0x4A10019C = 0x41000000`;
+`0x4A31E050 = 0x00080000`, `0x4A31E054 = 0x000F0003`,
+**`0x4A31E058 = 0x000B0003`** (pad0 mux 3 `gpio_wk31`, input off),
+`0x4A31E05C = 0x0100000B`; `0x4A30A314 = 0x00020100`.  The GPIO6 `OE` pair was
+not re-read, but it does not affect the CORE pad's mux.
+
+## Original claims (kept for the trail)
 
 1. **Report 180 §6 (session 29).**  The pad `0x4A10019C` (CONTROL_CORE_PAD0_
    FREF_CLK2_OUT / PAD1_SYS_NIRQ1) reads **`0x41000000`** on the running
@@ -17,48 +28,18 @@ session-31 wrap-up.
    earlier claim 'the reference muxes a reference clock out' is superseded by
    that decode."
 
-The two claims are about the same register and cannot both be current.  The
-note says the *decode* supersedes the report, but report 180 was not corrected
-in place and still carries the mux-0 value.
+## Resolution and why it matters
 
-## Evidence for each
+The reference **does** mux the CORE pad to `fref_clk2_out` and **does** enable
+the SCRM `AUXCLK1` generator.  The output is 12.8 MHz (`38.4 / 3`), not the
+38.4 MHz the vendor `.ini`'s `STRFRefClock = 2` names.
 
-* **For (1):** a live padconf dump of the reference with Wi-Fi up; the value
-  `0x41000000` is quoted.  The same session wrote `0x41000000` live to our
-  unit and re-scanned MMC5 (still no card — but that write does not enable the
-  CM parent).
-* **For (2):** a later decode in the same session; the note does not quote the
-  register values it used, and it may generalise a **WKUP**-pad decode
-  (`0x4A31E054/058/05C`) to `0x4A10019C`.
-* **Session 31 (this unit, not the reference):** the boot pad reads
-  `0x4118010F` (safe mode), the DTS does **not** mux `0x19C`, writing
-  `0x41000000` took, and writing `CM_DIV_M5 = 0x329` glitched the panel because
-  `dpll_per_m5x2_ck` is the DSS clock parent (trap 116).  **No fresh reference
-  read was taken** — the unit was on our image for this session.
+Session 31's behavioural test (pad mux 0 + `CM_DIV_M5 = 0x329`) was therefore
+half of the reference's configuration: it did not enable `AUXCLK1`.  Session 32
+enabled it exactly (`0x00020100`) and muxed the pad, and MMC5 still did not
+answer CMD5 — so the FREF2 output is **not** the WL1283's missing variable.
+The WL1283's main clock is the 26 MHz TCXO (vendor `.ini`; `wl128x_boot_clk()`),
+and the remaining question is the TCXO/power at the chip (report 185 §5).
 
-## What is uncertain
-
-* Which value the reference actually has with Wi-Fi up (`0x41000000` or a
-  GPIO mux), and what GPIO6 `OE` says about it.
-* Whether the reference's FREF pads are one decode or two (CORE `0x19C` vs the
-  WKUP group).
-* Whether the WL1283's 38.4 MHz reference comes from this pad at all — the
-  only positive evidence is the vendor `tiwlan_winchester.ini`
-  (`STRFRefClock = 2`); a crystal/PMIC source would not appear in the pad
-  state.
-
-## What would settle it
-
-A fresh, read-only dump on the live 1917 reference with Wi-Fi up:
-`0x4A10019C`, `0x4A31E054/058/05C`, and the GPIO6 `OE`/`DATAOUT` pair — or the
-board schematic / WL1283 datasheet showing the reference-clock source.
-
-## Consequence for the WL1283
-
-The session-31 FREF test (pad mux 0 + `CM_DIV_M5 = 0x329`) is a valid
-*behavioural* negative — the card still did not answer — but it is only a
-faithful reproduction of the reference if claim (1) is right.  If claim (2) is
-right, forcing the pad was not the reference's configuration, and the
-reference-clock hypothesis rests on the vendor `.ini` alone.  Either way the
-route is **closed as untestable without the DSS-independent clock tree and the
-schematic**; resolve this file before any future FREF attempt.
+The `CM_DIV_M5 = 0x329` write remains forbidden (trap 116): it is the DSS
+divider, not the FREF generator.

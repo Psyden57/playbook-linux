@@ -586,6 +586,79 @@ report 121 §3/§11/§12.
      WL1283 reference-clock experiment cannot be done by poking this divider
      without breaking the display.  (Session 31; report 180 + addendum.)
 
+117. **The WL1283 `FREF_CLK2_REQ` input is not used by the reference — do not
+     select mux 1.**  Fresh 1917 read with WLAN up: `0x4A31E058 = 0x000B0003`,
+     pad0 **mux 3 = `gpio_wk31`** with the input buffer off; pad1 mux 3
+     `gpio_wk7`.  The second opinion's mux 1 (`fref_clk2_req`) is not
+     selected.  The pad's line is low on both OSes (measured by temporarily
+     enabling the input buffer on our image).  (Session 32, report 185.)
+
+118. **The FREF2 output is SCRM `AUXCLK1` (`0x4A30A314`), not the DPLL_PER M5
+     divider.**  QNX sets `0x00020100`: source SYS_CLK, /3 = **12.8 MHz**,
+     enabled, and muxes `0x4A10019C` to `fref_clk2_out`; Linux had both off.
+     It can be enabled through the clock framework, but `of_clk_get()` on a
+     provider node returns the node's *parent* clock; use
+     `of_clk_get_from_provider()` to get `auxclk1_ck` itself.  Reproducing it
+     exactly (images `0xF521AB06`/`0x18D49C22`) does **not** make CMD5 answer,
+     so it is not the missing variable.  (Session 32, report 185.)
+
+119. **QNX enumerates the WL1283 at 24 MHz and sends CMD5 with argument
+     `0x00FFFF00`.**  Static RE of `devnp-ti1283.so`: `SYSCTL = 0x000E0080`
+     (CLKD=2) before CMD0, no 400 kHz phase, sequence CMD0→CMD5
+     (`0x00FFFF00`)→CMD3→CMD7.  Linux's 400 kHz + arg 0 is not the difference:
+     a runtime 24 MHz attempt (`SYSCTL=0x000e0087`) and a host quirk with arg
+     `0x00FFFF00` both still time out (`err=-110`, no response).  The audit
+     (report 186) shows the default Linux attempt is **one try at 400 kHz**
+     (`f_min = f_init = ios.clock = 400000`, `CLKD = 120`, actual 400 kHz)
+     and the full sequence **CMD52 → CMD0 → CMD8 → CMD5(arg 0)**; the card
+     times out on every command, starting with CMD52.  The 24 MHz line in
+     report 185 was the deliberate `init_hz` test, not the default.  Do not
+     re-litigate the init clock.  (Session 32, reports 185/186.)
+
+120. **Do not use a runtime MMC5 `unbind`/`bind` as a rescan.**  It wedges the
+     ttyGS0 shell (the kernel keeps running and USB keeps enumerating), so the
+     console dies and `reboot -f` never executes; the unit needs a power
+     cycle.  Change the DTS/driver and boot instead.  (Session 32; extends
+     trap 100.)
+
+121. **The WL1283's main clock is its 26 MHz TCXO; FREF is not needed before
+     enumeration.**  `tiwlan_winchester.ini` has `TCXO_Clk = 1`;
+     `wl128x_boot_clk()` selects the TCXO unless the hardware reports FREF or
+     the TCXO is 16.368/32.736 MHz.  `STRFRefClock = 2` is the sync clock.
+     The QNX driver does not configure or gate the TCXO, so the remaining
+     question is whether the board's 26 MHz oscillator runs under Linux —
+     measure TCXO/VBAT/VIO/reset and MMC5 CLK/CMD/DAT0 at the chip; no further
+     SoC-side register diff is expected to answer it.  (Session 32, report
+     185.)
+
+122. **Never retry `pkexec` after a failure on this host.**  The operator's
+     faillock policy can lock the host for 10 minutes after repeated failed
+     authentications.  If `pkexec chmod 666 /dev/ttyACM0` fails or the prompt
+     is not answered, stop and ask the operator to run the chmod.  (Operator,
+     session 32.)
+
+123. **The WL1283's 26 MHz TCXO is powered from the chip's internal 1.8 V.**
+     The Motorola 148603 module guide (a WL1283-based module) gives
+     VBAT 3.3 V, VIO 1.8 V, WL_EN active high, WLAN_IRQ active low,
+     SLOW_CLK 32.768 kHz, and says the TCXO is supplied by the SoC's internal
+     1.8 V.  If VIO is missing, the TCXO is dead with it.  A multimeter can
+     check VBAT/VIO/WL_EN/WL_IRQ and the SLOW_CLK DC average, but not the
+     26 MHz waveform.  (Session 32, report 186.)
+
+124. **A `late_initcall` runs after the `device_initcall` probes — not before
+     them.**  The first session-32 FREF2 test enabled SCRM `AUXCLK1` from a
+     `late_initcall` (level 7); the `omap_hsmmc` platform driver probes at
+     device-init level 6, so the clock was enabled **after** the MMC5 rescan
+     and the test was invalid.  Anything the probe needs (clock, reset,
+     regulator) must be set in the probe itself or at an earlier level.
+     (Session 32, reports 185/186.)
+
+125. **The Kindle Fire HD 3 (`amazon-soho`, P48WVB4) is a BCM4330 device,
+     not a WL1283C reference.**  The archived pmaports packages install
+     `bcmdhd.cal`/`fw_bcm4330.bin` and load `dhd`, and the vendor kernel config
+     has `CONFIG_WL12XX_MENU` off.  Do not use its firmware, DT or power
+     sequencing as a WL1283 comparison.  (Session 32, report 186.)
+
 ## 3. Corrections to older reports
 
 These twenty are preserved deliberately. Each is newer than the text it

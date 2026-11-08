@@ -1044,6 +1044,46 @@ correction.
 
 ---
 
+## 39. The WL1283 FREF request input is closed; the next step is the chip-side checks (session 32)
+
+**Decision.**  Do not pursue the `FREF_CLK2_REQ` input (mux 1 on `0x4A31E058`)
+or further SoC-side SDIO register diffs for the WL1283.  The reference leaves
+that pad as **mux 3 `gpio_wk31`** (`0x4A31E058 = 0x000B0003`); the one real
+SoC-side difference — the SCRM `AUXCLK1` / `fref_clk2_out` generator — was
+reproduced exactly on Linux and is not causal (the first test enabled it
+after the MMC5 probe; the corrected in-probe test is also negative).  The
+boot-time WL_EN 0/500 ms/1 reset pulse was tested (image `0xAF4FC103`) and is
+negative.  **The remaining unexamined software layer is the QNX power
+manager:** `bin/powerman` runs with `winchester.pm`
+(`use_preset_config winchester`), and its strings include
+`activity/wifi_driver`, `air_needs_wifi`, `wlan_needs_dma` and
+`ldo_vaux3`/`ldo_vaux1`; RE it + `devpm-omap4.so` for a WLAN rail/clock
+before trusting the chip-only hypothesis.  Then the measurement at the chip
+with the available equipment: with a **multimeter**, VBAT ≈ 3.3 V,
+VIO ≈ 1.8 V, WL_EN ≈ 1.8 V, WL_IRQ and the SLOW_CLK DC average (the Motorola
+148603 guide; the 26 MHz TCXO is powered from the chip's internal 1.8 V).
+
+**Why.**  A fresh QNX read with WLAN up settles the request-input question
+directly.  The first FREF2 output test (images `0xF521AB06` / `0x18D49C22`)
+matched `AUXCLK1 = 0x00020100`, pad `0x19C` mux 0 and `auxclk1_ck` 12.8 MHz,
+but enabled it **after** the MMC5 probe; the corrected test (image
+`0xF38CF87E`) enables it before `mmc_add_host()` and CMD5 still times out.  The QNX driver's protocol differences (24 MHz, CMD5 arg
+`0x00FFFF00`) were tested and are not sufficient.  The software audit (report
+186) shows the default Linux attempt is one 400 kHz try with CMD52 → CMD0 →
+CMD8 → CMD5(arg 0), and the card times out from CMD52 onward.  The chip does
+not respond at all (`err=-110`), so the gap is at the chip, not the host.
+
+**Constraint.**  Do not repeat the `CM_DIV_M5 = 0x329` write (trap 116).  Do
+not use a runtime MMC5 `unbind`/`bind` (trap 120).  No logic analyser is
+available, so the waveform comparison is out; a PMIC register read proves
+programming, not the voltage at the chip.
+
+**Evidence.**  Reports 185 and 186; the fresh QNX capture; the five test
+images; the static RE of `devnp-ti1283.so` and `devc-seromap-winbt`; the
+Motorola 148603 guide.
+
+---
+
 These were the open policy questions.  The licence and visibility are decided
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.
