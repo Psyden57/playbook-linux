@@ -57,10 +57,10 @@ rapid charger at session end (pack was 2.817 V / 0 %).**
   (`local/images/kernel-0x91AF34DF-charger.img`, sha256 `7d4b9187…`) + rootfs
   **`ba275807…`** (`local/images/rootfs-region1-7.3.3-charger.ext4`,
   17 modules).  Test it before any other bench work.
-* **Next work: ROADMAP item 9 step 0 (the charger test), then step 5** — the
-  WM8994 audio machine and the Cypress CY8CTMA3 touch.  The WL1283 stays parked
-  (report 180 §6); `hd3`, BB10 and the PlayBook OS image work remain parked by
-  the operator.
+* **Next work (operator order, session 30 end): step 0 charger test, then
+  step 4 (resume the WL1283 — the FREF reference-clock parent), then step 5**
+  (WM8994 audio + Cypress CY8CTMA3 touch).  `hd3`, BB10 and the PlayBook OS
+  image work remain parked by the operator.
 
 ## Previous state — 2026-11-06 (session 29)
 
@@ -510,10 +510,12 @@ exactly one unit and stays up until asked.
 to the region-1 userland with a clean panel and working eMMC, and the 42-file
 patch reproduces the tree from pristine 7.3.3.  Item 9 steps 1–3 (I²C4 motion
 sensors, TMP103 + BQ27541, FAN5702, CM3217) all work on 7.3.3; the WL1283 is
-**parked** (report 180 §6), and the `hd3` repurpose, BB10 and the PlayBook OS
+**the second task, after the charger test** (operator, session 30 end; report
+180 §6), and the `hd3` repurpose, BB10 and the PlayBook OS
 image work are parked by the operator.  NVRAM and the MCT remain unwritable, and
 an agent never writes RPMB (`SAFETY.md` §6).  **The next action is the prepared
-TWL6030 charger test** (item 9 step 0); the unit must charge first.
+TWL6030 charger test** (item 9 step 1.1 in `HANDOFF.md`); the unit must charge
+first.
 
 **Media state: our Linux 7.3.3 image is in region 0 — the 1917 IFS is not on
 media**, and `BOOTCTR_FCTRY` reads **`0x2D`** (no top-up was needed).  Restore
@@ -524,14 +526,16 @@ media**, and `BOOTCTR_FCTRY` reads **`0x2D`** (no top-up was needed).  Restore
 `ROADMAP.md` owns the ordered list.  **Item 10 is closed (7.3.3 port).**  The
 next work is **ROADMAP item 9 step 0: test the prepared TWL6030 charger fix**
 (image `0x91AF34DF` + rootfs `ba275807…`), because the pack ran flat with no
-BCI instance (trap 108); then **item 9 step 5**, the **WM8994** audio machine
-and the Cypress **CY8CTMA3** touch, on the 7.3.3 base.  Item 9 stands at:
+BCI instance (trap 108); **then step 4: resume the WL1283** (the FREF
+reference-clock parent, report 180 §6 / `HANDOFF.md` §1.2); **then item 9 step
+5**, the **WM8994** audio machine and the Cypress **CY8CTMA3** touch, on the
+7.3.3 base.  Item 9 stands at:
 **steps 1–3 done** — the I²C4 motion sensors (report 177), TMP103 + BQ27541
 (178), the FAN5702 LED (179) and **the CM3217 light sensor (182: 32–37 lux
-dark, 191 lit)**, all re-verified on 7.3.3 in session 30.  **Step 4 is parked**
-(the WL1283, report 180).  Every step is one variable per boot and none needs an
-RPMB write.  The sensor IRQs (GPIO2 lines 2/27/18) are the next variable if
-triggered sampling is wanted.
+dark, 191 lit)**, all re-verified on 7.3.3 in session 30.  **Step 4 is no
+longer parked** — it is the operator's second task.  Every step is one variable
+per boot and none needs an RPMB write.  The sensor IRQs (GPIO2 lines 2/27/18)
+are the next variable if triggered sampling is wanted.
 
 ## Workspace location
 

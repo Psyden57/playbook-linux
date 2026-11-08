@@ -261,6 +261,10 @@ brownout.
 * **"The 6.15.11 patch reproduces the tree"** — withdrawn: it is incomplete
   (trap 106) and kept for bisect reference only.
 * **"The 1917 `.rcfs` is an RCFS image"** — it is a QNX6 filesystem.
+* **"The WL1283 stays parked"** (this note and the session-29 handoff) — the
+  operator's session-30 end order makes it the **second task**, after the
+  charger confirmation; the one untested mechanism is the FREF
+  reference-clock parent (`DECISIONS.md` §36, `HANDOFF.md` §1.2).
 * **"The unit is up on the Linux image at session end"** (true mid-session) —
   it is powered off and docked, with the pack critical.
 * **The session-30 handoff's "charge before bench work"** remains current; the

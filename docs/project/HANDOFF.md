@@ -19,9 +19,10 @@ Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolut
 > `i2c_set_clientdata()` (trap 107 — deleting the client oopsed and killed the
 > shell, which is what wedged the console in session 30).
 >
-> **Next work: ROADMAP item 9 step 5 — WM8994 audio and the Cypress CY8CTMA3
-> touch, on the 7.3.3 base.**  The WL1283 is parked (report 180 §6); `hd3`,
-> BB10 and the PlayBook OS image work remain parked by the operator.
+> **Next work: first the TWL6030 charger test, then resume the WL1283 (the FREF
+> reference-clock parent), then item 9 step 5 — WM8994 audio and the Cypress
+> CY8CTMA3 touch, on the 7.3.3 base.**  `hd3`, BB10 and the PlayBook OS image
+> work remain parked by the operator.
 
 ## 0. The job, and where it stands
 
@@ -58,10 +59,11 @@ used for a clean rebuild.
 the last tested image is `0x0F6AC47F`.  Config:
 `kernel/winchester-7.3.3.config` (sha256 `7e0aa261…`).
 
-**Still open:** the peripheral bring-up (ROADMAP item 9), **step 0** (the
-prepared TWL6030 charger test) first, then **step 5** (audio + touch).  **Parked
-by the operator:** the WL1283 (report 180), the `hd3` cut-over, BB10, and the
-PlayBook OS image work.  Packaging (item 7) is untouched.
+**Still open:** the peripheral bring-up (ROADMAP item 9).  **The operator's
+order (session 30 end): step 0 (the prepared TWL6030 charger test) first, then
+step 4 (resume the WL1283 — the FREF reference-clock parent), then step 5
+(audio + touch).**  **Parked by the operator:** the `hd3` cut-over, BB10, and
+the PlayBook OS image work.  Packaging (item 7) is untouched.
 
 ## 0a. The way back (the unit is on our Linux image, the 1917 IFS is not on media)
 
@@ -82,13 +84,15 @@ base'` and `tools/pbssh.sh 'cat /dev/rpmb/BOOTCTR_FCTRY' | xxd -p` (expect
 **Not exercised in session 30** — the unit ended powered off on the dock; the
 last full run of this procedure was the session-27/28 restore.
 
-## 1. The one thing to do next: the TWL6030 charger test
+## 1. The next two tasks (operator order, session 30 end)
+
+### 1.1 First: confirm the TWL6030 charger
 
 **Why this first.**  The board had no TWL6030 `charger` child, so
 `CONFIG_CHARGER_TWL6030=m` built a driver that never probed and the module was
 not even in the 15-module rootfs.  The pack then ran flat on USB and the unit
 browned out at 2.817 V/0 % (trap 108).  A fix is **prepared and untested**.
-Do this before audio/touch so the bench can run on a charged pack.
+Do this before any other bench work so the bench can run on a charged pack.
 
 **Inputs (all present):**
 
@@ -125,12 +129,62 @@ watch `bq27541-0` `CURRENT_NOW`/`VOLTAGE_NOW`.
 
 | result | meaning | next |
 |---|---|---|
-| `twl6030_usb` appears and `CURRENT_NOW` goes positive, voltage rises | BCI works; the drain was the missing driver | keep this image/rootfs as the new known-good; proceed to step 5 |
+| `twl6030_usb` appears and `CURRENT_NOW` goes positive, voltage rises | BCI works; the drain was the missing driver | keep this image/rootfs as the new known-good; go to **1.2 (the WL1283)** |
 | the supply appears but current stays ∼0/negative | binding is right, charge path is not enabled or the limit is too low | try `online`/`current_max`; read `VBUS_VOLTAGE`; check the GPADC channel and `CHARGERUSB_CTRLLIMIT1/2`; one variable |
 | no `twl6030_usb` in `/sys/class/power_supply` | node/binding problem | read `dmesg | grep -iE "twl6030\|charger"`; check `monitored-battery`, the gpadc phandle and IRQs 2/5; fix the DTS, rebuild the DTB, reflash |
 | the unit browns out before the test | pack still too low | charge longer **off the dock** (dock is fine while off); do not loop boots — each spends a counter unit (trap 108) |
 
-## 1a. After the charger: item 9 step 5 (audio + touch)
+### 1.2 Second: resume the WL1283
+
+**This is the operator's second task (session 30 end).**  The chip and every
+SoC-side surface are measured; one mechanism was never tested.  Read **report
+180 §6** first — it lists what is already falsified so it is not retried.
+
+**State, in one paragraph.**  The TI WL1283 combo is on **MMC5
+(`0x480D5000`)**; WL_EN = **GPIO2_22** (active high, 120 ms before the chip is
+touched) and WL_IRQ = **GPIO2_21** (input, falling, active low).  `&mmc5`
+probes and clocks, the card never answers CMD5 (`STAT=00018000` = CTO), UART2
+HCI gets no answer, and the IRQ is never driven.  Eliminated with evidence:
+the enable line at boot and re-pulsed at runtime, the pads (full padconf diff),
+the IRQ pin, every TWL6030 rail and `CLK32KG`, the OCR window (1.8 V and 3.3 V),
+a full power cycle, a 12 MHz init clock, WL_EN driven by a regulator at MMC
+power-up, `ti,no-reset-on-init`, and 5 s of EN settling.  The pads, GPIO banks,
+all 256 PMIC registers, CM2/PRM and the FREF mux now match the reference.
+
+**The one untested mechanism: the FREF reference-clock parent.**  The vendor
+config (`local/work/qnx-fw/tiwlan_winchester.ini`) says the chip wants a
+**38.4 MHz reference clock** (`STRFRefClock = 2`) with a **CLK_REQ** handshake,
+and the pads are muxed (`0x4A10019C` = `fref_clk2_out`, WKUP
+`0x4A31E054/058/05C`) — but **muxing a pad does not enable its parent clock**.
+Report 180 §6's CM diff suggests the output may already run
+(`CM_DIV_M5_DPLL_PER` differs but the read-only `ST_HSDIVIDER_CLKOUT2` status
+is 1 in both), so a negative result also closes this route.  Nothing in the
+CM enable path was ever set by us.
+
+**Experiment (one variable per boot).**  From the known-good image after 1.1:
+enable the **FREF_CLK2 / DPLL_PER-M5 output path in CM** (the parent/gate, not
+just the pad mux), rebuild (`DEVELOPMENT.md` §3), flash **both** regions in one
+bootrom session (`pack -l both.lst -v 1,2 -s -f` + `flash --signed`), boot,
+then:
+
+```bash
+PBCON_TMO=30 ./tools/pbcon.py 'dmesg | grep -E "attach_sdio|new .*card"'
+PBCON_TMO=30 ./tools/pbcon.py '/bin/pbhci /dev/ttyS1'   # one HCI_Reset on UART2
+```
+
+`/bin/pbhci` is on the region-1 root; UART2 is already in the board DTS.  Do
+not characterise the chip from TabletOS (trap 103); the reference is for
+SoC-side comparison only.
+
+**Decision table.**
+
+| result | meaning | next |
+|---|---|---|
+| `pbhci` answers (`04 0E 04 01 03 0C 00`) | the chip's digital core runs — the reference clock was it | stop the WL1283 hunt at the source: `wlcore` + firmware, then BT/GPS |
+| SDIO enumerates (`attach_sdio` succeeds) but BT stays silent | SDIO path is right; BT needs its own enable/`.bts` | convert `firmware.bin` → `wl128x-fw-4-sr.bin` and `tiwlan_winchester.ini` → `wl128x-nvs.bin` (`build_rootfs.py --firmware DIR`) |
+| both still silent | the clock is not the gap | stop; the next evidence must be a bus capture or the datasheet (report 180 §6) |
+
+### 1.3 Then: item 9 step 5 (audio + touch)
 
 Report **176** is the inventory and bus map; DECISIONS §28 is the order.
 
@@ -157,12 +211,6 @@ OS that owns it (DECISIONS §31, trap 103); ask the reference OS what it maps
 (`pidin mem`/`pidin irq`) before writing a DT node (DECISIONS §30); **hardware
 RE from OS 2.x only, never BB10** (DECISIONS §34, trap 110).  Neither needs an
 RPMB write.
-
-**The WL1283 stays parked.**  It is on **MMC5 (`0x480D5000`)**, WL_EN =
-**GPIO2_22**, WL_IRQ = **GPIO2_21** (input); `&mmc5` probes and clocks and the
-card never answers CMD5.  Read report 180 §6 before touching it: every SoC-side
-register now matches the reference, and the one untested mechanism is enabling
-the **FREF reference-clock parent** in CM.
 
 ## 1a. Tools that make this cheap
 
@@ -323,7 +371,7 @@ $HOME/rea-work is READ-ONLY.  Map: docs/README.md.
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md,
 KERNEL-PORT.md (especially §7), ROADMAP.md items 9 and 10, KNOWN-ISSUES.md
 (traps 9-110, especially 91-110), DEVELOPMENT.md sections 3/3a/4, DECISIONS.md
-(17-34), reports 176 and 180/181/182, sessions/session-30.md, and
+(17-36), reports 176 and 180/181/182, sessions/session-30.md, and
 docs/contradictions/fan5702-safe-model-vs-cm3217-race.md.
 
 WHERE IT STANDS: **the patch set is on Linux 7.3.3 and the unit boots it**
@@ -349,16 +397,18 @@ local/work/ifs-shim-sealed.ifs --dest-block 0x825 --from-bootrom --password
 local/images/ifs0.sealed.bin (2.0.0.4869, trap 84).
 
 NEXT WORK: **first the charger test** (the pack ran flat because the TWL6030
-BCI was never instantiated — see below), then ROADMAP item 9 step 5.  The
-charger fix is prepared but NOT flashed: image `0x91AF34DF`
+BCI was never instantiated — HANDOFF §1.1), **then resume the WL1283** (step 4:
+the one untested mechanism is the FREF reference-clock parent, report 180 §6 and
+HANDOFF §1.2), **then item 9 step 5**.  The charger fix is prepared but NOT
+flashed: image `0x91AF34DF`
 (`local/images/kernel-0x91AF34DF-charger.img`) + rootfs `ba275807…`
 (`local/images/rootfs-region1-7.3.3-charger.ext4`, 17 modules).  The unit was
 docked on the rapid charger at session end; dock blocks USB, so undock it when
 flashing.  Then item 9 step 5 — the WM8994 audio machine (MFD+codec on I2C4
 0x1a, McBSP + ABE; the driver's `mcbsp` default still to pin down) and the
 Cypress CY8CTMA3 touch (Gen3; QNX Munin/Pegasus firmware; likely I2C3
-0x48060000, already enabled but empty).  Report 176 is the inventory.  The
-WL1283 is parked (report 180 §6).  hd3/BB10/PlayBook OS work remain parked.
+0x48060000, already enabled but empty).  Report 176 is the inventory.
+hd3/BB10/PlayBook OS work remain parked.
 
 HARDWARE RE RULE: **OS 2.x only** (live 1917 oracle, the 1917 `/base` QNX6
 image, the 1917 IFS tree, the 4869 IFS dump).  Never use BB10 images for

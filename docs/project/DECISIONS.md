@@ -914,6 +914,31 @@ the node.
 
 ---
 
+## 36. Resume the WL1283 as the second task, after the charger confirmation (session 30 end)
+
+**Decision (operator, session 30 end).**  The next session's **first** task is
+to confirm the prepared TWL6030 charger support; the **second** is to resume
+the **WL1283**.  Audio/touch (item 9 step 5) comes after.
+
+**Why.**  The WL1283 work was parked in session 29 only for fresh eyes, not
+because it was closed.  The single untested mechanism is the **FREF
+reference-clock parent**: the pads are muxed but the CM parent/gate was never
+enabled by us, and the vendor config wants a 38.4 MHz reference clock with a
+CLK_REQ handshake.  Report 180 §6's CM diff suggests the output may already
+run, so the experiment is cheap and a negative result closes the route rather
+than leaving it open.  Doing it after the charger test means the bench can run
+on a charged pack and the result is not disturbed by a brownout.
+
+**Evidence.**  Report 180 §6 (what is falsified and what is left);
+`HANDOFF.md` §1.2 (procedure, `/bin/pbhci` probe and decision table); the
+operator's order at session 30 end.
+
+**Constraint.**  One variable per boot; do not characterise the chip from
+TabletOS (trap 103); a negative result must stop the hunt rather than spawn
+another register diff.
+
+---
+
 These were the open policy questions.  The licence and visibility are decided
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.

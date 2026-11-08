@@ -362,7 +362,7 @@ light sensor is **open**: 0x10/0x11 ACK but read all-zero and the mainline
 GPIO1_13 (pad `0x1b0`, safe mode at boot) is driven by the driver's pinctrl +
 `enable-gpios`.  Images: region-0 `0xB759C3A2`, region-1 `0a55a170…`.
 
-**Step 4 — the WL1283: bus and wiring MEASURED, enumeration open (report 180).**
+**Step 4 — the WL1283: SECOND TASK after the charger (operator, session 30 end); bus and wiring MEASURED, enumeration open (report 180).**
 The combo is on **MMC5 (`0x480D5000`)**, not MMC1 — QNX's `pidin mem` shows
 `devnp-ti1283.so` holding that block and attaching GIC SPI 59, and the `sdmmc5`
 pads are the only sdmmc pads muxed on the reference.  **WL_EN = GPIO2_22
@@ -373,9 +373,15 @@ window and a power cycle are all eliminated (report 180 §4), and the chip scans
 fine under TabletOS.  Also eliminated: a 12 MHz init clock, WL_EN driven at MMC
 power-up, `ti,no-reset-on-init`, and 5 s of EN settling.  **The loader leaves
 WL_EN low and the QNX driver owns it**; with EN high our chip still does not
-drive its IRQ, so the next evidence has to come from the chip side (UART2/HCI
-probe, datasheet or a bus capture).  Images: region-0 `0xFC32F008`, region-1
-`0faeadff…`.
+drive its IRQ.  Images: region-0 `0xFC32F008`, region-1 `0faeadff…` (6.15.11;
+on 7.3.3 the base is `0x0F6AC47F`).
+
+**Next experiment — the FREF reference-clock parent.**  The vendor config says
+the chip wants a 38.4 MHz reference clock with a CLK_REQ handshake, and the
+pads are muxed (`0x4A10019C` = `fref_clk2_out`), but **muxing a pad does not
+enable its parent clock**; the CM enable path was never set by us.  Report 180
+§6's CM diff suggests the output may already run, so a negative result closes
+this route.  Procedure and decision table: `HANDOFF.md` §1.2.
 
 **Plan (one variable per boot):**
 0. **Power/charging — the TWL6030 BCI (found at session 30 end).**  The board
@@ -397,9 +403,10 @@ probe, datasheet or a bus capture).  Images: region-0 `0xFC32F008`, region-1
    Earlier QNX-side readings were race artefacts (trap 103).
 3. ~~the FAN5702 LED driver (no mainline driver; RE `led-fan5702.so`).~~
    **DONE** (report 179: `leds-fan5702`, EN = GPIO1_13).
-4. the WL1283: **bus/wiring done**; next is one of the two §6 experiments in
-   report 180 (clock rate first, then `MMCHS_CON`), then `wl12xx` + the
-   firmware/NVS (`wl128x-fw-5-sr.bin`, `wl128x-nvs.bin`, both in the host's
+4. **Resume the WL1283 after the charger test** (operator order, session 30
+   end): bus/wiring done; the one untested mechanism is the **FREF
+   reference-clock parent** (report 180 §6, `HANDOFF.md` §1.2).  Then `wl12xx` +
+   the firmware/NVS (`wl128x-fw-5-sr.bin`, `wl128x-nvs.bin`, both in the host's
    linux-firmware; `build_rootfs.py --firmware DIR` installs them), then BT
    (`hci_ll`/TI ST on UART2 `0x4806c000`) and GPS/AGPS.
 5. audio (WM8994 MFD+codec + an OMAP4 machine driver) and the Cypress
