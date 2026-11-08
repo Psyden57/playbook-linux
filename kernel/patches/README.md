@@ -3,11 +3,12 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**7 258 lines / 47 files (38 modified + 9 new)** against pristine
-**linux-7.3.3** (sha256 `e7b7fc2e…`).  It is generated from the tree, not from
+**7 620 lines / 48 files (38 modified + 10 new)** against pristine
+**linux-7.3.3** (sha256 `28e48f56…`).  It is generated from the tree, not from
 the previous patch (trap 106), and it was verified by applying it to pristine
-7.3.3 targets and comparing all 47 files byte-for-byte with
-`local/kernel-tree` — 0 rejects, 0 mismatches.
+7.3.3 targets and comparing all 48 files byte-for-byte with
+`local/kernel-tree` — 0 rejects, 0 mismatches.  Session 36 adds the
+`i2c2_pins` pinctrl group for the touch bus (report 193).
 
 ```bash
 # pristine 7.3.3, then:
@@ -36,13 +37,14 @@ the board's charger** (report 183): session 31 adds the real one,
 `drivers/power/supply/isl9519.c`, an Intersil ISL9519 at I²C1 0x09, and its
 `charger@9` node in the board DTS.  The BCI node/modules stay but are inert.
 
-The nine new files are the ones the old export recipe silently dropped plus
-the session-31 charger driver:
+The ten new files are the ones the old export recipe silently dropped, the
+session-31 charger driver, and the session-36 touch driver:
 `arch/arm/boot/dts/ti/omap/omap4-winchester.dts`,
 `arch/arm/include/debug/omap4bc.S`, `drivers/iio/light/cm3217.c`,
 `drivers/leds/leds-fan5702.c`, `drivers/misc/pbmon.c`, `pbmon-pair.h`,
-`pbmon-page.h`, `include/linux/pb_event.h` and
-`drivers/power/supply/isl9519.c`.  `patch -p1 --dry-run` alone does
+`pbmon-page.h`, `include/linux/pb_event.h`,
+`drivers/power/supply/isl9519.c` and `drivers/input/touchscreen/
+playbook-munin.c`.  `patch -p1 --dry-run` alone does
 not prove an export: it must be applied and the result compared to the tree.
 
 Session 32 adds two modified files — `drivers/mmc/core/sdio.c` (the CMD5
@@ -298,6 +300,20 @@ wc -l kernel/patches/0001-playbook-winchester-7.3.3.patch
 Session 32's export is **7 257 lines / 47 files** (sha256 `ad55511d…`), and
 the apply-and-compare verification printed **0 rejects, 0 mismatches**.
 Update this README and `STATE.md` when a new export lands.
+
+**Session 36 warning — the tree-vs-pristine walk above picks up BUILD
+ARTIFACTS on a built tree.**  Run on `local/kernel-tree` after a build, the
+script produced **85 files / 371 678 lines** because the tree contains
+generated sources that the `GEN` set does not list: `.vmlinux.export.c`,
+`.tmp_vmlinux*.kallsyms.S`, `scripts/{mod,dtc,genksyms,kconfig}/*` generated
+files, `crypto/*.asn1.[ch]`, `lib/oid_registry_data.c`,
+`lib/crc/crc32table.h`, `drivers/tty/vt/ucs_*`, `drivers/video/logo/*.c`,
+`net/wireless/shipped-certs.c`, `*.dtbo.S`, and the build copies under
+`arch/arm/boot/compressed/`.  Either `make clean` first or restrict the walk to
+the known source paths (48 now).  The session-36 exports used the previous patch's
+file list as the source set plus the new touch driver, and verified 48/48
+byte-identical; do the same only when you know no new source
+file exists, otherwise clean the tree and re-run the tree walk.
 
 ### The old (broken) recipe, for history
 

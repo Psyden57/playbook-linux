@@ -1,15 +1,15 @@
 # Session numbering
 
-The project spans **thirty-five sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **thirty-six sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-35`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-36`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
-* **Linux-era** ("session 1…29") — used inside the reports and handoffs, because
+* **Linux-era** ("session 1…30") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
   started.  **Linux session N = absolute session N + 6.**
 
@@ -47,6 +47,7 @@ So:
 | **33** | **27** | **the WL1283 bench-visible road is exhausted**: the QNX `winchester` powerman preset has no WLAN rail/clock (report 187); the chip is alive under QNX (WL_IRQ 1) and not under Linux (WL_IRQ 0), WL_EN is not exposed, VIO is 1.8 V, and no 3.3 V chip rail is exposed; a 200 ms MMC5 settle and a CMD52 skip are negative (report 188).  The USB warm-reset regression was the session-32 WL_EN pulse and is fixed; the final image is `0x0353A241`.  The QNX-side RE is not complete (hw_info inventory, hwio arrays, devb-mmcsd powerman, devpm tables; HANDOFF §1.4) |
 | **34** | **28** | **the QNX-side WL1283 RE is complete, negative** (report 189): `hw_info_pps` publishes no WLAN node (runtime-probed inventory; the node is in the syspage — trap 131); `hwio-config-winchester.so` contains only the six WLAN pads (sdmmc5 mux 0, WL_EN/WL_IRQ mux 3, FREF2_OUT mux 0) and WKUP `0x058` mux 3 on both halves; `devb-mmcsd-winchester`'s powerman client is only `-power on/off`; `devpm-omap4.so` registers only `iva_opp` and never touches MMCHS5; the WLAN `.ini` clock/power fields are firmware-time.  `tools/qnx-hwi.c` built for the one live syspage read.  The remaining difference is chip-side (VBAT/TCXO) or OMAP HSMMC sampling |
 | **35** | **29** | **S1/S2/S3/H1: the WL1283 software surface is exhausted** (report 192).  `startup-playbook` is the source of the QNX-only GPIOs (Winchester table at image `0x80122750`; GPIO1 0/4/15/18/28/31, GPIO2 5/7 output-low; trap 135).  Both-OS TWL reads: `CLK32KG` base `0x8C`, APP-ON in both (CFG_TRANS identical; CFG_GRP and CFG_STATE CON/MOD differ); `0xB0` is REGEN2.  S3 released all eight GPIOs on the live 1917 — negative (trap 136).  H1 (CMD0 → CMD5 only, 24 MHz, arg `0x00FFFF00`, image `0x29784F48`) still times out (`err=-110`; `HCTL=0x00000b00`; trap 137).  Only the chip-side measurements remain |
+| **36** | **30** | **item 9 step 5 starts; the touch bus is solved** (report 193).  The operator formally stopped the WL1283.  The Cypress touch is on **I²C2 `0x48072000` = Linux `i2c-1`** (QNX `/dev/i2c1`) at `0x65`: `graphics.conf` selects `driver = munin` and `libmtouch-munin` opens `/dev/i2c1`.  Linux never muxed i2c2's pads (`0x4A100126`/`0x4A100128` = `0x011F` safe mode), so every transfer timed out; writing them to `0x0110` made `0x65` ACK at once.  The DTS gains `i2c2_pins` (DTB builds; no image flashed).  Traps 138; DECISIONS §44 |
 
 ## Anchors (evidence for the mapping)
 

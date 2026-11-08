@@ -810,6 +810,70 @@ report 121 §3/§11/§12.
       the four hunks reverted; log `local/logs/boot-H1-0x29784F48.log`.
       (Session 35, report 192 §9.)
 
+138. **An enabled I²C controller is not a wired bus — mux its pads.**  `&i2c2`
+      and `&i2c3` were `status = "okay"` in the board DTS with **no
+      `pinctrl-0`**, so the controllers probed but their SCL/SDA pads stayed in
+      **safe mode**: live 16-bit reads, `0x4A100126` (i2c2_scl) and
+      `0x4A100128` (i2c2_sda) = **`0x011F`**, versus `0x0110` on the working
+      I²C1 pads.  The symptom is a **timeout**, not a NAK: an absent address on
+      a working bus returns `--` + `Remote I/O error`, while every i2c-1
+      read/write returned `--` + `Connection timed out`, and a whole-bus
+      `i2cdetect -y -r 1` blocked the ttyGS0 console for over a minute (send
+      Ctrl-C on `/dev/ttyACM0` to recover).  Writing both pads to `0x0110`
+      (mux 0, input, pull-up) made the touch at `0x65` ACK immediately.  The
+      same fix is the touch-bus resolution: **I²C2 `0x48072000` = Linux
+      `i2c-1`**, not `i2c-2`/`i2c-3` (report 193, DECISIONS §44).  When a bus
+      "does not work", read its pad mux before suspecting the device; and when
+      the board DTS enables a controller, add the pin group in the same change.
+      (Session 36, report 193.)
+
+139. **The tree-vs-pristine patch walk picks up build artifacts on a built
+      tree.**  The recipe in `kernel/patches/README.md` §"Regenerating the
+      patch" keeps a `GEN` exclusion set that is incomplete: run on
+      `local/kernel-tree` after a build it produced **85 files / 371 678
+      lines** instead of the true 47 files, because the tree contains
+      `.vmlinux.export.c`, `.tmp_vmlinux*.kallsyms.S`,
+      `scripts/{mod,dtc,genksyms,kconfig}/*` generated sources,
+      `crypto/*.asn1.[ch]`, `lib/oid_registry_data.c`,
+      `lib/crc/crc32table.h`, `drivers/tty/vt/ucs_*`,
+      `drivers/video/logo/*.c`, `net/wireless/shipped-certs.c`, `*.dtbo.S`,
+      and the build copies under `arch/arm/boot/compressed/`.  `make clean`
+      first, or restrict the walk to the known source paths; only use the old
+      patch's file list as the source set when no new source file was added
+      (session 36 did, and the export verified 47/47 byte-identical).
+      (Session 36.)
+
+140. **The Gen3 touch boots into its Munin bootloader; `reg0` is a command
+      register, and it is not a `cyttsp` part.**  At I²C2 `0x65` with **1-byte
+      register addressing**, `reg0` is a command and `reg1` is status/data.
+      A cold boot reads `reg1` = `0x09` (bit3 = bootloader, bit0 = just-reset)
+      and registers `0x00`–`0x07` = `00 09 b0 05 09 00 b7 2f`; this is the
+      bootloader, not a fault.  The vendor boot is `reg0 = 0x81`, sleep 10 ms,
+      **read 21 bytes at `reg1`** (status, bootloader ID `0xB0` = Pegasus, ver,
+      app start `0x900`, app checksum `0xB72F`, app version `0x020A`, silicon
+      `0x0586`, build `0x3B`), `reg0 = 0x80` (start app), sleep 50 ms, then
+      `reg0 = 0x02`, poll `reg1` bit0, `reg 0x1D = 1`, `reg 0x1F = 1`.  The app
+      report is **18 bytes at `reg1`**: a status byte plus four 4-byte contacts,
+      `X = b0 | ((b2 & 0x0F) << 8)`, `Y = b1 | ((b2 & 0xF0) << 4)`, `b3` =
+      down/id, `0xFFF` = no contact; accept a read when `byte17 & 1` equals the
+      status counter bit.  **No firmware upload is needed on this unit**: the
+      chip's app version/build matches `Pegasus_50.hex` (build `0x3B`;
+      `Pegasus_50.hex` == `Pegasus2_50.hex`; `Pegasus_D4_A.hex` is build
+      `0x35`).  Mainline `cyttsp_core` (Gen2) / `cyttsp5` (Gen5) do not speak
+      this protocol — write a small driver (DECISIONS §45).  (Session 36,
+      report 194.)
+
+141. **A blocking retry in a built-in probe delays the boot enough to break
+      USB warm-reset enumeration.**  The touch controller is not ready while
+      the i2c adapter is still probing (the first read at ~2.7 s returns
+      `-EREMOTEIO`), so the driver retried 40 × 50 ms inside `probe()`.  That
+      2.6 s delay moved the boot: the gadget bound at 5.78 s but the host
+      configured it only after a physical replug (74.7 s) — the same class as
+      trap 130, from a different cause.  Keep the probe non-blocking and run
+      the controller boot in a delayed work that retries (`MUNIN_BOOT_RETRIES`,
+      500 ms); the driver then binds, logs the 21-byte block and starts polling
+      without touching the boot timing.  (Session 36.)
+
 ## 3. Corrections to older reports
 
 These twenty-one are preserved deliberately. Each is newer than the text it

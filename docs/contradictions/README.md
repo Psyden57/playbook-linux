@@ -33,12 +33,12 @@ note after it is what a reader needs before opening the file.
 | `rpmb-key-kek-vs-fallback-literal.md` | **resolved (session 18), key pinned (session 19)** — the monitor is handed the key bytes by pointer; the live page gives the CID-derived seed and the frame key `dfeec0ce…2274` (report 143).  The Linux consequence is **conditional on the block seal** (report 144), not on the key; the seal caller is solved (147), the transform is not (148/156) |
 | `rpmb-page-rodata-contents.md` | **open (mechanism); contents measured** — report 92 says `page+0x20/+0x40` hold the `.rodata` constants, report 141 says nothing writes them; the live page measures the constants, but who writes them is unknown (session 19) |
 | `safety-no-emmc-mount-vs-readonly-root.md` | **resolved (session 17), extended (session 18)** — read-only eMMC/QNX6 mounts are allowed; the operator has now dropped the blanket writable-eMMC prohibition **for our own data** (NVRAM, the MCT, and dangerous RPMB still forbidden).  Rule in `SAFETY.md` §4/§6, decisions `DECISIONS.md` §17/§18; `hd3` to be repurposed (report 141) |
-| `touch-bus-i2c2-vs-i2c3.md` | **open** — the 1917 touch stack opens `/dev/i2c2` (QNX I²C3 `0x48060000`, which QNX does not instantiate) while the live QNX scan saw the touch's `0x65` on `/dev/i2c1` (I²C2 `0x48072000`); `muninfw`'s default address is `0x65`.  Settle it with read-byte `i2cdetect -y -r 2` and `-r 3` on the Linux image |
+| `touch-bus-i2c2-vs-i2c3.md` | **resolved 2026-11-08 (session 36, report 193)** — the board selects `driver = munin`, and `libmtouch-munin` opens QNX `/dev/i2c1` (I²C2 `0x48072000`, live Linux `i2c-1`) at `0x65`; the Pegasus `/dev/i2c2` string was the other driver.  Linux also needed the i2c2 pads muxed (`0x4A100126`/`0x4A100128` were `0x011F` = safe mode; `0x0110` made `0x65` ACK) |
 | `twl-clk32kg-on-both-vs-0xbd-be-difference.md` | **resolved 2026-11-08 (session 35, report 192 §7)** — `CLK32KG` is base `0x8C` (`CFG_GRP`/`CFG_TRANS`/`CFG_STATE` = `0x8C`/`0x8D`/`0x8E`), not the FreeBSD `0xBC`.  QNX `01/05/05` vs Linux `07/05/55`: `CFG_TRANS` identical, `CFG_STATE` APP-ON in both (CON/MOD bits differ), `CFG_GRP` differs.  `0xBC`–`0xBE` is a different, still-unnamed non-regulator resource |
 
 ## Still open — keep these in mind
 
-Six files have a genuinely open question left; none of them blocks the
+Five files have a genuinely open question left; none of them blocks the
 IFS rebuild, but each changes how a result should be read:
 
 1. **`expired-counter-nuke-vs-retry-halt.md`** — what an out-of-range
@@ -61,10 +61,10 @@ IFS rebuild, but each changes how a result should be read:
    registers `0x30/0x40/0x50` take the datasheet's `0b11xxxxxx` or the
    bootloader's `0x36`; the on/off path (GENERAL `0x10`) is unaffected.
    *Would settle it:* a brightness sweep on the live unit, or datasheet Table 4.
-6. **`touch-bus-i2c2-vs-i2c3.md`** — whether the Cypress touch at `0x65` is on
-   OMAP I²C2 `0x48072000` (where QNX saw `0x65`) or I²C3 `0x48060000` (the
-   library's `/dev/i2c2`).  *Would settle it:* read-byte `i2cdetect -y -r 2`
-   and `-r 3` on the Linux image, before and after the decoded reset pulse.
+
+Residual from the resolved `touch-bus` file: the touch driver/protocol
+(CY8CTMA3 Gen3 / Munin) and the `tp_intr = 1035 → GPIO2_3` inference are open;
+the bus (I²C2 `0x48072000` = Linux `i2c-1`) and address `0x65` are settled.
 
 Residual from the resolved `twl-clk32kg` file: the `0xBC`–`0xBE` resource's
 **name** is still open (needs `SWCU084`); `CLK32KG` itself is settled.

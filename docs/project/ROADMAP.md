@@ -542,8 +542,9 @@ sampling; a schematic/board view or logic analyser is required.**
 released to input on the live 1917 leave the chip up; `CLK32KG` is base `0x8C`
 and APP-ON in both; and H1 (CMD0 → CMD5 only, 24 MHz, arg `0x00FFFF00`) still
 times out (`HCTL=0x00000b00`, `CAPA=0x04e10080`).  **Only the chip-side
-measurements remain** (VBAT/TCXO/SLOW_CLK, MMC5_CLK/CMD/DAT0); the decision
-table is `HANDOFF.md` §0c.
+measurements remain** (VBAT/TCXO/SLOW_CLK, MMC5_CLK/CMD/DAT0).  **The operator
+formally stopped this item at the start of session 36; do not re-open traps
+116–137.**
 
 **Plan (one variable per boot):**
 0. **Power/charging — CLOSED 2026-11-08 (session 31).**  The board's charger
@@ -588,8 +589,29 @@ table is `HANDOFF.md` §0c.
    (`wl128x-fw-5-sr.bin`, `wl128x-nvs.bin`, both in the host's linux-firmware;
    `build_rootfs.py --firmware DIR` installs them), then BT
    (`hci_ll`/TI ST on UART2 `0x4806c000`) and GPS/AGPS.
-5. audio (WM8994 MFD+codec + an OMAP4 machine driver) and the Cypress
-   **CY8CTMA3** touch (QNX "Munin/Pegasus" firmware; no mainline Gen3 driver).
+5. **Step 5 has started (session 36, report 193): the touch bus is solved.**
+   The Cypress touch is on **OMAP I²C2 `0x48072000` = Linux `i2c-1`** (QNX
+   `/dev/i2c1`) at `0x65`: 1917 `graphics.conf` selects `driver = munin`, and
+   `libmtouch-munin` opens `/dev/i2c1` (the Pegasus `/dev/i2c2` string is the
+   unused driver).  Linux never muxed i2c2's pads (`0x4A100126`/`0x4A100128` =
+   `0x011F` safe mode, so every transfer timed out); writing them to `0x0110`
+   made `0x65` ACK at once, and the DTS now carries `i2c2_pins` (DECISIONS §44,
+   trap 138).  **The test image `0x307615B3` is on media and proves it on a
+   plain boot:** pads `0x0110`, `i2cdetect -y -r 1 0x65 0x65` shows `65`,
+   registers `0x00`/`0x01` read `0x00`/`0x09`.  **The protocol is decoded
+   (report 194, DECISIONS §45):** the chip boots into its Munin bootloader; the
+   driver runs `reg0=0x81` → 21-byte block → `reg0=0x80` → `reg0=0x02` →
+   `reg 0x1D/0x1F`, then reads the 18-byte report (4 × 12-bit contacts).  No
+   firmware upload is needed (app/build match `Pegasus_50.hex`).  **The small
+   input driver WORKS** (`drivers/input/touchscreen/playbook-munin.c`,
+   `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`): on the media image `0x04AF1433` the
+   controller boots to app mode and `input0`/`event0` reports touches
+   (`ABS_MT_SLOT`, `ABS_MT_POSITION_X/Y`).  The probe must not block (trap 141).
+   **Next: the WM8994 audio half**, plus the touch axis calibration/orientation
+   (vendor input 1280×768 → 1024×600 panel) and the IRQ pad.  Wiring: power
+   GPIO1_14, reset GPIO4_8, IRQ GPIO2_3 (polling for now).  **Audio
+   (WM8994 MFD+codec + an OMAP4 McBSP/`l4_abe` machine driver) is the other
+   half of step 5 and has not started** (report 176 §3, HANDOFF §1b).
 
 **Closes when:** each peripheral reports data under Linux (IIO/evdev/ALSA/input)
 and survives a reboot; the touch and FAN5702 have a driver; WiFi/BT/GPS are

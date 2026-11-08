@@ -232,16 +232,47 @@
 };
 
 /*
- * QNX enumerates THREE omap i2c controllers (0x48070000, 0x48072000,
- * 0x48350000) and its /dev/i2c0 need not be the first of them, so we cannot
- * assume the LM3532 is on the TWL's bus.  Bring the other two up so all of
- * them can be scanned.  (The `.script` order is 0x48070000, 0x48072000,
- * 0x48350000.)  i2c4 stays off: it is the one QNX does not instantiate.
+ * I2C2 (0x48072000) is the Cypress touch bus.  QNX names it /dev/i2c1 and the
+ * touch driver (`libmtouch-munin`, selected by graphics.conf `driver = munin`)
+ * opens exactly that node at slave 0x65.  Its pads are NOT muxed by our boot
+ * path: QNX's startup-playbook does that, and our chainloader never runs it.
+ * Read live on the session-36 boot, `0x4A100126`/`0x4A100128` (i2c2_scl/sda)
+ * were `0x011F` = safe mode, so every transaction on i2c-1 timed out; writing
+ * them to `0x0110` (mux 0, input, pull-up — the value the bootloader leaves on
+ * the working I2C1 pads) made 0x65 ACK immediately.
+ *
+ * The rest of the Munin wiring, from `libmtouch-munin` (`winchester_tp_init` /
+ * `winchester_tp_reset`): power = GPIO1_14 (cleared then set, 500 ms each),
+ * reset = GPIO4_8 (active low: clear, then set after the power pulse), and the
+ * interrupt is graphics.conf `tp_intr=1035` (QNX 1000 + gpio 35 = GPIO2_3, an
+ * inference from the 1000+gpio convention).  Both control lines read
+ * output-high under Linux already (the GPIO1 hogs below plus the bootloader),
+ * so no pulse is needed to make the part answer.  The node below binds the
+ * Munin driver; the bus pinctrl is the only pad change.
  */
 &i2c2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c2_pins>;
 	clock-frequency = <400000>;
 	status = "okay";
+
+	/*
+	 * Cypress CY8CTMA3 Gen3 running RIM's Munin protocol.  The driver
+	 * boots the resident application (report 194) and reads the 18-byte
+	 * report; it polls because the inferred IRQ (tp_intr=1035 = GPIO2_3)
+	 * is not wired yet.
+	 */
+	touchscreen@65 {
+		compatible = "rim,playbook-munin";
+		reg = <0x65>;
+		poll-interval-ms = <20>;
+	};
 };
+/*
+ * I2C3 (0x48060000) is not the touch bus (see the contradiction resolution) and
+ * QNX does not instantiate it.  It is left enabled-and-unmuxed as before; its
+ * pads stay in safe mode.
+ */
 &i2c3 {
 	clock-frequency = <400000>;
 	status = "okay";
@@ -1033,6 +1064,14 @@
  * the reference too, and gpio_6's pad is not in the TRM's CORE table).
  */
 &omap4_pmx_core {
+	/* I2C2 SCL/SDA = pads 0x126/0x128: the touch bus (see &i2c2). */
+	i2c2_pins: i2c2-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x126, 0x0110)	/* i2c2_scl */
+			OMAP4_IOPAD(0x128, 0x0110)	/* i2c2_sda */
+		>;
+	};
+
 	gpio1_en_pins: gpio1-en-pins {
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x190, 0x0003)	/* gpio_2  (GPIO1_2)  */

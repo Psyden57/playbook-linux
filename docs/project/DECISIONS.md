@@ -1233,6 +1233,91 @@ trap 137.
 
 ---
 
+## 44. The touch is on I²C2; mux its pads before any scan or driver work (session 36)
+
+**Decision.**  Treat the Cypress touch as **OMAP I²C2 `0x48072000`** — QNX
+`/dev/i2c1`, Linux **`i2c-1`** — at slave **`0x65`**, driven by the board's
+`graphics.conf` selection `driver = munin`.  Mux `i2c2_scl`/`i2c2_sda`
+(pads `0x4A100126`/`0x4A100128`) to **`0x0110`** (mux 0, input, pull-up) in
+`omap4-winchester.dts`; do not scan or bind a driver on `i2c-2`/`i2c-3`.
+
+**Why.**  `graphics.conf` is explicit
+(`driver = munin`, `i2c_lib=i2c-resmgr-client,tp_intr=1035,i2c_slave=0x65`);
+`libmtouch-munin.so` opens `/dev/i2c1`; QNX's `pidin ar` maps `/dev/i2c1` to
+`0x48072000`, and report 176's live scan found `0x65` there.  The
+`libmtouch-pegasus` `/dev/i2c2` string belongs to a driver this board does not
+select.  On Linux the controller was enabled but **its pads were in safe mode**
+(`0x011F`), so every transaction timed out; writing them to `0x0110` (the value
+the bootloader leaves on the working I²C1 pads) made `0x65` ACK at once.  This
+is the same class as the QNX-only GPIO outputs: board pad setup that QNX's
+`startup-playbook` performs and our chainloader does not.
+
+**Constraint.**  The pad write is the durable fix (DTS `i2c2_pins`); the
+runtime `devmem` write is volatile.  One variable per boot: `&i2c3` is left
+enabled-and-unmuxed.  The part is CY8CTMA3 Gen3; mainline has Gen2/Gen5 only,
+so the driver is still open.  `tp_intr = 1035 → GPIO2_3` is inferred from the
+QNX `1000 + gpio` convention, not independently measured.  No RPMB, NVRAM or
+MMC write is involved.
+
+**Evidence.**  Report **193**; `graphics.conf` lines 61–65; the
+`libmtouch-munin` dynamic symbols and `/dev/i2c1`; `winchester_tp_init`
+(`0x9120`, GPIO1 `0x4A310000` + GPIO4 `0x48059000`) and `winchester_tp_reset`
+(`0x90a0`, masks `0x4000` on GPIO1_14 and `0x100` on GPIO4_8); the live
+`i2c-1` of_node, pad reads and `i2cdetect`/`i2ctransfer` result; the resolved
+contradiction `docs/contradictions/touch-bus-i2c2-vs-i2c3.md`.
+
+---
+
+## 45. The touch is a Munin-protocol Gen3: write a small driver, not `cyttsp_core` (session 36)
+
+**Decision.**  Write a **new small input driver** for the CY8CTMA3 (for example
+`drivers/input/touchscreen/playbook-munin.c`) rather than extending mainline
+`cyttsp_core` (Gen2) or `cyttsp5` (Gen5).  The driver speaks RIM's **Munin**
+protocol: I²C2 `0x48072000` (Linux `i2c-1`), slave `0x65`, **1-byte register
+addressing**, `reg0` = command, `reg1` = status/data.  It must run the vendor
+boot: `reg0 = 0x81`, read the 21-byte bootloader block at `reg1`, require
+`status & 0x09 == 0x09`, `reg0 = 0x80` (start app), `reg0 = 0x02`,
+`reg 0x1D = 1`, `reg 0x1F = 1`, then read **18 bytes at `reg1`** on the IRQ.
+The report is a status byte plus four 4-byte contacts:
+`X = b0 | ((b2 & 0x0F) << 8)`, `Y = b1 | ((b2 & 0xF0) << 4)`, `b3` = down/id,
+`0xFFF` = no contact.  **No firmware upload is needed on this unit:** the live
+bootloader block (`ID 0xB0` Pegasus, app `0x020A`, build `0x3B`) matches
+`Pegasus_50.hex` exactly.
+
+**Why.**  The live chip boots into its **bootloader** (status `0x09`), not an
+app.  The vendor driver's own sequence and report parser are decompiled and
+reproduced; the report is structurally valid after the app start (four sentinel
+`0xFFF` contacts, counter `0x86`).  Mainline has no Munin/Gen3 support, and the
+Gen2/Gen5 register maps do not match.  The driver is small: reset/power GPIOs,
+two commands, a fixed report, and an IRQ.
+
+**Constraint.**  Wiring: power **GPIO1_14** (low 500 ms → high), reset
+**GPIO4_8** (active low), IRQ **GPIO2_3** (`tp_intr=1035`, inferred), 400 kHz.
+The firmware-upload path (`reg0` `0x84`/`0x83`, 0x80-byte blocks, Intel HEX) is
+documented but not implemented unless a version check fails.  Do not probe the
+whole bus (trap 138).  No RPMB/NVRAM/MCT involvement.
+
+**Evidence.**  Report **194**; the live 21-byte block and app start; the Ghidra
+decompile of `tp_reset`, `munin_panel_init`, `munin_sample_xy_data`,
+`get_coords`, `tp_firmware_check`, `firmware_upload`; the three `.hex` files
+(`Pegasus_50.hex` == `Pegasus2_50.hex`, build `0x3B`; `Pegasus_D4_A.hex` build
+`0x35`); report 193 for the bus.
+
+**Executed (session 36).**  `drivers/input/touchscreen/playbook-munin.c`
+(input multitouch, 1-byte register I2C, the boot sequence above, the 18-byte
+report parser, a 20 ms poll) with the DTS `touchscreen@65` node and
+`CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`.  On image **`0x04AF1433`** (on media)
+the driver registers `input0`, boots the controller (`bootloader 0xb0`,
+`app 0x020a`, `build 0x3b`) and reports touches on `event0`.  **The probe must
+not block:** the controller is not ready while the i2c adapter is still
+probing (first read `-EREMOTEIO` at ~2.7 s), and a retry inside `probe()`
+delayed the boot and broke USB warm-reset enumeration (trap 141); the boot now
+runs in a delayed work that retries every 500 ms.  Remaining touch work: the
+axis calibration/orientation (vendor input 1280×768 → 1024×600 panel) and the
+IRQ pad.
+
+---
+
 These were the open policy questions.  The licence and visibility are decided
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.

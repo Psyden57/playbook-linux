@@ -1,8 +1,11 @@
 # Which OMAP I²C controller is the Cypress touch on — I²C2 or I²C3?
 
-**Status: open.**  The touch slave address is known (`0x65`), but two 2.x
-sources point at different controllers, and the bench has not yet probed both
-with a read that covers `0x65`.
+**Status: resolved 2026-11-08 (session 36, report 193).**  The touch is on
+**OMAP I²C2 `0x48072000`** (QNX `/dev/i2c1`, Linux `i2c-1`) at slave `0x65`.
+The `libmtouch-pegasus` `/dev/i2c2` string was the wrong driver: the board
+selects `driver = munin`, and `libmtouch-munin` opens `/dev/i2c1`.  The Linux
+bus was additionally broken by an unmuxed pad pair; see the resolution below.
+The pre-resolution text is kept as written.
 
 ## Claims
 
@@ -49,3 +52,30 @@ the quick-write scan, which skipped `0x30–0x37`/`0x50–0x5f`), then a read at
 `0x65` on whichever bus ACKs, before and after the decoded reset pulse
 (GPIO4_8 clear → GPIO1_14 low 500 ms → GPIO4_8 release).  If both ACK, upload
 the Munin firmware on one bus and see which device changes behaviour.
+
+## Resolved 2026-11-08 (session 36, report 193)
+
+The deciding evidence is the board's own configuration, not a bare scan:
+
+* **`/base/usr/lib/graphics/omap4430/graphics.conf` selects
+  `driver = munin`**, with
+  `options = i2c_lib=i2c-resmgr-client,tp_intr=1035,i2c_slave=0x65`.  The
+  Pegasus library is not used on this board.
+* `libmtouch-munin.so` contains **`/dev/i2c1`** (Pegasus has `/dev/i2c2`), and
+  uses the resmgr client, so its bus is QNX `/dev/i2c1`.
+* Report 176's QNX `pidin ar` gives `/dev/i2c1` = **`0x48072000`**, and its live
+  scan found `0x65` there.  The two facts coincide.
+* On the live Linux image, `/sys/bus/i2c/devices/i2c-1/of_node` is the
+  `target-module@72000`, i.e. **Linux `i2c-1` = `0x48072000`**.
+
+The Linux side also had a second, independent fault: `0x4A100126`/`0x4A100128`
+(i2c2_scl/sda) were **`0x011F` = safe mode**, so every i2c-1 transaction timed
+out and `0x65` never answered.  Our DTS enabled `&i2c2` but never muxed its
+pads (QNX's `startup-playbook` does).  Writing both pads to `0x0110`
+(mux 0, input, pull-up — the value on the working I²C1 pads) made `0x65` ACK
+and a register read succeed.  The fix is now an `i2c2_pins` group in
+`omap4-winchester.dts`.
+
+Residual: the exact part/protocol (Gen3/Munin) and the `tp_intr = 1035 →
+GPIO2_3` inference are open; the bus and address are not.
+

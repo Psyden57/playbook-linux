@@ -1,6 +1,89 @@
 # Current state
 
-## Current state — 2026-11-08 (session 35)
+## Current state — 2026-11-08 (session 36)
+
+**Item 9 step 5 has started, and the touch bus is solved.  The Cypress touch is
+on OMAP I²C2 `0x48072000` — QNX `/dev/i2c1`, Linux `i2c-1` — at slave `0x65`,
+because the board's `graphics.conf` selects `driver = munin` and
+`libmtouch-munin` opens `/dev/i2c1`.  The Linux bus was dead for a second,
+independent reason: our DTS enabled `&i2c2` but never muxed its pads, which sat
+in safe mode (`0x4A100126`/`0x4A100128` = `0x011F`).  Writing them to `0x0110`
+(mux 0, input, pull-up) made `0x65` ACK immediately.  The fix is in the DTS
+(`i2c2_pins`), and the **Munin driver works**: the test image `0x04AF1433` is
+on media, the controller boots to app mode and `input0` reports touches.**
+
+* **Bus resolution (report 193).**  `graphics.conf` (1917 `/base`,
+  `usr/lib/graphics/omap4430/graphics.conf`) has
+  `begin mtouch / driver = munin / options =
+  i2c_lib=i2c-resmgr-client,tp_intr=1035,i2c_slave=0x65`.  The Munin library
+  carries `/dev/i2c1` (Pegasus has `/dev/i2c2`); QNX `pidin ar` maps
+  `/dev/i2c1` to `0x48072000` and report 176's scan found `0x65` there.  Live
+  Linux: `i2c-0` = `0x48070000`, **`i2c-1` = `0x48072000`**, `i2c-2` =
+  `0x48060000`, `i2c-3` = `0x48350000`.  The old "scan `-r 2`/`-r 3`" plan was
+  aimed at the wrong adapters.  The `touch-bus-i2c2-vs-i2c3` contradiction is
+  resolved.
+* **Root cause of the dead bus (trap 138).**  `0x4A100126` (i2c2_scl) and
+  `0x4A100128` (i2c2_sda) read `0x011F` = mux 7 safe mode, versus `0x0110` on
+  the working I²C1 pads.  The symptom was a **timeout** (`Connection timed
+  out`), not a NAK (`Remote I/O error`), and a whole-bus `i2cdetect -y -r 1`
+  blocked the console.  One 16-bit `devmem` write per pad to `0x0110` fixed it:
+  `i2cdetect -y -r 1 0x65 0x65` showed `65` and
+  `i2ctransfer -y 1 w1@0x65 0x00 r1` returned `0x00`.  This is startup-playbook
+  board-pad setup that our chainloader never runs (same class as trap 135).
+* **Munin wiring** (`winchester_tp_init` `0x9120`, `winchester_tp_reset`
+  `0x90a0`): GPIO1 `0x4A310000` and GPIO4 `0x48059000` are mapped; reset =
+  **GPIO4_8** (CLEARDATAOUT/SETDATAOUT `0x100`, then released after the power
+  pulse), power = **GPIO1_14** (`0x4000`, low 500 ms → high 500 ms).  Live both
+  were already output-high (`GPIO1_DATAOUT = 0x00006044`,
+  `GPIO4_DATAOUT = 0x90000120`), and the part answered from the pad mux alone —
+  no reset pulse was required.  `tp_intr = 1035` = GPIO2_3 by the QNX
+  `1000 + gpio` convention (inferred).
+* **Touch protocol decoded (report 194, DECISIONS §45).**  The chip boots into
+  its **Munin bootloader**, not an app: live `reg1 = 0x09` (bit3 = bootloader,
+  bit0 = just-reset) and the 21-byte block is `status 0x09, bootloader ID 0xB0
+  (Pegasus), ver 0x05, app start 0x900, checksum 0xB72F, app version 0x020A,
+  silicon 0x0586, build 0x3B`.  The vendor boot is `reg0=0x81` → read 21 bytes
+  at `reg1` → `reg0=0x80` (start app) → `reg0=0x02` → `reg 0x1D=1` →
+  `reg 0x1F=1`.  Run live in this order, the app came up (status `0x10`) and
+  the report at `reg1` is **18 bytes**: a status byte + four 4-byte contacts,
+  `X=b0|((b2&0x0F)<<8)`, `Y=b1|((b2&0xF0)<<4)`, `b3`=down, `0xFFF`=no contact
+  (all four sentinels with no finger).  **No firmware upload is needed:** the
+  chip's app/build match `Pegasus_50.hex` (= `Pegasus2_50.hex`; D4_A is older).
+  **Decision: a new small input driver, not `cyttsp_core`/`cyttsp5`.**
+* **DTS change:** an `i2c2_pins` group (`OMAP4_IOPAD(0x126, 0x0110)` /
+  `(0x128, 0x0110)`) and `pinctrl-0 = <&i2c2_pins>` on `&i2c2`; `&i2c3` is
+  left enabled-and-unmuxed (empty, one variable).  Copied to
+  `local/kernel-tree`; the DTB builds.  The 7.3.3 patch now includes the
+  `i2c2_pins` change and the Munin driver: **7 620 lines / 48 files**, sha256
+  `28e48f56…`, applied to pristine 7.3.3 with 0 rejects and 48/48 files
+  byte-identical (trap 139: the tree walk otherwise includes build-generated
+  sources).
+* **Test image `0x04AF1433`** (`0x91A8C4` bytes; the touch driver) was flashed
+  to **region 0 only** and booted; it **enumerates by itself (26 s)** and the
+  driver boots the controller.  The earlier bus test `0x307615B3` and the two
+  intermediate driver images (`0x86024669`, `0x31AD9A77`) are superseded.  The
+  known-good baseline remains `0xE36C679A`; this test image is the current
+  media (region 1 unchanged).
+* **Unit:** region 0 = **`0x04AF1433`**, region 1 = the 7.3.3 charger rootfs
+  (`ba275807…`, 17 modules); the 1917 IFS is not on media.
+  `BOOTCTR_FCTRY = 0x2b` (three test boots; the boot-time top-up saw
+  `0x2b >= 0x1e`, no write).  Pack Full (100 %, 4.156 V).
+* **The Munin driver WORKS.**  `drivers/input/touchscreen/playbook-munin.c`
+  (input multitouch, 1-byte register I2C, the `0x81 → 0x80 → 0x02 → 0x1D/0x1F`
+  boot, the 18-byte report, a 20 ms poll pending the IRQ pad) plus the DTS
+  `touchscreen@65` node and `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`.  On image
+  **`0x04AF1433`** (`0x91A8C4` bytes, on media): `input0` registers at
+  2.379 s, the boot work logs `Munin bootloader id 0xb0 … app 0x020a build
+  0x3b` at 2.958 s, `ready` at 3.259 s, and touching the panel produces
+  `event0` (`ABS_MT_SLOT`, `ABS_MT_POSITION_X/Y`, `ABS_X/Y`, SYN).  The
+  **probe must not block** (trap 141): the boot runs in a delayed work, or the
+  USB gadget misses its connect.  The 7.3.3 patch is **7 620 lines / 48
+  files**, sha256 `28e48f56…`, 0 rejects and 48/48 byte-identical.
+* **Next:** the WM8994 audio half of step 5, plus the touch axis
+  calibration/orientation and the IRQ pad.  Report **194**, traps
+  **138/139/140/141**, decisions **§44/§45**.
+
+## Previous state — 2026-11-08 (session 35)
 
 **S1, S2, S3 and H1 are all done; the WL1283 software surface is now
 exhausted.**  S1: `startup-playbook` is the source of the QNX-only GPIO outputs
@@ -720,6 +803,10 @@ charges; it is **not** a known-good baseline (reports 185/186).  The previous
 test images were `0x9471F6C9` (audit), `0xF38CF87E` (FREF before probe) and
 `0xE6F77A9B`.
 
+**The media currently holds the session-36 touch image `0x04AF1433`**
+(`0x91A8C4` bytes — `i2c2_pins` + the Munin driver); re-flash the known-good
+region-0 image below at block `0x825` to return.
+
 **The known-good image is `0xE36C679A` on the 7.3.3 base**
 (`local/images/kernel-0xE36C679A-wdt58s.img`, sha256 `bdbaf5fc…`, 0x91A748
 bytes) — the
@@ -836,13 +923,13 @@ the I²C bus and resets the unit).
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **the known-good `0xE36C679A`** (`local/images/kernel-0xE36C679A-wdt58s.img`, 0x91A748 bytes, sha256 `bdbaf5fc…`), restored after the session-35 S3/H1 bench; the CRC was re-verified this session (`zlib.crc32(image[0:-4]) = 0xE36C679A`).  **The 1917 IFS is not on media**; the way back is `local/work/ifs-shim-sealed.ifs` (7,900,548 B, sha256 `b52195bb…`) at block `0x825` (region 0 only).  The compressed `local/work/ifs1917-compressed.ifs` (3,466,232 B, sha256 `f14db207…`) is the session-27 alternative |
-| region-0 RCFS (`/base`) | **still the 1917 RCFS at region-0 offset 0xC00000** — outside the 7.3.3 image (which ends at 0x91A748) and not touched this session; not readable as `/base` without the 1917 IFS |
+| region-0 IFS on media | **the session-36 touch driver image `0x04AF1433`** (`0x91A8C4` bytes; `i2c2_pins` + the Munin driver), flashed region-0 only.  **The known-good baseline is `0xE36C679A`** (`local/images/kernel-0xE36C679A-wdt58s.img`, 0x91A748 bytes, sha256 `bdbaf5fc…`); re-flash it at block `0x825` to return.  **The 1917 IFS is not on media**; the way back is `local/work/ifs-shim-sealed.ifs` (7,900,548 B, sha256 `b52195bb…`) at block `0x825` (region 0 only).  The compressed `local/work/ifs1917-compressed.ifs` (3,466,232 B, sha256 `f14db207…`) is the session-27 alternative |
+| region-0 RCFS (`/base`) | **still the 1917 RCFS at region-0 offset 0xC00000** — outside the 7.3.3 test image (which ends at 0x91A8C4) and not touched this session; not readable as `/base` without the 1917 IFS |
 | UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
 | `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it ran during the session-35 S3/S2 TabletOS bench and topped `BOOTCTR_FCTRY` back to `0x32` |
-| `BOOTCTR_FCTRY` | **`0x2f`** after the session-35 S3/H1 bench: the 1917 boot topped it to `0x32`, and two Linux boots (H1 test + restore) spent `0x32 → 0x30 → 0x2f`.  Both boot-time top-ups read `>= threshold 0x1E` and wrote nothing (`dmesg` line `pbrpmb: topup: ... 2f000000`, `0x2f >= threshold 0x1e, no write`) |
+| `BOOTCTR_FCTRY` | **`0x2b`** after the three session-36 driver test boots (`dmesg` `pbrpmb: topup: ... 2b000000`, `0x2b >= threshold 0x1e, no write`) |
 | region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 `ba275807…`, **17 modules under `/lib/modules/7.3.3`** (incl. `twl6030_charger.ko`, `twl6030-gpadc.ko`); the initramfs mounts it **read-write** and chroots into it |
-| TabletOS / OS | **not running** — the unit is **on our Linux 7.3.3 known-good image `0xE36C679A`**, console over ttyGS0 (no door — trap 88), **pack Full: 100 %, 4.152 V**.  The last TabletOS boot was the session-35 S3/S2 bench (1917 IFS + door + root SSH) |
+| TabletOS / OS | **not running** — the unit is **on our Linux 7.3.3 touch image `0x04AF1433`**, console over ttyGS0 (no door — trap 88), **pack Full: 100 %, 4.156 V**.  The last TabletOS boot was the session-35 S3/S2 bench (1917 IFS + door + root SSH) |
 | device-side files | none needed on Linux; QNX `/tmp` tools must be re-pushed after a TabletOS restore |
 
 The factory boot budget is real and one-way: every successful factory/CRC boot
@@ -853,47 +940,36 @@ exactly one unit and stays up until asked.
 
 ## The single current blocker
 
-**The WL1283 is silent under Linux even with the reference's exact host
-sequence; the software surface is exhausted (report 192).**  Under QNX the chip
-is alive (`ti0` UP/RUNNING, 40+ scan results, `GPIO2_DATAIN` bit 21 = 1); under
-Linux with WL_EN high it answers nothing (CMD5 `err=-110`, `resp0=0`).  Session
-35 closed the last software leads:
+**The touch works under Linux; the audio is the next task.**  The Cypress
+CY8CTMA3 is on **I²C2 `0x48072000` = Linux `i2c-1`** at `0x65` (QNX
+`driver = munin`, `/dev/i2c1`).  The DTS muxes the pads; the driver
+(`playbook-munin.c`) boots the controller out of its Munin bootloader and
+reports touches on `input0`/`event0`.  The image `0x04AF1433` is on media and
+self-enumerates.  Open touch details: the axis calibration/orientation
+(vendor input 1280×768 → 1024×600 panel), the IRQ pad, and the sleep/power
+states.  Report 194, traps 138–141, DECISIONS §44/§45.
 
-* **S1:** `startup-playbook` (never run by our chainloader) is the source of the
-  QNX-only GPIOs; its Winchester table marks GPIO1 0/4/15/18/28/31 and GPIO2
-  5/7 as outputs driven low, gpio54 (WL_EN) output-low, gpio53 input/falling
-  (trap 135).
-* **S2:** `CLK32KG` is base `0x8C`, APP-ON in both (`CFG_TRANS` identical,
-  `CFG_GRP` differs, `CFG_STATE` CON/MOD differs); `0xB0` is REGEN2 (display),
-  `0xBC` is an unnamed non-regulator resource (trap 135).
-* **S3:** all eight QNX-only GPIO outputs released to input on the live 1917 —
-  negative (trap 136).
-* **H1:** CMD0 → CMD5 only, 24 MHz, arg `0x00FFFF00` — still `err=-110`
-  (trap 137).
+**The WL1283 was formally stopped at the start of session 36.**  Its software
+surface is exhausted (report 192; traps 135–137), and the remaining difference
+is chip-side, needing a schematic/board view or logic analyser.  Do not re-run
+traps 116–137.
 
-**What remains is chip-side** (VBAT/TCXO/SLOW_CLK, MMC5_CLK/CMD/DAT0) or OMAP
-HSMMC sampling, requiring a schematic/board view or a logic analyser.  The
-decision table for that measurement is in `HANDOFF.md` §0c.  Do not re-run traps
-116–137.
-
-**Media state: the known-good `0xE36C679A` is in region 0** (restored after the
-session-35 S3/H1 bench; CRC re-verified this session by
-`zlib.crc32(image[0:-4])`); region 1 is the 7.3.3 charger rootfs (`ba275807…`).
-The 1917 IFS is not on media.  `BOOTCTR_FCTRY = 0x2f`.  NVRAM and the MCT remain
-unwritable, and an agent never writes RPMB (`SAFETY.md` §6).
+**Media state: the touch image `0x04AF1433` is in region 0** (region-0 only;
+the known-good `0xE36C679A` is the way back); region 1 is the 7.3.3 charger
+rootfs (`ba275807…`).  The 1917 IFS is not on media.  `BOOTCTR_FCTRY = 0x2b`.
+NVRAM and the MCT remain unwritable, and an agent never writes RPMB
+(`SAFETY.md` §6).
 
 ## What is next
 
-1. **The only remaining WL1283 work is chip-side.**  Measure, at the chip under
-   both OSes, VBAT/VIO/WL_EN/WL_IRQ, the 26 MHz TCXO and the 32.768 kHz
-   SLOW_CLK, and MMC5_CLK/CMD/DAT0.  A board view or logic analyser is required;
-   the decision table is in `HANDOFF.md` §0c.
-2. **If the WL1283 is formally stopped: item 9 step 5** — the WM8994 audio
-   machine and the Cypress CY8CTMA3 touch (report 176 is the inventory).  Item 9
-   steps 0–3 are done (charger, reports 177/178/179/182, re-verified on 7.3.3 in
-   session 30); every step is one variable per boot and none needs an RPMB write.
-3. **The unit is on the known-good `0xE36C679A`** (region 0 only restored;
-   region 1 unchanged), pack Full 4.152 V.
+1. **The WM8994 audio half of item 9 step 5** — enable `CONFIG_MFD_WM8994` /
+   `CONFIG_SND_SOC_WM8994`, probe the codec at I²C4 `0x1a`, then the
+   McBSP/`l4_abe` machine link (report 176 §3, HANDOFF §1b).
+2. **Touch polish:** the axis calibration/orientation for the 1024×600 panel
+   and the IRQ pad (GPIO2_3); the bus, protocol and driver are proven.
+3. **The unit is on the touch image `0x04AF1433`** (region 0 only; region 1
+   unchanged), pack Full 4.156 V.  Re-flash `0xE36C679A` at block `0x825` to
+   return to the known-good baseline.
 
 ## Workspace location
 
