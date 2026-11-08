@@ -6,18 +6,20 @@ A from-scratch, upstream-kernel port to a **BlackBerry PlayBook**: TI
 backlight controller.
 
 The device boots a **chainloader image** written into media region 0 that loads
-a stock **Linux 6.15.11** `zImage` + our `omap4-winchester.dtb`, then an
-initramfs whose PID 1 brings up a USB CDC-ACM console (and optionally the
-read-only region-1 root). Everything is derived from live measurements of the
-device's original QNX 6.6 ("TabletOS") and from static analysis of its boot
+an upstream **Linux 7.3.3** `zImage` + our `omap4-winchester.dtb`, then an
+initramfs whose PID 1 brings up a USB CDC-ACM console and hands PID 1 to a
+BusyBox userland on the region-1 ext4 root.  The **6.15.11** tree and patch are
+kept as the backup/reference.  Everything is derived from live measurements of
+the device's original QNX 6.6 ("TabletOS") and from static analysis of its boot
 image — no vendor kernel, no vendor device tree.
 
 ## Status
 
 **The current state lives in [`docs/project/STATE.md`](docs/project/STATE.md) and
 only there**; this page does not restate it. The next experiment is in
-[`docs/project/HANDOFF.md`](docs/project/HANDOFF.md), and the active image work
-is in [`docs/project/IFS-REBUILD.md`](docs/project/IFS-REBUILD.md).
+[`docs/project/HANDOFF.md`](docs/project/HANDOFF.md), and the 7.3.3 port record
+is in [`docs/project/KERNEL-PORT.md`](docs/project/KERNEL-PORT.md).  (The
+2.1.0.1917 image-rebuild work in `IFS-REBUILD.md` is parked by the operator.)
 
 ## How it works
 
@@ -38,15 +40,17 @@ Our image is a **replacement for the region-0 IFS**, not an extra file: RIM's
 fixed startup prefix and header are kept, and our chainloader, `zImage` and DTB
 are placed in the image behind them.  (The separate 2.1.0.1917 work rebuilds the
 imagefs itself behind the same prefix; see `docs/project/IFS-REBUILD.md`.)  A
-small ARM chainloader at image offset `0x800` copies the 6.15.11 `zImage` and the
+small ARM chainloader at image offset `0x800` copies the 7.3.3 `zImage` and the
 board DTB to high DRAM, checks the DTB magic, and jumps with the ARM boot
-protocol.  The kernel is pristine Linux 6.15.11 plus one patch set
-(`kernel/clean-kernel-6.15.11-changes.patch`, 34 files) carrying the
-`omap4-winchester` board DTS and the board quirks.  The initramfs contains a
-static PID 1 and a purpose-built console (no busybox, no shell) whose commands
-read and write device registers and buses directly, with every hardware access
-performed in a forked worker so a bus abort cannot wedge the console.  A 32 MiB
-ext4 root in media region 1 can be loop-mounted read-only; the longer-term
+protocol.  The kernel is upstream Linux 7.3.3 plus one patch set
+(`kernel/patches/0001-playbook-winchester-7.3.3.patch`, 42 files) and the board
+config `kernel/winchester-7.3.3.config`; the 6.15.11 tree and patch are kept as
+the reference.  The initramfs contains a static PID 1 and a purpose-built
+console (the initramfs itself has no busybox or shell) whose commands read and
+write device registers and buses directly, with every hardware access performed
+in a forked worker so a bus abort cannot wedge the console.  It then mounts the
+region-1 ext4 root **read-write** and execs its BusyBox `/sbin/init`; a 64 MiB
+BusyBox userland with `/lib/modules/7.3.3` lives there.  The longer-term
 direction is postmarketOS/nura.
 
 Everything the chain needed — the loader's selector, the RPMB record format, the
@@ -69,16 +73,22 @@ and [`docs/project/SAFETY.md`](docs/project/SAFETY.md) before writing anything.
 # this puts them on PATH and exports CROSS_COMPILE / QNX_HOST / QNX_TARGET
 . tools/env.sh
 
-# build
+# the shipped 7.3.3 config (a clean build does: cp kernel/winchester-7.3.3.config
+# local/kernel-tree/.config; keep CONFIG_KERNEL_XZ=y — with gzip the assembled
+# chainloader image (2.88 MB sealed-IFS base + zImage + DTB) exceeds the
+# 0xB00000 region-0 IFS slot)
 make -C local/kernel-tree ARCH=arm CROSS_COMPILE=arm-linux- -j12 zImage
 make -C local/kernel-tree ARCH=arm CROSS_COMPILE=arm-linux- ti/omap/omap4-winchester.dtb
+make -C local/kernel-tree ARCH=arm CROSS_COMPILE=arm-linux- -j12 modules
 
 # wrap into the chainloader image (prints the image CRC; tools/env.sh above
 # already provided the QNX 6.6 toolchain)
 python3 tools/build_kernel_image.py
 
-# flash the test image and boot it  (full loop: docs/project/DEVELOPMENT.md)
-python3 tools/pre_os_ifs_flash.py --template-ifs boot/chainloader/kernel.img
+# flash the image and boot it (dry run unless --apply; full loop and the
+# region-1 rootfs in docs/project/DEVELOPMENT.md)
+python3 tools/bbusb.py flash --component boot/chainloader/kernel.img \
+        --dest-block 0x825 --from-bootrom --password 0000 --apply
 ```
 
 The bench console is driven from the host with `tools/pbcon.py`; the console's
@@ -98,9 +108,13 @@ kernel/           patch set, kernel config, board DTS + modified driver copies
 boot/             chainloader source and image builder
 initramfs/        PID 1 (init.c) and the bench console (console.c)
 tools/            host tools (console driver, ssh wrapper, flasher, QNX probes)
-hardware/         TRM/datasheet copies (local only — not redistributed)
 local/            GITIGNORED payload: device dumps, images, keys, vendor tools
 ```
+
+The TI TRM and the TWL6030/TC358764 datasheets live in an **untracked
+`hardware/` directory**; nothing there is committed or published (see
+`docs/project/SETUP.md` §7).  A clone has no `hardware/` and needs no copy: every
+derived register value is quoted in `docs/reports/` with its table reference.
 
 ## Safety notes
 

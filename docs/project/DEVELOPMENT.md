@@ -83,8 +83,9 @@ tools/pbssh.sh 'dd if=/dev/hd1 bs=16 skip=65536 count=180193' | sha256sum
 7.3.3 tree; `local/kernel-tree-6.15.11` is the untouched reference.  Use
 **`kernel/winchester-7.3.3.config`** for a clean build (`kernel/winchester.config`
 is the 6.15.11 one), and keep **`CONFIG_KERNEL_XZ=y`**: the chainloader image
-must end below the region-0 IFS slot bound `0xB00000`, and gzip does not fit
-(0xB8ABB4).  Module release is **7.3.3**.
+must end below the region-0 IFS slot bound `0xB00000`; with gzip the assembled
+image was 0xB8ABB4 (the zImage alone is smaller — the 2.88 MB sealed-IFS base
+pushes it over).  Module release is **7.3.3**.
 
 **The binaries in `initramfs/root/` are NOT built by the kernel's build** — the
 kernel only packs the directory into the cpio — **and they are gitignored**

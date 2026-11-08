@@ -23,12 +23,13 @@ already contains exactly the public content:
 
 * `local/` — both cross-toolchains, the QNX/device dumps, the sealed IFS and
   other images, the SSH keys, the vendor tools, the kernel build tree, the
-  pristine tarball, backups and logs.
+  pristine tarballs, backups and logs.
+* `hardware/` — the TI OMAP4430 TRM (text/PDF) and the TWL6030/TC358764
+  datasheets.  The whole directory is gitignored; nothing there is tracked or
+  published.
 * `.commandcode/` — the agent's learned working notes.
 * `tools/qnx6-usage` — the host-built binary.  Its source
   `tools/qnx6-usage.c` is tracked and public; rebuild it locally.
-* `hardware/*` PDFs and the TRM text extraction.  Only
-  `hardware/README.md` is tracked.
 
 The bb10mt source is not in either tree; `tools/bbusb.py` is a GPL-3.0
 derivative and is published under GPL-3.0-or-later (see `NOTICE`).

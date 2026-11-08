@@ -33,7 +33,7 @@ explicit `QNX_HOST`/`QNX_TARGET` paths, not its own `/opt/qnx660` env script.
 proprietary, and the Buildroot toolchain carries its source-offer obligations —
 keep both under `local/` and out of any publication.
 
-Used for `zImage`, the DTB and the two static initramfs binaries. The same
+Used for `zImage`, the DTB and the static initramfs binaries. The same
 `bin/` also supplies `arm-linux-objdump`, `readelf` and `gcc` for RE work and for
 the console build (`arm-linux-gcc -static -O2 -o root/console console.c`,
 handoff §3). The toolchain is Buildroot 2021.11 — gcc 14.3.0, binutils 2.43.1
@@ -43,7 +43,11 @@ Host-side build prerequisites (the host is Arch; `pacman -S bc` was the one
 missing package, report 103 §4.1): `bc` — required by `kernel/time/timeconst.h`,
 without it the build stops at `Kbuild:21` — plus `flex`, `bison`, `pahole`,
 `dtc`, OpenSSL and libelf. Host python is 3 with `pyusb` (§6). A full `zImage`
-build takes `-j12`-level parallelism; gzip `zImage` ≈ 6.96 MB, `Image` ≈ 16.9 MB.
+build takes `-j12`-level parallelism; the **XZ** `zImage` is ≈ 6.57 MB and the
+assembled chainloader image is 0x91AB20 (inside the `0xB00000` region-0 slot).
+With gzip the zImage alone is 9.12 MB and the assembled image (2.88 MB sealed-IFS
+base + zImage + DTB + trailer) was **0xB8ABB4**, over the slot — hence XZ.
+`Image` ≈ 16.9 MB.
 
 ## 2. QNX 6.6 toolchain (builds the chainloader and the QNX-side probes)
 
@@ -80,38 +84,42 @@ unit, so it only runs while TabletOS is up. Anything else you want to ask the
 reference must be built and pushed the same way (this is the cheapest oracle the
 project has).
 
-## 3. Pristine Linux 6.15.11 tree (the diff baseline)
+## 3. Pristine Linux 7.3.3 tree (the diff baseline; 6.15.11 kept as reference)
 
-**The tarball now lives in the repository payload**, so the patch can be
+**Both tarballs live in the repository payload**, so either patch can be
 regenerated and re-verified without depending on anything outside the repo:
 
 ```
-local/pristine/linux-6.15.11.tar.xz     151 MB   (gitignored, like all of local/)
+local/pristine/linux-7.3.3.tar.xz    154.9 MB  (gitignored, like all of local/)
+sha256 79c66dde66cd96877fcde8f7d36aec946b1f423d2b97b5a7b1751b75c764f3d1
+local/pristine/linux-6.15.11.tar.xz  151 MB
 sha256 89ab469fc35bd9cbc6c5bf4e5cb802581806d5cbc14fb47e5c9edcc477e65d93
 ```
 
-Recreate the tree with the helper (it verifies the payload's sha256 and reuses
-an existing extraction):
+Recreate either tree with the helper (it verifies the payload's sha256 and
+reuses an existing extraction):
 
 ```bash
-tools/get_pristine.sh                     # -> /tmp/linux-6.15.11
-tools/get_pristine.sh local/pristine/linux-6.15.11   # or on disk (gitignored)
-# the tree is unmodified 6.15.11, no PlayBook strings
+tools/get_pristine.sh                     # 7.3.3 -> /tmp/linux-7.3.3
+tools/get_pristine.sh 6.15.11             # reference -> /tmp/linux-6.15.11
+tools/get_pristine.sh 7.3.3 local/pristine/linux-7.3.3   # or on disk (gitignored)
+# the trees are unmodified 7.3.3 / 6.15.11, no PlayBook strings
 ```
 
-`/tmp` is a tmpfs on the bench host, so the ~1.3 GB extraction costs RAM unless
-you give it a disk path.  **Nothing outside this workspace is needed** — the
-tarball in `local/pristine/` is the authoritative copy (sha256
-`89ab469f…65d93`).  The pre-extracted tree that used to live at
-`$HOME/wsl-migration/kernel/pristine` is no longer part of any
-procedure.
+`/tmp` is a tmpfs on the bench host, so the 1.3–1.8 GB extraction costs RAM
+unless you give it a disk path.  **Nothing outside this workspace is needed** —
+the tarballs in `local/pristine/` are the authoritative copies.  The
+pre-extracted tree that used to live at `$HOME/wsl-migration/kernel/pristine` is
+no longer part of any procedure.
 
 **Do not diff against `…/kernel/linux`** — that is a *modified* tree from an
 earlier phase, so it is neither pristine nor this project's tree
 (bootstrap §5). The working kernel tree is in the gitignored payload
-(`local/kernel-tree`); it is regenerable from the patch (34 files / 5 137 lines;
-see `kernel/patches/README.md` §"Regenerating this patch") plus
-`kernel/patches/winchester.config`.
+(`local/kernel-tree`); it is regenerable from
+`kernel/patches/0001-playbook-winchester-7.3.3.patch` (42 files / 6 648 lines)
+plus `kernel/winchester-7.3.3.config`.  The 6.15.11 reference is
+`kernel/patches/0001-playbook-winchester-6.15.11.patch` (34 files / 5 703 lines)
+plus `kernel/winchester.config`.
 
 ## 4. RE tools
 
@@ -162,16 +170,16 @@ regenerable:
 | `local/loaders/` | the ramloader blob the flasher uploads (`LDR_01`, RIM material; `bbusb.DEFAULT_LOADERS` resolves it) |
 | `local/vendor/` | third-party tooling: `bb10mt*`, `cellebrite-blackberry`, `CFP.exe`, `nvram-*`.  (`bbusb` is ours and lives in `tools/`; the ramloader moved to `local/loaders/`) |
 | `local/research/` | RE scratch: `hd0-modemap-2026-10-20`, `deckard-*`, `ghidra-mmc-2026-10-26`, `loader-audit-2026-10-21`, `loader-test-2026-10-25` |
-| `local/kernel-tree/` | the kernel build tree (regenerable from the patch + `winchester.config`) |
+| `local/kernel-tree/` | the kernel build tree (regenerable from the 7.3.3 patch + `kernel/winchester-7.3.3.config`) |
 | `local/legacy/` | an earlier, abandoned phase (kept locally, separate from this one) |
 
-`hardware/swpu231ap.pdf.txt` (the TI OMAP4430 TRM as text) and
-`hardware/twl6030.pdf` are on disk; `hardware/README.md` is the only tracked file
-there and `*.pdf`/`hardware/*.txt` are gitignored — see `DECISIONS.md` OPEN
-DECISIONS. The pad tables, PRCM maps, `COMPLEXIO_CFG1`/`DSI_CTRL` fields (TRM
-Table 10-530) and the DISPC timing encodings all come from that TRM, and every
-value derived from it is quoted in `docs/reports/` with its table reference, so
-the reports are usable without the PDF.
+`hardware/` (the TI OMAP4430 TRM as text and PDF, the TWL6030 datasheet and the
+TC358764 datasheet) is **entirely gitignored and untracked** — nothing there is
+committed or published.  A new contributor needs their own copies (SWPU231AP is
+a public TI document).  The pad tables, PRCM maps, `COMPLEXIO_CFG1`/`DSI_CTRL`
+fields (TRM Table 10-530) and the DISPC timing encodings all come from that TRM,
+and every value derived from it is quoted in `docs/reports/` with its table
+reference, so the reports are usable without the PDF.
 
 ## 8. Paths: what the tools need (read this before running anything in `tools/`)
 

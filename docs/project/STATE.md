@@ -30,8 +30,9 @@ rapid charger at session end (pack was 2.817 V / 0 %).**
   an unbind/bind cycle on 7.3.3 (shell survives, lux 30).
 * **Image:** region-0 **`0x0F6AC47F`**, 0x91AB20 bytes
   (`local/images/kernel-0x0F6AC47F-7.3.3.img`, sha256 `fcddda8d…`).  The zImage
-  is **XZ**-compressed (6 568 696 B) to fit the `0xB00000` region-0 IFS slot;
-  with gzip it was 0xB8ABB4 and refused to build.
+  is **XZ**-compressed (6 568 696 B); with gzip the assembled chainloader image
+  (2.88 MB sealed-IFS base + zImage + DTB) was **0xB8ABB4**, over the
+  `0xB00000` region-0 IFS slot, and the builder refused it.
 * **Peripherals on 7.3.3:** all 15 modules load — BMA150 (`input0`), HMC5843L,
   MPU3050 (die ID `0E9E`), TMP103 (`hwmon0`), BQ27541
   (`/sys/class/power_supply/bq27541-0`), FAN5702 (`playbook:{red,green,blue}:status`),

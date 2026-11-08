@@ -229,6 +229,10 @@ selector and A/B fallback and was wrong — see
 
 ## 11. The pristine 6.15.11 tarball is part of the repository payload
 
+> **Superseded in part by §33 (session 30):** the current diff baseline is
+> **7.3.3**, with `local/pristine/linux-7.3.3.tar.xz`.  The 6.15.11 tarball
+> remains in the payload as the reference and is still never removed.
+
 **Decision.** `local/pristine/linux-6.15.11.tar.xz` (151 MB, gitignored like the
 rest of `local/`) is the canonical copy of the diff baseline.  The pre-extracted
 tree under the wsl-migration directory is a convenience, not a dependency.
@@ -920,7 +924,7 @@ exists.
 documentation are licensed under GPL-3.0-or-later (see `LICENSE`).  This is the
 simplest licence compatible with `tools/bbusb.py`, a GPL-3.0 derivative of
 bb10mt.  The kernel patch and the copies under `kernel/source/` remain
-**GPL-2.0-only** (they are Linux 6.15.11 derivatives); `NOTICE` records that and
+**GPL-2.0-only** (they are Linux 7.3.3 / 6.15.11 derivatives); `NOTICE` records that and
 the rest of the provenance.  The mixed corpus is unchanged: our own sources, the
 GPL-2.0 kernel delta, TI TRM/datasheet references, and third-party vendor
 tooling under the gitignored `local/vendor/`.
@@ -961,12 +965,11 @@ the tree can prove.
 ### Publishing the proprietary QNX dumps and the TI TRM
 
 **Undecided, currently withheld.** `local/` (device dumps, the sealed IFS, the
-other images) is gitignored as a block, and `*.pdf` is gitignored separately —
-that is what keeps the TRM out of version control, although
-`hardware/swpu231ap.pdf.txt` (a text extraction, ~31 MB) and
-`hardware/twl6030.pdf` are on disk. Whether, when and in what form any of this
-is published is open; the default in force is "device-derived and vendor
-material stays local". The reports quote TRM page/line references precisely so
+other images) and the whole `hardware/` directory (the TI TRM text/PDF and the
+TWL6030/TC358764 datasheets) are gitignored as blocks — nothing there is tracked
+or published.  Whether, when and in what form any of this is published is open;
+the default in force is "device-derived and vendor material stays local".  The
+reports quote TRM page/line references precisely so
 the analysis can be followed without redistributing it.
 
 ### Provenance of the `bbusb` module

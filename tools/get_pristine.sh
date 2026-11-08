@@ -1,23 +1,45 @@
 #!/bin/sh
-# Extract the pristine Linux 6.15.11 tree from the repository payload.
+# Extract a pristine Linux tree from the repository payload.
 #
 # The project must not depend on a pristine copy that lives outside this
 # workspace (the old recipe pointed at .../wsl-migration/home/psyden/kernel/
-# pristine).  The authoritative copy is local/pristine/linux-6.15.11.tar.xz,
+# pristine).  The authoritative copies are the tarballs in local/pristine/,
 # whose sha256 is checked below.
 #
-# Usage:  tools/get_pristine.sh [dest-dir]
-#         default dest: ${TMPDIR:-/tmp}/linux-6.15.11
+# Usage:  tools/get_pristine.sh [VERSION] [dest-dir]
+#         VERSION: 7.3.3 (default, the current base) or 6.15.11 (reference)
+#         default dest: ${TMPDIR:-/tmp}/linux-$VERSION
 #
-# The tree is ~1.3 GB extracted.  /tmp is a tmpfs on the bench host, so if RAM
-# is tight pass a disk path instead, e.g. local/pristine/linux-6.15.11.
-# Re-running is cheap: an existing extraction is reused.
+# Examples:
+#   tools/get_pristine.sh                    # 7.3.3 -> /tmp/linux-7.3.3
+#   tools/get_pristine.sh 6.15.11            # 6.15.11 -> /tmp/linux-6.15.11
+#   tools/get_pristine.sh 7.3.3 local/pristine/linux-7.3.3
+#
+# The tree is ~1.3-1.8 GB extracted.  /tmp is a tmpfs on the bench host, so if
+# RAM is tight pass a disk path instead.  Re-running is cheap: an existing
+# extraction is reused.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-TARBALL="$ROOT/local/pristine/linux-6.15.11.tar.xz"
-SHA256=89ab469fc35bd9cbc6c5bf4e5cb802581806d5cbc14fb47e5c9edcc477e65d93
-NAME=linux-6.15.11
+
+case "${1:-7.3.3}" in
+7.3.3)
+	VERSION=7.3.3
+	SHA256=79c66dde66cd96877fcde8f7d36aec946b1f423d2b97b5a7b1751b75c764f3d1
+	;;
+6.15.11)
+	VERSION=6.15.11
+	SHA256=89ab469fc35bd9cbc6c5bf4e5cb802581806d5cbc14fb47e5c9edcc477e65d93
+	;;
+*)
+	echo "unknown VERSION '$1' (want 7.3.3 or 6.15.11)" >&2
+	exit 1
+	;;
+esac
+[ $# -ge 1 ] && shift
+
+NAME=linux-$VERSION
+TARBALL="$ROOT/local/pristine/$NAME.tar.xz"
 
 if [ $# -ge 1 ]; then
 	DEST=$1
@@ -25,7 +47,15 @@ else
 	DEST=${TMPDIR:-/tmp}/$NAME
 fi
 
-if [ -f "$DEST/Makefile" ] && grep -q "^VERSION = 6$" "$DEST/Makefile" 2>/dev/null; then
+want_major=${VERSION%%.*}
+rest=${VERSION#*.}
+want_minor=${rest%%.*}
+want_sub=${rest#*.}
+
+if [ -f "$DEST/Makefile" ] &&
+   grep -q "^VERSION = $want_major\$" "$DEST/Makefile" 2>/dev/null &&
+   grep -q "^PATCHLEVEL = $want_minor\$" "$DEST/Makefile" 2>/dev/null &&
+   grep -q "^SUBLEVEL = $want_sub\$" "$DEST/Makefile" 2>/dev/null; then
 	echo "pristine tree already present: $DEST"
 	exit 0
 fi

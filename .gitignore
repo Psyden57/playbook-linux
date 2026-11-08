@@ -23,11 +23,11 @@ rsa.pub
 ifs0.sealed.bin
 
 # --- reference documents (not ours to redistribute) -----------------
-# case-insensitive: TC358764XBG.PDF slipped past `*.pdf` once
+# case-insensitive: TC358764XBG.PDF slipped past `*.pdf` once.
+# The whole hardware/ directory (TI TRM, TWL6030 and TC358764 datasheets) is
+# local-only and never published.
 *.[Pp][Dd][Ff]
-# TRM extracts live in hardware/ but stay local; hardware/README.md is tracked
-hardware/*.txt
-hardware/*.[Pp][Dd][Ff]
+hardware/
 
 # --- build output -----------------------------------------------------------
 # the chainloader is assembled on every image build; only its sources are tracked

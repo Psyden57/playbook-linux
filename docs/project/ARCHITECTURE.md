@@ -10,9 +10,9 @@ for facts. Neither shares code with the other.
 | flasher | `tools/bbusb.py` | the pre-OS `0xF7` writer: a `.signed` container (region 0 + region 1 in one bootrom session) or a bare component (`--component --dest-block`); `tools/pre_os_ifs_flash.py` is the older template tool (`DECISIONS.md` §29) |
 | USB tool | `tools/bbusb.py` | one CFP-style entry point: the protocol module plus `info` / `flash` / `reset-osregion` / `boot-mode` / `reset-loader` and offline `pack` / `unpack` / `split` / `parse` |
 | offline tests | `tools/tests/test_offline.py` | stubbed-device checks for the USB tools; no USB, no unit |
-| kernel source changes | `kernel/clean-kernel-6.15.11-changes.patch`, `kernel/patches/` | the complete delta vs pristine 6.15.11 + the board `.config` |
+| kernel source changes | `kernel/patches/0001-playbook-winchester-7.3.3.patch`, `kernel/winchester-7.3.3.config` | the complete delta vs pristine 7.3.3 + the board `.config`; the 6.15.11 patch/tree stay as the reference |
 | board DTS + patched drivers | `kernel/source/` (`omap4-winchester.dts`, `tc358764.c`, `dsi.c`, `omap4bc.S`) | board description and the three display patches |
-| PID 1 | `initramfs/init.c` | mounts, creates the USB gadget, forks the console; no reboot timer since session 15 |
+| PID 1 | `initramfs/init.c` | mounts, creates the USB gadget, runs the boot top-up, then mounts the region-1 root rw, chroots and execs `/sbin/init`; falls back to the console; no reboot timer since session 15 |
 | console | `initramfs/console.c` | the REPL on `/dev/ttyGS0`, and the only way to touch hardware by hand |
 | host capture/drive tools | `tools/` (`pbcon.py`, `pb_ring.py`, `pb_events.py`, `pbssh.sh`, `door-hold.sh`, `pbi2c`, `usb_watch.py`, `probe_loader.py`, `force_reset_loader.py`) | console driver, DRAM capture, QNX access, I²C oracle, loader reset |
 | boot-chain tools | `tools/` (`89-crc_tool.py`, `build_crc_image.py`, `90-nvram2074.py`, `memdump3.c`, `memw32.c`, `ramloader-commands.txt`) | IFS CRC verify/reseal, the pre-chainloader images, NVRAM `0x2074`, and the QNX-side memory reader/writer |
@@ -99,7 +99,10 @@ semantics are still open (report 91 §9 Q1).
 `/init` is a static binary and PID 1 (`initramfs/init.c`). It mounts
 `devtmpfs`/`proc`/`sys`/`configfs`, builds the USB gadget by `mkdir` in
 configfs (`g1`, function `acm.usb0`, product string *"PlayBook (Linux
-bring-up)"*), waits for `/dev/ttyGS0`, then forks `/console`. It reboots **only when the
+bring-up)"*), waits for `/dev/ttyGS0`, runs the boot-time `pbrpmb topup`, then
+mounts the region-1 ext4 root **read-write**, bind-mounts `/dev` `/proc` `/sys`
+into it, `chroot`s and execs `/sbin/init`.  With no `/sbin/init` it falls back
+to the initramfs `/console`.  It reboots **only when the
 console asks** through a pipe (or the power button is held); the old 180 s <!-- audit-ok: history of the removed timer -->
 `BOOT_LIFETIME_S` timer was removed in session 15, because a boot is now a
 deliberate act and every one spends a factory boot (reports 109 §8, 115;

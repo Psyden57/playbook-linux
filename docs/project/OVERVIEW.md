@@ -1,13 +1,15 @@
 # Project overview — mainline Linux on a BlackBerry PlayBook
 
-A from-scratch port of **unmodified-upstream Linux 6.15.11** to a
-**BlackBerry PlayBook** (TI OMAP4430 ES2.2, RIM codename "winchester"). For the
+A from-scratch port of **upstream Linux 7.3.3** to a
+**BlackBerry PlayBook** (TI OMAP4430 ES2.2, RIM codename "winchester").  The
+6.15.11 tree is kept as the backup/reference.  For the
 Linux image, no RIM kernel, bootloader, driver or filesystem is reused: the unit
 boots an image this project builds, written into **media region 0**
-(`/dev/hd1`), with an **initramfs** PID 1/console and a **USB CDC-ACM console**
-(plus an optional read-only root in region 1). Everything is recovered by
-measurement — from a live QNX 6.6 reference on the same hardware and from static
-RE of its binaries — rather than from a vendor source drop, which does not exist.
+(`/dev/hd1`), with an **initramfs** PID 1/console, a **USB CDC-ACM console**,
+and a **BusyBox userland on the region-1 ext4 root**.  Everything is recovered
+by measurement — from a live QNX 6.6 reference on the same hardware and from
+static RE of its binaries — rather than from a vendor source drop, which does
+not exist.
 
 A second artefact is built here: a modified **2.1.0.1917** boot image whose
 IFS and `/base` are ours (`IFS-REBUILD.md`).  For what works, what is next and
@@ -68,8 +70,8 @@ What each stage is allowed to do matters when a boot fails:
 | eMMC second stage (`hd0`/`hd0head.bin`, linked `0x7FFF7000`, loaded `0x80000000`) | reads NVRAM `0x2040` and `0x2801`, reads the RPMB selector, verifies region 0 (ECDSA or CRC), may **nuke** on some paths, then hands off | it is not the OS loader: its only MMC image loader has no caller, so the 2.75 MB image at `0x800FF800` was placed by something else (open question, report 99 §3) |
 | region-0 image = our chainloader image | word 0 `0xEA0001FE` branches to image `+0x800` = `0x80100000` | — (`LoadEnd` at `hdr+0x08` is the first byte past the image, not an entry point) |
 | chainloader (our code) | five actions: clear the four breadcrumb rings, copy zImage/DTB high, check the DTB magic, publish the epoch block, jump | it never writes media and never touches WDT2 |
-| kernel | pets WDT2 from a 2 s `timer_list`, devicetree describes the board | no modules (initramfs) |
-| userspace | PID 1 in the initramfs, the console on USB, and optionally the read-only region-1 root | — |
+| kernel | pets WDT2 from a 2 s `timer_list`, devicetree describes the board | modules load from the region-1 root, not from the initramfs |
+| userspace | PID 1 in the initramfs hands over to the BusyBox `/sbin/init` on the region-1 ext4 root (rw); the console is on USB | — |
 
 The chainloader is entered with the MMU off, in ARM state, SVC, IRQ/FIQ masked
 (report 91 §2). The epoch-delay instrument is still in its source:

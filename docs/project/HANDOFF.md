@@ -295,7 +295,7 @@ Full text: `KNOWN-ISSUES.md` §2.  The ones that end sessions:
 | tools | `tools/` (see `tools/README.md`) |
 | images, sealed IFS, backups | `local/images/` (gitignored) |
 | 6.15.11 reference tree | `local/kernel-tree-6.15.11/` |
-| OMAP4430 TRM (text) | `hardware/swpu231ap.pdf.txt` |
+| OMAP4430 TRM (text) | `hardware/swpu231ap.pdf.txt` (untracked/local) |
 | public/private repositories | `docs/project/REPO-MANAGEMENT.md` |
 
 ## 5. Working rules
