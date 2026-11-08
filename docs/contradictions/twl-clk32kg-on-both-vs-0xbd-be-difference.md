@@ -1,8 +1,14 @@
 # TWL6030 `CLK32KG`: "on in both" vs the `0xBD`/`0xBE` differences
 
-**Status: open.**  Two readings of the same PMIC comparison disagree about
-whether the 32.768 kHz clock resource is actually configured the same under
-QNX and Linux.  Nothing has been measured that settles it.
+**Status: RESOLVED (session 35, report 192 §7; both OSes read).**  `CLK32KG` is
+register base `0x8C` (`CFG_GRP` 0x8C, `CFG_TRANS` 0x8D, `CFG_STATE` 0x8E;
+kernel `clk-twl.c`), **not** the FreeBSD `0xBC` claim.  QNX reads `01/05/05`;
+Linux reads `07/05/55`.  **`CFG_TRANS` (`0x8D`) is identical; `CFG_GRP` (`0x8C`)
+differs; `CFG_STATE` (`0x8E`) differs only in the CON/MOD bits — its APP field
+is `01` in both (`0x05 → 1`, `0x55 → 1`), so the 32 kHz clock is APP-ON in
+both.**  Report 180's "CFG_STATE identical; CFG_TRANS 0x55 vs 0x05" mislabeled
+the two bytes.  The `0xBC`–`0xBE` difference is a **different** resource.  The
+resolution is at the end of this file.
 
 ## Claim 1 — `CLK32KG` is ON in both (report 180 §4, dossier §7.3)
 
@@ -78,6 +84,45 @@ Supporting facts, both verified this session:
 
 Until then, do not quote "CLK32KG is ON in both" as proof that the WLAN slow
 clock is identical.
+
+## Resolution (session 35) — measured on both OSes
+
+* **`CLK32KG` is at base `0x8C`, not `0xBC`.**  The mainline clock driver
+  `local/kernel-tree/drivers/clk/clk-twl.c` lists `clk32kg` with `.base = 0x8C`
+  (and `clk32kaudio` `.base = 0x8F`); the 2014 LKML patch "clk: twl: add TWL6030
+  support" independently defines `TWL6030_PM_RECEIVER_CLK32KG_CFG_STATE 0x8E`.
+  The external review's FreeBSD `0xBC` mapping is wrong for this part.
+* **Reads** (`i2cget -f -y 0 0x48` on Linux; `pbi2c dump 0 0x48 0x8c 0x8f` on
+  the live 1917; raw captures `docs/captures/twl6030-{linux,qnx}-2026-11-08.txt`):
+
+  | reg | field | QNX | Linux |
+  |---|---|---|---|
+  | `0x8C` | `CFG_GRP` | `0x01` | `0x07` |
+  | `0x8D` | `CFG_TRANS` | `0x05` | `0x05` |
+  | `0x8E` | `CFG_STATE` | `0x05` | `0x55` |
+
+* **`CFG_TRANS` (`0x8D`) is byte-identical; `CFG_GRP` (`0x8C`) differs.**
+  `CFG_STATE` (`0x8E`) differs, but its APP field is `01` in both
+  (`TWL6030_CFG_STATE_APP(0x05) = (0x05 & 0x0C) >> 2 = 1` and
+  `(0x55 & 0x0C) >> 2 = 1`).  Therefore `CLK32KG` is **APP-ON in both**; the
+  `0x05`-vs-`0x55` bits are CON/MOD, so only a sleep-state difference remains.
+  Report 180's "CFG_STATE identical; CFG_TRANS 0x55 vs 0x05" called the two
+  bytes the wrong way round; the corrected statement is **APP state
+  identical/ON; `CFG_GRP` differs; `CFG_TRANS` identical; `CFG_STATE` CON/MOD
+  bits differ**.  (The 12-item difference list was not the whole story.)
+* **The `0xB0`–`0xB2` difference is `REGEN2`** (the QNX PMIC driver's own table
+  gives `regen2` base `0xB0`, `regen1` `0xAD`): QNX `00/01/00`, Linux
+  `07/05/55` — on DVT3+ REGEN1/2 are GPIO-controlled, so QNX leaves the TWL
+  register unassigned.  REGEN1/2 are the display/panel rails (report 187), not
+  WLAN.
+* **The `0xBC`–`0xBE` difference is an unnamed non-regulator control resource**:
+  QNX `07/05/55` (on), Linux `07/01/00` (off).  It is not `CLK32KG`, not a
+  regulator in the QNX table, and no QNX WLAN layer touches it.  Its *name* still
+  needs `SWCU084`, but it does not reopen the 32 kHz lead.
+* **Consequence:** the 32 kHz / `CLK32KG` lead for the WL1283 is **closed**.  S3
+  (report 192 §8) then released all eight QNX-only GPIO outputs on the live 1917
+  and the chip stayed up — so the remaining candidates are the chip's
+  non-exposed VBAT/TCXO/reset pins and OMAP HSMMC sampling.
 
 ## Sources
 

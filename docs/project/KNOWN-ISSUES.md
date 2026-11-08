@@ -750,11 +750,69 @@ report 121 §3/§11/§12.
      The QNX `startup-playbook` binary (`local/work/ifs1917.imagefs` offset
      `0x908`, size `0x44008`, source `hwi_omap4430.c`) was never audited and
      is the likely source of these outputs; audit it before treating the GPIO
-     banks as matched.  (Session 34, report 191 §1.1/§1.3.)
+      banks as matched.  (Session 34, report 191 §1.1/§1.3.)
+
+135. **`startup-playbook` is the source of the QNX-only GPIO outputs, and it does
+      not touch `CLK32KG`.**  The 1917 imagefs `startup.*` (`0x44008` bytes at
+      offset `0x908`, raw ARM load base `0x80100000`) applies a runtime-selected
+      board GPIO table that marks **`GPIO1` bits 0/4/15/18/28/31 and `GPIO2`
+      bits 5/7 as outputs driven low**, and `gpio 54` (WL_EN) output-low /
+      `gpio 53` (WL_IRQ) input/falling-with-pull — the exact live QNX OE subset.
+      The Winchester table is at image `0x80122750` (32-byte records: `+0` gpio
+      id, `+4` direction `1`=output, `+8` level, `+0xc` detect, `+0x14/+0x15`
+      rev, `+0x16` phase); the `151/152`/`151/163` strings are the other boards.
+      It also builds the syspage `WLAN` node (`WLAN_EN_GPIO=54,WLAN_INT_GPIO=53`)
+      and sets `WLDR = 0xFFE2B400` (58.6 s).  It has **no TWL register
+      programming**: voltage setup is the OMAP PRM voltage controller
+      (`0x4A30_0BF8`/`BA0`), and the only `0xbc` immediate is a device MMIO
+      offset; the `pmic-twl6030_winchester2.cfg`/`pmic-winchester-twl6030` path
+      is regulator group/state/trans only and has no `CLK32KG` string.
+      **Both-OS reads settled `CLK32KG`:** it is at base `0x8C` (kernel
+      `clk-twl.c`, not the FreeBSD `0xBC`), with `CFG_GRP`/`CFG_TRANS`/
+      `CFG_STATE` = `0x8C`/`0x8D`/`0x8E`.  QNX `01/05/05`, Linux `07/05/55`:
+      `CFG_TRANS` (`0x8D`) is **identical**, `CFG_STATE` (`0x8E`) is APP-ON in
+      both (CON/MOD bits differ), `CFG_GRP` differs — report 180's labels were
+      swapped.
+      `0xB0`–`0xB2` is **REGEN2** (QNX `00/01/00`, GPIO-controlled on DVT3+;
+      Linux `07/05/55`) — the display/panel rail.  `0xBC`–`0xBE` is an unnamed
+      non-regulator resource, not `CLK32KG`.  (Session 35, report 192;
+      contradiction resolved.)
+
+136. **The eight QNX-only GPIO outputs are NOT the WL1283 enable/reset/power
+      — S3 is negative.**  On the live 1917 (`ti0` UP/RUNNING), set each OE bit
+      to input one at a time — `GPIO1_OE 0x4A310134` bits 0/4/15/18/28/31,
+      `GPIO2_OE 0x48055134` bits 5/7 — and check `GPIO2_DATAIN` (`0x48055138`)
+      bit 21, `ifconfig ti0` and `/pps/services/wifi/status`: every flip left
+      the chip up (`DATAIN` bit21 = 1, `ti0` RUNNING, `wifi_power::on`) and the
+      OE bit stuck (no re-drive).  Restore by clearing the bit and
+      `ifconfig ti0 down/up`.  **Verify the flip actually took:** `gpio31`
+      (`gpio_wk31`, WKUP pad `0x4A31E058` mux 3) has its input buffer off, so
+      `DATAIN` bit31 reads 0 either way — temporarily set pad bit8
+      (`0x000B0003 -> 0x000B0103`) to read the pin (it is driven low and stays
+      low when released: external pull-down), then restore the pad.  Do not
+      repeat the bisect; the remaining WL1283 difference is chip-side or OMAP
+      HSMMC sampling.  (Session 35, report 192 §8.)
+
+137. **H1 — the exact QNX SDIO sequence (CMD0 → CMD5 only) is also negative.**
+      Built and booted image **`0x29784F48`** (`0x91A2D4`, sha256 `64f70585…`,
+      `local/images/kernel-0x29784F48-h1-nosdioreset.img`) with four hunks:
+      `MMC_CAP2_NO_SDIO_RESET (1 << 30)`; skip `sdio_reset()` in
+      `mmc_rescan_try_freq` when it is set; for `480d5000` only set
+      `MMC_CAP2_NO_SDIO_RESET | MMC_CAP2_NO_SD | MMC_CAP2_NO_MMC` (never
+      `MMC_CAP2_NO_SDIO`); and `omap_hsmmc.init_hz=24000000
+      omap_hsmmc.sdio_ocr_quirk=1` in the DTS `bootargs`.  The trace is exactly
+      `sdio_reset skipped` → `go_idle` → 24 MHz (`CLKD=2`) → `op=0` →
+      `attach_sdio` → **`op=5 arg=00ffff00 err=-110 resp0=0`** → `attach_sdio no`
+      (no CMD8, no CMD55/CMD1).  `HCTL = 0x00000b00` (SDVS18|SDBP) and
+      `CAPA = 0x04e10080`, confirming H2 (1.8 V signalling; the 3.3 V `vmmc` is
+      OCR only).  **The host sequence is not the difference; the software
+      surface is exhausted.**  The test image was replaced by `0xE36C679A` and
+      the four hunks reverted; log `local/logs/boot-H1-0x29784F48.log`.
+      (Session 35, report 192 §9.)
 
 ## 3. Corrections to older reports
 
-These twenty are preserved deliberately. Each is newer than the text it
+These twenty-one are preserved deliberately. Each is newer than the text it
 contradicts, and the older reports have been corrected in place where they could
 be.
 
@@ -910,6 +968,17 @@ and `0xBBBB` → `0x4444` restarts it.  Verified live in session 31:
 `WLDR = 0xFFE2B400` (58.6 s, QNX's value) read back and `WCRR` reloaded.
 Trap 115; the inline correction is in report 109 §8.1.
 
+**3.21 Report 180 §4's `CLK32KG` register labels are swapped.**  The report claims
+"every regulator `CFG_STATE` is identical (`…=0x05`); only group/transition
+differ (`CFG_GRP` `0x07` vs `0x01`, `CFG_TRANS` `0x55` vs `0x05`)".  The
+`0x05`-in-both register is `CFG_TRANS` (TWL `0x8D`), not `CFG_STATE`; the
+`0x55`-vs-`0x05` register is `CFG_STATE` (`0x8E`), not `CFG_TRANS`.  Corrected
+statement: `CFG_GRP` (`0x8C`) differs; `CFG_TRANS` (`0x8D`) is identical;
+`CFG_STATE` (`0x8E`) differs only in the CON/MOD bits — its APP field (bits
+3:2) is `01` in both, so the 32 kHz clock is APP-ON in both.  Sources: session
+35, report 192 §7; `local/kernel-tree/drivers/clk/clk-twl.c`
+(`VREG_GRP 0`, `VREG_TRANS 1`, `VREG_STATE 2`).  (Session 35.)
+
 **Also corrected elsewhere, for completeness:** `0x1cce0` in `winch_lcdctl` is a
 HAL parameter-block defaults initialiser, not the register programmer — the
 writers are `0x18a7c`/`0x179dc`/`0x16610` (report 117, correcting 111); the
@@ -964,6 +1033,18 @@ decrements `BOOTCTR_FCTRY`" was an incomplete caller audit — reports 89 §3.5 
   (`118` §8.2, `111` §8 item 4).  The corrections are applied *in place* in those
   two files and listed in §3; the other reports are left as written so the
   section-by-section citations elsewhere still resolve.
+
+### Fixed in session 35 (documentation)
+
+* **The `CLK32KG` register labels were swapped** in report 180 §4 and the
+  session-35 draft: with `clk-twl.c`'s `VREG_GRP 0` / `VREG_TRANS 1` /
+  `VREG_STATE 2`, `0x8D` is `CFG_TRANS` (identical `0x05`) and `0x8E` is
+  `CFG_STATE` (`0x05` vs `0x55`; APP bits 3:2 = `01` in both, CON/MOD differ).
+  Corrected in report 180 (inline), report 192, STATE, HANDOFF, ROADMAP, the
+  contradiction file and both captures; listed as §3.21.
+* **The contradictions index is current again:** `twl-clk32kg…` is resolved
+  2026-11-08 (report 192 §7), the open list is six, and the `0xBC` identity is
+  the only residual.
 
 ### Fixed in session 33 (USB warm-reset regression, stale patch)
 

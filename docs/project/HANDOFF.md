@@ -1,30 +1,37 @@
-# Handoff — session 35 (absolute)
+# Handoff — session 36 (absolute)
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§6).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — this handoff is for **absolute 35 = Linux-era 29**.  See
+`N+6` — this handoff is for **absolute 36 = Linux-era 30**.  See
 `docs/sessions/NUMBERING.md`.
 
-> **Session-34 result: the QNX-side WL1283 RE is complete and names no WLAN
-> rail, clock or extra pad.**  The live 1917 syspage `WLAN` node is only
-> `WLAN_EN_GPIO=54,WLAN_INT_GPIO=53` with an empty `location` (report 189 §8);
-> the PPS `hw_info` inventory has no WLAN node at all; the board pad/GPIO
-> database, the powerman preset, `devpm-omap4.so`, `devb-mmcsd-winchester`'s
-> powerman client and the WLAN `.ini` are all read (report 189).  The chip is
-> alive under QNX (`ti0` UP/RUNNING, 40+ scan results, `GPIO2_DATAIN` bit 21 =
-> 1) and not under Linux with WL_EN high (bit 21 = 0); the remaining difference
-> is at the chip's non-exposed power/clock pins or in OMAP HSMMC sampling — a
-> schematic/board view or a logic analyser is needed.  The operator's Linux
-> RPMB top-up test succeeded.  The unit is back on the known-good
-> **`0xE36C679A`** (region 0 only restored), `BOOTCTR_FCTRY = 0x31`, pack
-> **Full, 4.126 V, +265 mA, ISL9519 `Charging`**.  **The operator has kept the
-> WL1283 open (session 34) and had two external reviews done (report 191).
-> Next: audit the QNX `startup-playbook`/TWL/GPIO state, bisect the QNX-only
-> GPIO outputs, run H1 (CMD0 → CMD5 only, 24 MHz, arg `0x00FFFF00`), then the
-> chip-side measurements.  H2's "revert 3.3 V" is withdrawn (MMC5 has no
-> `ti,dual-volt`; 3.3 V is OCR only).**  **Do not repeat the closed
-> experiments** (traps 116–134).  `hd3`, BB10 and the PlayBook OS image work
-> remain parked.
+> **Session-35 result: the QNX `startup-playbook` audit is DONE (report 192,
+> trap 135).**  The binary's Winchester board GPIO table marks **`GPIO1` bits
+> 0/4/15/18/28/31 and `GPIO2` bits 5/7 as outputs driven low**, plus `gpio 54`
+> (WL_EN) output-low and `gpio 53` (WL_IRQ) input/falling — exactly the live QNX
+> OE subset report 191 computed.  Linux never runs startup, so that is the
+> source of the QNX-only GPIO outputs.  Startup also builds the syspage `WLAN`
+> node (`WLAN_EN_GPIO=54,WLAN_INT_GPIO=53`) and sets `WLDR = 0xFFE2B400`
+> (58.6 s); it has **no `CLK32KG` write** (voltage setup is the OMAP PRM VC).
+> **The S3 bench is also done, and it is negative for all eight lines.**
+> On the live 1917 each QNX-only output (GPIO1 0/4/15/18/28/31, GPIO2 5/7) was
+> released to input; every flip left `ti0` UP/RUNNING and `DATAIN` bit21 = 1
+> (trap 136).  **S2 is answered on both OSes:** `0x8C`/`0x8D`/`0x8E` =
+> `CFG_GRP`/`CFG_TRANS`/`CFG_STATE` = QNX `01/05/05`, Linux `07/05/55` —
+> `CFG_TRANS` identical, `CFG_STATE` APP-ON in both (CON/MOD differ), `CFG_GRP`
+> differs (report 180's labels corrected), so **the 32 kHz lead is closed**;
+> `0xB0`–`0xB2` is **REGEN2** (display rail); `0xBC`–`0xBE` is an unnamed
+> non-regulator resource.  **H1 was then built and booted and is negative**
+> (image `0x29784F48`): CMD0 → CMD5 only, 24 MHz, arg `0x00FFFF00` still times
+> out (`err=-110`; `HCTL=0x00000b00`, `CAPA=0x04e10080`) — the host sequence is
+> not the difference (trap 137).  **The software surface is exhausted; only the
+> chip-side measurements remain** (VBAT/TCXO/SLOW_CLK, MMC5_CLK/CMD/DAT0; a board
+> view or logic analyser).  The unit is restored to the known-good
+> **`0xE36C679A`** in region 0, region 1 the 7.3.3 charger rootfs,
+> `BOOTCTR_FCTRY = 0x2f` (two bench boots), pack Full 4.152 V.  H2's "revert
+> 3.3 V" is withdrawn (MMC5 has no `ti,dual-volt`; 3.3 V is OCR only).**  **Do
+> not repeat the closed experiments** (traps 116–137).  `hd3`, BB10 and the
+> PlayBook OS image work remain parked.
 
 ## 0. The job, and where it stands
 
@@ -91,18 +98,56 @@ sleep 2; PBCON_TMO=10 ./tools/pbcon.py 'reboot -f'
 until grep -qE 'COMPLETE|done|error' /tmp/f.log; do sleep 2; done; tail -5 /tmp/f.log
 ```
 
-At session-34 handoff the media holds the **known-good `0xE36C679A`**, so no
+At session-35 handoff the media holds the **known-good `0xE36C679A`**, so no
 restore is needed to return to Linux; to return to TabletOS use the IFS flash
-above.  `BOOTCTR_FCTRY` reads **`0x31`** (the session-34 TabletOS comparison
-boot topped it to `0x32`; the operator's Linux top-up test succeeded, and the
-restored Linux boot spent one).  Region 0 is the **only** region that changed
-on this trip (the region-1 rootfs is unchanged), so restoring **region 0 only**
+above.  `BOOTCTR_FCTRY` reads **`0x2f`** (two session-35 bench boots:
+`0x31 → 0x2f`; each boot's `pbrpmb topup` saw `>= 0x1e`, no write).  Region 0 is
+the **only** region that changed on this trip (the region-1 rootfs is
+unchanged), so restoring **region 0 only**
 is enough — the old "flash both regions" rule applies only when both were
 modified (operator correction, session 31).  The RCFS at region-0 `0xC00000`
 and the 1917 UFS are still on media and untouched.  After the boot:
 `tools/pbssh.sh 'uname -a; mount | grep base'` and read
 `/dev/rpmb/BOOTCTR_FCTRY` (expect `0x32` after the TabletOS top-up).  **Do not
 restore `local/images/ifs0.sealed.bin`** — it is the 2.0.0.4869 IFS (trap 84).
+
+## 0c. The next step — the one experiment (chip-side power/clock)
+
+**Goal.**  Explain why the WL1283 is up under QNX and silent under Linux when
+every software/SoC state matches.  The software surface is exhausted (report
+192; traps 135–137).
+
+**The experiment.**  With the board accessible, measure at the WL1283 under QNX
+(1917 IFS) and Linux (`0xE36C679A`) with a multimeter and, where possible, an
+oscilloscope/logic analyser:
+
+* VBAT (≈3.3 V), VIO (1.8 V), WL_EN (1.8 V high), WL_IRQ (1.8 V up / 0 V down);
+* the **26 MHz TCXO** (frequency/amplitude) and the **32.768 kHz SLOW_CLK**
+  (0–1.8 V square);
+* MMC5 **CLK/CMD/DAT0** at the first command (400 kHz Linux / 24 MHz QNX);
+* current draw on the 3.3 V rail before/after WL_EN.
+
+**Inputs:** the unit, a board view/schematic or a probe sheet, the two images,
+`tools/bbusb.py` (region-0 flash), `tools/pbcon.py` (Linux console),
+`tools/door-hold.sh`/`tools/pbssh.sh` (QNX), and `tools/memdump3.c`/
+`tools/memw32.c` if a register-side check is needed.
+
+**Decision table.**
+
+* VBAT missing under Linux → board rail/load switch; trace the WL1283 supply net.
+* VIO missing under Linux → TWL V1V8/VCXIO path (unlikely: 1.8 V was measured at
+  the accessible points).
+* 26 MHz TCXO absent under Linux but present under QNX → the TCXO/LDO or its
+  enable is the variable; find the TCXO net.
+* 32.768 kHz SLOW_CLK absent under Linux → the board net from `CLK32KG` (the
+  PMIC resource is APP-ON in both); trace it to the chip.
+* All rails/clocks present and the chip still drives nothing → OMAP HSMMC
+  sampling or a power-on strap; need the board view/strap check.
+* QNX and Linux traces identical → chip-side/strap; a datasheet/board view is
+  required.
+
+**One variable at a time.**  Do not inject rails or pins; do not re-add the
+WL_EN pulse (trap 130).
 
 ## 1. The WL1283 (item 9 step 4) — the software road is exhausted
 
@@ -226,12 +271,22 @@ CALLED`, `SDIO clock ... 24Mhz`, `sdioAdapt_ConnectBus: Send commands sequence:
 0, 5, 3, 7`.  So the chip works under QNX with exactly the software/board state
 we have reproduced; the remaining difference is not in a QNX file.
 
-**Not in the list above (new in report 191): the QNX `startup-playbook`/BSP.**
-The 1917 boot image contains a `startup-playbook` binary (`0x44008` bytes at
-image offset `0x908`, source `hwi_omap4430.c`) that was never audited.  It is
-the likely source of the QNX-only GPIO outputs (GPIO1 bits 0/4/15/18/28/31,
-GPIO2 bits 5/7) and possibly the TWL `CLK32KG` setup.  This is the next static
-task.
+**The QNX `startup-playbook`/BSP audit is DONE (session 35, report 192, trap
+135).**  The `startup.*` entry (`0x44008` bytes at imagefs `0x908`, raw ARM at
+`0x80100000`) is the **source of the QNX-only GPIO outputs**: its Winchester
+board GPIO table (image `0x80122750`, 75 records) marks `GPIO1` bits
+0/4/15/18/28/31 and `GPIO2` bits 5/7 as **outputs driven low**, and `gpio 54`
+(WL_EN) output-low / `gpio 53` (WL_IRQ) input/falling.  That is the live QNX OE
+subset exactly.  It also builds the syspage `WLAN` node and sets WDT2 to
+`0xFFE2B400`.  It has **no `CLK32KG` write**.  Both-OS reads: `0x8C`–`0x8E` =
+QNX `01/05/05`, Linux `07/05/55`; `CFG_TRANS` (`0x8D`) is identical and
+`CFG_STATE` (`0x8E`) is APP-ON in both (CON/MOD differ), so the 32 kHz clock is
+enabled in APP in both (report 180's labels corrected).  The S3 bench
+(report 192 §8) then released all eight QNX-only GPIO outputs on the live 1917
+and the chip stayed up (**all negative**, trap 136).  H1 (report 192 §9) then
+built and booted the exact CMD0 → CMD5-only, 24 MHz, arg `0x00FFFF00` sequence
+and the card still timed out (**negative**, trap 137).  **The software surface is
+exhausted; do not re-open any of these leads.**
 
 **Do not re-open this list.**  If none of it yields a WLAN rail/clock (it does
 not), the remaining evidence is the chip's BGA pins or the MMC5 bus — a
@@ -251,6 +306,11 @@ step 5, or obtain the hardware.
   live syspage `WLAN` node is only EN/INT, and no QNX software layer names a
   rail or clock.  **The software stop condition is met; what remains needs
   external evidence** (schematic/board view or logic analyser).
+* **Delivered in session 35:** S1 (`startup-playbook` is the source of the
+  QNX-only GPIOs), S2 (`CLK32KG` APP-ON in both; `0xB0` = REGEN2; `0xBC`
+  unnamed), S3 (all eight GPIOs negative) and H1 (CMD0 → CMD5 only still
+  times out) — report 192, traps 135–137.  **The software surface is exhausted;
+  only the chip-side measurements remain.**
 
 ## 1a. Tools that make this cheap
 
@@ -272,6 +332,14 @@ step 5, or obtain the hardware.
   push it to `/tmp`, run `/tmp/qnx-hwi WLAN` (or `all`).  Read-only; the
   `-static` is required (trap 131).
 * `tools/env.sh` — both cross-toolchains; `tools/env.sh --check`.
+* **Static RE:** the REA MCP server exposes **Ghidra 12.1.4** (`open_binary`,
+  `binary_overview`, `analyze_function`, `procedure_pseudo_code`,
+  `search_strings`, `xrefs`, `read_bytes`).  Raw ARM import:
+  `open_binary(path=…, format="raw-binary", architecture="arm",
+  entry_point="0x80100000")`.  Reconcile addresses with
+  `ntoarmv7-readelf`/`objdump` — Ghidra may add `+0x10000` on an ELF; the QNX
+  toolchain is ground truth.  QNX device tools build `-static` (trap 131).
+  See `DEVELOPMENT.md` §7a.
 
 ## 1b. The follow-on: item 9 step 5 (audio + touch)
 
@@ -479,6 +547,8 @@ Full text: `KNOWN-ISSUES.md` §2.  The ones that end sessions:
 | QNX-side WL1283 RE | `docs/reports/189-wl1283-qnx-side-re-2026-11-08.md` |
 | WL1283 fresh-eyes dossier | `docs/reports/190-wl1283-dossier-2026-11-08.md` |
 | WL1283 external review + next plan | `docs/reports/191-wl1283-external-review-2026-11-08.md` |
+| WL1283 startup-playbook audit + S1/S2/S3/H1 | `docs/reports/192-wl1283-startup-playbook-audit-2026-11-08.md` |
+| TWL6030 both-OS register captures | `docs/captures/twl6030-linux-2026-11-08.txt`, `docs/captures/twl6030-qnx-2026-11-08.txt` |
 | images, sealed IFS, backups | `local/images/` (gitignored) |
 | 6.15.11 reference tree | `local/kernel-tree-6.15.11/` |
 | OMAP4430 TRM (text) | `hardware/swpu231ap.pdf.txt` (untracked/local) |
@@ -499,24 +569,23 @@ Full text: `KNOWN-ISSUES.md` §2.  The ones that end sessions:
 * **One variable per boot**; the whole-map diff is the highest-yield technique.
 * **Update the docs as you go**; `STATE.md` and `KNOWN-ISSUES.md` go stale first.
 * **Restore the sealed IFS at the end of every session** unless the operator
-  ends on our image.  Session 34 ended on the known-good `0xE36C679A` (region 0
-  restored after the QNX read); region 0 is the only region that needs
+  ends on our image.  Session 35 ended on the known-good `0xE36C679A` (region 0
+  restored after the S3/H1 bench); region 0 is the only region that needs
   restoring.
 
 ## 6. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 35 (absolute; Linux-era 29)
+PlayBook (OMAP4430 "winchester") — session 36 (absolute; Linux-era 30)
 
 Workspace: this repository — a git checkout.  The earlier work tree
 $HOME/rea-work is READ-ONLY.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md,
 KERNEL-PORT.md (especially §7), ROADMAP.md item 9 (steps 4 and 5),
-KNOWN-ISSUES.md (traps 9-131, especially 105-131), DEVELOPMENT.md sections
-3/3a/4, DECISIONS.md (17-41), reports 176, 180/181/182, 183, 184, 185, 186,
-187, 188 and 189, sessions/session-31.md, session-32.md, session-33.md and
-session-34.md.
+KNOWN-ISSUES.md (traps 9-137, especially 105-137), DEVELOPMENT.md sections
+3/3a/4 and 7a, DECISIONS.md (17-42), reports 176, 180/181/182, 183, 184-192,
+sessions/session-31.md … session-35.md.
 
 WHERE IT STANDS: the patch set is on Linux 7.3.3 and the unit boots it.
 The known-good image is region-0 0xE36C679A
@@ -534,42 +603,30 @@ reproduces the tree byte-for-byte; config kernel/winchester-7.3.3.config
 
 PHYSICAL STATE: THE KNOWN-GOOD IMAGE 0xE36C679A IS IN REGION 0 — region
 1 is the 7.3.3 charger rootfs; the 1917 IFS is NOT on media.
-BOOTCTR_FCTRY reads 0x31; the pack is Full (100 %, 4.126 V, +265 mA,
-ISL9519 Charging).  To return to TabletOS, flash region 0 only:
+BOOTCTR_FCTRY reads 0x2f; the pack is Full (100 %, 4.152 V).
+To return to TabletOS, flash region 0 only:
 tools/bbusb.py flash --component local/work/ifs-shim-sealed.ifs
 --dest-block 0x825 --from-bootrom --password 0000 --apply, then re-read
 /dev/rpmb/BOOTCTR_FCTRY.  Do NOT restore local/images/ifs0.sealed.bin
 (2.0.0.4869, trap 84).
 
-NEXT WORK: the WL1283 is KEPT OPEN by the operator (session 34).  Read reports
-190 (dossier) and 191 (external review + corrections).  Work in this order:
-  S1. Audit the QNX `startup-playbook` binary (1917 boot image, offset 0x908,
-      size 0x44008, source hwi_omap4430.c) for GPIO1/GPIO2/TWL/CLK32KG init.
-      It never runs under our chainloader and is the likely source of the
-      QNX-only GPIO outputs.
-  S2. Decode the TWL6030 0xBC-0xBE (CLK32KG group/transition/state) and the
-      other 9 differences (0x00,0x01,0x20,0x2D,0xB0,0xB1,0xB2,0xE4,0xF4,0xFA)
-      on both OSes.  The datasheet is hardware/twl6030.pdf.
-  S3. On the live 1917, bisect the QNX-only GPIO outputs one at a time
-      (GPIO1 bits 0/4/15/18/28/31, GPIO2 bits 5/7): flip OE to input, check
-      ti0/DATAIN bit 21/scan results, restore with ifconfig ti0 down/up.
-  H1. For the 480d5000 host, send CMD0 -> CMD5 ONLY: re-add the custom
-      NO_SDIO_RESET quirk at the sdio_reset() call site (it is NOT upstream
-      and not in the current tree), set
-      MMC_CAP2_NO_SDIO_RESET | MMC_CAP2_NO_SD | MMC_CAP2_NO_MMC, plus
-      omap_hsmmc.init_hz=24000000 and omap_hsmmc.sdio_ocr_quirk=1 (CMD5 arg
-      0x00FFFF00).  Do NOT set MMC_CAP2_NO_SDIO (it skips CMD5).  Record
-      HCTL/CAPA/SYSCTL/PSTATE/STAT before/after and the raw R4 response.
-      H2 is withdrawn: MMC5 has no ti,dual-volt, so it always uses SDVS18;
-      the 3.3 V dummy vmmc is OCR only.  Verify HCTL=0x00000B00 and CAPA VS18.
-Then the chip-side measurements (VBAT/TCXO/SLOW_CLK, MMC5_CLK/CMD/DAT0) with
-a board view or logic analyser.  The QNX software surface is otherwise COMPLETE
-(report 189): no rail/clock/pad; the live syspage WLAN node is only
-WLAN_EN_GPIO=54,WLAN_INT_GPIO=53.  Do NOT repeat traps 116-134.  If the
-WL1283 is later stopped, step 5 (WM8994 audio + CY8CTMA3 touch, report 176)
-follows.  The USB warm-reset regression was the session-32 WL_EN reset pulse
-and is fixed by removing it (trap 130).  hd3/BB10/PlayBook OS work remain
-parked.
+WHERE THE WL1283 IS: the software surface is EXHAUSTED.  Session 35 finished:
+  S1 — startup-playbook is the source of the QNX-only GPIOs (report 192 §4,
+       trap 135): GPIO1 0/4/15/18/28/31 and GPIO2 5/7 are outputs driven low,
+       gpio54 (WL_EN) output-low, gpio53 (WL_IRQ) input/falling.
+  S2 — CLK32KG is base 0x8C and APP-ON in both (report 192 §7): CFG_TRANS
+       (0x8D) is identical; CFG_STATE (0x8E) CON/MOD bits differ; CFG_GRP
+       (0x8C) differs.  0xB0-B2 is REGEN2 (display rail); 0xBC-BE is an
+       unnamed non-regulator resource (not CLK32KG).
+  S3 — all eight QNX-only GPIOs released to input on the live 1917: negative
+       (trap 136).
+  H1 — CMD0 -> CMD5 only, 24 MHz, arg 0x00FFFF00: still err=-110 resp0=0;
+       HCTL=0x00000b00, CAPA=0x04e10080 (trap 137, image 0x29784F48).
+What remains is CHIP-SIDE: VBAT/TCXO/SLOW_CLK and MMC5_CLK/CMD/DAT0 with a
+board view or logic analyser.  If the WL1283 is formally stopped, item 9 step 5
+(WM8994 audio + CY8CTMA3 touch, report 176) follows.  Do NOT repeat traps
+116-137.  H2 is withdrawn: MMC5 has no ti,dual-volt, so it always uses SDVS18;
+the 3.3 V dummy vmmc is OCR only.  hd3/BB10/PlayBook OS work remain parked.
 
 HARDWARE RE RULE: OS 2.x only (live 1917 oracle, the 1917 /base QNX6 image,
 the 1917 IFS tree, the 4869 IFS dump).  Never use BB10 images for PlayBook
@@ -597,6 +654,13 @@ the operator to run the chmod.  Run the USB/flash tools as the USER — never
 pkexec.  The device password is 0000, sent once, never retried.  Rebuild the
 QNX oracle tools after `. tools/env.sh`: pbmem3 = `ntoarmv7-gcc -O2 -o
 /tmp/pbmem3 tools/memdump3.c`, and /tmp is wiped on reboot.
+
+STATIC RE: the REA MCP server exposes Ghidra 12.1.4 (`open_binary`,
+`binary_overview`, `analyze_function`, `procedure_pseudo_code`, `search_strings`,
+`xrefs`, `read_bytes`); raw ARM import `format=raw-binary, architecture=arm,
+entry_point=0x80100000`.  Reconcile addresses with `ntoarmv7-readelf`/`objdump`
+(Ghidra may add +0x10000 on an ELF); QNX device tools build `-static`.
+See DEVELOPMENT.md §7a.
 
 SAFETY: read SAFETY.md first.  One variable per boot.  Flash region 0 only
 when only it changed; flash both regions in one bootrom session only when

@@ -52,6 +52,26 @@ are negative for CMD5, and the pulse caused the USB warm-reset enumeration
 regression (trap 130).  The final image `0x0353A241` enumerates by itself; the
 patch is **7 258 lines / 47 files**, sha256 `e7b7fc2e…`.
 
+**Session-35 S1 — the QNX `startup-playbook` audit is DONE (report 192, trap
+135).**  The binary's Winchester board GPIO table marks **`GPIO1` bits
+0/4/15/18/28/31 and `GPIO2` bits 5/7 as outputs driven low**, plus `gpio 54`
+(WL_EN) output-low and `gpio 53` (WL_IRQ) input/falling — exactly the live QNX
+OE subset report 191 computed.  Linux never runs startup, so that is the source
+of the QNX-only outputs.  Startup also builds the syspage `WLAN` node
+(`WLAN_EN_GPIO=54,WLAN_INT_GPIO=53`) and sets `WLDR = 0xFFE2B400` (58.6 s); it
+has **no `CLK32KG` write** (voltage setup is the OMAP PRM VC).  **S3 was then
+run on the live 1917 and is negative for all eight lines** (GPIO1
+0/4/15/18/28/31, GPIO2 5/7): each OE flip to input sticks, but `ti0` stays
+UP/RUNNING and `DATAIN` bit21 = 1 (trap 136).  **S2 is answered on both
+OSes:** `0x8C`/`0x8D`/`0x8E` = `CFG_GRP`/`CFG_TRANS`/`CFG_STATE` = QNX
+`01/05/05`, Linux `07/05/55`; `CFG_TRANS` identical and `CFG_STATE` APP-ON in
+both (CON/MOD differ), so **the 32 kHz lead is closed**; `0xB0`–`0xB2` is **REGEN2**
+(display rail); `0xBC`–`0xBE` is an unnamed non-regulator resource.  **H1 was
+then built and booted and is negative** (image `0x29784F48`: CMD0 → CMD5 only,
+24 MHz, arg `0x00FFFF00` still times out; `HCTL=0x00000b00`,
+`CAPA=0x04e10080`; trap 137).  **The software surface is exhausted; only the
+chip-side measurements remain.**
+
 ## 1. Force the complete QNX timing set as ONE experiment — **DONE, negative**
 
 Forced together and read back: `DISPC_TIMING_H = 0x0890A113`,
@@ -516,6 +536,14 @@ HANDOFF §1.4 listed was read statically:
 **So no QNX software layer names a WLAN rail, clock or extra pad.  The
 remaining difference is the chip's non-exposed power/clock pins or OMAP HSMMC
 sampling; a schematic/board view or logic analyser is required.**
+
+**Session-35 software close — S1/S2/S3/H1 all negative (report 192, traps
+135–137).**  `startup-playbook` is the source of the QNX-only GPIOs; all eight
+released to input on the live 1917 leave the chip up; `CLK32KG` is base `0x8C`
+and APP-ON in both; and H1 (CMD0 → CMD5 only, 24 MHz, arg `0x00FFFF00`) still
+times out (`HCTL=0x00000b00`, `CAPA=0x04e10080`).  **Only the chip-side
+measurements remain** (VBAT/TCXO/SLOW_CLK, MMC5_CLK/CMD/DAT0); the decision
+table is `HANDOFF.md` §0c.
 
 **Plan (one variable per boot):**
 0. **Power/charging — CLOSED 2026-11-08 (session 31).**  The board's charger

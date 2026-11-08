@@ -441,6 +441,38 @@ instead of the bootrom you just left (report 103 §6.3). The `BOOTCTR` line is a
 `memdump3`/`memw32`/`memtest` sources are in `tools/`; the device copies live
 outside the repo and are pushed the same way.
 
+## 7a. Static reverse engineering: REA MCP + Ghidra (and the QNX toolchain as ground truth)
+
+The session's MCP server **REA 6.7.0** exposes a Ghidra 12.1.4 provider
+(`/home/psyden/tools/ghidra_12.1.4_PUBLIC`).  Use it for decompilation and
+cross-references instead of hand-reading `objdump` output:
+
+```
+open_binary(path="/tmp/startup-playbook.bin", format="raw-binary",
+            architecture="arm", entry_point="0x80100000")   # raw ARM: file 0 -> 0x80100000
+binary_overview()                         # procedure/string counts, segments
+analyze_function("0x8010cb9c")            # pseudocode + assembly + calls + refs
+procedure_pseudo_code("0x8010ccf4")       # Ghidra decompiler
+search_strings("WLAN_EN_GPIO")            # defined strings
+search_procedures("regen")                # function names
+xrefs(address="0x80122750")               # incoming references
+read_bytes(address="0x801293f8", length=48)
+```
+
+* Ghidra auto-analysis must report complete before an operation returns; the
+  imported Program/temporary project is **ephemeral** (nothing is written back).
+* **Addressing caveats.**  A raw-binary import maps file offset 0 at
+  `entry_point`; for an ELF, Ghidra may load it at `file VA + 0x10000` (report
+  189's `hwio-omap4.so`/`pmic-winchester-twl6030` were quoted that way).
+  Reconcile every address with **`ntoarmv7-readelf -l/-S` / `objdump`** — the QNX
+  6.6 toolchain is the ground truth for ELF VAs and file offsets, Ghidra for the
+  decompiled logic.
+* QNX tool builds that run on the device should be **`-static`** (trap 131: the
+  2014 libc does not export `hwi_off2tag`/`hwi_next_tag`/`__hwi_find_string`).
+* The session-35 `startup-playbook` audit (report 192) is the worked example: a
+  raw ARM image at `0x80100000`, `procedure_pseudo_code` for the GPIO/pad/board
+  routines, and a content scan for the 32-byte GPIO table.
+
 ## 8. Loop discipline
 
 * **Judge the panel only after `fb <rrggbb>`.** A black framebuffer and a dead

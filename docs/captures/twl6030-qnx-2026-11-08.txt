@@ -1,0 +1,59 @@
+# TWL6030 register reads on the live TabletOS 2.1.0.1917 (session 35)
+# 2026-11-08.  READ-ONLY (pbi2c dump; no writes).
+# Bus 0 (/dev/i2c0, I2C1 0x48070000), slave 0x48.
+# Tool: tools/pbi2c, pushed to /tmp and built into the 1917 bench boot.
+# Device: QNX 6.6.0, OMAP4430_ES2.2_HS_Winchester_Rev:07, ti0 UP/RUNNING.
+
+# --- CLK32KG block (kernel clk-twl.c: clk32kg base 0x8C) ---
+8c=0x01
+8d=0x05
+8e=0x05
+8f=0x13
+
+# --- session-29 difference candidates on QNX ---
+00=0x19
+01=0x50
+20=0xc0
+2d=0x02
+
+# --- resource block 0xB0-0xC0 ---
+b0=0x00
+b1=0x01
+b2=0x00
+b3=0x07
+b4=0x05
+b5=0x55
+b6=0x07
+b7=0x05
+b8=0x55
+b9=0x07
+ba=0x05
+bb=0x55
+bc=0x07
+bd=0x05
+be=0x55
+bf=0x07
+c0=0x01
+
+# --- 0xE4/0xF4/0xFA ---
+e4=0x07
+e5=0x10
+e6=0x52
+f4=0x7f
+f5=0x01
+f6=0x7f
+fa=0x00
+
+# --- Linux side (same boot pair, docs/captures/twl6030-linux-2026-11-08.txt) ---
+# 8c=0x07 8d=0x05 8e=0x55 8f=0x13   CLK32KG (base 0x8C): CFG_GRP 0x8C
+#                                     (QNX 01 vs Linux 07), CFG_TRANS 0x8D
+#                                     (05 in BOTH), CFG_STATE 0x8E (QNX 05 vs
+#                                     Linux 55; APP bits 3:2 = 01 in both ->
+#                                     APP-ON; the differing bits are CON/MOD).
+# b0=0x07 b1=0x05 b2=0x55           REGEN2 (QNX driver table base 0xB0):
+#                                     QNX 00/01/00 (off, GPIO-controlled on
+#                                     DVT3+) vs Linux 07/05/55 (TWL on).
+# bc=0x07 bd=0x01 be=0x00           a non-regulator control resource:
+#                                     QNX 07/05/55 (on) vs Linux 07/01/00 (off).
+#                                     NOT CLK32KG; identity still open.
+# 00=0x52 01=0x10 20=0xe0 2d=0x82  e4=0x07 f4=0xff fa=0x01

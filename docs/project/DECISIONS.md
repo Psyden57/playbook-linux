@@ -1173,6 +1173,66 @@ A/B.
 
 ---
 
+## 42. The QNX-only GPIO outputs are a startup-playbook action; S3 starts with gpio31 (session 35)
+
+**Decision.**  Treat the QNX-only `GPIO1` bits 0/4/15/18/28/31 and `GPIO2`
+bits 5/7 as **deliberate `startup-playbook` board outputs**, not a side effect
+of FREF or the WLAN driver.  The S3 bisect therefore tests exactly those lines,
+one OE bit at a time, and starts with **`gpio31`** (`gpio_wk31`, WKUP pad
+`0x4A31E058`, mux 3, input buffer off).  Do not re-open the QNX-side software
+inventory for a WLAN rail/clock (report 189 stands); this is a *pin-state*
+difference, not a power-service one.
+
+**Why.**  The unaudited `startup.*` (`0x44008` bytes at imagefs `0x908`, raw ARM
+at `0x80100000`) applies a runtime-selected board GPIO table whose Winchester
+entries mark those GPIOs `direction=1` (output), level 0 (driven low), plus
+`gpio 54` (WL_EN) output-low and `gpio 53` (WL_IRQ) input/falling.  That is
+byte-for-byte the live QNX OE subset report 191 computed.  Linux's chainloader
+never runs startup, so the lines remain inputs/floating.  `gpio31` is the most
+plausible board control (WKUP ball, input buffer off) and is the cheapest
+single-line test.
+
+**Evidence.**  Report 192; the Winchester table at image `0x80122750` (75
+32-byte records); `FUN_8010cb9c` (GPIO) and `FUN_8010ccf4` (pad) decompiled;
+the live `GPIO1_OE = 0x6FFB1FAA` / `GPIO2_OE = 0xCE3ECD5F` match.  Startup has
+**no** `CLK32KG` write (PMIC voltage setup is the OMAP PRM VC, `FUN_80107748`).
+**S3 (session 35) released all eight lines on the live 1917 and every one is
+negative** (trap 136), so this is a real but non-causal board-state
+difference.  Both-OS TWL reads show `CLK32KG` `CFG_STATE` (`0x8E`) APP-ON in
+both (`CFG_TRANS` identical; `CFG_GRP` and the CON/MOD state bits differ;
+`0xB0` is REGEN2, `0xBC` an unnamed resource), so the 32 kHz lead is closed
+(`docs/contradictions/twl-clk32kg-…`).
+
+**Constraint.**  One variable per boot; restore OE with `ifconfig ti0 down/up`
+and the saved word; never leave a line driven wrong.  Do not re-add the WL_EN
+reset pulse (trap 130).  The chip-side measurements still follow if the bisect is
+negative.
+
+---
+
+## 43. H1 is negative; the WL1283 software surface is exhausted (session 35)
+
+**Decision.**  Do not run further host-side SDIO experiments for the WL1283.
+The exact reference sequence — CMD0 → CMD5 only (no CMD52, no CMD8), 24 MHz,
+CMD5 arg `0x00FFFF00`, `HCTL = 0x00000B00` (SDVS18|SDBP) — still times out
+(`err=-110`, no R4).  The remaining work is the chip-side measurement
+(VBAT/TCXO/SLOW_CLK, MMC5_CLK/CMD/DAT0) with a board view or logic analyser; if
+the item is stopped, item 9 step 5 (audio/touch) follows.
+
+**Why.**  H1 (image `0x29784F48`) matched the reference's SDIO init in sequence
+and clock, and the card is silent from CMD5 (the first response-required
+command).  S3 (trap 136) and S2 (trap 135; `CLK32KG` APP-ON in both) are also
+negative, so the difference is not host-visible.
+
+**Evidence.**  Report 192 §9; log `local/logs/boot-H1-0x29784F48.log`; the four
+H1 source hunks are recorded in the report and were reverted after the test;
+trap 137.
+
+**Constraint.**  The H1 image is not the known-good baseline; the unit is back on
+`0xE36C679A` (region 0).  Do not repeat traps 116–137.
+
+---
+
 These were the open policy questions.  The licence and visibility are decided
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.

@@ -34,11 +34,11 @@ note after it is what a reader needs before opening the file.
 | `rpmb-page-rodata-contents.md` | **open (mechanism); contents measured** — report 92 says `page+0x20/+0x40` hold the `.rodata` constants, report 141 says nothing writes them; the live page measures the constants, but who writes them is unknown (session 19) |
 | `safety-no-emmc-mount-vs-readonly-root.md` | **resolved (session 17), extended (session 18)** — read-only eMMC/QNX6 mounts are allowed; the operator has now dropped the blanket writable-eMMC prohibition **for our own data** (NVRAM, the MCT, and dangerous RPMB still forbidden).  Rule in `SAFETY.md` §4/§6, decisions `DECISIONS.md` §17/§18; `hd3` to be repurposed (report 141) |
 | `touch-bus-i2c2-vs-i2c3.md` | **open** — the 1917 touch stack opens `/dev/i2c2` (QNX I²C3 `0x48060000`, which QNX does not instantiate) while the live QNX scan saw the touch's `0x65` on `/dev/i2c1` (I²C2 `0x48072000`); `muninfw`'s default address is `0x65`.  Settle it with read-byte `i2cdetect -y -r 2` and `-r 3` on the Linux image |
-| `twl-clk32kg-on-both-vs-0xbd-be-difference.md` | **open** — report 180 says `CLK32KG` is ON in both; session 29's 12-difference list includes TWL `0xBD`/`0xBE`, which response3 maps to the `CLK32KG` `TRANS`/`STATE` registers.  The bytes were never read.  Settle it by reading `0xBC`–`0xBE` on both OSes and decoding the TWL6030 resource map (report 191 §1.2) |
+| `twl-clk32kg-on-both-vs-0xbd-be-difference.md` | **resolved 2026-11-08 (session 35, report 192 §7)** — `CLK32KG` is base `0x8C` (`CFG_GRP`/`CFG_TRANS`/`CFG_STATE` = `0x8C`/`0x8D`/`0x8E`), not the FreeBSD `0xBC`.  QNX `01/05/05` vs Linux `07/05/55`: `CFG_TRANS` identical, `CFG_STATE` APP-ON in both (CON/MOD bits differ), `CFG_GRP` differs.  `0xBC`–`0xBE` is a different, still-unnamed non-regulator resource |
 
 ## Still open — keep these in mind
 
-Seven files have a genuinely open question left; none of them blocks the
+Six files have a genuinely open question left; none of them blocks the
 IFS rebuild, but each changes how a result should be read:
 
 1. **`expired-counter-nuke-vs-retry-halt.md`** — what an out-of-range
@@ -65,12 +65,9 @@ IFS rebuild, but each changes how a result should be read:
    OMAP I²C2 `0x48072000` (where QNX saw `0x65`) or I²C3 `0x48060000` (the
    library's `/dev/i2c2`).  *Would settle it:* read-byte `i2cdetect -y -r 2`
    and `-r 3` on the Linux image, before and after the decoded reset pulse.
-7. **`twl-clk32kg-on-both-vs-0xbd-be-difference.md`** — whether the TWL6030
-   `CLK32KG` resource is really configured the same under QNX and Linux.  The
-   "ON in both" statement and the `0xBD`/`0xBE` differences have not been
-   reconciled.  *Would settle it:* read `0xBC`–`0xBE` on both OSes, decode the
-   TWL6030 resource map, and compare group/transition/state; measure the
-   32.768 kHz at the chip if it stays ambiguous.
+
+Residual from the resolved `twl-clk32kg` file: the `0xBC`–`0xBE` resource's
+**name** is still open (needs `SWCU084`); `CLK32KG` itself is settled.
 
 Two smaller residuals, not contradictions in their own right:
 `66` still does not prove that the `0xDE` `count` field *is* the RPMB record, and
@@ -89,7 +86,6 @@ unidentified.
   (resolved); **bridge programming** → `111-vs-122-bridge-programming.md`
   (resolved); **timing-field split** → `open-dispc-dsi-timing-fields.md`
   (falsified); the byte order is `111-vs-123-tcon-byte-order.md` (resolved).
-* WL1283/PMIC (open): `twl-clk32kg-on-both-vs-0xbd-be-difference.md` asks
-  whether the 32 kHz `CLK32KG` resource is configured the same under QNX and
-  Linux; it is a PMIC read/decode, not a contradiction with the WLAN driver
-  findings.
+* WL1283/PMIC (resolved 2026-11-08): `twl-clk32kg-on-both-vs-0xbd-be-difference.md`
+  — `CLK32KG` is APP-ON in both; the `0xBC`–`0xBE` resource is a different,
+  still-unnamed resource (identity open).
