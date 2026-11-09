@@ -88,7 +88,7 @@ report 121 §3/§11/§12.
 30. **`--reuse-loader` can fail** (`set_mode(2) failed`) and strand the bootrom with a **red blinking LED**; recover with a plain `--template-ifs <sealed>` flash, no power cycle needed.
 31. **Non-burst DSI video mode is rejected at this pixel clock** — `[drm] Cannot find any crtc or sizes`, no `/dev/fb0`, DSS stays in standby. Keep BURST.
 32. **`pgrep -f`/`pkill -f` match your own command line** — use `ps -ef | grep '[p]re_os_ifs_flash'`.
-33. **A wedged image used to reset-loop every ~7.8 s, and every iteration was another factory boot.**  Since session 15 `/init` no longer reboots itself, so this only applies to an old image.  A wedged *new* image stays up and costs one unit; the restore flasher's `--delay` is still what catches a loop instead of a stale bootrom.  Read the counter at both ends of a cycle, and treat a `0x32` reading as "the top-up ran", not as "nothing was spent" (`SAFETY.md` §2, report 109 §8.1, session-10 §3).
+33. **A wedged image used to reset-loop every ~7.8 s, and every iteration was another factory boot.**  Since session 15 `/init` no longer reboots itself, so this only applies to an old image.  A wedged *new* image stays up and costs one unit; the restore flasher's `--delay` is still what catches a loop instead of a stale bootrom.  Read the counter at both ends of a cycle, and treat a `0x32` reading as "the top-up ran", not as "nothing was spent" (`SAFETY.md` §2, report 109 §8.1, session-10 §3).  **On current images the counter self-replenishes** (our Linux `/init` top-up and the TabletOS `startup.sh`), so this is a health check, not a budget to conserve.
 34. **QNX's `-t/-T` bridge self-test leaves the panel in a grey vertical-line test pattern.**  It is a diagnostic, not part of the display path; do not run it at boot.  To make it run, `winch_lcdctl power_off` first, then `winch_lcdctl -t <n> power_on`; `-T 1` alone returns before the test.  While it runs, `GPIO2_DATAIN` bit 4 (GPIO36) toggles — that is the valid delivery indicator (report 127 §2).
 35. **`unbind`/`bind` of the TC358764 disables the whole display output**, not just the stream: after the bind, `DSI_CLK_CTRL` loses its PLL power bits, `VC_CTRL(0)` loses `VC_EN`, and `LINE_STATUS` stops.  Frames seen during the bind are the output restarting, not a TCON result.  Judge the panel on a fresh boot, not after an unbind/bind.
 36. **A null packet written to `VC_SHORT_PACKET_HEADER(vc)` in *video* mode never completes.** `PACKET_SENT` times out (`polls=2000`).  The reference's clock-start packet needs VC0 in **command** mode (bit 4 = 0) with `MODE_SPEED` (bit 9) set; `0x20800791` is the wrong word (bit 4 = 1) and hangs the wait.
@@ -895,6 +895,64 @@ report 121 §3/§11/§12.
       patch) — do not mistake the missing line for a different failure.
       (Session 37, report 196.)
 
+144. **A 64-bit divide in kernel C on 32-bit ARM needs `div_s64()`, not `/`.**
+      `munin_map()`'s first build used `s64 num / span` and the link failed with
+      `undefined reference to __aeabi_ldivmod` (`drivers/input/touchscreen/
+      playbook-munin.o`).  Include `<linux/math64.h>` and call `div_s64()` (or
+      `div64_s64()`); the compiler runtime is not linked into the kernel.
+      (Session 38, report 198.)
+
+145. **Root SSH works on 2.1.0.1917, but only after the door-hold has uploaded
+      the key.**  A cold TabletOS boot's first `tools/pbssh.sh` attempts (default
+      `root`) fail with `Permission denied (publickey,password)`; the same script
+      succeeding as `devuser` is *not* evidence that root is disabled — the door
+      handshake had simply completed between attempts.  Start
+      `setsid tools/door-hold.sh`, wait for it to connect, then retry as root.
+      The old "1917 only accepts devuser" comment in `tools/pbssh.sh` was wrong.
+      (Session 38; operator correction.)
+
+146. **The Munin touch IRQ fires at the controller's report rate (~330–380/s)
+      with no finger — that is not noise.**  The driver reads the 18-byte report
+      on every falling edge; the read releases the line and the next report pulls
+      it down again.  Prove it by unbinding the driver
+      (`echo 1-0065 > /sys/bus/i2c/drivers/playbook-munin/unbind`): the
+      `/proc/interrupts` count freezes; rebinding resumes it.  The vendor library
+      attaches an ISR too (`tp_intr_attach`).  Do not chase it as an electrical
+      fault; the 20 ms poll is the fallback if the IRQ request fails.
+      (Session 38, report 198.)
+
+147. **`SND_SOC_WM8994` has no Kconfig prompt; `scripts/config -e` does not
+      enable it.**  The symbol is `tristate` with only `depends on MFD_WM8994`
+      and no description, so `olddefconfig` silently drops a hand-set value.
+      It must be `select`ed by a machine driver (the samsung/fsl boards do
+      this); add a board `sound/soc/ti/Kconfig` entry that selects it (and
+      `SND_SOC_OMAP_MCBSP`).  Similarly, `CONFIG_SND` is capped at `m` unless
+      `CONFIG_SOUND=y` — a built-in sound core needs both.  (Session 38,
+      report 199.)
+
+148. **Enabling `&l4_abe` hangs on the WD_TIMER3 target (0x40130000) in
+      ti-sysc, right after its revision read.**  The board DTS therefore
+      keeps `&l4_abe { status = "disabled"; }`, but the McBSP1/2/3 audio
+      peripherals are inside that segment.  The WD target
+      (`target-module@30000`) has **no label** (only its child `wdt3:
+      watchdog@0` does); label the target in `omap4-l4-abe.dtsi` and keep it
+      `status = "disabled"` while enabling the segment.  Attack this one
+      variable per boot: the loader's WDT2 is 7.8 s until the kernel's late
+      reprogram, so a deterministic hang can reset-loop and drain
+      `BOOTCTR_FCTRY`; keep a known-good image ready.  (Session 38, report
+      199.)
+
+149. **Do not build the ASoC card/codec/McBSP into the kernel: the card
+      registration delays the USB gadget enough to break self-enumeration.**
+      The built-in `asoc-simple-card` probe took ~1.3 s (3.35 s → 4.63 s) and
+      the host configured the gadget only after a physical replug — the
+      trap-141 class again.  Build `MFD_WM8994`, `SND_SOC_WM8994`,
+      `SND_SOC_OMAP_MCBSP` and `SND_SIMPLE_CARD` as modules and load them from
+      the region-1 `rcS` **after** the initramfs gadget is up.
+      `snd-soc-simple-card` also needs `snd-soc-simple-card-utils.ko` or it
+      fails with a page of `Unknown symbol simple_util_*` errors, and the card
+      never registers.  (Session 38, report 199.)
+
 ## 3. Corrections to older reports
 
 These twenty-one are preserved deliberately. Each is newer than the text it
@@ -1129,6 +1187,18 @@ decrements `BOOTCTR_FCTRY`" was an incomplete caller audit — reports 89 §3.5 
   (`118` §8.2, `111` §8 item 4).  The corrections are applied *in place* in those
   two files and listed in §3; the other reports are left as written so the
   section-by-section citations elsewhere still resolve.
+
+### Fixed in session 38 (documentation)
+
+* **`tools/pbssh.sh` claimed the 1917 image "only accepts devuser".**  Root
+  works (`uid:0 euid:0`); the early `Permission denied (publickey,password)` was
+  the door-hold key upload not yet done.  The comment now says so.  (Session
+  38; operator correction.)
+* **The boot-budget prose read as if every test boot were a budget risk.**  The
+  Linux `/init` tops `BOOTCTR_FCTRY` up at ≤`0x1e` and TabletOS writes `0x32`,
+  so the counter self-replenishes; `SAFETY.md` §2, `STATE.md`, trap 33 and
+  `HANDOFF.md` now say so, with the hard hazards unchanged.  (Session 38;
+  operator direction.)
 
 ### Fixed in session 35 (documentation)
 

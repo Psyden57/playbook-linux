@@ -1391,6 +1391,95 @@ it matters for the post-enumeration `wl12xx` bring-up, not CMD5).
 
 ---
 
+## 47. The touch uses the 1917 scaling.conf calibration and the GPIO2_3 edge IRQ (session 38)
+
+**Decision.**  Map the Munin report's 12-bit raw coordinates through the 1917
+vendor calibration in `etc/system/config/scaling.conf`
+(`1024x600:mode=calib`, raw `x 172→1108` → display `102→922`, raw `y 110→658`
+→ display `60→540`), driven from DT properties
+(`rim,x-calibration`, `rim,y-calibration`, `touchscreen-size-x/y`), and clamp
+to the 1024×600 panel.  Wire the IRQ as **gpio 35 = GPIO2_3**, CORE pad
+**`0x056` (`gpmc_ad11`)**, mux 3 / input / pull / falling (`0x410b`), with
+`interrupts = <3 IRQ_TYPE_EDGE_FALLING>` on the `touchscreen@65` node.  Request
+it as a threaded IRQ after the controller enters app mode; fall back to the
+20 ms poll if the request fails.
+
+**Why.**  `scaling.conf` is the vendor's own mapping and its first valid
+`1024x600` entry is `calib`; the `disp_*` endpoints are inset calibration
+targets, so stretching the raw range across the panel would shift the touch.
+The IRQ number is the documented QNX `1000 + gpio` convention
+(`tp_intr=1035`), and the 1917 `gpio_config` record for gpio 35 is
+input/falling/pull (signal `0x16`), the same class as `WL_IRQ`.  The pad offset
+is confirmed by mainline OMAP4 names (`0x054` = `gpmc_ad10` = gpio_34, `0x058`
+= `gpmc_ad12` = gpio_36).
+
+**Constraint.**  The IRQ fires at the controller's active report rate
+(~330–380/s with no finger); that is the chip, not noise — unbinding the driver
+freezes the count and rebinding resumes it.  The vendor library attaches an ISR
+too (`tp_intr_attach`).  The power/reset lines (GPIO1_14 / GPIO4_8) are still
+not driven by the driver; they read output-high after boot and the part answers
+without a pulse.  No RPMB/NVRAM/MCT involvement.
+
+**Evidence.**  Report **198**; the decoded `scaling.conf` line; the 1917
+`gpio_config`/`pad_config` tables; `devmem 0x4A100056 = 0x410B`; the live
+`/proc/interrupts` line and the unbind/rebind freeze; the `event0` drag capture
+(left edge `X 0..7`, top edge `X 86→957` at `Y ≈ 0`).
+
+**Executed (session 38).**  Region-0 image **`0x82FC0D35`** (`0x91A9C4`, kernel
+`7.3.3 #26`) on media; `Munin touchscreen ready (irq 110)` at 3.453 s.
+
+---
+
+## 48. WM8994 audio: ABE + McBSP, with the WD_TIMER3 target off (session 38)
+
+**Decision.**  Bring the WM8994 up on the 1917 layout: the codec on I²C4 `0x1a`
+(16-bit registers), the CPU side on the OMAP4 **ABE/McBSP** (the 1917 driver is
+`deva-ctrl-omap4abe-wm8994`, started as
+`io-audio -d omap4abe-wm8994 aif=0,secure_capture`).  Use a **machine driver** —
+a small board driver or `simple-audio-card` — that `select`s
+`SND_SOC_WM8994` and `SND_SOC_OMAP_MCBSP`, and enable `&l4_abe` with the
+**WD_TIMER3 target (`0x40130000`) disabled**, after labelling that target in
+`omap4-l4-abe.dtsi`.
+
+**Why.**  The codec answers its ID as `0x8994` (report 199).  There is no
+mainline OMAP4+WM8994 machine driver, and `SND_SOC_WM8994` has no Kconfig
+prompt — it is selected by a machine driver, so `scripts/config -e` alone is
+dropped by `olddefconfig`.  The McBSPs are inside `l4_abe`, and the board
+already documents that enabling the segment hangs on the WD_TIMER3 target in
+ti-sysc; the target has no label, so the board DTS cannot disable it today.
+
+**Constraint.**  The codec needs seven supplies
+(`DBVDD/DCVDD/AVDD1/AVDD2/CPVDD/SPKVDD1/SPKVDD2`); map them provisionally to
+the always-on TWL `v1v8`/`v2v1` for the probe, and refine SPKVDD when the
+speaker rail is identified.  **The ABE boot is the risky one:** the loader's
+WDT2 is 7.8 s until the kernel's late reprogram, so a deterministic hang can
+reset-loop and drain `BOOTCTR_FCTRY`; one variable per boot, with
+`0x82FC0D35`/`0xE36C679A` ready to reflash.
+
+**Evidence.**  Report **199**; the live `0x8994` read; `scripts/startup.sh`
+(`SERVICE_audio_winchester`); the 1917 driver's option strings;
+`drivers/mfd/wm8994-core.c` (the supply list); `sound/soc/codecs/Kconfig`
+(hidden symbol); `omap4-l4-abe.dtsi` (McBSP/WD_TIMER3); the board DTS
+`&l4_abe`.
+
+**Executed (session 38) — the ABE segment.**  `wdt3_target` labelled in
+`omap4-l4-abe.dtsi`; board DTS `&l4_abe { status = "okay"; }` +
+`&wdt3_target { status = "disabled"; }`.  Image **`0x50842767`** booted: the
+McBSP1/2/3 targets (`4012208c/4012408c/4012608c`) probe `pm ok`, `40130000`
+(WD_TIMER3) is absent from the probe list, uptime 37 s, `BOOTCTR_FCTRY = 0x30`,
+no hang.
+
+**Executed (session 38) — the machine link, as modules.**  The card is built as
+**modules** (`MFD_WM8994`, `SND_SOC_WM8994`, `SND_SOC_OMAP_MCBSP`,
+`SND_SIMPLE_CARD`, selected by a new `SND_SOC_PLAYBOOK_WM8994` board Kconfig)
+and loaded from the region-1 `rcS` **after** the initramfs USB gadget.  Image
+**`0x3B2ECFED`** + rootfs `07d4e28b…` gives
+`0 [WM8994]: simple-card - PlayBook WM8994`; the unit enumerates by itself.
+Building the stack into the kernel delayed `asoc-simple-card` by ~1.3 s and
+broke USB self-enumeration (trap 149).
+
+---
+
 These were the open policy questions.  The licence and visibility are decided
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.

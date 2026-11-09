@@ -636,11 +636,27 @@ image is `0x0DC36A11`.
    `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`): on the media image `0x04AF1433` the
    controller boots to app mode and `input0`/`event0` reports touches
    (`ABS_MT_SLOT`, `ABS_MT_POSITION_X/Y`).  The probe must not block (trap 141).
-   **Next: the WM8994 audio half**, plus the touch axis calibration/orientation
-   (vendor input 1280×768 → 1024×600 panel) and the IRQ pad.  Wiring: power
-   GPIO1_14, reset GPIO4_8, IRQ GPIO2_3 (polling for now).  **Audio
-   (WM8994 MFD+codec + an OMAP4 McBSP/`l4_abe` machine driver) is the other
-   half of step 5 and has not started** (report 176 §3, HANDOFF §1b).
+   **Touch calibration and IRQ are DONE (session 38, report 198).**  The
+   report's 12-bit coordinates go through the 1917 `scaling.conf`
+   `1024x600:mode=calib` map (raw x 172→1108 → display 102→922, raw y 110→658 →
+   display 60→540, clamped to 1024×600); the IRQ is gpio 35 = GPIO2_3, CORE pad
+   `0x056` (`gpmc_ad11`), `IRQ_TYPE_EDGE_FALLING`, and image `0x82FC0D35`
+   reports `Munin touchscreen ready (irq 110)`.  The IRQ rate is the
+   controller's active report rate (~330–380/s), not noise; the 20 ms poll
+   remains the fallback.  Wiring: power GPIO1_14, reset GPIO4_8, IRQ GPIO2_3;
+   the driver still relies on the post-boot high levels for power/reset.
+   **Audio (WM8994) — STARTED (session 38, report 199).**  The codec ID is
+   confirmed at I²C4 `0x1a` (`0x8994`), but there is no mainline OMAP4+WM8994
+   machine driver and `SND_SOC_WM8994` is a hidden symbol a machine driver
+   must select.  The 1917 stack is `deva-ctrl-omap4abe-wm8994` (ABE + McBSP).
+   The McBSPs are in `l4_abe`, which the board disabled because **WD_TIMER3
+   (0x40130000) hangs ti-sysc**.  **The segment is now DONE:** `wdt3_target` is
+   labelled in `omap4-l4-abe.dtsi`, `&l4_abe` is enabled with that target
+   disabled, McBSP2 is `okay` with the epson pads, and the
+   `simple-audio-card` link is `0 [WM8994]: simple-card - PlayBook WM8994` on
+   image `0x3B2ECFED` (report 199).  The sound stack is modules loaded from
+   `rcS` after the USB gadget (trap 149).  **Remaining:** playback
+   (MCLK/FLL/clocking).
 
 **Closes when:** each peripheral reports data under Linux (IIO/evdev/ALSA/input)
 and survives a reboot; the touch and FAN5702 have a driver; WiFi/BT/GPS are

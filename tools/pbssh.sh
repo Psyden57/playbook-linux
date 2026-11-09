@@ -10,9 +10,11 @@
 #
 # Paths are resolved from this script's own location, so a clone works
 # anywhere.  PB_KEY overrides the private key (default: local/secrets/rsa);
-# PB_USER overrides the login (default: root).  **The 2.1.0.1917 image only
-# accepts `devuser`** — its root method is the 4869 one and is denied; use
-#   PB_USER=devuser tools/pbssh.sh 'uname -a'
+# PB_USER overrides the login (default: root).  **Root works on 2.1.0.1917**
+# (verified session 38: `uid:0 euid:0`), but only after the door-hold handshake
+# has uploaded the key: a cold boot's first attempts get
+# "Permission denied (publickey,password)" until `door-hold.sh` has connected.
+# Do not switch to devuser to work around that — wait for the hold.
 #
 # Usage:  tools/pbssh.sh 'echo OK'
 #         PB_USER=devuser tools/pbssh.sh 'uname -a'

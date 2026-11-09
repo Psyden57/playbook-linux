@@ -116,6 +116,16 @@ reading of `0x32` only means "topped up": while the top-up script was broken it
 wrote `0x00000000` (the brick
 value) and logged "ok" (`docs/contradictions/bootctr-drain-vs-session10-readings.md`).
 
+**In routine bench use the budget maintains itself.**  Our Linux image's
+`/init` runs `pbrpmb topup 0x1E` on every boot (one sealed frame and a
+read-back, never a loop; report 175), and every TabletOS boot writes the record
+back to `0x32` (the operator's `startup.sh`).  A normal test boot therefore
+spends one unit and is replenished at the next boot; **it is not a reason to
+avoid an experiment.**  What still matters is the failure modes below — a value
+of `0`, `> 0x32`, a failed or half-formed write, a store that fails to read
+whole, and a pack too flat to boot.  Read the counter at both ends of a cycle as
+a **health check**, not as a go/no-go budget.
+
 **Power is part of the budget.** A unit on a flat pack can brown out and
 warm-reset on its own, and each such boot spends a counter unit. Session 30
 measured **2.817 V / capacity 0 % / `Critical`** immediately before such a

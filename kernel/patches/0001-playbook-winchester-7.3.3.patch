@@ -143,7 +143,7 @@
  			      <0xb4010 0x4>;
 --- a/arch/arm/boot/dts/ti/omap/omap4-winchester.dts
 +++ b/arch/arm/boot/dts/ti/omap/omap4-winchester.dts
-@@ -0,0 +1,1161 @@
+@@ -0,0 +1,1250 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * BlackBerry PlayBook (RIM "winchester", OMAP4430 ES2.2 HS).
@@ -401,13 +401,23 @@
 +	/*
 +	 * Cypress CY8CTMA3 Gen3 running RIM's Munin protocol.  The driver
 +	 * boots the resident application (report 194) and reads the 18-byte
-+	 * report; it polls because the inferred IRQ (tp_intr=1035 = GPIO2_3)
-+	 * is not wired yet.
++	 * report.  The IRQ is graphics.conf `tp_intr=1035` = gpio 35 = GPIO2_3
++	 * (pad 0x056, gpmc_ad11); the 1917 gpio_config has it input/falling
++	 * with pull, the same class as WL_IRQ.  The four-point calibration is
++	 * the 1917 `scaling.conf` `1024x600:mode=calib` line.
 +	 */
 +	touchscreen@65 {
 +		compatible = "rim,playbook-munin";
 +		reg = <0x65>;
++		interrupt-parent = <&gpio2>;
++		interrupts = <3 IRQ_TYPE_EDGE_FALLING>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&touch_irq_pins>;
 +		poll-interval-ms = <20>;
++		touchscreen-size-x = <1024>;
++		touchscreen-size-y = <600>;
++		rim,x-calibration = <172 1108 102 922>;
++		rim,y-calibration = <110 658 60 540>;
 +	};
 +};
 +/*
@@ -564,6 +574,31 @@
 +&vana {
 +	regulator-always-on;
 +	regulator-boot-on;
++};
++
++/*
++ * Wolfson WM8994 audio codec on I2C4 at 0x1a (report 176/199).  The 1917 QNX
++ * stack is `deva-ctrl-omap4abe-wm8994` (ABE + McBSP); the codec answers its
++ * ID register as 0x8994.  This block must come after the twl6030 include,
++ * which defines the regulator labels.
++ *
++ * Supplies: 1.8 V for the core/I/O/AVDD1, 2.1 V for AVDD2/CPVDD.  SPKVDD is
++ * provisional — the speaker rail is not identified yet.
++ */
++&i2c4 {
++	wm8994: audio-codec@1a {
++		compatible = "wlf,wm8994";
++		reg = <0x1a>;
++		#sound-dai-cells = <0>;
++
++		DBVDD-supply = <&v1v8>;
++		DCVDD-supply = <&v1v8>;
++		AVDD1-supply = <&v1v8>;
++		AVDD2-supply = <&v2v1>;
++		CPVDD-supply = <&v2v1>;
++		SPKVDD1-supply = <&v2v1>;
++		SPKVDD2-supply = <&v2v1>;
++	};
 +};
 +
 +/*
@@ -739,13 +774,16 @@
 +};
 +
 +/*
-+ * ABE (audio back end) is not needed for bring-up.  Its targets live in
-+ * abe_pwrdm/abe_clkdm; after l4_abe populates them, the WD_TIMER3 target
-+ * (0x40130000) hangs in the ti-sysc enable/softreset path right after its
-+ * revision read.  Disable the whole segment until ABE power/clock bring-up
-+ * is understood.
++ * ABE (audio back end): the McBSP audio targets live here.  The WD_TIMER3
++ * target (0x40130000) hangs in the ti-sysc enable/softreset path right after
++ * its revision read, so keep that one target off and enable the rest of the
++ * segment (report 199, trap 148).
 + */
 +&l4_abe {
++	status = "okay";
++};
++
++&wdt3_target {
 +	status = "disabled";
 +};
 +
@@ -1166,6 +1204,27 @@
 +		>;
 +	};
 +
++	/* Touch IRQ: gpmc_ad11 = gpio_35 = GPIO2_3, input/falling (1917). */
++	touch_irq_pins: touch-irq-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x056, 0x410b)
++		>;
++	};
++
++	/*
++	 * McBSP2 (inside the ABE segment) is the codec's I2S bus.  The pads
++	 * are the OMAP4 ABE McBSP2 balls, as used by omap4-epson-embt2ws.dts.
++	 * CPU (McBSP) is the clock master, so clkx/fsx are outputs.
++	 */
++	mcbsp2_pins: mcbsp2-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x0f6, 0x0000)	/* abe_mcbsp2_clkx, out */
++			OMAP4_IOPAD(0x0f8, 0x0100)	/* abe_mcbsp2_dr, in */
++			OMAP4_IOPAD(0x0fa, 0x0000)	/* abe_mcbsp2_dx, out */
++			OMAP4_IOPAD(0x0fc, 0x0000)	/* abe_mcbsp2_fsx, out */
++		>;
++	};
++
 +	gpio1_en_pins: gpio1-en-pins {
 +		pinctrl-single,pins = <
 +			OMAP4_IOPAD(0x190, 0x0003)	/* gpio_2  (GPIO1_2)  */
@@ -1303,6 +1362,36 @@
 +/ {
 +	battery: battery {
 +		compatible = "simple-battery";
++	};
++};
++
++/*
++ * Audio: the WM8994 codec on ABE/McBSP2.  The ABE segment is enabled in
++ * omap4-l4-abe.dtsi with WD_TIMER3 off (report 199).  The CPU (McBSP2) is the
++ * bit/frame clock master; the codec is the consumer.
++ */
++&mcbsp2 {
++	#sound-dai-cells = <0>;
++	pinctrl-names = "default";
++	pinctrl-0 = <&mcbsp2_pins>;
++	status = "okay";
++};
++
++/ {
++	sound {
++		compatible = "simple-audio-card";
++		simple-audio-card,name = "PlayBook WM8994";
++		simple-audio-card,format = "i2s";
++		simple-audio-card,bitclock-master = <&dailink0_cpu>;
++		simple-audio-card,frame-master = <&dailink0_cpu>;
++
++		dailink0_cpu: simple-audio-card,cpu {
++			sound-dai = <&mcbsp2>;
++		};
++
++		simple-audio-card,codec {
++			sound-dai = <&wm8994>;
++		};
 +	};
 +};
 --- a/arch/arm/boot/dts/ti/omap/omap4.dtsi
@@ -6982,7 +7071,7 @@
  
 --- a/drivers/input/touchscreen/playbook-munin.c
 +++ b/drivers/input/touchscreen/playbook-munin.c
-@@ -0,0 +1,320 @@
+@@ -0,0 +1,424 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * BlackBerry PlayBook (OMAP4430 "winchester") Munin touchscreen.
@@ -7010,6 +7099,8 @@
 +#include <linux/i2c.h>
 +#include <linux/input.h>
 +#include <linux/input/mt.h>
++#include <linux/interrupt.h>
++#include <linux/math64.h>
 +#include <linux/module.h>
 +#include <linux/of.h>
 +#include <linux/property.h>
@@ -7032,14 +7123,34 @@
 +#define MUNIN_BOOT_RETRIES	40
 +#define MUNIN_BOOT_DELAY_MS	500
 +
++/*
++ * One axis of the vendor's four-point calibration (1917
++ * etc/system/config/scaling.conf, the `1024x600:mode=calib` line): the raw
++ * coordinate range [raw_min, raw_max] maps linearly onto the display range
++ * [disp_min, disp_max].  The endpoints may be reversed; that encodes an
++ * inverted axis.
++ */
++struct munin_cal {
++	s32 raw_min;
++	s32 raw_max;
++	s32 disp_min;
++	s32 disp_max;
++};
++
 +struct munin_ts {
 +	struct i2c_client *client;
 +	struct input_dev *input;
 +	struct delayed_work boot_work;
 +	struct delayed_work poll;
++	struct munin_cal cal_x;
++	struct munin_cal cal_y;
++	unsigned int panel_w;
++	unsigned int panel_h;
 +	unsigned int poll_ms;
 +	unsigned int boot_tries;
++	int irq;
 +	bool booted;
++	bool using_irq;
 +};
 +
 +static int munin_read(struct i2c_client *client, u8 reg, u8 *buf, int len)
@@ -7074,6 +7185,30 @@
 +static int munin_write8(struct i2c_client *client, u8 reg, u8 value)
 +{
 +	return munin_write(client, reg, &value, 1);
++}
++
++static unsigned int munin_map(const struct munin_cal *c, unsigned int raw,
++			      unsigned int max)
++{
++	s64 span = (s64)c->raw_max - c->raw_min;
++	s64 num, v;
++
++	if (span == 0)
++		return min(raw, max);
++
++	num = ((s64)(s32)raw - c->raw_min) * ((s64)c->disp_max - c->disp_min);
++	if (num >= 0)
++		num += span / 2;
++	else
++		num -= span / 2;
++	v = c->disp_min + div_s64(num, span);
++
++	if (v < 0)
++		v = 0;
++	if (v > max)
++		v = max;
++
++	return (unsigned int)v;
 +}
 +
 +/*
@@ -7163,20 +7298,34 @@
 +
 +	for (i = 0; i < MUNIN_CONTACTS; i++) {
 +		int o = 1 + i * 4;
-+		unsigned int x = buf[o] | ((buf[o + 2] & 0x0f) << 8);
-+		unsigned int y = buf[o + 1] | ((buf[o + 2] & 0xf0) << 4);
-+		bool down = buf[o + 3] != 0 && y != MUNIN_COORD_MAX;
++		unsigned int xr = buf[o] | ((buf[o + 2] & 0x0f) << 8);
++		unsigned int yr = buf[o + 1] | ((buf[o + 2] & 0xf0) << 4);
++		bool down = buf[o + 3] != 0 && yr != MUNIN_COORD_MAX;
 +
 +		input_mt_slot(input, i);
 +		input_mt_report_slot_state(input, MT_TOOL_FINGER, down);
 +		if (down) {
-+			input_report_abs(input, ABS_MT_POSITION_X, x);
-+			input_report_abs(input, ABS_MT_POSITION_Y, y);
++			input_report_abs(input, ABS_MT_POSITION_X,
++					 munin_map(&ts->cal_x, xr,
++						   ts->panel_w - 1));
++			input_report_abs(input, ABS_MT_POSITION_Y,
++					 munin_map(&ts->cal_y, yr,
++						   ts->panel_h - 1));
 +		}
 +	}
 +
 +	input_mt_sync_frame(input);
 +	input_sync(input);
++}
++
++static irqreturn_t munin_irq(int irq, void *data)
++{
++	struct munin_ts *ts = data;
++
++	if (ts->booted)
++		munin_report(ts);
++
++	return IRQ_HANDLED;
 +}
 +
 +static void munin_boot_work(struct work_struct *work)
@@ -7198,11 +7347,34 @@
 +	}
 +
 +	ts->booted = true;
-+	dev_info(&ts->client->dev, "Munin touchscreen ready (poll %u ms)\n",
-+		 ts->poll_ms);
 +
-+	if (ts->poll_ms)
-+		schedule_delayed_work(&ts->poll, 0);
++	/*
++	 * The IRQ is only wired once the controller is in app mode: the line is
++	 * quiet in the bootloader and a request during adaptor probing would
++	 * race the first (failing) I2C read.  Fall back to polling when the
++	 * binding has no interrupt or the request fails.
++	 */
++	if (ts->irq > 0) {
++		ret = request_threaded_irq(ts->irq, NULL, munin_irq,
++					   IRQF_ONESHOT | IRQF_TRIGGER_FALLING,
++					   dev_name(&ts->client->dev), ts);
++		if (!ret) {
++			ts->using_irq = true;
++			dev_info(&ts->client->dev,
++				 "Munin touchscreen ready (irq %d)\n", ts->irq);
++		} else {
++			dev_warn(&ts->client->dev,
++				 "Munin irq %d unavailable (%d), polling\n",
++				 ts->irq, ret);
++		}
++	}
++
++	if (!ts->using_irq) {
++		dev_info(&ts->client->dev,
++			 "Munin touchscreen ready (poll %u ms)\n", ts->poll_ms);
++		if (ts->poll_ms)
++			schedule_delayed_work(&ts->poll, 0);
++	}
 +}
 +
 +static void munin_poll(struct work_struct *work)
@@ -7222,6 +7394,7 @@
 +{
 +	struct munin_ts *ts;
 +	struct input_dev *input;
++	u32 v[4];
 +	int ret;
 +
 +	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C))
@@ -7234,18 +7407,36 @@
 +	ts->client = client;
 +	i2c_set_clientdata(client, ts);
 +
++	/* Defaults: the 1917 scaling.conf `1024x600:mode=calib` line. */
++	ts->cal_x = (struct munin_cal){ 172, 1108, 102, 922 };
++	ts->cal_y = (struct munin_cal){ 110, 658, 60, 540 };
++	ts->panel_w = 1024;
++	ts->panel_h = 600;
++
++	if (!device_property_read_u32_array(&client->dev, "rim,x-calibration",
++					    v, 4))
++		ts->cal_x = (struct munin_cal){ v[0], v[1], v[2], v[3] };
++	if (!device_property_read_u32_array(&client->dev, "rim,y-calibration",
++					    v, 4))
++		ts->cal_y = (struct munin_cal){ v[0], v[1], v[2], v[3] };
++	device_property_read_u32(&client->dev, "touchscreen-size-x",
++				 &ts->panel_w);
++	device_property_read_u32(&client->dev, "touchscreen-size-y",
++				 &ts->panel_h);
++
 +	input = devm_input_allocate_device(&client->dev);
 +	if (!input)
 +		return -ENOMEM;
++	ts->input = input;
 +
 +	input->name = "PlayBook Munin Touch";
 +	input->id.bustype = BUS_I2C;
 +	__set_bit(INPUT_PROP_DIRECT, input->propbit);
 +
-+	input_set_abs_params(input, ABS_MT_POSITION_X, 0, MUNIN_COORD_MAX, 0, 0);
-+	input_set_abs_params(input, ABS_MT_POSITION_Y, 0, MUNIN_COORD_MAX, 0, 0);
-+	input_set_abs_params(input, ABS_X, 0, MUNIN_COORD_MAX, 0, 0);
-+	input_set_abs_params(input, ABS_Y, 0, MUNIN_COORD_MAX, 0, 0);
++	input_set_abs_params(input, ABS_MT_POSITION_X, 0, ts->panel_w - 1, 0, 0);
++	input_set_abs_params(input, ABS_MT_POSITION_Y, 0, ts->panel_h - 1, 0, 0);
++	input_set_abs_params(input, ABS_X, 0, ts->panel_w - 1, 0, 0);
++	input_set_abs_params(input, ABS_Y, 0, ts->panel_h - 1, 0, 0);
 +
 +	ret = input_mt_init_slots(input, MUNIN_CONTACTS, INPUT_MT_DIRECT);
 +	if (ret)
@@ -7255,7 +7446,7 @@
 +	if (ret)
 +		return ret;
 +
-+	ts->input = input;
++	ts->irq = client->irq;
 +	ts->poll_ms = 20;
 +	device_property_read_u32(&client->dev, "poll-interval-ms", &ts->poll_ms);
 +
@@ -7274,6 +7465,8 @@
 +	if (!ts)
 +		return;
 +	cancel_delayed_work_sync(&ts->boot_work);
++	if (ts->using_irq)
++		free_irq(ts->irq, ts);
 +	cancel_delayed_work_sync(&ts->poll);
 +}
 +
@@ -7303,3 +7496,35 @@
 +MODULE_AUTHOR("PlayBook Linux bring-up");
 +MODULE_DESCRIPTION("BlackBerry PlayBook Munin (CY8CTMA3 Gen3) touchscreen");
 +MODULE_LICENSE("GPL");
+--- a/arch/arm/boot/dts/ti/omap/omap4-l4-abe.dtsi
++++ b/arch/arm/boot/dts/ti/omap/omap4-l4-abe.dtsi
+@@ -258,7 +258,7 @@
+ 			};
+ 		};
+ 
+-		target-module@30000 {			/* 0x40130000, ap 14 0e.0 */
++		wdt3_target: target-module@30000 {		/* 0x40130000, ap 14 0e.0 */
+ 			compatible = "ti,sysc-omap2", "ti,sysc";
+ 			reg = <0x30000 0x4>,
+ 			      <0x30010 0x4>,
+--- a/sound/soc/ti/Kconfig
++++ b/sound/soc/ti/Kconfig
+@@ -56,6 +56,18 @@
+ 	  Say Y or M here if you want to have support for McBSP IP found in
+ 	  Texas Instruments OMAP1/2/3/4/5 SoCs.
+ 
++config SND_SOC_PLAYBOOK_WM8994
++	tristate "SoC Audio support for BlackBerry PlayBook (WM8994)"
++	depends on ARCH_OMAP4 && I2C
++	select SND_SOC_WM8994
++	select SND_SOC_OMAP_MCBSP
++	select SND_SIMPLE_CARD
++	help
++	  Say Y or M to enable the WM8994 codec on the PlayBook's ABE/McBSP2
++	  bus.  The card itself is described by the board DTS
++	  (`simple-audio-card`); this symbol selects the codec, the McBSP DAI
++	  and the generic machine driver.
++
+ config SND_SOC_OMAP_MCPDM
+ 	tristate "Multichannel PDM Controller (McPDM) support"
+ 	depends on ARCH_OMAP4 || SOC_OMAP5 || COMPILE_TEST

@@ -33,11 +33,11 @@
         @ trustworthy readback.  Loader keeps its hands off the watchdog.
 
         .equ ZIMAGE_SRC,  0x803BF800
-        .equ ZIMAGE_SIZE, 0x006432F8
-        .equ DTB_SRC,     0x80A02AF8
-        .equ DTB_SIZE,    0x00016FEC
+        .equ ZIMAGE_SIZE, 0x006620D0
+        .equ DTB_SRC,     0x80A218D0
+        .equ DTB_SIZE,    0x0001747D
         .equ KERNEL_DEST, 0x84000000
-        .equ DTB_DEST,    0x846432F8
+        .equ DTB_DEST,    0x846620D0
 
         @ Clear the DEBUG_LL ring state (count +0x80, index +0x84) and the
         @ first page of characters, so every boot's earlyprintk log starts

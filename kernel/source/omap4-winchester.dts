@@ -255,13 +255,23 @@
 	/*
 	 * Cypress CY8CTMA3 Gen3 running RIM's Munin protocol.  The driver
 	 * boots the resident application (report 194) and reads the 18-byte
-	 * report; it polls because the inferred IRQ (tp_intr=1035 = GPIO2_3)
-	 * is not wired yet.
+	 * report.  The IRQ is graphics.conf `tp_intr=1035` = gpio 35 = GPIO2_3
+	 * (pad 0x056, gpmc_ad11); the 1917 gpio_config has it input/falling
+	 * with pull, the same class as WL_IRQ.  The four-point calibration is
+	 * the 1917 `scaling.conf` `1024x600:mode=calib` line.
 	 */
 	touchscreen@65 {
 		compatible = "rim,playbook-munin";
 		reg = <0x65>;
+		interrupt-parent = <&gpio2>;
+		interrupts = <3 IRQ_TYPE_EDGE_FALLING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&touch_irq_pins>;
 		poll-interval-ms = <20>;
+		touchscreen-size-x = <1024>;
+		touchscreen-size-y = <600>;
+		rim,x-calibration = <172 1108 102 922>;
+		rim,y-calibration = <110 658 60 540>;
 	};
 };
 /*
@@ -418,6 +428,31 @@
 &vana {
 	regulator-always-on;
 	regulator-boot-on;
+};
+
+/*
+ * Wolfson WM8994 audio codec on I2C4 at 0x1a (report 176/199).  The 1917 QNX
+ * stack is `deva-ctrl-omap4abe-wm8994` (ABE + McBSP); the codec answers its
+ * ID register as 0x8994.  This block must come after the twl6030 include,
+ * which defines the regulator labels.
+ *
+ * Supplies: 1.8 V for the core/I/O/AVDD1, 2.1 V for AVDD2/CPVDD.  SPKVDD is
+ * provisional — the speaker rail is not identified yet.
+ */
+&i2c4 {
+	wm8994: audio-codec@1a {
+		compatible = "wlf,wm8994";
+		reg = <0x1a>;
+		#sound-dai-cells = <0>;
+
+		DBVDD-supply = <&v1v8>;
+		DCVDD-supply = <&v1v8>;
+		AVDD1-supply = <&v1v8>;
+		AVDD2-supply = <&v2v1>;
+		CPVDD-supply = <&v2v1>;
+		SPKVDD1-supply = <&v2v1>;
+		SPKVDD2-supply = <&v2v1>;
+	};
 };
 
 /*
@@ -593,13 +628,16 @@
 };
 
 /*
- * ABE (audio back end) is not needed for bring-up.  Its targets live in
- * abe_pwrdm/abe_clkdm; after l4_abe populates them, the WD_TIMER3 target
- * (0x40130000) hangs in the ti-sysc enable/softreset path right after its
- * revision read.  Disable the whole segment until ABE power/clock bring-up
- * is understood.
+ * ABE (audio back end): the McBSP audio targets live here.  The WD_TIMER3
+ * target (0x40130000) hangs in the ti-sysc enable/softreset path right after
+ * its revision read, so keep that one target off and enable the rest of the
+ * segment (report 199, trap 148).
  */
 &l4_abe {
+	status = "okay";
+};
+
+&wdt3_target {
 	status = "disabled";
 };
 
@@ -1020,6 +1058,27 @@
 		>;
 	};
 
+	/* Touch IRQ: gpmc_ad11 = gpio_35 = GPIO2_3, input/falling (1917). */
+	touch_irq_pins: touch-irq-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x056, 0x410b)
+		>;
+	};
+
+	/*
+	 * McBSP2 (inside the ABE segment) is the codec's I2S bus.  The pads
+	 * are the OMAP4 ABE McBSP2 balls, as used by omap4-epson-embt2ws.dts.
+	 * CPU (McBSP) is the clock master, so clkx/fsx are outputs.
+	 */
+	mcbsp2_pins: mcbsp2-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x0f6, 0x0000)	/* abe_mcbsp2_clkx, out */
+			OMAP4_IOPAD(0x0f8, 0x0100)	/* abe_mcbsp2_dr, in */
+			OMAP4_IOPAD(0x0fa, 0x0000)	/* abe_mcbsp2_dx, out */
+			OMAP4_IOPAD(0x0fc, 0x0000)	/* abe_mcbsp2_fsx, out */
+		>;
+	};
+
 	gpio1_en_pins: gpio1-en-pins {
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x190, 0x0003)	/* gpio_2  (GPIO1_2)  */
@@ -1157,5 +1216,35 @@
 / {
 	battery: battery {
 		compatible = "simple-battery";
+	};
+};
+
+/*
+ * Audio: the WM8994 codec on ABE/McBSP2.  The ABE segment is enabled in
+ * omap4-l4-abe.dtsi with WD_TIMER3 off (report 199).  The CPU (McBSP2) is the
+ * bit/frame clock master; the codec is the consumer.
+ */
+&mcbsp2 {
+	#sound-dai-cells = <0>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&mcbsp2_pins>;
+	status = "okay";
+};
+
+/ {
+	sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "PlayBook WM8994";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,bitclock-master = <&dailink0_cpu>;
+		simple-audio-card,frame-master = <&dailink0_cpu>;
+
+		dailink0_cpu: simple-audio-card,cpu {
+			sound-dai = <&mcbsp2>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&wm8994>;
+		};
 	};
 };

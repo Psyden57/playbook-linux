@@ -32,6 +32,16 @@ for m in evdev bma150 hmc5843_i2c mpu3050 hwmon tmp103 bq27xxx_battery_i2c \
 	modprobe "$m" 2>/dev/null
 done
 
+# Audio (session 38): the WM8994 on ABE/McBSP2.  These are loaded here, after
+# the initramfs has already created the USB gadget, so the codec/card probe
+# cannot delay the gadget's enumeration (that delay is the USB regression the
+# built-in probes caused).  Order matters only in that the codec and McBSP
+# should exist before the generic card binds; modprobe resolves the rest.
+for m in wm8994 snd-soc-wm-hubs snd-soc-wm8994 snd-soc-ti-sdma \
+	 snd-soc-omap-mcbsp snd-soc-simple-card-utils snd-soc-simple-card; do
+	modprobe "$m" 2>/dev/null
+done
+
 # One line in the kernel log, so the boot is visible from kmsg even when the
 # console is not attached.
 {

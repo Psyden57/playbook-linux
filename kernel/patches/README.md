@@ -3,10 +3,10 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**7 305 lines / 46 files (36 modified + 10 new)** against pristine
-**linux-7.3.3** (sha256 `d0d00009…`).  It is generated from the tree, not from
+**7 530 lines / 48 files (38 modified + 10 new)** against pristine
+**linux-7.3.3** (sha256 `9089ef49…`).  It is generated from the tree, not from
 the previous patch (trap 106), and it was verified by applying it to pristine
-7.3.3 targets and comparing all 46 files byte-for-byte with
+7.3.3 targets and comparing all 48 files byte-for-byte with
 `local/kernel-tree` — 0 rejects, 0 mismatches.  Session 36 added the
 `i2c2_pins` pinctrl group for the touch bus (report 193).  **Session 37 moved
 the WL1283 (MMC5) instrumentation out** into
@@ -76,6 +76,18 @@ prints, the `480d5000` PBGPIO dump and the DTS `vwl1283`/`fref*`/`sdmmc5_pins`/
 `kernel/archive/wl1283/wl1283-instrumentation-7.3.3.patch`.  The board DTS now
 sets `&mmc5 { status = "disabled"; }`.  The general eMMC bring-up prints
 (`PBM`/`PBINI`/`PBSIO`/`PBX`/`PBREQ`/`PBIRQ` and `pb_event`) remain.
+
+**Session 38 updates the touch only (report 198).**  `playbook-munin.c` gains
+the 1917 `scaling.conf` coordinate map (`rim,x-calibration`/`rim,y-calibration`,
+`div_s64`, clamped to `touchscreen-size-x/y`) and the threaded
+`IRQ_TYPE_EDGE_FALLING` handler with the poll fallback; the board DTS gains
+`touch_irq_pins` (`0x056` = gpio 35) and the `interrupts`/calibration
+properties.  Session 38 also enables the ABE segment: `omap4-l4-abe.dtsi`
+gains the `wdt3_target` label and the board DTS sets `&l4_abe { status =
+"okay"; }` + `&wdt3_target { status = "disabled"; }` (report 199), and adds the
+WM8994 codec + McBSP2 + `simple-audio-card` nodes plus the
+`SND_SOC_PLAYBOOK_WM8994` board Kconfig.  The export is **7 530 lines / 48
+files**, sha256 `9089ef49…`, verified 0 rejects / 48/48 byte-identical.
 
 ## Reference base: 6.15.11
 
@@ -319,6 +331,10 @@ the apply-and-compare verification printed **0 rejects, 0 mismatches**.
 verified 0 rejects / 0 mismatches; it used the session-36 patch's file list as
 the source set, dropped the two files that are now pristine (`sdio.c`,
 `host.h`), and did not need a clean tree (nothing was added).
+**Session 38's export is 7 530 lines / 48 files** (sha256 `9089ef49…`),
+verified 0 rejects / 48/48 byte-identical; the touch driver + board DTS +
+`omap4-l4-abe.dtsi` changed, and `sound/soc/ti/Kconfig` joined the set (the
+`SND_SOC_PLAYBOOK_WM8994` select).
 Update this README and `STATE.md` when a new export lands.
 
 **Session 36 warning — the tree-vs-pristine walk above picks up BUILD

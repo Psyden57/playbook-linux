@@ -1,6 +1,65 @@
 # Current state
 
-## Current state — 2026-11-09 (session 37)
+## Current state — 2026-11-09 (session 38)
+
+**The touch is finished: the calibrated 1024×600 coordinates and the GPIO2_3
+edge IRQ are both in the tree and proven on the bench (report 198).  The unit is
+on the new Linux image `0x50842767` (region 0 only).**  Item 9 step 5's touch
+half is closed; the WM8994 audio half has **started** (codec confirmed, ABE
+segment up — report 199).
+
+* **Calibration (report 198).**  The 1917 `/base`
+  `etc/system/config/scaling.conf` has `1024x600:mode=calib`:
+  raw `x 172→1108` → display `102→922`, raw `y 110→658` → display `60→540`.
+  `playbook-munin.c` maps through it (`div_s64`, clamped to 0..1023/0..599) and
+  takes the endpoints from `rim,x-calibration`/`rim,y-calibration` +
+  `touchscreen-size-x/y`.  A left-edge/top-edge drag reads `X 0..7` (left, Y
+  swept) and `X 86→957` at `Y ≈ 0` (top) — correct axes, no swap, no inversion.
+* **IRQ.**  `tp_intr=1035` = gpio 35 = GPIO2_3 = CORE pad `0x056`
+  (`gpmc_ad11`), mux 3/input/pull/falling (`0x410b`), `IRQ_TYPE_EDGE_FALLING`.
+  `devmem 0x4A100056` = `0x410B`; `/proc/interrupts` has
+  `110: … 48055000.gpio 3 Edge 1-0065`; the driver logs
+  `Munin touchscreen ready (irq 110)` at 3.453 s.  The ~330–380/s rate is the
+  controller's active report rate (unbinding the driver freezes it; rebinding
+  resumes it); the 20 ms poll remains the fallback.
+* **Audio started (report 199).**  The WM8994 answers at I²C4 `0x1a`
+  (`i2ctransfer -y 3 w2@0x1a 0x00 0x00 r2` → `0x8994`), but there is **no
+  mainline OMAP4+WM8994 machine driver** and `SND_SOC_WM8994` is a hidden
+  Kconfig symbol a machine driver must `select`.  The 1917 stack is ABE + McBSP
+  (`io-audio -d omap4abe-wm8994 aif=0,secure_capture`); the McBSPs live in
+  `l4_abe`, which the board disabled because **WD_TIMER3 (0x40130000) hangs
+  ti-sysc**.  **The segment and the machine link are DONE:** the card is
+  `0 [WM8994]: simple-card - PlayBook WM8994`,
+  `/proc/asound/pcm` = `40124000.mcbsp-wm8994-aif1 … playback 1 : capture 1`.
+  The stack is **modules** loaded from `rcS` after the USB gadget (trap 149);
+  building it in delayed the gadget and broke self-enumeration.  Seven supplies
+  are mapped provisionally (`v1v8`/`v2v1`); the codec's jack IRQs are not
+  wired.
+* **ABE segment validated (session 38, report 199).**  `omap4-l4-abe.dtsi` now
+  labels `wdt3_target`; the board enables `&l4_abe` and disables that target.
+  Image **`0x50842767`** booted with `4012208c/4012408c/4012608c` (McBSP1/2/3)
+  and the other ABE audio targets probing (`PBS … pm ok`), **WD_TIMER3 absent
+  from the probe list**, no hang; uptime 37 s, counter `0x30`.  The machine
+  link is done (above).
+* **Image:** region-0 **`0x3B2ECFED`** (`0x939780`, kernel `7.3.3`; touch +
+  ABE + audio machine link), region 1 = the audio rootfs (`07d4e28b…`, 24
+  modules; `local/images/rootfs-region1-audio.ext4`), flashed both regions in
+  one bootrom session; the base patch is **48 files / 7 530 lines /
+  `9089ef49…`**.  The unit is **on this Linux image**; the 1917 IFS is the way
+  back (`local/work/ifs-shim-sealed.ifs`, block `0x825`).  The previous
+  ABE-only image `0x50842767` rebuilds from commit `12d20b3`, the touch-only
+  `0x82FC0D35` from `7ced600` (the `.img` is gitignored); the saved fallbacks
+  remain `0xE36C679A` and `0x04AF1433`.
+* **Docs:** report **198**; `DECISIONS.md` §47; `ROADMAP.md` item 9 step 5;
+  `KNOWN-ISSUES.md` (trap 33 wording); `SAFETY.md`/`STATE.md`/`HANDOFF.md`
+  budget wording (the counter is self-replenishing).
+* **Bench note:** `tools/pbssh.sh` logs in as **root** (`uid:0`); the earlier
+  failures were the door-hold key upload not yet done.  The script's
+  "1917 only accepts devuser" comment was wrong and is corrected.
+* **Next:** the WM8994 audio half (codec-ID at I²C4 `0x1a`, then the
+  McBSP/l4_abe machine link), or the WL1283 chip-side measurements.
+
+## Previous state — 2026-11-09 (session 37)
 
 **The session-36 direction is done: the WL1283 code is archived out of the
 active tree and patch (Task 1), the board DTS is re-derived from 2.1.0.1917
@@ -864,6 +923,8 @@ this trial.
 | eMMC (MMC2) | **reads proven; writes healthy — but writers must use large blocks** | `mmcblk1` = MCGAFA 59.4 GiB, `boot0`/`boot1`/`rpmb`; needs the `vemmc` fixed supply for `ocr_avail` (report 109 §9).  Session 16 read a freshly flashed 11 152 064-byte image back **byte-exactly** and matched a pre-flash TabletOS capture (report 134); the MMC2 functional clock is 96 MHz.  Session 17 measured the write path (report 136): the driver has no request-size limit — an O_DIRECT write gives **256 KiB `CMD25`s, 5.5–7.0 MB/s** (4 KiB chunks: 0.93 MB/s), one `CMD13` per request (normal `mmc_blk_card_busy`).  The old 17–32 KB/s was `recv`'s tiny buffered writes plus 4–7 unthrottled `printk`s per request to **fbcon**.  Use ≥64 KiB (ideally 256 KiB–1 MiB) writes with the MMC trace off.  **Session 18: region 1 now holds a bootable Linux root** (32 MiB ext4 at raw `0x29000000`), written through the pre-OS `0xF7` loop (2055 frames) and read back byte-exactly (QNX `dd` and Linux `blk sumb`); it mounts read-only via a loop and its `/init` runs (report 140). |
 | USB device + gadget | **working, but not a bulk transport** | enumerates `0fca:8010`, CDC-ACM, product string "PlayBook (Linux bring-up)"; `/dev/ttyACM0` ↔ `/dev/ttyGS0`; High Speed (480 Mbps), 512-byte bulk packets.  **Drains at only ~134 KB/s and drops bytes when the host blasts** (report 136 §3.3), so it is a control/debug channel: do not send multi-MB images through `recv`.  Report 114, 136 |
 | **WL1283 (MMC5)** | **software surface exhausted (session 37: the 1917-truth minimal host also fails CMD5; the chip is not up — WL_IRQ low)** | **Session 37:** the WL1283 code is archived (`kernel/archive/wl1283/`), the DTS is re-derived from 2.1.0.1917, and the minimal 1917-truth `&mmc5` (image `0x0DC36A11`) probes but returns `attach_sdio no` (report 196); pads `0x0118`, WL_EN `0x0003`, WL_IRQ `0x410B` match QNX and WL_EN is high, but `GPIO2_DATAIN` bit 21 = 0.  Bus, pads, WL_EN/IRQ, PMIC rails, MMC5 CON/HCTL/SYSCTL and the clock manager all match the reference.  QNX enumerates at 24 MHz with CMD5 arg `0x00FFFF00`; Linux's default 400 kHz/CMD52-first also times out.  **Session 35:** `startup-playbook` (never run by our chainloader) is the source of the QNX-only GPIOs — Winchester table at image `0x80122750`; GPIO1 0/4/15/18/28/31 and GPIO2 5/7 are output-low, gpio54 (WL_EN) output-low, gpio53 input/falling (report 192 §4, trap 135).  All eight released to input on the live 1917 are **negative** (trap 136).  `CLK32KG` is base `0x8C` and APP-ON in both (CFG_TRANS identical; CFG_GRP and the CFG_STATE CON/MOD bits differ; trap 135).  **H1** (CMD0 → CMD5 only, no CMD52/CMD8, 24 MHz, arg `0x00FFFF00`, image `0x29784F48`) still times out (`err=-110`, no R4; `HCTL=0x00000b00`, `CAPA=0x04e10080`; trap 137).  The remaining difference is the chip's non-exposed VBAT/TCXO/reset pins or OMAP HSMMC sampling — needs a schematic/board view or logic analyser |
+| **Munin touch (CY8CTMA3)** | **working — calibrated, IRQ wired (session 38)** | I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c` boots the app and maps the 12-bit report through the 1917 `scaling.conf` calib (raw x 172→1108 → 102→922, y 110→658 → 60→540) to 1024×600.  IRQ gpio 35 = GPIO2_3 pad `0x056` = `0x410B`, `EDGE_FALLING`, `irq 110`; the ~330–380/s rate is the chip's report rate.  Power/reset GPIO1_14/GPIO4_8 are not driven.  Report 198, DECISIONS §47 |
+| **WM8994 audio** | **machine link up; playback untested (session 38)** | I²C4 `0x1a` (`0x8994`); a new `SND_SOC_PLAYBOOK_WM8994` selects the codec/McBSP/simple-card, and the card is `0 [WM8994]: simple-card - PlayBook WM8994` with PCM `40124000.mcbsp-wm8994-aif1` (playback 1, capture 1).  The stack is modules loaded from `rcS` after the USB gadget (trap 149); the seven supplies are provisional (`v1v8`/`v2v1`) and the codec's jack IRQs are unwired.  Playback/MCLK is the next experiment.  Report 199 |
 | Userspace (initramfs) | **working, minimal** | `/init` = PID 1, mounts, creates the configfs ACM gadget, forks `/console` in the fallback path.  **No auto-reboot since session 15** — PID 1 reboots only on request (the timer spent a `BOOTCTR_FCTRY` unit per iteration).  **Session 28:** after the gadget and the boot-time top-up, `/init` mounts the region-1 ext4 root **read-write**, bind-mounts /dev//proc//sys, chroots and execs `/sbin/init`; with no `/sbin/init` it falls back to the console.  Report 176, session-28 note |
 | Userspace (region-1 root) | **working — a real BusyBox userland** | 64 MiB ext4 at raw `0x29000000`; BusyBox 1.36.1 + init + 401 applet links + `pbconsole`/`pbrpmb` + `/lib/modules/6.15.11`; boots to `sh -l` on `/dev/ttyGS0`; `insmod`/`modprobe` proven.  `local/images/rootfs-region1.ext4` sha256 `e1ec2bf3…`, kernel image `0xAEDF68D0` |
 | Console | **working** | `help ls cat peek poke kick disp bl i2c i2c16 spi fb kmsg grep blk recv sink blkwr qnx6 rootfs write reboot`; `spi tcon` (low-first) and `spi tconbe` (high-first); `blk info/sum/sumb/rd` is read-only FNV-1a64 over `/dev/mmcblk1` (**`blk info` prints size 0 B — `fstat` bug, see KNOWN-ISSUES**), `grep <substr> <path>` scans any-size text (for `clk_summary`); `sink <len>` measures the link, `blkwr <off> <len> [chunk]` is a timed O_DIRECT write with a deterministic pattern (report 136); `qnx6 [off-hex]` mounts hd3 read-only (report 138); `rootfs [off-hex]` mounts the region-1 ext4 root read-only on `/rootfs` (report 140); argument limit 24.  `pb_reg` op set is now `w a:v` / `r a` / `t a` (16 reads, re-arm) / `u a` (16 reads, no re-arm) / `d from:to` (range dump) / `v` (video liveness).  Every hardware access forks with a bounded wait |
@@ -877,7 +938,7 @@ this trial.
 | Panel identity | **Hitachi (definitive)** | on TabletOS: `GPIO6_DATAIN = 0x00010800` (bit 16 = 1), slog `LCD is Hitachi`.  Report 127 §1 |
 | **Image on the panel** | **WORKING** | With `0x8C146805` (and the same source as `0x068C867F`) the panel shows a clean, stable image: solid white, solid red, and the kernel console as legible text.  The three necessary fixes were the bridge delivery (VC0/HS null packet), the LVDS porches + TCON table at bring-up, and the DISPC core clock. Report 133 |
 | QNX oracle tool | **`tools/qnx-dsiread.c` → `tools/pbdsi`** | Reads any TC358764 register over DSI from a TabletOS user process (generic read request `0x24` on hw VC1, BTA, RX FIFO pop; response is a generic long read, DT `0x1A`).  Read-only.  This is how the reference values in this document were obtained. Report 132 §2 |
-| Kernel patch + config | **7.3.3 (session 32 export); 6.15.11 kept as reference** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **7 257 lines / 47 files** (38 modified + 9 new), sha256 `ad55511d…`, generated from the tree against pristine 7.3.3, applied with 0 rejects and **47/47 files byte-identical** (session 32 adds `drivers/mmc/core/sdio.c` and `include/linux/mmc/host.h`; extends `omap_hsmmc.c`, `omap4-common.c` and the board DTS).  Config: `kernel/winchester-7.3.3.config` (sha256 `9274c809…`, includes `CONFIG_CHARGER_ISL9519=y`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; note it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
+| Kernel patch + config | **7.3.3 (session 38 export); 6.15.11 kept as reference** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **7 530 lines / 48 files** (38 modified + 10 new), sha256 `9089ef49…`, generated from the tree against pristine 7.3.3, applied with 0 rejects and **48/48 files byte-identical**.  Session 37 removed the WL1283 code (archived); session 38 adds the touch calibration + IRQ (driver and board DTS), the ABE segment enable (`omap4-l4-abe.dtsi` label + board `&l4_abe`/`&wdt3_target`), and the WM8994 codec/McBSP2/simple-card nodes + `sound/soc/ti/Kconfig`.  Config: `kernel/winchester-7.3.3.config` (includes `CONFIG_CHARGER_ISL9519=y`, `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`, `CONFIG_KERNEL_XZ=y`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
 | **ISL9519 charger** | **WORKING under Linux (session 31)** | I²C1 `0x48070000`, slave `0x09`; VendorID `0x0049`, DeviceID `0x0003`.  `isl9519.c` (built-in, DTS `charger@9`) sets the four registers in RIM's order with the masked fields and refreshes every 5 s.  Measured **+358 → +397 mA**, 3.775 → 3.794 V, capacity 8 → 9 %, `Charging`; still on at 197 s (watchdog).  Registers read back `0x14=0x0280`, `0x15=0x1070`, `0x3E=0x0D00`, `0x3F=0x0180`.  Report 183 |
 | TWL6030 BCI | **probes after the session-31 fix; NOT the board's charger** | `twl6030_charger` probes with the `simple-battery` profile and sets `CONTROLLER_CTRL1=0x10`, `VOREG=0x21`, `VICHRG=0x08`, `CINLIMIT=0x09`, but the stock OS leaves the whole block at bootloader reset values — it charges through the ISL9519.  The BCI node/modules are inert; `twl6030_usb` reports `ONLINE=1`, VBUS 4.81–4.91 V |
 
@@ -1013,20 +1074,23 @@ the I²C bus and resets the unit).
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **the 1917 IFS** (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`), flashed region-0 only for the session-37 calibration check; TabletOS is running.  Linux test images (region 0 only, block `0x825`): the Task-3 `0x0DC36A11` (`0x91A514`; mmc5 enabled, CMD5 negative), `0x05819994` (mmc5 disabled), the known-good `0xE36C679A` (`local/images/kernel-0xE36C679A-wdt58s.img`, 0x91A748, sha256 `bdbaf5fc…`), and the touch `0x04AF1433`.  The compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative |
-| region-0 RCFS (`/base`) | **still the 1917 RCFS at region-0 offset 0xC00000** — outside the 7.3.3 test image (which ends at 0x91A8C4) and not touched this session; not readable as `/base` without the 1917 IFS |
+| region-0 IFS on media | **the session-38 Linux touch image `0x82FC0D35`** (`0x91A9C4`, kernel `7.3.3 #26`; `boot/chainloader/kernel.img`), flashed region 0 only.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier Linux images (region 0 only, block `0x825`): the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A` (`local/images/kernel-0xE36C679A-wdt58s.img`, 0x91A748, sha256 `bdbaf5fc…`), and the touch `0x04AF1433` |
+| region-0 RCFS (`/base`) | **still the 1917 RCFS at region-0 offset 0xC00000** — outside the 7.3.3 test image (which ends at 0x91A9C4) and not touched this session; not readable as `/base` without the 1917 IFS |
 | UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
 | `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it ran during the session-35 S3/S2 TabletOS bench and topped `BOOTCTR_FCTRY` back to `0x32` |
-| `BOOTCTR_FCTRY` | **`0x32`** on the session-37 TabletOS boot (the TabletOS top-up ran; `cat /dev/rpmb/BOOTCTR_FCTRY` → the byte `0x32`) |
+| `BOOTCTR_FCTRY` | **`0x31`** on the session-38 Linux boot — `pbrpmb: topup: BOOTCTR_FCTRY … = 31000000`, `0x31 >= threshold 0x1e, no write`.  The counter is self-replenishing: the Linux `/init` tops it up at ≤`0x1e`, and a TabletOS boot writes `0x32` |
 | region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 `ba275807…`, **17 modules under `/lib/modules/7.3.3`** (incl. `twl6030_charger.ko`, `twl6030-gpadc.ko`); the initramfs mounts it **read-write** and chroots into it |
-| TabletOS / OS | **running 2.1.0.1917** (`0fca:8012`) — region 0 = the 1917 IFS; `ti0` UP with 40+ scans, MAC `14:74:11:8f:9c:c3`; door available (`169.254.0.1`).  The session-37 Linux Task-3 image `0x0DC36A11` is the way back |
+| TabletOS / OS | **NOT running** — the unit is on our Linux image `0x82FC0D35` (`0fca:8010`, console `pb> `).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; the door (`169.254.0.1`, root ssh) is available only on TabletOS |
 | device-side files | none needed on Linux; QNX `/tmp` tools must be re-pushed after a TabletOS restore |
 
-The factory boot budget is real and one-way: every successful factory/CRC boot
-spends one unit, and only a **TabletOS** boot puts one back.  `0` and `> 0x32` do
-not fall back to the product path — they hard-lock the unit (`SAFETY.md` §2).
-**Since session 15 our images no longer reboot themselves**, so a boot now costs
-exactly one unit and stays up until asked.
+The factory boot budget is **self-maintaining in bench use**: every successful
+factory/CRC boot spends one unit, and the booted OS puts it back — our Linux
+`/init` runs `pbrpmb topup 0x1E`, and every TabletOS boot tops the record to
+`0x32`.  **Since session 15 our images no longer reboot themselves**, so a test
+boot costs one unit, is replenished at boot, and stays up until asked; it is not
+a reason to avoid an experiment.  The hard hazards remain: `0` and `> 0x32` do
+not fall back to the product path — they hard-lock the unit (`SAFETY.md` §2) —
+and a failed/half-formed write or a flat pack is still a brick risk.
 
 ## The single current blocker
 
@@ -1046,39 +1110,57 @@ partition** (report 197) — a TI WL128x radio-parameters INI + a binary blob, a
 the assigned MAC is in NVRAM `deviceinfo` (`14:74:11:8f:9c:c3`).  It is the
 source for `wl128x-nvs.bin` **after** enumeration; it cannot fix CMD5.
 
-**The touch works** (I²C2 `0x48072000` = `i2c-1` at `0x65`, `playbook-munin.c`,
-`input0`/`event0`; reports 193/194, traps 138–141).  Open touch details: axis
-calibration/orientation (1280×768 → 1024×600) and the IRQ pad.  **The WM8994
-audio has not started.**
+**The touch is finished** (I²C2 `0x48072000` = `i2c-1` at `0x65`,
+`playbook-munin.c`, `input0`/`event0`; reports 193/194/198, traps 138–141).
+The 1917 `scaling.conf` calibration maps the report to 1024×600 and the
+GPIO2_3 edge IRQ works (`irq 110`); the power/reset lines are still not driven
+by the driver.  **The WM8994 audio has started and the machine link is DONE**
+(card `0 [WM8994]: simple-card - PlayBook WM8994`; report 199); playback is the
+next step.  The sound stack is modules loaded from `rcS` after the USB gadget
+(trap 149).
 
-**Media state: region 0 = the 1917 IFS** (TabletOS 2.1.0.1917 is running,
-`ti0` UP, `BOOTCTR_FCTRY = 0x32`) — the default restored state; region 1 = the
-7.3.3 charger rootfs (`ba275807…`).  The Linux Task-3 image `0x0DC36A11` is the
-way back; the known-good `0xE36C679A` and touch `0x04AF1433` remain.  NVRAM and
-the MCT remain unwritable, and an agent never writes RPMB (`SAFETY.md` §6).
+**The audio card is up; playback is the next experiment, not a blocker.**  The
+single blocker below is still the WL1283's CMD5.
+
+**Media state: region 0 = the session-38 Linux image `0x3B2ECFED`** (kernel
+`7.3.3`; touch + ABE + audio machine link); region 1 = the audio rootfs
+(`07d4e28b…`, 24 modules; `local/images/rootfs-region1-audio.ext4`).  The unit
+is on Linux, not TabletOS.  The way back to TabletOS is
+the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, block `0x825`); the previous
+Linux images `0x0DC36A11`, `0xE36C679A` and `0x04AF1433` remain.  NVRAM and the
+MCT remain unwritable, and an agent never writes RPMB (`SAFETY.md` §6).
 
 ## What is next
 
 1. **WL1283 chip-side measurement** — the 1917-truth DT redo is done and
    negative (report 196); VBAT / 26 MHz TCXO / SLOW_CLK and MMC5
    CLK/CMD/DAT0 need a board view or logic analyser.
-2. **The WM8994 audio half of item 9 step 5** — the read-only codec-ID check at
-   I²C4 `0x1a` (`i2ctransfer -y 3 w2@0x1a 0x00 0x00 r2` should return
-   `0x8994`), then `CONFIG_MFD_WM8994` / `CONFIG_SND_SOC_WM8994`, the codec
-   node, and the McBSP/`l4_abe` machine link (report 176 §3, HANDOFF §0c).
+2. **The WM8994 audio half of item 9 step 5 — the card is UP (report 199).**
+   The codec ID is confirmed (`0x8994`) and the machine link is **DONE**: the
+   ABE segment is enabled with `WD_TIMER3` off, McBSP2 is `okay` with the epson
+   pads, and the `simple-audio-card` link is
+   `0 [WM8994]: simple-card - PlayBook WM8994`
+   (`/proc/asound/pcm` = `40124000.mcbsp-wm8994-aif1 … playback 1 : capture 1`).
+   The stack is **modules** loaded from `rcS` after the USB gadget (trap 149).
+   **Next:** a playback test; the codec still needs its MCLK/FLL and the DAI
+   clocking verified (the jack-detect IRQs are not wired; the four
+   `Mic detect IRQ: -22` lines are benign).  Keep
+   `0x3B2ECFED`/`0x50842767`/`0xE36C679A` ready to reflash.
    **Also the one cheap chip-side check:** the board's FEM is a TriQuint
    TQP6M9002 (`tiwlan_winchester.ini FemVendorAndOptions = 1`); probe the FEM
    VCC (and WL1283 VBAT) on live QNX-with-WiFi vs Linux — a rail off under
    Linux would be a shared board rail the TWL comparison missed (report 195
    §3.7).  The FEM alone cannot gate SDIO.
-3. **Touch polish:** the axis calibration/orientation for the 1024×600 panel
-   and the IRQ pad (GPIO2_3); the bus, protocol and driver are proven.
+3. **Touch: DONE (session 38, report 198).**  The calibration and the IRQ are
+   in the tree and proven; the remaining nicety is driving power/reset and
+   possibly coalescing the report rate.
 4. **Build `wl128x-nvs.bin` from the hd5 calibration** (report 197), and add the
    `wlcore@2` child the mainline binding requires (`ti,wl1283`, `reg = <2>`,
    `interrupts` for WL_IRQ, `ref-clock-frequency`/`tcxo-clock-frequency` 26 MHz),
    for the post-enumeration `wl12xx` path — report 195 §3.6, HANDOFF §0b.
-5. **The unit is on TabletOS** (1917 IFS in region 0, `BOOTCTR_FCTRY = 0x32`).
-   Re-flash `0x0DC36A11` (or `0xE36C679A`) at block `0x825` to return to Linux.
+5. **The unit is on Linux `0x3B2ECFED`** (region 0) + the audio rootfs
+   (`07d4e28b…`, region 1).  To return to TabletOS, flash the 1917 IFS at block
+   `0x825`; the previous Linux images remain.
 
 ## Workspace location
 
