@@ -874,6 +874,27 @@ report 121 §3/§11/§12.
       500 ms); the driver then binds, logs the 21-byte block and starts polling
       without touching the boot timing.  (Session 36.)
 
+142. **A DT node with no `status` property is enabled; deleting the board
+      override does not disable it.**  `omap4-l4.dtsi`'s `mmc5` node has no
+      `status`, so it is enabled by default.  When the session-37 archive
+      removed the board DTS `&mmc5 { status = "okay"; … }` block, the controller
+      would still have probed — with no `pinctrl`, no `vmmc` and no board
+      wiring.  The base DTS must therefore set `&mmc5 { status = "disabled"; }`.
+      Check the dtsi default before assuming "remove the override = disable".
+      (Session 37.)
+
+143. **Archiving the WL1283 `PBCMD`/`PBOCR` prints removes the CMD5 error
+      code from the boot log.**  The minimal 1917-truth `&mmc5` host
+      (`0x0DC36A11`) reproduces the negative — `PBC: mmc4 attach_sdio` →
+      `attach_sdio no` → `Failed to initialize a non-removable card` — but the
+      log cannot say whether CMD5 timed out (`-110`) or NAKed, because the
+      per-command prints were moved to `kernel/archive/wl1283/` (Task 1).  The
+      absence of a "no support for card's volts" warning places the failure at
+      CMD5 (before voltage selection).  For a future run that needs the exact
+      error, re-add a one-line `PBCMD`/`PBOCR` trace (or apply the archive
+      patch) — do not mistake the missing line for a different failure.
+      (Session 37, report 196.)
+
 ## 3. Corrections to older reports
 
 These twenty-one are preserved deliberately. Each is newer than the text it
@@ -1042,6 +1063,17 @@ statement: `CFG_GRP` (`0x8C`) differs; `CFG_TRANS` (`0x8D`) is identical;
 3:2) is `01` in both, so the 32 kHz clock is APP-ON in both.  Sources: session
 35, report 192 §7; `local/kernel-tree/drivers/clk/clk-twl.c`
 (`VREG_GRP 0`, `VREG_TRANS 1`, `VREG_STATE 2`).  (Session 35.)
+
+**3.22 Report 189 §2.1's `gpio_config` field offsets/labels are off.**
+Re-read directly from the mounted 1917 `/base` and cross-checked against
+startup-playbook (session 37): the record is `+0x04` direction, **`+0x0c`
+edge-detect** (not "pull/attr"; 2 = falling), **`+0x11` pull/enable** (not
+`+0x10`), `+0x14/+0x15` rev, `+0x16` phase, and **`+0x18` pad signal id** (not
+`+0x1c`, which is zero).  Values: gpio 53 (WL_IRQ) input/falling, signal
+`0x59`; gpio 54 (WL_EN) output/low, signal `0x58`.  The same 32-byte records
+appear byte-identically in startup-playbook's Winchester GPIO table (image
+`0x80122750`, records 13/14), so the hwio database is the table startup
+applies.  (Session 37, report 195 §3.2.)
 
 **Also corrected elsewhere, for completeness:** `0x1cce0` in `winch_lcdctl` is a
 HAL parameter-block defaults initialiser, not the register programmer — the

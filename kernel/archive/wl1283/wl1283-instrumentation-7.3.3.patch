@@ -1,0 +1,517 @@
+WL1283 instrumentation, Linux 7.3.3 — archived at session 37 (absolute).
+
+This patch re-adds the WL1283-specific code that was removed from the active
+tree and from 0001-playbook-winchester-7.3.3.patch under DECISIONS §46 and
+HANDOFF §0c.  It applies to the *clean* base tree (the tree produced by the
+current 0001-playbook-winchester-7.3.3.patch) with `patch -p1`.
+
+Contents (all WL1283-specific):
+  * drivers/mmc/host/omap_hsmmc.c
+      - pb_init_hz (MMC5 init-clock override) module parameter + calc_divisor
+      - PBCLK / PBD command/register tracing
+      - pb_sdio_ocr_quirk + the 480d5000 MMC_CAP2_SDIO_OCR_PROBE_FFFF00 select
+      - pb_enable_fref_clk2() and pb_wl1283_reset_pulse() (already unused)
+      - the 480d5000 PBGPIO one-shot dump in probe
+  * drivers/mmc/core/core.c   — PBCMD (480d5000 CMD trace) and PBVOLT
+  * drivers/mmc/core/mmc_ops.c — PBOCR
+  * drivers/mmc/core/sdio.c    — the CMD5 arg 0x00ffff00 probe quirk
+  * include/linux/mmc/host.h   — MMC_CAP2_SDIO_OCR_PROBE_FFFF00
+  * arch/arm/boot/dts/ti/omap/omap4-winchester.dts
+      - vwl1283 regulator, sdmmc5_pins, fref_clk2_out_pins, fref_clk_pins,
+        wl1283_ctrl_pins, wl1283-en-hog, and the &mmc5 host
+
+This is the state that produced the negative CMD5 results of reports 180-192
+(traps 116-137).  It is kept as the reference for the 1917-truth re-derivation;
+do not re-apply it on the "fresh derivation" path without a reason.
+--- a/arch/arm/boot/dts/ti/omap/omap4-winchester.dts
++++ b/arch/arm/boot/dts/ti/omap/omap4-winchester.dts
+@@ -35,6 +35,29 @@
+ 		regulator-always-on;
+ 	};
+ 
++	/*
++	 * The WL1283 combo's SDIO I/O window (MMC5).  This does not switch a
++	 * rail — the chip is powered by the bootloader and has no host-side
++	 * regulator in RIM's own rail policy — it exists so the MMC core has a
++	 * non-zero `ocr_avail` (same reason as vemmc; without it
++	 * mmc_select_voltage() rejects the card with "no support for card's
++	 * volts").
++	 */
++	vwl1283: regulator-wl1283 {
++		compatible = "regulator-fixed";
++		regulator-name = "vwl1283";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		/*
++		 * Deliberately NOT gpio-controlled: the loader leaves WL_EN
++		 * (GPIO2_22) high, and the whole point of `ti,no-reset-on-init`
++		 * on gpio2_target is that nothing in this boot ever drops it —
++		 * which is exactly the reference's condition.  The supply exists
++		 * only to give the MMC core an ocr_avail window.
++		 */
++		regulator-always-on;
++	};
++
+ 	chosen {
+ 		/* No stdout-path: it makes the 8250 driver register ttyS2 as a
+ 		 * second console.  That console writes to the (dead) UART3 THR
+@@ -508,14 +531,52 @@
+ };
+ 
+ /*
+- * MMC5 (0x480D5000) is the TI WL1283 combo's SDIO bus.  The WL1283
+- * bring-up (sdmmc5 pads, the FREF clock, the vmmc window and the board
+- * control lines) is archived under kernel/archive/wl1283/ and is to be
+- * re-derived from OS 2.1.0.1917.  Leave the controller disabled so it does
+- * not probe with no board wiring.
++ * MMC5 (0x480D5000) is the TI WL1283 combo's SDIO bus — measured, not inferred
++ * (session 29, trap 97).  io-pkt's process map (`pidin mem`) shows
++ * devnp-ti1283.so holding `/dev/mem 0x480d5000` (8 KiB, the hsmmc block) and
++ * the mmc5 interrupt attached as QNX vector 0x5b = GIC SPI 59, which is
++ * exactly `mmc5` in omap4-l4.dtsi.  The sdmmc5 pads 0x148-0x152 read 0x0118
++ * (mux 0, pull-up, input enable) on the running TabletOS while every sdmmc1
++ * and sdmmc3 pad is still 0x000f (safe mode), and QNX never instantiates the
++ * MMC1 controller at all.  Report 176's "mmc1" was the wrong controller.
++ *
++ * The I/O rail: the TWL's VMMC is switched OFF in RIM's own rail policy
++ * (`/etc/system/config/pmic-twl6030.cfg`, "set_state vmmc off app con mod") —
++ * that is the SD-slot rail and there is no SD slot.  The 1.8 V window below is
++ * the one every mainline wl12xx board describes (e.g. omap4-epson-embt2ws);
++ * the supply exists to give the MMC core an `ocr_avail` (as with vemmc), not to
++ * switch anything.
++ *
++ * Step one is enumeration only: no wlcore child node yet, so the card comes up
++ * as a bare SDIO device and the bus/power/pinctrl are the only variables.
+  */
++&omap4_pmx_core {
++	sdmmc5_pins: sdmmc5-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x148, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_clk */
++			OMAP4_IOPAD(0x14a, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_cmd */
++			OMAP4_IOPAD(0x14c, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_dat0 */
++			OMAP4_IOPAD(0x14e, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_dat1 */
++			OMAP4_IOPAD(0x150, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_dat2 */
++			OMAP4_IOPAD(0x152, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc5_dat3 */
++		>;
++	};
++
++	fref_clk2_out_pins: fref-clk2-out-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x19c, 0x0000)	/* fref_clk2_out */
++		>;
++	};
++};
++
+ &mmc5 {
+-	status = "disabled";
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&sdmmc5_pins &fref_clk_pins &fref_clk2_out_pins>;
++	vmmc-supply = <&vwl1283>;
++	bus-width = <4>;
++	ti,non-removable;
++	non-removable;
+ };
+ 
+ /*
+@@ -585,6 +646,45 @@
+  * fields (§18.4.12.9.4 is opaque enough that copying is safer).
+  */
+ /*
++ * The WL1283's reference clock comes OUT of the SoC and is requested by the
++ * chip with CLK_REQ.  The vendor's own config says so:
++ * local/work/qnx-fw/tiwlan_winchester.ini, `STRFRefClock = 2` (38.4 MHz) with
++ * "Bit 3 - CLK_REQ type, 0 = wired-OR", and `STRFRefClockSettingTime = 5` —
++ * "the time from asserting CLK_REQ (low to high) to valid FREF clock on the
++ * device inputs".  A WiLink with no running reference clock has no running
++ * digital core: it cannot answer SDIO, cannot answer HCI on UART2 and its IRQ
++ * line never goes high, which is exactly what this unit does.
++ *
++ * These pads live in the WKUP padconf at 0x4A31E000 — a block this project had
++ * never compared with the reference.  The reference muxes the request half of
++ * each pair:
++ *
++ *   0x4A31E050  FREF_CLK0_OUT / FREF_CLK3_REQ   ours 0x01080000  ref 0x00080000
++ *   0x4A31E054  FREF_CLK0_OUT / FREF_CLK3_REQ   ours 0x010F0002  ref 0x000F0003
++ *   0x4A31E058  FREF_CLK3_OUT / FREF_CLK4_REQ   ours 0x0108010F  ref 0x000B0003
++ *   0x4A31E05C  FREF_CLK4_OUT / SYS_32K         ours 0x01000108  ref 0x0100000B
++ *
++ * The values are the reference's own readback, as with the display pads.
++ */
++&omap4_pmx_wkup {
++	/*
++	 * Offsets are relative to the pinmux node's own reg base (0x40), so the
++	 * reference's 0x4A31E050..0x05C are 0x10..0x1C here.
++	 */
++	/*
++	 * Pin 10 (0x4A31E050) is already claimed by the TWL6030 ("0-0048"),
++	 * which wants FREF_CLK0_OUT as its own 32 kHz/oscillator clock — so it
++	 * is not in this group.  The three the reference muxes differently and
++	 * nothing else owns are below.
++	 */
++	fref_clk_pins: fref-clk-pins {
++		pinctrl-single,pins = <
++			0x018 0x000B0003	/* FREF_CLK4_OUT / FREF_CLK4_REQ */
++		>;
++	};
++};
++
++/*
+  * The reference leaves the TWL6030 MSECURE ball on fref_clk0_out in
+  * MUX_MODE2 (0x000F0003), not in safe mode.  mainline's twl6030_omap4.dtsi
+  * claims this pin for exactly that mux, so it has to be expressed as a pad
+@@ -827,9 +927,11 @@
+ 
+ /*
+  * Do not reset the GPIO2 module at probe.  Its DATAOUT holds the reference's
+- * steady-state display outputs, and the reset drops every one of them to 0 for
+- * the duration of the probe.  ti-sysc's reset is skipped so the hogs below can
+- * re-assert the same values without a glitch.
++ * steady-state outputs — including GPIO2_22, the WL1283 enable — and the reset
++ * drops every one of them to 0 for the duration of the probe.  On the reference
++ * the line is never low after boot, and a bare low->high on it does not bring
++ * the WL1283 back (session 29), so the glitch is worth removing: ti-sysc's
++ * reset is skipped and the hogs below re-assert the same values anyway.
+  */
+ &gpio2_target {
+ 	ti,no-reset-on-init;
+@@ -837,7 +939,7 @@
+ 
+ &gpio2 {
+ 	pinctrl-names = "default";
+-	pinctrl-0 = <&panel_en_pins>;
++	pinctrl-0 = <&panel_en_pins &wl1283_ctrl_pins>;
+ 
+ 	/* LM3532 / panel I2C gate — measured (report 120) */
+ 	panel-en-hog {
+@@ -897,6 +999,18 @@
+ 		line-name = "gpio2-20";
+ 	};
+ 
++	/*
++	 * WL1283 WLAN/BT enable, gpio_54 = GPIO2_22 (pad gpmc_nwp 0x07c).  The
++	 * loader leaves it LOW and the QNX driver raises it; hold it high here so
++	 * the chip is powered for the UART2/HCI probe.
++	 */
++	wl1283-en-hog {
++		gpio-hog;
++		gpios = <22 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "wl1283-enable";
++	};
++
+ };
+ 
+ /*
+@@ -971,6 +1085,19 @@
+ 			OMAP4_IOPAD(0x1b0, 0x0003)
+ 		>;
+ 	};
++
++	/*
++	 * WL1283 control lines.  gpio_54 (GPIO2_22, pad gpmc_nwp 0x07c) is the
++	 * WLAN enable; the reference leaves that pad at 0x0003 (mux 3 = gpio,
++	 * no pulls) with GPIO2_DATAOUT bit 22 set.  gpio_53 (GPIO2_21, pad
++	 * gpmc_ncs3 0x07a) is the WLAN interrupt and is already muxed by
++	 * bridge_pins above as an input.
++	 */
++	wl1283_ctrl_pins: wl1283-ctrl-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x07c, 0x0003)	/* gpmc_nwp = gpio_54 (WL_EN) */
++		>;
++	};
+ };
+ 
+ &gpio1 {
+--- a/drivers/mmc/core/core.c
++++ b/drivers/mmc/core/core.c
+@@ -23,6 +23,7 @@
+ #include <linux/fault-inject.h>
+ #include <linux/random.h>
+ #include <linux/slab.h>
++#include <linux/string.h>
+ #include <linux/of.h>
+ 
+ #include <linux/pb_event.h>
+@@ -634,6 +635,7 @@
+ int mmc_wait_for_cmd(struct mmc_host *host, struct mmc_command *cmd, int retries)
+ {
+ 	struct mmc_request mrq = {};
++	int err;
+ 
+ 	WARN_ON(!host->claimed);
+ 
+@@ -644,8 +646,11 @@
+ 	cmd->data = NULL;
+ 
+ 	mmc_wait_for_req(host, &mrq);
+-
+-	return cmd->error;
++	err = cmd->error;
++	if (host->parent && strstr(dev_name(host->parent), "480d5000"))
++		pr_info("PBCMD: mmc4 op=%u arg=%08x flags=%08x err=%d resp0=%08x\n",
++			cmd->opcode, cmd->arg, cmd->flags, err, cmd->resp[0]);
++	return err;
+ }
+ 
+ EXPORT_SYMBOL(mmc_wait_for_cmd);
+@@ -1133,6 +1138,7 @@
+ 		ocr &= ~0x7F;
+ 	}
+ 
++	pr_info("PBVOLT: card_ocr=%08x host_avail=%08x\n", ocr, host->ocr_avail);
+ 	ocr &= host->ocr_avail;
+ 	if (!ocr) {
+ 		dev_warn(mmc_dev(host), "no support for card's volts\n");
+--- a/drivers/mmc/core/mmc_ops.c
++++ b/drivers/mmc/core/mmc_ops.c
+@@ -208,6 +208,10 @@
+ 	if (err)
+ 		return err;
+ 
++	pr_info("PBOCR: arg=%08x resp=%08x host_avail=%08x%s\n",
++		cmd->arg, cmd->resp[0], host->ocr_avail,
++		(cmd->resp[0] & MMC_CARD_BUSY) ? "" : " busy");
++
+ 	if (mmc_host_is_spi(host)) {
+ 		if (!(cmd->resp[0] & R1_SPI_IDLE)) {
+ 			*busy = false;
+--- a/drivers/mmc/core/sdio.c
++++ b/drivers/mmc/core/sdio.c
+@@ -1212,12 +1212,16 @@
+ int mmc_attach_sdio(struct mmc_host *host)
+ {
+ 	int err, i, funcs;
+-	u32 ocr, rocr;
++	u32 ocr = 0, rocr, probe_ocr = 0;
+ 	struct mmc_card *card;
+ 
+ 	WARN_ON(!host->claimed);
+ 
+-	err = mmc_send_io_op_cond(host, 0, &ocr);
++	if (host->caps2 & MMC_CAP2_SDIO_OCR_PROBE_FFFF00)
++		probe_ocr = 0x00ffff00;
++	err = mmc_send_io_op_cond(host, probe_ocr, &ocr);
++	pr_info("PBC: sdio probe_ocr=%08x err=%d ocr=%08x\n",
++		probe_ocr, err, ocr);
+ 	if (err)
+ 		return err;
+ 
+@@ -1227,6 +1231,8 @@
+ 
+ 
+ 	rocr = mmc_select_voltage(host, ocr);
++	pr_info("PBC: sdio ocr=%08x avail=%08x rocr=%08x\n",
++		ocr, host->ocr_avail, rocr);
+ 
+ 	/*
+ 	 * Can we support the voltage(s) of the card(s)?
+--- a/drivers/mmc/host/omap_hsmmc.c
++++ b/drivers/mmc/host/omap_hsmmc.c
+@@ -231,6 +231,17 @@
+  */
+ static bool pb_trace;
+ module_param_named(trace, pb_trace, bool, 0644);
++/*
++ * Override the 400 kHz init clock on MMC5 only.  The QNX SDIO driver runs
++ * its CMD0/CMD5/CMD3/CMD7 sequence with SYSCTL.CLKD = 2 on a 96 MHz clock
++ * (12-24 MHz), not at 400 kHz; set this and rebind 480d5000.mmc to test
++ * whether the WL1283 needs the faster init rate.
++ */
++static unsigned int pb_init_hz;
++module_param_named(init_hz, pb_init_hz, uint, 0644);
++static bool pb_sdio_ocr_quirk;
++module_param_named(sdio_ocr_quirk, pb_sdio_ocr_quirk, bool, 0644);
++MODULE_PARM_DESC(sdio_ocr_quirk, "PlayBook: probe SDIO with CMD5 arg 0x00ffff00");
+ MODULE_PARM_DESC(trace, "PlayBook: log MMC requests and IRQs (PBREQ/PBIRQ)");
+ static u64 pb_req_ns;
+ 
+@@ -572,7 +583,16 @@
+ 	u16 dsor = 0;
+ 
+ 	if (ios->clock) {
+-		dsor = DIV_ROUND_UP(clk_get_rate(host->fclk), ios->clock);
++		unsigned int clk = ios->clock;
++
++		if (pb_init_hz && clk == 400000 &&
++		    host->mmc->parent &&
++		    strstr(dev_name(host->mmc->parent), "480d5000")) {
++			clk = pb_init_hz;
++			pr_info("PBCLK: %s init override %u -> %uHz\n",
++				mmc_hostname(host->mmc), ios->clock, clk);
++		}
++		dsor = DIV_ROUND_UP(clk_get_rate(host->fclk), clk);
+ 		if (dsor > CLKD_MAX)
+ 			dsor = CLKD_MAX;
+ 	}
+@@ -589,21 +609,27 @@
+ 
+ 	dev_vdbg(mmc_dev(host->mmc), "Set clock to %uHz\n", ios->clock);
+ 
++	pr_info("PBCLK: %s enter %uHz\n", mmc_hostname(host->mmc), ios->clock);
+ 	omap_hsmmc_stop_clock(host);
++	pr_info("PBCLK: %s stopped\n", mmc_hostname(host->mmc));
+ 
+ 	regval = OMAP_HSMMC_READ(host->base, SYSCTL);
+ 	regval = regval & ~(CLKD_MASK | DTO_MASK);
+ 	clkdiv = calc_divisor(host, ios);
++	pr_info("PBCLK: %s CLKD=%lu actual=%luHz\n", mmc_hostname(host->mmc),
++		clkdiv, clkdiv ? clk_get_rate(host->fclk) / clkdiv : 0);
+ 	regval = regval | (clkdiv << 6) | (DTO << 16);
+ 	OMAP_HSMMC_WRITE(host->base, SYSCTL, regval);
+ 	OMAP_HSMMC_WRITE(host->base, SYSCTL,
+ 		OMAP_HSMMC_READ(host->base, SYSCTL) | ICE);
+ 
+ 	/* Wait till the ICS bit is set */
++	pr_info("PBCLK: %s ics poll\n", mmc_hostname(host->mmc));
+ 	timeout = jiffies + msecs_to_jiffies(MMC_TIMEOUT_MS);
+ 	while ((OMAP_HSMMC_READ(host->base, SYSCTL) & ICS) != ICS
+ 		&& time_before(jiffies, timeout))
+ 		cpu_relax();
++	pr_info("PBCLK: %s ics done\n", mmc_hostname(host->mmc));
+ 
+ 	/*
+ 	 * Enable High-Speed Support
+@@ -629,6 +655,7 @@
+ 
+ 	omap_hsmmc_start_clock(host);
+ 	pb_event(0x1400);
++	pr_info("PBCLK: %s done\n", mmc_hostname(host->mmc));
+ }
+ 
+ static void omap_hsmmc_set_bus_width(struct omap_hsmmc_host *host)
+@@ -1617,6 +1644,23 @@
+ 	}
+ 
+ 	omap_hsmmc_set_bus_mode(host);
++	/*
++	 * Do NOT read other modules here.  This runs on every set_ios,
++	 * including a runtime unbind/bind long after probe, and a cached
++	 * ioremap of another target is not guaranteed live then: it faulted
++	 * in bind_store -> mmc_power_up and took the shell (and the console)
++	 * down with interrupts disabled (session 29, trap 100).  The GPIO
++	 * bank dump lives in omap_hsmmc_probe() instead, which runs once.
++	 */
++	pr_info("PBD: %s CON=%08x HCTL=%08x SYSCTL=%08x CAPA=%08x STAT=%08x PSTATE=%08x SYSSTATUS=%08x\n",
++		mmc_hostname(mmc),
++		OMAP_HSMMC_READ(host->base, CON),
++		OMAP_HSMMC_READ(host->base, HCTL),
++		OMAP_HSMMC_READ(host->base, SYSCTL),
++		OMAP_HSMMC_READ(host->base, CAPA),
++		OMAP_HSMMC_READ(host->base, STAT),
++		OMAP_HSMMC_READ(host->base, PSTATE),
++		OMAP_HSMMC_READ(host->base, SYSSTATUS));
+ 	pr_info("PBSIO: %s done\n", mmc_hostname(mmc));
+ 	pb_event(0x1800);
+ }
+@@ -1881,6 +1925,60 @@
+ }
+ #endif
+ 
++/*
++ * The reference enables SCRM AUXCLK1 (fref_clk2_out, SYS_CLK/3 = 12.8 MHz)
++ * before it probes the WL1283.  A late_initcall ran after the MMC5 probe
++ * (device_initcall), so the first session-32 test was too late; do it here,
++ * before mmc_add_host() starts the rescan.
++ */
++static void __maybe_unused pb_enable_fref_clk2(void)
++{
++	struct of_phandle_args clkspec = { };
++	struct device_node *np;
++	struct clk *clk;
++	int ret;
++
++	np = of_find_node_by_name(NULL, "auxclk1_ck");
++	if (!np) {
++		pr_info("PLAYBOOK: fref: no auxclk1_ck node\n");
++		return;
++	}
++	clkspec.np = np;
++	clk = of_clk_get_from_provider(&clkspec);
++	of_node_put(np);
++	if (IS_ERR(clk)) {
++		pr_info("PLAYBOOK: fref: get failed %ld\n", PTR_ERR(clk));
++		return;
++	}
++	clk_set_rate(clk, 12800000);
++	ret = clk_prepare_enable(clk);
++	pr_info("PLAYBOOK: fref_clk2_out %lu Hz enable=%d\n",
++		clk_get_rate(clk), ret);
++}
++
++/*
++ * hPlatform_hardResetTnetw drives WL_EN low for 500 ms and then high before
++ * the SDIO enumeration.  The gpio-hog leaves the line high from early boot,
++ * so repeat the reference's reset before mmc_add_host() starts the rescan.
++ */
++static void __maybe_unused pb_wl1283_reset_pulse(void)
++{
++	void __iomem *g;
++	u32 v;
++
++	g = ioremap(0x48055000, 0x1000);
++	if (!g)
++		return;
++	v = readl(g + 0x134);
++	writel(v & ~(1u << 22), g + 0x134);
++	writel(1u << 22, g + 0x190);
++	mdelay(500);
++	writel(1u << 22, g + 0x194);
++	mdelay(50);
++	iounmap(g);
++	pr_info("PLAYBOOK: WL_EN reset pulse (500 ms low, 50 ms settle)\n");
++}
++
+ static int omap_hsmmc_probe(struct platform_device *pdev)
+ {
+ 	struct omap_hsmmc_platform_data *pdata = pdev->dev.platform_data;
+@@ -2093,9 +2191,39 @@
+ 	if (!ret)
+ 		mmc->caps |= MMC_CAP_SDIO_IRQ;
+ 
++	if (strstr(dev_name(&pdev->dev), "480d5000")) {
++		if (pb_sdio_ocr_quirk)
++			mmc->caps2 |= MMC_CAP2_SDIO_OCR_PROBE_FFFF00;
++		/* FREF2 (AUXCLK1) enable and the WL_EN reset pulse are both
++		 * disabled: neither is needed for CMD5 (report 185) and the
++		 * pulse is a suspect for the USB warm-reset regression. */
++	}
++
+ 	pr_info("PBM: %s add_host\n", dev_name(&pdev->dev));
+ 	ret = mmc_add_host(mmc);
+ 	pr_info("PBM: %s add_host done\n", dev_name(&pdev->dev));
++	/*
++	 * One-shot board dump: the reference's GPIO4 outputs are part of the
++	 * WL1283 bring-up evidence (report 180).  Probe only, and only for the
++	 * combo's controller — see the note in omap_hsmmc_set_ios about why
++	 * this must not run per-request.
++	 */
++	if (strstr(dev_name(&pdev->dev), "480d5000")) {
++		int b;
++
++		for (b = 0; b < 5; b++) {
++			void __iomem *g = ioremap(0x48055000 + b * 0x2000, 0x1000);
++
++			if (!g) {
++				pr_info("PBGPIO: gpio%d: ioremap failed\n", b + 2);
++				continue;
++			}
++			pr_info("PBGPIO: gpio%d rev=%08x OE=%08x OUT=%08x IN=%08x\n",
++				b + 2, readl(g + 0x0000), readl(g + 0x0134),
++				readl(g + 0x013c), readl(g + 0x0138));
++			iounmap(g);
++		}
++	}
+ 
+ 	if (ret)
+ 		goto err_irq;
+--- a/include/linux/mmc/host.h
++++ b/include/linux/mmc/host.h
+@@ -463,6 +463,7 @@
+ #define MMC_CAP2_CRYPTO		0
+ #endif
+ #define MMC_CAP2_ALT_GPT_TEGRA	(1 << 28)	/* Host with eMMC that has GPT entry at a non-standard location */
++#define MMC_CAP2_SDIO_OCR_PROBE_FFFF00	(1 << 29)	/* Probe SDIO with CMD5 arg 0x00ffff00 */
+ 
+ 	bool			uhs2_sd_tran;	/* UHS-II flag for SD_TRAN state */
+ 	bool			uhs2_app_cmd;	/* UHS-II flag for APP command */

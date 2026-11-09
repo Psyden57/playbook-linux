@@ -3,12 +3,18 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**7 620 lines / 48 files (38 modified + 10 new)** against pristine
-**linux-7.3.3** (sha256 `28e48f56…`).  It is generated from the tree, not from
+**7 305 lines / 46 files (36 modified + 10 new)** against pristine
+**linux-7.3.3** (sha256 `d0d00009…`).  It is generated from the tree, not from
 the previous patch (trap 106), and it was verified by applying it to pristine
-7.3.3 targets and comparing all 48 files byte-for-byte with
-`local/kernel-tree` — 0 rejects, 0 mismatches.  Session 36 adds the
-`i2c2_pins` pinctrl group for the touch bus (report 193).
+7.3.3 targets and comparing all 46 files byte-for-byte with
+`local/kernel-tree` — 0 rejects, 0 mismatches.  Session 36 added the
+`i2c2_pins` pinctrl group for the touch bus (report 193).  **Session 37 moved
+the WL1283 (MMC5) instrumentation out** into
+`kernel/archive/wl1283/wl1283-instrumentation-7.3.3.patch` (DECISIONS §46):
+`drivers/mmc/core/sdio.c` and `include/linux/mmc/host.h` are no longer
+modified (they are pristine again), and the WL1283 hunks in
+`omap_hsmmc.c`/`core.c`/`mmc_ops.c` and the board DTS are gone.  The base is
+now chainloader, display, sensors, charger, touch, WDT2 and eMMC only.
 
 ```bash
 # pristine 7.3.3, then:
@@ -47,7 +53,7 @@ session-31 charger driver, and the session-36 touch driver:
 playbook-munin.c`.  `patch -p1 --dry-run` alone does
 not prove an export: it must be applied and the result compared to the tree.
 
-Session 32 adds two modified files — `drivers/mmc/core/sdio.c` (the CMD5
+Session 32 added two modified files — `drivers/mmc/core/sdio.c` (the CMD5
 probe-OCR quirk and `PBC: sdio` diagnostics) and `include/linux/mmc/host.h`
 (`MMC_CAP2_SDIO_OCR_PROBE_FFFF00`) — and extends `drivers/mmc/host/
 omap_hsmmc.c` (the quirk for `480d5000`), `arch/arm/mach-omap2/omap4-common.c`
@@ -60,6 +66,16 @@ WL_EN reset pulse also broke USB warm-reset enumeration (trap 130).  The
 functions remain in `omap_hsmmc.c` as `__maybe_unused` until the next cleanup;
 the session-33 MMC test knobs (`post-power-on-delay-ms`, CMD52 skip) are not
 in this patch.
+
+**Session 37 archives the above (DECISIONS §46).**  The WL1283 SDIO quirk
+(`sdio.c`, `host.h`), `playbook_fref_clk2_init` (not present in the current
+`omap4-common.c` any more), `pb_enable_fref_clk2`, `pb_wl1283_reset_pulse`,
+`pb_sdio_ocr_quirk`, `pb_init_hz`, the `PBCMD`/`PBCLK`/`PBD`/`PBOCR`/`PBVOLT`
+prints, the `480d5000` PBGPIO dump and the DTS `vwl1283`/`fref*`/`sdmmc5_pins`/
+`wl1283_ctrl_pins`/`wl1283-en-hog`/`&mmc5` nodes are in
+`kernel/archive/wl1283/wl1283-instrumentation-7.3.3.patch`.  The board DTS now
+sets `&mmc5 { status = "disabled"; }`.  The general eMMC bring-up prints
+(`PBM`/`PBINI`/`PBSIO`/`PBX`/`PBREQ`/`PBIRQ` and `pb_event`) remain.
 
 ## Reference base: 6.15.11
 
@@ -299,6 +315,10 @@ wc -l kernel/patches/0001-playbook-winchester-7.3.3.patch
 
 Session 32's export is **7 257 lines / 47 files** (sha256 `ad55511d…`), and
 the apply-and-compare verification printed **0 rejects, 0 mismatches**.
+**Session 37's export is 7 305 lines / 46 files** (sha256 `d0d00009…`), also
+verified 0 rejects / 0 mismatches; it used the session-36 patch's file list as
+the source set, dropped the two files that are now pristine (`sdio.c`,
+`host.h`), and did not need a clean tree (nothing was added).
 Update this README and `STATE.md` when a new export lands.
 
 **Session 36 warning — the tree-vs-pristine walk above picks up BUILD

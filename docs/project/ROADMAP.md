@@ -555,7 +555,25 @@ archives the WL1283-specific instrumentation from the tree/patch into
 host (pads, WL_EN/WL_IRQ), one variable per boot.  This is a new derivation,
 not a re-run: the negative results of reports 180–192 stand, and traps 116–137
 are not to be repeated as-is.  DECISIONS §46.  The WM8994 audio experiment
-follows.
+follows.  **Session 37: Task 1 (the archive) is done** — the WL1283 code is in
+`kernel/archive/wl1283/`, the base patch is 46 files (sha256 `d0d00009…`), and
+the re-derived `&mmc5` is `status = "okay"` (the 1917-truth minimal host).
+**Task 2 (the 1917-truth DTS
+audit) is done: report 195** (node-by-node provenance + the `&mmc5`
+re-derivation, header corrected).  **Task 3 is done and negative: report 196.** 
+The minimal 1917-truth `&mmc5` host (image `0x0DC36A11`) boots and probes but
+**CMD5 still does not answer** (`attach_sdio no` at 2.829 s, no voltage
+warning); the DT model is not the missing piece, and the redo reproduced the
+old state.  The remaining evidence is chip-side (VBAT/TCXO/SLOW_CLK, MMC5
+CLK/CMD/DAT0) — a board view or logic analyser.  **Calibration/NVS lead
+CHECKED (report 197):** QNX `hd5` (512 KiB) is the factory/calibration
+partition — unit serials + 2011-04 factory timestamps, a 19 118-byte TI WL128x
+radio-parameters INI (TxPower, XTAL trim, TX BiP reference, FEM/trace
+insertion loss, 2.4/5 GHz TXPD tables) and a 44 405-byte binary blob; the
+assigned WLAN MAC is in NVRAM `deviceinfo` (`1474118f9cc3`).  It is the source
+for `wl128x-nvs.bin` after enumeration (it cannot fix CMD5).  Media at session
+end: region 0 = the 1917 IFS (TabletOS running, `ti0` UP); the Linux Task-3
+image is `0x0DC36A11`.
 
 **Plan (one variable per boot):**
 0. **Power/charging — CLOSED 2026-11-08 (session 31).**  The board's charger

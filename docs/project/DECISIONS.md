@@ -1356,6 +1356,39 @@ the MMC5 `pidin` note); the instrumentation file list
 (`omap_hsmmc.c`, `mmc/core/{core,sdio,mmc_ops}.c`, `include/linux/mmc/host.h`,
 the board DTS); reports 180–192; the operator's direction at session 36 end.
 
+**Executed (session 37).**  Task 1 is done: `kernel/archive/wl1283/` holds
+`wl1283-instrumentation-7.3.3.patch` (517 lines, round-trip verified) and a
+`README.md`; the WL1283 code is out of the tree and the base patch, which is
+now **7 305 lines / 46 files**, sha256 `d0d00009…`, verified 0 rejects /
+46/46 byte-identical against pristine 7.3.3.  Scope was the **named WL1283
+code only** (operator): the SDIO quirk (`sdio.c`, `host.h`), `pb_sdio_ocr_quirk`,
+`pb_init_hz`, `pb_enable_fref_clk2`, `pb_wl1283_reset_pulse`, the
+`PBCMD`/`PBCLK`/`PBD`/`PBOCR`/`PBVOLT` prints, the `480d5000` PBGPIO dump and
+the DTS `vwl1283`/`sdmmc5_pins`/`fref*`/`wl1283_ctrl_pins`/`wl1283-en-hog`/
+`&mmc5` nodes.  The general eMMC `PB*` prints and `pb_event` stay (KERNEL-PORT
+§7.2's full prune remains separate).  `&mmc5` is now `status = "disabled"` in
+the board DTS (the dtsi node has no status and is enabled by default).  The
+build is clean and produced the first WL1283-free base image, CRC `0x05819994`
+(not flashed).  Task 2 (the 1917-truth DTS audit) is **report 195**: a
+node-by-node audit with provenance classes, the corrected header (the 4869
+claim removed; I²C1/I²C3 comment fixes), and the `&mmc5` re-derivation (pads,
+WL_EN/WL_IRQ, 4-bit, 24 MHz, 1.8 V OCR window, no `ti,dual-volt`, no pwrseq),
+each value cited.  The re-derived `&mmc5` is not added to the tree yet; Task 3
+is the one boot.  Patch re-exported after the comment edits: 46 files, 7 305
+lines, sha256 `d0d00009…`, 0 rejects / 46/46 identical.
+
+**Executed (session 37) — Task 3.**  The re-derived minimal `&mmc5` host was
+built (image `0x0DC36A11`, kernel `7.3.3 #24`), flashed region 0 only, and
+booted: `mmc4` probes (`f_max=24000000`, 400 kHz init) and **CMD5 still does
+not answer** — `attach_sdio no` at 2.829 s, `Failed to initialize a
+non-removable card`, no voltage warning (report 196).  The eMMC, the Munin
+touch (`event0`) and the rest of the stripped base are healthy.  **The DT
+model is not the missing piece; the redo reproduced the old state.**  The
+remaining evidence is chip-side or host-sampling (needs a board view or logic
+analyser).  A new lead from the operator: WLAN calibration/NVS data may live in
+NVRAM or a QNX-exposed partition, to check on the next TabletOS boot (read-only;
+it matters for the post-enumeration `wl12xx` bring-up, not CMD5).
+
 ---
 
 These were the open policy questions.  The licence and visibility are decided
