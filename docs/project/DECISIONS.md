@@ -1318,6 +1318,46 @@ IRQ pad.
 
 ---
 
+## 46. Re-derive the board DTS from 2.1.0.1917; archive the WL1283 code and restart it from basics (session 36 end)
+
+**Decision (operator, session 36 end).**  The board DTS is to be **re-derived
+node by node from 2.1.0.1917** (the live oracle, its `/base`, and the 1917 IFS
+tree), not from the 2.0.0.4869 register map the header names.  The
+WL1283-specific instrumentation is to be **moved out of the active 7.3.3 tree
+and patch into an archive** and the WL1283 started again from a minimal
+1917-truth `&mmc5` (pads, WL_EN/WL_IRQ), one variable per boot.  This is the
+next session's **first task**; the WM8994 audio experiment follows.
+
+**Why.**  The WL1283 is one of the device's most important parts and the
+current approach has not brought it up.  The DTS header still says it was
+reverse-engineered from 2.0.0.4869 and the OS 2.0 IFS buildfile, while the
+WL1283, display, sensor, charger and touch nodes were later corrected from
+1917; a full 1917-truth audit is the systematic way to rule out a missing or
+wrong model (pads, `vmmc`/`vqmmc`, pwrseq, clocks, bus properties).  The
+accumulated MMC instrumentation (`PBCMD`/`PBCLK`/`PBD`/`PBOCR`/`PBVOLT`, the
+`sdio_ocr_quirk`, `pb_enable_fref_clk2`, `pb_wl1283_reset_pulse`, the
+`MMC_CAP2_SDIO_OCR_PROBE_FFFF00` bit) also obscures the baseline.
+
+**What this does not change.**  The negative results of reports 180–192 stand
+(the pads/GPIOs/PMIC rails/clock manager matched; S3 and H1 were negative; the
+remaining candidate was chip-side VBAT/TCXO/SLOW_CLK or OMAP HSMMC sampling).
+The redo is a **new derivation**, not a re-run: do not repeat traps 116–137
+as-is, and if a new test overlaps one (H1, S3), say what is different and keep
+it one variable.
+
+**Constraint.**  Archive before editing; keep the base patch (display, sensors,
+charger, touch) clean; no RPMB/NVRAM/MCT writes.  The old code and its
+experiment log stay in the archive as the reference.  The touch image
+`0x04AF1433` is the current media and the working baseline.
+
+**Evidence.**  `kernel/source/omap4-winchester.dts` header lines 5–6 (the 4869
+provenance); the 1917 citations already in the file (the charger comment,
+the MMC5 `pidin` note); the instrumentation file list
+(`omap_hsmmc.c`, `mmc/core/{core,sdio,mmc_ops}.c`, `include/linux/mmc/host.h`,
+the board DTS); reports 180–192; the operator's direction at session 36 end.
+
+---
+
 These were the open policy questions.  The licence and visibility are decided
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.

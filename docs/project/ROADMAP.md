@@ -546,6 +546,17 @@ measurements remain** (VBAT/TCXO/SLOW_CLK, MMC5_CLK/CMD/DAT0).  **The operator
 formally stopped this item at the start of session 36; do not re-open traps
 116–137.**
 
+**Re-opened (operator, session 36 end) — a 1917-truth DTS audit and a
+from-basics restart.**  The WL1283 is the priority.  The next session (1)
+archives the WL1283-specific instrumentation from the tree/patch into
+`kernel/archive/wl1283/`, (2) re-derives the board DTS node by node from
+**2.1.0.1917** (the live oracle, its `/base`, the 1917 IFS tree) instead of the
+2.0.0.4869 header, and (3) brings `&mmc5` up again from a minimal 1917-truth
+host (pads, WL_EN/WL_IRQ), one variable per boot.  This is a new derivation,
+not a re-run: the negative results of reports 180–192 stand, and traps 116–137
+are not to be repeated as-is.  DECISIONS §46.  The WM8994 audio experiment
+follows.
+
 **Plan (one variable per boot):**
 0. **Power/charging — CLOSED 2026-11-08 (session 31).**  The board's charger
    is the **Intersil ISL9519 at I²C1 `0x48070000`, slave `0x09`** (VendorID

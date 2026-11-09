@@ -182,7 +182,9 @@ step 5**: the WM8994 audio machine and the Cypress CY8CTMA3 touch (report 176).
 * **"`/base/usr/bin/touch` is RIM's touch daemon."**  It is the POSIX utility;
   the driver is a `screen` module.  [report 193 §1]
 * **"The WL1283 is still open."**  The operator formally stopped it at the
-  start of this session; do not repeat traps 116–137.
+  start of this session; **at session 36 end the operator re-opened it** for a
+  1917-truth DTS audit and a from-basics restart (DECISIONS §46).  The old
+  negative results stand; do not repeat traps 116–137 as-is.
 * **The intermediate images `0x86024669` (probe read failed) and `0x31AD9A77`
   (blocking retry; USB regression) are superseded by `0x04AF1433`; the bus
   test `0x307615B3` is superseded too.**
@@ -224,9 +226,14 @@ step 5**: the WM8994 audio machine and the Cypress CY8CTMA3 touch (report 176).
 
 ## Next
 
-Start the **WM8994 audio half** of step 5 (enable `CONFIG_MFD_WM8994` /
-`CONFIG_SND_SOC_WM8994`, probe the codec at I²C4 `0x1a`, then the McBSP/`l4_abe`
-machine link).  Touch polish: the axis calibration/orientation for the
-1024×600 panel and the IRQ pad.  The unit is on the touch image `0x04AF1433`
-(counter `0x2b`); re-flash `local/images/kernel-0xE36C679A-wdt58s.img` at block
-`0x825` to return to the known-good baseline.
+At wrap-up the operator directed the next session's **first task**: archive the
+WL1283-specific code out of the active tree/patch (`kernel/archive/wl1283/`),
+then **re-derive the board DTS node by node from 2.1.0.1917** (the header is
+still 2.0.0.4869-era) and **restart `&mmc5` from a minimal 1917-truth host**
+(pads, WL_EN/WL_IRQ; no OCR quirks/FREF/pulse).  The old negative results
+(reports 180–192, traps 116–137) stand; this is a new derivation, not a re-run
+(DECISIONS §46).  The first experiment is a minimal MMC5 host + CMD5; the
+WM8994 codec-ID experiment follows.  Touch polish (axis calibration, IRQ pad)
+remains open.  The unit is on the touch image `0x04AF1433` (counter `0x2b`);
+re-flash `local/images/kernel-0xE36C679A-wdt58s.img` at block `0x825` to
+return to the known-good baseline.

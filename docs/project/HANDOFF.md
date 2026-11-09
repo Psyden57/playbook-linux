@@ -29,8 +29,10 @@ Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolut
 > `reg0=0x80` (start app) → `reg0=0x02` → `reg 0x1D=1` → `reg 0x1F=1`, then
 > reads the 18-byte report at `reg1` (4 × 12-bit contacts).  No firmware upload
 > is needed (the app/build match `Pegasus_50.hex`).  **The touch WORKS on the media image `0x04AF1433`:** the driver boots
-> the controller and `input0` reports touches.  **Next: the WM8994 audio
-> half.**  The known-good baseline remains `0xE36C679A`.
+> the controller and `input0` reports touches.  **Next (operator direction,
+> session 36 end): archive the WL1283 code, re-derive the board DTS from
+> 2.1.0.1917, and restart MMC5 from a minimal host; the WM8994 audio half
+> follows.**  The known-good baseline remains `0xE36C679A`.
 
 ## 0. The job, and where it stands
 
@@ -78,15 +80,14 @@ Munin touch driver.  Config: `kernel/winchester-7.3.3.config` (includes
 
 **Parked by the operator:** the `hd3` cut-over, BB10, and the PlayBook OS image
 work.  **The WL1283 (item 9 step 4) was formally stopped at the start of
-session 36.**  The QNX-side RE is complete (report 189) and names no WLAN rail,
-clock or extra pad; the live syspage node is only EN/INT; the electrical
-comparison and every S1/S2/S3/H1 experiment are negative (report 192).  The
-remaining difference is chip-side and needs a schematic/board view or a logic
-analyser.  **Do not re-open traps 116–137.**  Item 9 step 5 (WM8994 audio +
-CY8CTMA3 touch) is the work now.  The USB warm-reset re-enumeration regression
-remains **fixed** (trap 130); the image enumerates by itself.
+session 36 and re-opened at its end** for a 1917-truth DTS audit and a
+from-basics restart (§0c, DECISIONS §46).  The negative results of reports
+180–192 stand; **do not repeat traps 116–137 as-is** — the redo is a new
+derivation, and any overlapping test must state what is different.  The WM8994
+audio half follows.  The USB warm-reset regression remains **fixed** (traps
+130/141); the image enumerates by itself.
 
-## 0a. The way back (the unit is on the known-good image, the 1917 IFS is not on media)
+## 0a. The way back (the unit is on the touch image `0x04AF1433`; the 1917 IFS is not on media)
 
 To return to PlayBook OS 2.1.0.1917:
 
@@ -111,15 +112,55 @@ and the 1917 UFS are still on media and untouched.  After the boot:
 `/dev/rpmb/BOOTCTR_FCTRY` (expect `0x32` after the TabletOS top-up).  **Do not
 restore `local/images/ifs0.sealed.bin`** — it is the 2.0.0.4869 IFS (trap 84).
 
-## 0c. The next step — the one experiment (WM8994 codec ID)
+## 0c. The next step — archive the WL1283 code, re-derive the DTS from 1917, then a minimal MMC5
+
+**Operator direction (session 36 end).**  The WL1283 is the priority.  Before
+another CMD5 experiment: (1) archive the accumulated WL1283 code, (2) re-derive
+the board DTS node by node from **2.1.0.1917** rather than the 2.0.0.4869
+header, and (3) start `&mmc5` again from a minimal 1917-truth host.  The old
+negative results (reports 180–192, traps 116–137) stand; this is a new
+derivation, not a re-run.  DECISIONS §46.
+
+**Task 1 — archive the WL1283 code (mechanical, no boot).**
+* Create `kernel/archive/wl1283/README.md` and
+  `kernel/archive/wl1283/wl1283-instrumentation-7.3.3.patch`.
+* Move out of the active tree/patch: the MMC instrumentation
+  (`PBCMD`/`PBCLK`/`PBD`/`PBOCR`/`PBVOLT`), `pb_sdio_ocr_quirk`,
+  `pb_enable_fref_clk2`, `pb_wl1283_reset_pulse`,
+  `MMC_CAP2_SDIO_OCR_PROBE_FFFF00`, and the DTS `vwl1283`, `fref*`,
+  `wl1283_ctrl_pins`, `wl1283-en-hog` and `&mmc5` nodes.
+* Re-export the base patch (display, sensors, charger, touch) and verify it
+  reproduces the tree byte-for-byte.
+
+**Task 2 — the 1917-truth DTS audit (file-only).**
+* For every node, cite the 1917 artifact: live `pidin mem`/`pidin irq`, the
+  1917 `/base` (`hwio-config-winchester.so`, the enums), the 1917 IFS tree, the
+  live registers.
+* Re-derive `&mmc5` from scratch: pads `0x148`–`0x152`, `wl1283_ctrl_pins`
+  (`0x07a`/`0x07c`), the EN/IRQ lines, `vmmc`/`vqmmc`, `bus-width`,
+  `non-removable`, `max-frequency`, `mmc-pwrseq`, `ti,dual-volt`, `no-1-8-v`.
+  Compare with the 1917 `hwio` pad/GPIO tables and the live QNX state.
+* Correct the DTS header to name which nodes are 1917.
+
+**Task 3 — the one experiment (first WL1283 boot).**  A minimal `&mmc5` host
+from the 1917 evidence: pads, WL_EN, WL_IRQ; **no** OCR quirks, no FREF, no
+reset pulse.  Boot and read the CMD trace.
+
+* CMD5 answers → the redo found the missing piece; proceed to firmware/NVS.
+* CMD5 still times out with the minimal host → the redo reproduced the old
+  state; the next measurement is chip-side (VBAT/TCXO/MMC5_CLK/CMD/DAT0), as
+  reports 180–192 concluded.
+
+**Inputs:** the unit on `0x04AF1433`; the 1917 oracle (`tools/pbssh.sh`, the
+door); `local/work/rcfs-1917-mnt`; `local/work/ifs1917-tree`;
+`tools/qnx-hwi.c`, `tools/pbi2c`; `local/kernel-tree`; the patch.
+**One variable per boot.**  Do not inject rails or pins.
+
+## 0d. After that — the WM8994 codec ID (item 9 step 5)
 
 **The touch is done and works** (image `0x04AF1433`: `input0`/`event0`, the
-driver boots the Munin controller; traps 140/141).  The next work is the
-**audio half of item 9 step 5**, starting with the WM8994.
-
-**The one experiment (read-only, no build).**  On the running touch image, read
-the WM8994 software-reset/device-ID register at **I²C4 `0x1a`** (Linux
-`i2c-3`), with 16-bit register addressing:
+driver boots the Munin controller; traps 140/141).  The audio half starts with
+a read-only codec check at **I²C4 `0x1a`** (Linux `i2c-3`), 16-bit registers:
 
 ```
 i2ctransfer -y 3 w2@0x1a 0x00 0x00 r2
@@ -158,6 +199,10 @@ instance is probably **2**; confirm it.
 WL_EN pulse (trap 130).
 
 ## 1. The WL1283 (item 9 step 4) — the software road is exhausted
+
+**Re-opened at session 36 end for a 1917-truth DTS audit and a from-basics
+restart (§0c, DECISIONS §46).  The results below are the evidence and are not
+invalidated; do not repeat traps 116–137 as-is.**
 
 **Session-34 result (report 189).**  The QNX-side RE that session 33 left open
 is complete:
@@ -653,10 +698,11 @@ The Linux bus was dead because i2c2 pads 0x4A100126/0x4A100128 were 0x011F
 immediately.  The DTS now has i2c2_pins.  Wiring: power GPIO1_14, reset
 GPIO4_8, IRQ tp_intr=1035 = GPIO2_3 (inferred).  **The touch WORKS** (report
 194, DECISIONS §45): the driver boots the Munin controller and `input0`/
-`event0` reports touches; the media image is `0x04AF1433`.  NEXT: the WM8994
-codec-ID experiment (HANDOFF §0c), then the audio machine.  Do NOT run a
-whole-bus i2cdetect (it blocks the console; probe one address).
-hd3/BB10/PlayBook OS work remain parked.
+`event0` reports touches; the media image is `0x04AF1433`.  NEXT (operator
+direction): archive the WL1283 code, re-derive the DTS from 2.1.0.1917, and
+restart MMC5 (HANDOFF §0c, DECISIONS §46); then the WM8994 codec-ID
+experiment.  Do NOT run a whole-bus i2cdetect (it blocks the console; probe one
+address).  hd3/BB10/PlayBook OS work remain parked.
 
 HARDWARE RE RULE: OS 2.x only (live 1917 oracle, the 1917 /base QNX6 image,
 the 1917 IFS tree, the 4869 IFS dump).  Never use BB10 images for PlayBook

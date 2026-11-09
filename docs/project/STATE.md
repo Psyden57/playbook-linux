@@ -940,19 +940,23 @@ exactly one unit and stays up until asked.
 
 ## The single current blocker
 
-**The touch works under Linux; the audio is the next task.**  The Cypress
-CY8CTMA3 is on **I²C2 `0x48072000` = Linux `i2c-1`** at `0x65` (QNX
-`driver = munin`, `/dev/i2c1`).  The DTS muxes the pads; the driver
+**The touch works under Linux; the WL1283 is re-opened as the next task.**
+The Cypress CY8CTMA3 is on **I²C2 `0x48072000` = Linux `i2c-1`** at `0x65`
+(QNX `driver = munin`, `/dev/i2c1`).  The DTS muxes the pads; the driver
 (`playbook-munin.c`) boots the controller out of its Munin bootloader and
 reports touches on `input0`/`event0`.  The image `0x04AF1433` is on media and
 self-enumerates.  Open touch details: the axis calibration/orientation
 (vendor input 1280×768 → 1024×600 panel), the IRQ pad, and the sleep/power
 states.  Report 194, traps 138–141, DECISIONS §44/§45.
 
-**The WL1283 was formally stopped at the start of session 36.**  Its software
-surface is exhausted (report 192; traps 135–137), and the remaining difference
-is chip-side, needing a schematic/board view or logic analyser.  Do not re-run
-traps 116–137.
+**The WL1283 was formally stopped at the start of session 36 and re-opened at
+its end (operator, DECISIONS §46).**  The negative results of reports 180–192
+stand (pads, GPIOs, PMIC rails and the clock manager matched; S3 and H1 were
+negative; the remaining candidate is chip-side VBAT/TCXO/SLOW_CLK or OMAP
+HSMMC sampling).  The next session **archives the WL1283 code, re-derives the
+board DTS node by node from 2.1.0.1917, and restarts `&mmc5` from a minimal
+1917-truth host.**  Do not repeat traps 116–137 as-is; this is a new
+derivation.  The WM8994 audio half follows.
 
 **Media state: the touch image `0x04AF1433` is in region 0** (region-0 only;
 the known-good `0xE36C679A` is the way back); region 1 is the 7.3.3 charger
@@ -962,12 +966,16 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 ## What is next
 
-1. **The WM8994 audio half of item 9 step 5** — enable `CONFIG_MFD_WM8994` /
-   `CONFIG_SND_SOC_WM8994`, probe the codec at I²C4 `0x1a`, then the
-   McBSP/`l4_abe` machine link (report 176 §3, HANDOFF §1b).
-2. **Touch polish:** the axis calibration/orientation for the 1024×600 panel
+1. **Archive the WL1283 code, re-derive the board DTS from 2.1.0.1917, and
+   restart `&mmc5` from a minimal host** (DECISIONS §46).  The old negative
+   results stand; the first experiment is a minimal 1917-truth MMC5 host and a
+   CMD5 read.
+2. **The WM8994 audio half of item 9 step 5** — the read-only codec-ID check at
+   I²C4 `0x1a`, then `CONFIG_MFD_WM8994` / `CONFIG_SND_SOC_WM8994`, the codec
+   node, and the McBSP/`l4_abe` machine link (report 176 §3, HANDOFF §0d).
+3. **Touch polish:** the axis calibration/orientation for the 1024×600 panel
    and the IRQ pad (GPIO2_3); the bus, protocol and driver are proven.
-3. **The unit is on the touch image `0x04AF1433`** (region 0 only; region 1
+4. **The unit is on the touch image `0x04AF1433`** (region 0 only; region 1
    unchanged), pack Full 4.156 V.  Re-flash `0xE36C679A` at block `0x825` to
    return to the known-good baseline.
 
