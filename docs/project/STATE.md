@@ -1066,6 +1066,11 @@ the MCT remain unwritable, and an agent never writes RPMB (`SAFETY.md` §6).
    I²C4 `0x1a` (`i2ctransfer -y 3 w2@0x1a 0x00 0x00 r2` should return
    `0x8994`), then `CONFIG_MFD_WM8994` / `CONFIG_SND_SOC_WM8994`, the codec
    node, and the McBSP/`l4_abe` machine link (report 176 §3, HANDOFF §0c).
+   **Also the one cheap chip-side check:** the board's FEM is a TriQuint
+   TQP6M9002 (`tiwlan_winchester.ini FemVendorAndOptions = 1`); probe the FEM
+   VCC (and WL1283 VBAT) on live QNX-with-WiFi vs Linux — a rail off under
+   Linux would be a shared board rail the TWL comparison missed (report 195
+   §3.7).  The FEM alone cannot gate SDIO.
 3. **Touch polish:** the axis calibration/orientation for the 1024×600 panel
    and the IRQ pad (GPIO2_3); the bus, protocol and driver are proven.
 4. **Build `wl128x-nvs.bin` from the hd5 calibration** (report 197), and add the

@@ -200,6 +200,10 @@ general eMMC bring-up prints (`PBM`/`PBINI`/`PBSIO`/`PBX`/`PBREQ`/`PBIRQ` and
 * **The exact WL_IRQ `interrupts` flag for the `wlcore@2` node** — our 1917
   evidence is active-low/falling, the epson mainline board uses
   `IRQ_TYPE_LEVEL_HIGH`.  *Would settle it:* a working enumeration + IRQ test.
+* **Does the TQP6M9002 FEM (or a shared board rail) matter?**  The board's FEM
+  is TriQuint (`FemVendorAndOptions = 1`); no 1917 software switches a FEM rail.
+  *Would settle it:* probe the FEM VCC and the WL1283 VBAT on live QNX-with-WiFi
+  vs Linux (a multimeter check; report 195 §3.7).
 
 ## Superseded / uncertain
 

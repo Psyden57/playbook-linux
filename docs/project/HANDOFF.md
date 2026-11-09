@@ -116,6 +116,14 @@ the 1917-truth redo the operator asked for, and it is **negative**:
   `omap4-epson-embt2ws.dts` (same chip; it also uses `vmmc-supply` +
   `mmc-pwrseq-simple clocks = <&twl 1>` for the 32 kHz).  Our `&mmc5` has **no
   `wlcore` child yet** — add it once the bus enumerates; it cannot fix CMD5.
+* **The TQP6M9002 FEM (operator, session 37, report 195 §3.7).**  The board's
+  FEM is a TriQuint part (`tiwlan_winchester.ini FemVendorAndOptions = 1` =
+  TQS), i.e. the TQP6M9002 beside the WL1283.  No 1917 software switches a FEM
+  rail (driver = pads+EN/IRQ only; startup = EN/INT; `.pm` = OSWR).  The FEM is
+  RF and cannot gate SDIO enumeration, so it does not explain CMD5 by itself —
+  **but probe the FEM VCC (and the WL1283 VBAT) on live QNX-with-WiFi vs
+  Linux**: off under Linux would point at a shared board rail the TWL
+  comparison missed, and is the one cheap chip-side check available.
 
 ## 0c. Item 9 step 5 (audio + touch)
 
