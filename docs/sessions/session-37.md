@@ -129,6 +129,17 @@ general eMMC bring-up prints (`PBM`/`PBINI`/`PBSIO`/`PBX`/`PBREQ`/`PBIRQ` and
 * **`BOOTCTR_FCTRY = 0x32`** on this TabletOS boot (the TabletOS top-up ran)
   [`cat /dev/rpmb/BOOTCTR_FCTRY` → the byte `0x32`].
 
+* **The mainline `wlcore` binding was checked (report 195 §3.6).**  In the 7.3.3
+  tree, `ti,wl1283` **requires `interrupts` and `ref-clock-frequency`**; the
+  SDIO form is a `wlcore@2` child of the MMC node (`reg = <2>`), with a WL_IRQ
+  `interrupts` entry and the 26 MHz ref/tcxo clock.  The closest mainline board
+  is `omap4-epson-embt2ws.dts` (same chip; `wlcore@2`, `ref-clock-frequency =
+  <26000000>`, `tcxo-clock-frequency = <26000000>`, `interrupts-extended` on a
+  GPIO), followed by `omap4-var-som-om44-wlan.dtsi`.  **Our `&mmc5` has no
+  `wlcore` child yet** — a post-enumeration requirement; it cannot fix CMD5.
+  The epson also models the enable as a `regulator-fixed` + `startup-delay-us`
+  and the 32 kHz SLOW_CLK as `mmc-pwrseq-simple clocks = <&twl 1>`.
+
 ## Inferred (reasoning from evidence, not directly measured)
 
 * **The 1917-truth DT model is not the missing piece for CMD5.**  The negative
@@ -186,6 +197,9 @@ general eMMC bring-up prints (`PBM`/`PBINI`/`PBSIO`/`PBX`/`PBREQ`/`PBIRQ` and
 * **Touch axis calibration/orientation** (vendor 1280×768 → 1024×600) and the
   IRQ pad (`tp_intr=1035` = GPIO2_3, inferred); **WM8994 audio not started**
   (read-only codec-ID at I²C4 `0x1a` is the first step).
+* **The exact WL_IRQ `interrupts` flag for the `wlcore@2` node** — our 1917
+  evidence is active-low/falling, the epson mainline board uses
+  `IRQ_TYPE_LEVEL_HIGH`.  *Would settle it:* a working enumeration + IRQ test.
 
 ## Superseded / uncertain
 

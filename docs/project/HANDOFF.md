@@ -108,6 +108,14 @@ the 1917-truth redo the operator asked for, and it is **negative**:
   difference is **chip-side (VBAT / 26 MHz TCXO / SLOW_CLK) or OMAP HSMMC
   sampling**, which needs a **board view or logic analyser**.  Do not re-run
   the closed experiments (traps 116–141) without stating what is new.
+* **Mainline binding (checked session 37, report 195 §3.6).**  `ti,wl1283`
+  requires `interrupts` **and** `ref-clock-frequency`; the SDIO form is a
+  `wlcore@2` child of `&mmc5` with `ref-clock-frequency`/`tcxo-clock-frequency`
+  = 26 MHz and a WL_IRQ `interrupts` entry (gpio 53 → `&gpio2 21`), plus
+  `#address-cells`/`#size-cells`.  The closest board is
+  `omap4-epson-embt2ws.dts` (same chip; it also uses `vmmc-supply` +
+  `mmc-pwrseq-simple clocks = <&twl 1>` for the 32 kHz).  Our `&mmc5` has **no
+  `wlcore` child yet** — add it once the bus enumerates; it cannot fix CMD5.
 
 ## 0c. Item 9 step 5 (audio + touch)
 
@@ -304,7 +312,8 @@ Operator's call when to stop and to wrap up.
 
 NEXT (operator's call): (a) the chip-side WL1283 measurements (needs a board
 view/logic analyser); (b) the WM8994 codec-ID + machine link; (c) touch axis
-calibration/orientation + IRQ; (d) build wl128x-nvs.bin from hd5 (file-only).
+calibration/orientation + IRQ; (d) build wl128x-nvs.bin from hd5, and add the
+`wlcore@2` child per the binding (report 195 §3.6), when the bus works.
 The unit is on TabletOS; region 0 is the only region a Linux test changes.
 
 UPDATE THE DOCS as you go and commit: STATE.md, HANDOFF.md, ROADMAP.md,

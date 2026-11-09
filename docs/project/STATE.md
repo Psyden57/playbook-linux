@@ -1068,8 +1068,10 @@ the MCT remain unwritable, and an agent never writes RPMB (`SAFETY.md` §6).
    node, and the McBSP/`l4_abe` machine link (report 176 §3, HANDOFF §0c).
 3. **Touch polish:** the axis calibration/orientation for the 1024×600 panel
    and the IRQ pad (GPIO2_3); the bus, protocol and driver are proven.
-4. **Build `wl128x-nvs.bin` from the hd5 calibration** (report 197), for the
-   post-enumeration `wl12xx` path, whenever the bus works.
+4. **Build `wl128x-nvs.bin` from the hd5 calibration** (report 197), and add the
+   `wlcore@2` child the mainline binding requires (`ti,wl1283`, `reg = <2>`,
+   `interrupts` for WL_IRQ, `ref-clock-frequency`/`tcxo-clock-frequency` 26 MHz),
+   for the post-enumeration `wl12xx` path — report 195 §3.6, HANDOFF §0b.
 5. **The unit is on TabletOS** (1917 IFS in region 0, `BOOTCTR_FCTRY = 0x32`).
    Re-flash `0x0DC36A11` (or `0xE36C679A`) at block `0x825` to return to Linux.
 
