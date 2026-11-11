@@ -31,11 +31,10 @@ now the **WM8994 codec up to the DAC**.
 **The audio blocker is now the McBSP, not the codec.**  See §0c.
 
 **The patch** `kernel/patches/0001-playbook-winchester-7.3.3.patch` is still the
-session-39 export (**53 files / 7 773 lines**, sha256 `434d06c3…`).  **Session
-41 changed `omap4-winchester.dts`, `playbook-wm8994.c` and `omap-mcbsp.c` in the
-tree but did NOT re-export the patch** — regenerate it before publishing or
-handing the tree on (recipe in `kernel/patches/README.md`; **`make clean` the
-tree first**, trap 139).  Trap 161.
+export at the session-41 wrap-up (**54 files / 8 113 lines**, sha256
+`fc3b2e54…`, 0 rejects and 54/54 byte-identical).  It picked up session 41's
+`omap4-winchester.dts`, `playbook-wm8994.c` changes and `sound/soc/ti/
+omap-mcbsp.c`, which the session-39 export had omitted.  Trap 161.
 
 ## 0a. The media, and the way back
 
@@ -63,7 +62,14 @@ Unchanged and **formally stopped by the operator** (session 36).  The 1917-truth
 minimal `&mmc5` host probes but `attach_sdio no` (report 196).  Do not re-run
 traps 116–137.
 
-## 0c. Item 9 step 5 — audio: one experiment, with a scope
+## 0c. Item 9 step 5 — audio: the next experiments, all bench/software only
+
+**Constraint (operator, session 41 end): there is no scope, no boardview and no
+pad-level knowledge.  Every experiment must be run from the bench (the unit
+itself) or from static RE.  Nothing may depend on probing a pin.**
+
+That rules out the obvious next step (watch `abe_mcbsp2_dx`) and leaves four
+software-only routes, in order of cost.
 
 ### What is already proven (do not re-derive)
 
@@ -78,41 +84,65 @@ R0x601 0x0001   R0x602 0x0001   AIF1 -> DAC1 routed
 R0x200 0x0011   AIF1CLK from FLL1
 R0x732 0x6020   FLL1 locked
 R0x60  0x00EE   output stage connected
-SRGR1 0x0f07    McBSP CLKGDV /8, 16-bit
-SRGR2 0x101f    FPER 31 (32 BCLK/frame)
+SRGR1 0x0f07    McBSP CLKGDV /8, CLKWD 16-bit
+SRGR2 0x101f    FPER 31 (32 BCLK/frame), CLKSM 0, FSGM 0
 AUXCLK1 (0x4A30A314) = 0x00020100   12.8 MHz, from a cold boot
 ```
 
-and the **DAC noise floor is audible**.  Programme audio is not.
-
-### The one measurement that is missing
+and the **DAC noise floor is audible**.  Programme audio is not.  The open
+measurement is:
 
 ```
 DXR   = 0x00000000      <- 32-bit transmit register, offset 0x8
-DRR   = 0xc8xxxxxx
 SPCR2 = 0x02f5          XRST=1  XRDY=0 (FIFO full)  XEMPTY=1 (shifter empty)
-                        GRST=1  FRST=1
 ```
-while `omap-dma-engine` interrupts advance **12/s** (= 48 000 / 4096) and
-`hw_ptr` runs at **48 185 frames/s**.
 
-**Do this:** put a scope on **`abe_mcbsp2_dx`** — CORE pad `0x0F8`, **high
-half** — during playback and look for activity.
+### E1 (cheapest, most likely) — make the McBSP a clock *consumer*
 
-| result | meaning | next |
-|---|---|---|
-| the pad **toggles** | the McBSP is transmitting; the codec is mis-framing what it receives | re-check `R0x300` format (`FMT` is bits `[4:3]`, `0x1` = I2S) and word length against the McBSP `XCR`/`SRGR1` `FWID`; try the codec-as-AIF1-master pair (§0c note) |
-| the pad is **static** | the McBSP never transmits; the fault is inside the port | check the sDMA port config and `ti,buffer-size`, then try `dx`→`dr` loopback with a capture stream |
-| no scope available | — | do the **loopback**: set `abe_mcbsp2_dx`→`dr` externally (or configure a capture stream and watch `DRR`) — this proves the transmit path without the codec |
-
-**Fallback experiment (no scope needed): the reference's clock roles.**
 The reference runs the codec as **AIF1 master** (`R0x302 = 0x4000`) with its
-McBSP as a consumer; ours is the reverse.  Switching needs **both** sides at
-once:
-1. board DTS DAI link format, and
-2. the CPU DAI in `SND_SOC_DAIFMT_BC_FC`, with `set_sysclk` taking the codec's
-   BCLK.
-This removes the McBSP sample-rate generator from the path entirely.
+McBSP as a consumer; ours is the reverse.  That structural difference puts the
+McBSP's sample-rate generator in the path on our side and removes it entirely on
+theirs.  Change **both** sides together (one boot, one variable = "clock roles
+inverted"):
+
+* board DTS: the `sound` node's DAI link format, and
+* `playbook-wm8994.c`: `dai_fmt` to `SND_SOC_DAIFMT_CBC_CFC` → the codec as
+  provider (`SND_SOC_DAIFMT_CBP_CFP` is codec-provider), and
+  `snd_soc_dai_set_sysclk(cpu_dai, …, aifclk, SND_SOC_CLOCK_IN)` so the McBSP
+  takes the codec's BCLK instead of generating it; drop the
+  `set_clkdiv`/`PB_MCBSP_FCLK_HZ` maths on that path.
+
+Read back `SPCR2` after the change: `XRDY` should stop being 0 with `XEMPTY` 1.
+
+### E2 — prove the transmit path without the codec (loopback, no probe)
+
+`abe_mcbsp2_dx` and `abe_mcbsp2_dr` are the **two halves of one register**
+(`0x4A1000F8`; TRM Table 18-420).  Set the pad to mux 3 (`gpio`) on both halves
+and drive `dx`'s GPIO function from a userspace bit-bang, reading `dr`'s
+`DATAIN`: that proves the two balls are connected and that the pad config works,
+using only `/dev/mem` writes.  Alternatively configure the McBSP for internal
+loopback (`PCR0`/`XCCR` loopback bits) and enable a **capture** stream alongside
+playback — the sDMA then delivers what the McBSP actually transmitted into a
+`/dev/dsp` read, which is a complete software-visible answer.
+
+### E3 — ask the reference the same question with a real stream
+
+Boot TabletOS, play a file, and while it plays read the **McBSP2 registers**
+with `memdump3` (they are blocked from Linux userspace, trap 158, but QNX can
+read them).  We have the codec side from a live reference (§5g of report 205) but
+**not** its `SPCR2`/`SRGR1`/`SRGR2`/`PCR0` *during playback* — and that is exactly
+the register set that differs in meaning between master and consumer.  This is
+pure static/bench work and needs no probe.
+Note `memdump3` reads physical memory, so `0x49024000`-based addresses are the
+right ones to try (the "dma" window), and QNX does not enforce the Linux L4
+firewall for these.
+
+### E4 — re-read the driver against the reference's DMA usage
+
+Static RE only: compare how the 1917 stack programs sDMA for McBSP2 (the
+`deva-ctrl-omap4abe-wm8994.so` re in report 201 covers the codec; the McBSP/sDMA
+side has **not** been decompiled).  A threshold/port mismatch would explain
+`XRDY` stuck at 0 with the sDMA running.
 
 ### Driver facts you need before touching it
 
@@ -123,10 +153,9 @@ This removes the McBSP sample-rate generator from the path entirely.
   it every `update_bits()` is a silent no-op because the cache holds the values
   the driver tried to write while the codec was frozen.  **Trap 162.**
 * `hw_params` writes `R0x200 = 0` to thaw, so **something must re-enable
-  `AIF1CLK` afterwards** — otherwise the DAC loses its clock (that bug was found
-  and fixed in session 41).
-* The FLL is referenced from **BCLK**, not MCLK1: MCLK1 locked it only
-  intermittently (§0c note in report 205 §5h).
+  `AIF1CLK` afterwards** — otherwise the DAC loses its clock.
+* The FLL is referenced from **BCLK**, not MCLK1 (MCLK1 locked only
+  intermittently; see the open contradiction).
 
 ## 0d. Touch — done, but it does not survive a warm reboot
 
@@ -293,13 +322,19 @@ kernel 7.3.3); region 1 is the audio/OSS rootfs 7cc63990... (27 modules).  The
 way back to TabletOS is the 1917 IFS (local/work/ifs-shim-sealed.ifs) at block
 0x825.  Do NOT restore local/images/ifs0.sealed.bin (2.0.0.4869, trap 84).
 
-WHERE IT IS: ONE experiment — scope abe_mcbsp2_dx (CORE pad 0x0F8, HIGH half)
-during playback.  Toggling => the McBSP transmits and the codec mis-frames;
-static => the fault is inside the port (check sDMA port config, ti,buffer-size,
-then a dx->dr loopback with capture).  No scope? Do the loopback.  FALLBACK:
-the reference runs the codec as AIF1 MASTER (R0x302=0x4000) with its McBSP as a
-consumer; switching needs BOTH the DAI link format and the CPU DAI in
-SND_SOC_DAIFMT_BC_FC, which removes the SRG from the path.
+WHERE IT IS: FOUR software-only experiments, in cost order (there is NO scope,
+NO boardview and NO pad knowledge — nothing may depend on probing a pin):
+E1 make the McBSP a CLOCK CONSUMER, matching the reference (codec as AIF1 master,
+R0x302=0x4000) on BOTH sides at once — the DAI link format plus the CPU DAI
+taking the codec's BCLK — which removes the sample-rate generator from the path
+where XRDY=0 sits.  E2 prove the transmit path without the codec: dx/dr are the
+two halves of one register (0x4A1000F8), so drive one as a GPIO and read the
+other from /dev/mem, or use internal loopback with a capture stream so the sDMA
+delivers what was transmitted into a /dev/dsp read.  E3 boot TabletOS and read
+the reference's McBSP2 SPCR2/SRGR1/SRGR2/PCR0 DURING playback with memdump3 (the
+"dma" window 0x49024000; Linux userspace cannot, trap 158) — we have its codec
+file but not its McBSP mid-stream.  E4 static RE of the 1917 sDMA/McBSP setup
+(report 201 decompiled the codec, not the McBSP/sDMA).
 
 BENCH: the unit is on OUR LINUX IMAGE — there is NO door.  Use tools/pbcon.py
 (prompt `pb> `), reboot with tools/pbcon.py 'reboot -f'; run

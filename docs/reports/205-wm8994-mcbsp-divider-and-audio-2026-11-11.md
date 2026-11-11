@@ -283,9 +283,10 @@ master.
 > and the master/slave bit differ.
 
 Setting the codec to the reference's master/DSP configuration on our image
-**silenced the noise floor**, because the McBSP was then still in I2S and still
-acting as clock master, so the two disagreed about the frame.  Matching the
-reference requires changing *both* sides at once:
+**silenced the noise floor** at the time, most plausibly because the McBSP was
+then still configured as I2S clock master, so the two disagreed about the frame
+(that specific test is not reproducible on demand and is not relied on
+anywhere).  Matching the reference requires changing *both* sides at once:
 
 1. board DTS: DAI link format and
 2. the CPU DAI to clock-consumer (`SND_SOC_DAIFMT_BC_FC`), with
@@ -606,18 +607,35 @@ while at the same time:
 So the DMA runs and the PCM believes it is consuming, but the McBSP's transmit
 registers are empty.
 
-**Corroboration:** enabling the AIF1->DAC1 routing (`R0x601/0x602`)
-**silenced the noise floor** — routing real (silent) data into the DAC replaces
-its idle noise, so the DAC *is* converting the AIF1 input and that input is all
-zeros.  Consistent with `DXR` being empty.
+**A hypothesis that was tested and failed:** enabling the AIF1→DAC1 routing
+(`R0x601/0x602`) appeared to silence the noise floor, which suggested the DAC
+was converting routed (silent) data.  **It does not reproduce** — toggling that
+routing on and off while the floor was audible made **no difference** (operator,
+twice).  So the routing is not what silences it and the floor cannot be used to
+infer anything about AIF1 data.  Recorded because the opposite reading is
+tempting.
 
-**What would settle it** (hardware, not registers):
-1. A scope on `abe_mcbsp2_dx` (CORE pad `0x0F8` high) during playback — if the
-   pad toggles, data is present and the codec is mis-framing it; if static, the
-   McBSP is not transmitting.
-2. A loopback (McBSP `dx` -> `dr`) with capture enabled — proves the transmit
-   path independently of the codec.
-3. A meter on MCLK1 — the one unresolved question from §5h.
+**Constrain the next step to software.**  The operator has **no scope, no
+boardview and no pad-level knowledge** (session 41 end), so none of the obvious
+"probe `abe_mcbsp2_dx`" answers are available.  The software-only routes, in
+order of cost:
+
+1. **Make the McBSP a clock consumer** — adopt the reference's roles (codec as
+   AIF1 master, `R0x302 = 0x4000`) on *both* sides at once: the DAI link format
+   plus the CPU DAI taking the codec's BCLK.  This removes the sample-rate
+   generator from the path, which is where `XRDY = 0` sits.
+2. **Prove the transmit path without the codec** — `dx`/`dr` are the two halves
+   of one register (`0x4A1000F8`), so drive one as a GPIO and read the other
+   from `/dev/mem`, or use the McBSP's internal loopback with a capture stream so
+   the sDMA delivers what was actually transmitted into a `/dev/dsp` read.
+3. **Read the reference's McBSP during playback** — we have its codec file
+   (§5g) but **not** its `SPCR2`/`SRGR1`/`SRGR2`/`PCR0` mid-stream, and that is
+   exactly the register set whose meaning differs between master and consumer.
+   `memdump3` can read the "dma" window (`0x49024000`) on QNX, which Linux
+   userspace cannot (trap 158).
+4. **Static RE of the 1917 sDMA/McBSP setup** — report 201 decompiled the codec
+   driver, but the McBSP/sDMA side has not been decompiled; a threshold or port
+   mismatch would explain `XRDY` stuck at 0 with the sDMA running.
 
 ## 5. Why OSS makes this ordering fragile
 

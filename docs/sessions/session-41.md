@@ -213,6 +213,14 @@ remaining fault was localised to the McBSP transmit path.
 * **Images** — region 0 **`0xB8830701`** (kernel `7.3.3`, `0x93A8F4` bytes);
   region 1 `local/images/rootfs-region1-audio-oss.ext4`, sha256
   `7cc63990…` (27 modules).
-* **Kernel patch was NOT re-exported** this session — the tree has the changes
-  but `kernel/patches/0001-playbook-winchester-7.3.3.patch` still describes
-  session 39's 53 files / 7 773 lines.  **A next-session task.**  See KNOWN-ISSUES.
+* **Kernel patch re-exported at wrap-up** —
+  `kernel/patches/0001-playbook-winchester-7.3.3.patch` is now **54 files /
+  8 113 lines**, sha256 `fc3b2e54…`, verified **0 rejects / 54/54
+  byte-identical** by applying it to pristine 7.3.3 targets and comparing every
+  file with `local/kernel-tree`.  It adds `sound/soc/ti/omap-mcbsp.c` (which was
+  **not** in the session-39 export) and picks up the session-41 DTS and machine
+  driver changes.  The tree-walk recipe in `kernel/patches/README.md` was *not*
+  used: on a built tree it returns 90 files because it sweeps ~37 build
+  artifacts (`docs/`-recorded warning in that README).  The export was driven
+  from the previous patch's 53-file list plus the one new file, which is the
+  README's documented alternative when no new sources exist.

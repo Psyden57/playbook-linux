@@ -79,4 +79,4 @@ The guides are in `docs/parked/`.
 * **118 §8.2** and **111 §8 item 4** are corrected inline.
 * The session-13 "partial live image" was withdrawn by report 129 §5.
 * Old patch-size statements (42, 46, 47, 48 files) are historical; the current
-  export is 53 files / 7,773 lines (`kernel/patches/README.md`).
+  export is 54 files / 8,113 lines (`kernel/patches/README.md`).

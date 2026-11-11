@@ -3,11 +3,16 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**7 773 lines / 53 files** against pristine
-**linux-7.3.3** (sha256 `434d06c3…`).  It is generated from the tree, not from
-the previous patch (trap 106), and it was verified by applying it to pristine
-7.3.3 targets and comparing all 53 files byte-for-byte with
-`local/kernel-tree` — 0 rejects, 0 mismatches.  **Session 39** adds the board
+**8 113 lines / 54 files** against pristine
+**linux-7.3.3** (sha256 `fc3b2e54…`, session-41 wrap-up).  It is generated from
+the tree, not from the previous patch (trap 106), and it was verified by
+applying it to pristine 7.3.3 targets and comparing all 54 files byte-for-byte
+with `local/kernel-tree` — 0 rejects, 0 mismatches.  **Session 41** adds
+`sound/soc/ti/omap-mcbsp.c` (missing from the 53-file export: the rate/width
+re-program fix, the `configured` guard, the info-level register dump and the
+steady-state dump), the AUXCLK1 `assigned-clock-rates` in the board DTS and the
+machine driver's deferred-repair chain (PM3, charge pump, DAC routing,
+`regcache_mark_dirty`).  **Session 39** adds the board
 machine driver (`sound/soc/ti/playbook-wm8994.c` + Kconfig/Makefile), the
 `wm8994-core.c` runtime-PM board quirk and the board `sound` node/codec clocks,
 and it restores `drivers/input/touchscreen/{Kconfig,Makefile}`, which the
@@ -108,7 +113,9 @@ board `pm_runtime_forbid` quirk; the board DTS gains the
 had omitted `drivers/input/touchscreen/{Kconfig,Makefile}` (trap 154) and the
 `drivers/mfd/wm8994-core.c` modification.  The export is **7 773 lines / 53
 files**, sha256 `434d06c3…`, verified 0 rejects / 53/53 byte-identical.  Run
-`make clean` in the tree before the walk (trap 139).
+`make clean` in the tree before the walk (trap 139).  **Superseded by the
+session-41 export above (54 files / 8 113 lines)** — kept because it records
+which file the following session had to add (`omap-mcbsp.c`).
 
 ## Reference base: 6.15.11
 
@@ -345,6 +352,15 @@ EOF
 cp /tmp/new.patch kernel/patches/0001-playbook-winchester-7.3.3.patch
 wc -l kernel/patches/0001-playbook-winchester-7.3.3.patch
 ```
+
+**Session 41's export is 8 113 lines / 54 files** (sha256 `fc3b2e54…`),
+verified 0 rejects / 54/54 byte-identical.  It was **not** produced with the
+tree walk below: on a built tree that walk returned **90 files** because it
+sweeps build artifacts (see the session-36 warning at the end).  Instead the
+export was driven from the previous patch's 53-file list **plus**
+`sound/soc/ti/omap-mcbsp.c`, which is the documented alternative when no other
+new source exists — but the file list must still be checked file by file, since
+that is exactly how `omap-mcbsp.c` came to be missing.
 
 Session 32's export is **7 257 lines / 47 files** (sha256 `ad55511d…`), and
 the apply-and-compare verification printed **0 rejects, 0 mismatches**.

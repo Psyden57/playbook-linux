@@ -116,7 +116,7 @@ no longer part of any procedure.
 earlier phase, so it is neither pristine nor this project's tree
 (bootstrap §5). The working kernel tree is in the gitignored payload
 (`local/kernel-tree`); it is regenerable from
-`kernel/patches/0001-playbook-winchester-7.3.3.patch` (53 files / 7 773 lines)
+`kernel/patches/0001-playbook-winchester-7.3.3.patch` (54 files / 8 113 lines)
 plus `kernel/winchester-7.3.3.config`.  The 6.15.11 reference is
 `kernel/patches/0001-playbook-winchester-6.15.11.patch` (34 files / 5 703 lines)
 plus `kernel/winchester.config`.

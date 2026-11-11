@@ -1023,16 +1023,19 @@ report 121 §3/§11/§12.
       toolchain) and reads the ID as `0x8994` on the first try.  This is how the
       reference's live codec state was obtained (report 204).  (Session 40.)
 
-161. **The kernel patch was NOT re-exported after session 41.**  The tree
-      (`local/kernel-tree`) carries session 41's edits to
-      `arch/arm/boot/dts/ti/omap/omap4-winchester.dts` (the AUXCLK1
-      `assigned-clock-rates`), `sound/soc/ti/playbook-wm8994.c` and
-      `sound/soc/ti/omap-mcbsp.c`, but
-      `kernel/patches/0001-playbook-winchester-7.3.3.patch` still describes the
-      session-39 state (53 files / 7 773 lines, sha256 `434d06c3…`).  Regenerate
-      it with the tree walk in `kernel/patches/README.md` — **`make clean`
-      first** (trap 139) — before publishing the tree or handing it on.
-      (Session 41.)
+161. **The kernel patch export must be driven from the tree, and `omap-mcbsp.c`
+      was missing from the session-39 export.**  Session 41 changed
+      `omap4-winchester.dts`, `playbook-wm8994.c` **and**
+      `sound/soc/ti/omap-mcbsp.c`; only the first two were already in the patch.
+      The export is now **54 files / 8 113 lines**, sha256 `fc3b2e54…`, verified
+      0 rejects / 54/54 byte-identical.  Two lessons: (a) check every modified
+      file is present with `grep '^+++ b/<path>$'`, not by assuming; (b) do
+      **not** run the README's tree-walk on a built tree — it returned **90
+      files** because it sweeps build artifacts (`.vmlinux.export.c`,
+      `.tmp_vmlinux*.kallsyms.S`, `crypto/*.asn1.[ch]`, `scripts/dtc/*`,
+      `drivers/tty/vt/ucs_*`, `logo_*.c`, `lib/oid_registry_data.c`, …).  Either
+      `make clean` first or drive the export from the previous patch's file list
+      plus any genuinely new source.  (Session 41.)
 
 162. **After a period of dropped codec writes, `update_bits()` is a silent
       no-op — discard the regmap cache first.**  The WM8994 freezes its register
@@ -1068,6 +1071,16 @@ report 121 §3/§11/§12.
       `tools/pbcon.py` now waits for a prompt up to `PBCON_SYNC` seconds and
       reports "the shell is still busy" instead of queueing bytes into it.
       (Session 41.)
+
+165. **No hardware probing is available — every experiment must be bench or
+      static-RE only.**  The operator has **no scope, no logic analyser, no
+      boardview and no pad-level knowledge** of the board (stated at session 41
+      end).  Do not propose an experiment whose answer is "probe pin X" or
+      "measure pad Y": it cannot be run.  Substitute a software-visible
+      equivalent — a register readback, a `/dev/mem` loopback, a capture stream,
+      a QNX `memdump3` read of a window Linux cannot touch, or static RE of the
+      reference driver.  The audio next-steps in `HANDOFF.md` §0c are written to
+      this constraint.  (Session 41, operator.)
 
 ## 3. Corrections to older reports
 
