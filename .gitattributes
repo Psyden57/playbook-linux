@@ -6,3 +6,4 @@
 *.pdf binary
 *.PDF binary
 docs/reports/data/** binary
+docs/captures/*.txt -text
