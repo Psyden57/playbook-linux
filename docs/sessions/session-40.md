@@ -91,7 +91,9 @@ static RE of the 1917 binaries, a live QNX codec read, and a reconstruction of
   151/152 or 151/163 (by a sub-variant < 4) and BT 171; otherwise **WLAN 54/53
   and BT 55**.  The strings are pre-formatted log lines selected through a
   PIC-relative table; the branch is at `0x8010219c`/`0x80102358`
-  (`gpio-pins.md` §2).
+  (`gpio-pins.md` §2).  That Winchester takes the default branch is confirmed
+  by the unit's own syspage, which publishes `WLAN_EN_GPIO=54,WLAN_INT_GPIO=53`
+  (report 189 — an older read, not this session's).
 * **The board/silicon identity comes from manufacturing data**
   (`Reading MFG data...`, `Unable to determine board type from productID …
   Setting to Winchester`, `Board type = %s`) with the name tables at

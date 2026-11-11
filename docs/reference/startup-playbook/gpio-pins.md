@@ -120,7 +120,10 @@ and for BT, at `0x80102220` (`ldr r3,[DAT_8010244c]` → BT 171) with a fallback
 `DAT_80102434` (BT 55) when the board type is not 4.
 
 **Conclusion for this unit.**  Winchester is *not* board type 4, so it takes the
-default branch: **WLAN_EN_GPIO = 54, WLAN_INT_GPIO = 53, BT_EN_GPIO = 55**.  The
+default branch: **WLAN_EN_GPIO = 54, WLAN_INT_GPIO = 53, BT_EN_GPIO = 55**.
+The unit's own syspage publishes exactly that pair (`WLAN_EN_GPIO=54,
+WLAN_INT_GPIO=53` — report 189, a live read from an earlier session), so this is
+the selected value, not merely the branch's default.  The
 `151/152`, `151/163` and `171` sets belong to a different board (board type 4,
 split by a sub-variant), which is why they never appeared in the WLAN bring-up
 code — we were not missing a pin.  The linux-era attempts used gpio 54/53, which
