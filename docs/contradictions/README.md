@@ -33,6 +33,7 @@ note after it is what a reader needs before opening the file.
 | `fref-clk2-pad-reference-decode.md` | **resolved 2026-11-08 (session 32, report 185)** — a fresh read-only dump with Wi-Fi up gives CORE `0x4A10019C = 0x41000000` (pad0 mux 0 `fref_clk2_out`) and SCRM `AUXCLK1 = 0x00020100` (12.8 MHz enabled); the session-29 "mux 3" decode was a **WKUP**-pad result (`0x4A31E058` pad0) generalised to the CORE pad.  The FREF2 output is matched and not causal for CMD5 |
 | `gpio2-24-resx-vs-datasheet.md` | **open** — report 122 calls `GPIO2_24` the bridge RESX (medium), but the reference reads that bit LOW during a working display while the datasheet says RESX is low-active; the pad's input path is disabled, so the `DATAIN` bit may be meaningless.  Not blocking: the display works |
 | `ldr01-0x10000-header.md` | **resolved — there is no header** — report 164's corrected addendum and the session-23 handoff give `file_offset = VA − 0x80100000`; session 22's note still records the `0x10000` belief and is left as written (evidence, not product) |
+| `mclk1-locks-vs-not-under-linux.md` | **open (session 41)** — report 204/203 say MCLK1 never clocks under our image; session 41 measured FLL1 **locked** from MCLK1 once (`0x732 = 0x6020`) and then failing on later boots and a cold boot with an identical register file, while every SoC register matches QNX.  Not settled; a meter on MCLK1 (or a repeated lock test across boots) would close it.  The driver uses BCLK in the meantime (report 205 §4b/§5h, DECISIONS §52) |
 | `open-dispc-dsi-timing-fields.md` | **resolved (falsified) 2026-10-28** — all four fields and the QNX PHY words were forced and read back identical; the panel stayed black (report 124), so the split was not the blocker.  The display was later fixed by the DISPC core clock (report 133) |
 | `rpmb-key-kek-vs-fallback-literal.md` | **resolved (session 18), key pinned (session 19)** — the monitor is handed the key bytes by pointer; the live page gives the CID-derived seed and the frame key `dfeec0ce…2274` (report 143).  The Linux consequence is **conditional on the block seal** (report 144), not on the key; the seal caller is solved (147), the transform is not (148/156) |
 | `rpmb-page-rodata-contents.md` | **open (mechanism); contents measured** — report 92 says `page+0x20/+0x40` hold the `.rodata` constants, report 141 says nothing writes them; the live page measures the constants, but who writes them is unknown (session 19) |
@@ -42,7 +43,7 @@ note after it is what a reader needs before opening the file.
 
 ## Still open — keep these in mind
 
-Five files have a genuinely open question left; none of them blocks the
+Six files have a genuinely open question left; none of them blocks the
 IFS rebuild, but each changes how a result should be read:
 
 1. **`expired-counter-nuke-vs-retry-halt.md`** — what an out-of-range
@@ -50,18 +51,23 @@ IFS rebuild, but each changes how a result should be read:
    untested.  The two 32 GB units in that state cannot be read without an OS, and
    there is no spare to trace it on.  Do not assume "it only refuses to boot";
    do not test it.
-2. **`gpio2-24-resx-vs-datasheet.md`** — whether `GPIO2_24` is really the
+2. **`mclk1-locks-vs-not-under-linux.md`** — report 204 says MCLK1 never clocks
+   under our image; session 41 measured FLL1 **locked** from MCLK1 once and then
+   failing on later boots with an identical register file.  *Would settle it:* a
+   meter/scope on MCLK1 on a locking and a non-locking boot.  This decides
+   whether the driver may adopt the reference's MCLK1 design.
+3. **`gpio2-24-resx-vs-datasheet.md`** — whether `GPIO2_24` is really the
    TC358764's RESX.  The display works with the current pulse, so this matters
    only if the reset sequence is changed; do not build an experiment that depends
    on it.
-3. **`rpmb-page-rodata-contents.md`** — who writes `page+0x20`/`page+0x40` of
+4. **`rpmb-page-rodata-contents.md`** — who writes `page+0x20`/`page+0x40` of
    `rpmb-omap4`'s page, and when.  The contents are measured; the writer is not.
    It is a mechanism question behind the `0x2F` transform, not a value question.
-4. **`bootctr-drain-vs-session10-readings.md`** — the *rate* is settled going
+5. **`bootctr-drain-vs-session10-readings.md`** — the *rate* is settled going
    forward (one factory boot = one count; an OS boot tops up), but session 10's
    static `0x32` across many boots is still unexplained.  Keep measuring the
    counter at both ends of a cycle rather than trusting either story.
-5. **`fan5702-dimming-register-bits.md`** — whether the FAN5702 dimming
+6. **`fan5702-dimming-register-bits.md`** — whether the FAN5702 dimming
    registers `0x30/0x40/0x50` take the datasheet's `0b11xxxxxx` or the
    bootloader's `0x36`; the on/off path (GENERAL `0x10`) is unaffected.
    *Would settle it:* a brightness sweep on the live unit, or datasheet Table 4.

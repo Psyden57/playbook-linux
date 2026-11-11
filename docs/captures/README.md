@@ -9,6 +9,28 @@ Naming is `playbook-live[-spare]-<date>-<topic>.txt` (the `spare` captures are
 from the unit that is now down).  `docs/reports/data/` holds the binary captures
 and the larger dumps.
 
+## WM8994 reference codec, full register file (session 41)
+
+Two complete 1905-register dumps of the **working** WM8994 on the reference
+(2.1.0.1917, `io-audio` running), read with `tools/pbi2c dump16` over the door.
+**Both were taken during playback.**
+
+| file | when |
+|---|---|
+| `wm8994-reference-live-2026-11-11.txt` | playback |
+| `wm8994-reference-playing-2026-11-11.txt` | playback, moments later |
+
+They differ in **only two registers** (`R0x402`/`R0x403`, DAC1 volumes
+`0x007d → 0x0073`) — a volume change, not a state difference.  **Neither is an
+idle capture:** the reference's idle state (`R0x200 = 0x0010`,
+`R0x003 = 0x0000`, `R0x04C = 0x1F25`, `R0x732 = 0x6020`) was measured with
+targeted single-register `pbi2c rd16` reads and is recorded in report 205 §5g,
+not in these files.
+
+These are the baseline for any future WM8994 comparison: **diff our live register
+file against these first** before theorising (report 205 §5f).
+
+
 ## Exact duplicates
 
 These pairs are byte-identical; keep one of each when pruning.

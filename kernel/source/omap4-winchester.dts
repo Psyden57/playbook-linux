@@ -445,9 +445,21 @@
 		reg = <0x1a>;
 		#sound-dai-cells = <0>;
 
-		/* MCLK1 = SCRM AUXCLK1 (SYS_CLK / 3 = 12.8 MHz), fref_clk2_out. */
+		/*
+		 * MCLK1 = SCRM AUXCLK1 (SYS_CLK / 3 = 12.8 MHz), fref_clk2_out.
+		 *
+		 * The divider must be forced.  AUXCLK1 is not reset by a warm
+		 * reset, and a cold boot leaves it at 0x00000100 -- divider field
+		 * 0, i.e. /1 = 38.4 MHz, which is far outside the WM8994 FLL's
+		 * 0.032-13.5 MHz reference range, so FLL1 can never lock (measured
+		 * on a battery-pulled boot, report 205 §5h).  The reference's
+		 * startup-playbook writes 0x00020100 (/3) before anything else
+		 * runs; assigned-clock-rates is the supported way to say the same.
+		 */
 		clocks = <&auxclk1_ck>;
 		clock-names = "MCLK1";
+		assigned-clocks = <&auxclk1_ck>;
+		assigned-clock-rates = <12800000>;
 
 		DBVDD-supply = <&v1v8>;
 		DCVDD-supply = <&v1v8>;

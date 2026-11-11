@@ -1023,6 +1023,52 @@ report 121 §3/§11/§12.
       toolchain) and reads the ID as `0x8994` on the first try.  This is how the
       reference's live codec state was obtained (report 204).  (Session 40.)
 
+161. **The kernel patch was NOT re-exported after session 41.**  The tree
+      (`local/kernel-tree`) carries session 41's edits to
+      `arch/arm/boot/dts/ti/omap/omap4-winchester.dts` (the AUXCLK1
+      `assigned-clock-rates`), `sound/soc/ti/playbook-wm8994.c` and
+      `sound/soc/ti/omap-mcbsp.c`, but
+      `kernel/patches/0001-playbook-winchester-7.3.3.patch` still describes the
+      session-39 state (53 files / 7 773 lines, sha256 `434d06c3…`).  Regenerate
+      it with the tree walk in `kernel/patches/README.md` — **`make clean`
+      first** (trap 139) — before publishing the tree or handing it on.
+      (Session 41.)
+
+162. **After a period of dropped codec writes, `update_bits()` is a silent
+      no-op — discard the regmap cache first.**  The WM8994 freezes its register
+      map when `AIF1CLK_ENA = 1` with a stopped source (trap 155), so writes are
+      dropped while the *cache* still records the intended value.  Every later
+      `snd_soc_component_update_bits()` compares against that cache, sees no
+      difference, and never touches the bus — so a driver can log a successful
+      write while the hardware holds the reset value.  Measured: PM3 read
+      `0x0000` after the driver had "written" `0x00F0`, and only
+      `regcache_mark_dirty()` + `regcache_sync()` made the writes land.
+      This is the same class as report 200 / DECISIONS §49.  Whenever a period
+      of dropped writes is possible, mark the cache dirty before writing again.
+      (Session 41.)
+
+163. **Copy a rebuilt `.ko` into `local/work/modules-7.3.3/` before
+      `build_rootfs.py`, and verify it landed.**  Session 41 rebuilt
+      `snd-soc-playbook-wm8994.ko`, flashed a rootfs, and the change had no
+      effect because the staging directory still held the previous module — the
+      device's copy had no new strings.  The build script only walks the staging
+      directory, so a forgotten copy is silent.  Check with
+      `debugfs -R 'dump /lib/modules/<krel>/kernel/<name>.ko /tmp/x' <image>`
+      and grep the extracted file for a string only the new build has.
+      (Session 41.)
+
+164. **A console that echoes input but prints nothing is a BUSY SHELL, not a
+      dead console.**  The target prints no prompt while a foreground command
+      runs, but the ACM tty keeps echoing every byte sent.  Session 41
+      mis-diagnosed this as a wedged console repeatedly and re-ran
+      `pkexec chmod 666 /dev/ttyACM0`, which does nothing for it (the chmod is
+      only needed after a genuine re-enumeration).  Use `tools/pbraw.py <secs>
+      0a` to see the raw bytes — buffered output arrives at once, proving the
+      console was fine — and `tools/pbraw.py 2 03` to send Ctrl-C.
+      `tools/pbcon.py` now waits for a prompt up to `PBCON_SYNC` seconds and
+      reports "the shell is still busy" instead of queueing bytes into it.
+      (Session 41.)
+
 ## 3. Corrections to older reports
 
 These twenty-two are preserved deliberately. Each is newer than the text it
@@ -1202,6 +1248,34 @@ edge-detect** (not "pull/attr"; 2 = falling), **`+0x11` pull/enable** (not
 appear byte-identically in startup-playbook's Winchester GPIO table (image
 `0x80122750`, records 13/14), so the hwio database is the table startup
 applies.  (Session 37, report 195 §3.2.)
+
+**3.23 "MCLK1 does not clock under our image" (reports 203/204, handoff) is too
+strong.**  With the codec thawed, the reference's exact FLL1 programme and
+`R0x224 = 0x0000` (`REFCLK_SRC = MCLK1`), FLL1 **did** lock once
+(`R0x732 = 0x6020`) — so the capability exists on this hardware under our image
+and report 204's blanket denial is wrong.  However it then **failed to lock on
+later boots and on a battery-pulled cold boot** with an identical register file
+and identical SoC programming, so it is **not reliable**, and the driver
+therefore stays on the BCLK path, which locked on every trial.  The real,
+reproducible defect was `AUXCLK1` booting at `0x00000100` (÷1 = 38.4 MHz,
+outside the FLL's 0.032–13.5 MHz range) — now fixed in the DTS.
+(Session 41, report 205 §4b/§5h.)
+
+**3.24 The MCLK1 pad and the AUXCLK mapping were never in doubt.**
+`hwio-omap4.so`'s pad resolver maps pad id `0xB7` → CORE `0x4A10019C` **low
+half**, and only `0xB7`/`0xE6` map to that offset; the TRM names the register
+`CONTROL_CORE_PAD0_FREF_CLK2_OUT_PAD1_SYS_NIRQ1` (mux 0 = `fref_clk2_out`) and
+states the AUXCLK rule directly ("`fref_clk1_out` is controlled by the
+`SCRM.AUXCLK0` register"), so `fref_clk2_out` ← **AUXCLK1**.  The board DTS was
+right; the `0x19E` difference report 204 noticed is `sys_nirq1`, not the clock.
+(Session 41, report 205 §8.)
+
+**3.25 The DTS codec supply mapping is not the cause of the silence.**  Measured
+read-only on both OSes (`pmic-twl6030-ctl get_state/get_vout`): V1V8 1823 mV,
+V2V1 2127 mV, VANA 2100 mV, VDAC 1800 mV, VAUX1/2/3 2800 mV, all ON — the same
+rails and voltages, and the same PM2/PM3/PM5 codec values as the working
+reference.  The mapping is still out of the datasheet's range and worth fixing,
+but it does not explain the fault.  (Session 41, report 205 §5.)
 
 **Also corrected elsewhere, for completeness:** `0x1cce0` in `winch_lcdctl` is a
 HAL parameter-block defaults initialiser, not the register programmer — the

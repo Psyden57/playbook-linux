@@ -41,12 +41,17 @@ known-good image.
 
 **Open.**
 
-* **WM8994 audio.**  The write path is solved — the codec freezes its register
-  map while `AIF1CLK_ENA = 1` with a stopped source (report 203).  The blocker
-  is the codec clock: MCLK1 does not clock under our image, while the reference
-  locks FLL1 from it (report 204).  Next: name the pad carrying MCLK1
-  (`0x19C` vs `0x19E`) with the `hwio` resolver, compare the codec power path,
-  then apply the driver order in `HANDOFF.md` §0c.
+* **WM8994 audio.**  The codec is **done and driver-driven**: from a cold boot
+  the machine driver thaws it, locks FLL1, enables AIF1CLK from that FLL, sets
+  16-bit word length and enables the whole output chain (PM3 output mixers,
+  charge pump `CP_ENA`, DAC→mixer un-mute, AIF1→DAC routing, output stage) — and
+  the DAC's noise floor is audible, the first codec output this image has made.
+  **The remaining blocker is the McBSP transmit path:** in steady state
+  `DXR = 0x00000000` with `SPCR2 = 0x02F5` (`XRDY = 0` buffer full, `XEMPTY = 1`
+  shifter empty) while sDMA interrupts fire at 12/s and `hw_ptr` runs at
+  48 185 frames/s.  Next: a scope on `abe_mcbsp2_dx` (pad `0x0F8` high) or a
+  `dx`→`dr` loopback, then the one structural difference left — the reference
+  runs the codec as **AIF1 master** with its McBSP as a consumer.  Report 205.
 * **WL1283.**  Formally stopped by the operator (session 36).  The software
   surface is exhausted and the 1917-truth minimal host still fails CMD5
   (report 196).  Do not re-run traps 116–137.  The WLAN calibration/NVS is

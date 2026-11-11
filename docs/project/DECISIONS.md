@@ -1647,8 +1647,50 @@ pseudo-code we write) is committed.
 **Evidence.**  Reports **201** and **204**; `docs/reference/startup-playbook/`;
 the operator's session-40 correction, recorded in `docs/sessions/session-40.md`.
 
+---
 
-## Open policy decisions
+## 52. The board machine driver owns the whole codec chain, and repairs it from a delayed work (session 41)
+
+**Decision.**  `sound/soc/ti/playbook-wm8994.c` configures and, if necessary,
+re-asserts **every** WM8994 block the output path needs — word length, FLL,
+AIF1CLK, PM1/PM3/PM5, the charge pump, the DAC→mixer and AIF1→DAC routing, and
+the analogue output stage — rather than trusting DAPM to do it.  The repair runs
+from a **delayed work scheduled at `trigger(START)`** (50 ms), and begins with
+`regcache_mark_dirty()` + `regcache_sync()`.  The `.trigger` is kept only for
+that scheduling.
+
+**Why.**  DAPM's power-up writes all land *after* the DAPM stream event that
+turns on `AIF1CLK_ENA`, which is exactly when the codec freezes (trap 155), so
+they are silently dropped; and ASoC offers no hook after the CPU DAI starts
+BCLK — the machine `.trigger` is *first* in the trigger order.  A delayed work is
+therefore the only point at which the codec is both unfrozen and about to stream.
+Separately, because writes were dropped while frozen, the regmap cache holds the
+*intended* values and every later `update_bits()` is a no-op until the cache is
+discarded (trap 162).
+
+**Evidence.**  Measured: PM3 read `0x0000` while the driver had written
+`0x00F0`, and only `regcache_mark_dirty`/`regcache_sync` made it stick; the
+`AIF1CLK` re-enable fixed a bug where the driver's own thaw left the DAC without
+a clock; the charge pump enable produced the first audible codec output from
+this image.  Report 205 §5b/§5m.
+
+**Constraint.**  This is a workaround for the ASoC/clock ordering, not a
+correct design: the reference avoids the whole problem by keeping FLL1 locked
+permanently from MCLK1 and gating only `AIF1CLK` (report 205 §5g).  If MCLK1 is
+ever made reliable, the driver should adopt the reference's model and the repair
+work can be retired.
+
+**Honest caveat.**  It addresses the *codec*; it does not fix the remaining
+McBSP transmit fault, which is upstream of everything listed above.
+
+**Related: the DT clock rate must be forced, not inherited.**  `AUXCLK1` is not
+reset by a warm reset and a cold boot leaves it at `0x00000100` (÷1 = 38.4 MHz,
+outside the WM8994 FLL's 0.032–13.5 MHz range), so `assigned-clocks` /
+`assigned-clock-rates = <12800000>` on the codec node is part of this decision —
+the divider cannot be left to whatever the boot chain happened to leave.
+Verified on a battery-pulled boot.
+
+
 
 The repository licence and visibility are decided below; the remaining
 policy questions (publication of the proprietary corpus) stay open and are

@@ -65,6 +65,29 @@ def drain(fd):
             return
 
 
+def write_all(fd, data, timeout=5.0):
+    """Write every byte, tolerating EAGAIN on this non-blocking tty.
+
+    The port is opened O_NONBLOCK so reads never hang; that makes a write
+    raise BlockingIOError when the ACM endpoint's buffer is momentarily full
+    (common right after the gadget re-enumerates).  Retry with a short
+    select() rather than failing the whole command.
+    """
+    end = time.time() + timeout
+    while data:
+        try:
+            n = os.write(fd, data)
+            data = data[n:]
+            continue
+        except BlockingIOError:
+            pass
+        except OSError as e:
+            raise OSError(e.errno, "write failed: %s" % e.strerror)
+        if time.time() > end:
+            raise OSError("timed out writing to the console")
+        select.select([], [fd], [], 0.05)
+
+
 def main(argv):
     if not argv:
         print(__doc__)
@@ -76,13 +99,35 @@ def main(argv):
         return 1
 
     # Wake the console: it says nothing until it sees a host byte.
-    os.write(fd, b"\n")
-    read_until(fd, b"pb> ", 5)
+    #
+    # The shell prints no prompt while a foreground command is still running,
+    # and the ACM tty keeps echoing our input regardless.  That looks exactly
+    # like a dead console, so distinguish the two: wait up to PBCON_SYNC
+    # seconds for a prompt, and if one never comes report that the shell is
+    # busy and leave it alone rather than queueing bytes into it.
+    try:
+        write_all(fd, b"\n")
+    except OSError as e:
+        print("pbcon: %s" % e, file=sys.stderr)
+        os.close(fd)
+        return 1
+    if b"pb> " not in read_until(fd, b"pb> ", float(os.environ.get("PBCON_SYNC", "10"))):
+        print("pbcon: no prompt -- the shell is still running a command."
+              "\n       Nothing was sent.  Wait for it, or send Ctrl-C with"
+              "\n       tools/pbraw.py 2 03.", file=sys.stderr)
+        os.close(fd)
+        return 1
+    drain(fd)
 
     rc = 0
     for cmd in argv:
         drain(fd)
-        os.write(fd, cmd.encode() + b"\n")
+        try:
+            write_all(fd, cmd.encode() + b"\n")
+        except OSError as e:
+            print("pbcon: %s" % e, file=sys.stderr)
+            rc = 1
+            break
         out = read_until(fd, b"pb> ", float(os.environ.get("PBCON_TMO", "20")))
         txt = out.decode("utf-8", "replace").replace("\r", "")
         lines = [l for l in txt.split("\n") if l.strip() and l.strip() != "pb>"]
@@ -91,6 +136,13 @@ def main(argv):
             print("  " + l)
         if not out:
             print("  !! no response")
+            rc = 1
+            break
+        if b"pb> " not in out:
+            # The read timed out with output but no prompt: the shell is still
+            # inside this command (or a previous one).  Sending the next line
+            # now would be swallowed by a busy shell and look like a hang.
+            print("  !! no prompt: the shell is still busy; not sending more")
             rc = 1
             break
     os.close(fd)

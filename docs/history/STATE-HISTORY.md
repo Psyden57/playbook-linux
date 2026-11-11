@@ -6,6 +6,10 @@ state is [`docs/project/STATE.md`](../project/STATE.md).
 
 ## Previous states
 
+**The session-40 state snapshot** (2026-11-11) is at git commit `7a93423` in
+`docs/project/STATE.md`; it was replaced by the session-41 state and is not
+duplicated here because the commit preserves it verbatim.
+
 ## Previous state — 2026-11-11 (session 39)
 
 **The WM8994 playback path is built and the DAI streams; the codec clock is

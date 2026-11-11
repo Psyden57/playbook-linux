@@ -22,7 +22,8 @@
 #include <sys/ioctl.h>
 #include <sys/soundcard.h>
 
-#define CHUNK_FRAMES 1024
+/* Full-scale-ish square wave: loud enough to judge by ear on a speaker. */
+#define TONE_AMP 12000
 
 static int step(const char *what, int fd, unsigned long req, int *val)
 {
@@ -40,10 +41,17 @@ int main(int argc, char **argv)
 {
 	const char *dev = "/dev/dsp";
 	int secs = 2, freq = 440;
-	int fmt = AFMT_S16_LE, ch = 2, rate = 48000, frag = 0x00040008;
-	int fd, i, frames, nframes;
+	/*
+	 * Ask for 4 fragments of 2^14 bytes: 16384 frames, i.e. ~341 ms at
+	 * 48 kHz stereo S16.  The OSS default (256-byte fragments) gives a
+	 * 64-frame period, and at 48 kHz the period interrupt never keeps up --
+	 * the stream reports one period and then sits in XRUN with hw_ptr
+	 * pinned.  The 8 kHz path, which works, gets 4096-frame periods.
+	 */
+	int fmt = AFMT_S16_LE, ch = 2, rate = 48000, frag = 0x0004000E;
+	int fd, i, frames, nframes, blksz;
 	uint32_t phase = 0, inc;
-	int16_t buf[CHUNK_FRAMES * 2];
+	int16_t *buf;
 	unsigned long total = 0;
 
 	if (argc > 1)
@@ -69,17 +77,37 @@ int main(int argc, char **argv)
 		return 1;
 	step("SETFRAGMENT", fd, SNDCTL_DSP_SETFRAGMENT, &frag);
 
+	/*
+	 * Write exactly one hardware period per write(), and take the period
+	 * from the driver instead of assuming 1024 frames fits.  The original
+	 * code wrote 1024 frames into the 64-frame ring that
+	 * SETFRAGMENT 0x00040008 asks for, so the first write overran and the
+	 * stream sat in XRUN with hw_ptr pinned at one period.
+	 */
+	blksz = 0;
+	if (ioctl(fd, SNDCTL_DSP_GETBLKSIZE, &blksz) < 0 || blksz <= 0) {
+		fprintf(stderr, "pbplay: GETBLKSIZE: %s\n", strerror(errno));
+		return 1;
+	}
+	frames = blksz / (ch * 2);
+	printf("pbplay: block size %d bytes (%d frames)\n", blksz, frames);
+	if (frames <= 0)
+		return 1;
+
+	buf = calloc(frames * 2, sizeof(int16_t));
+	if (!buf)
+		return 1;
+
 	inc = (uint32_t)(((uint64_t)freq << 16) / (rate > 0 ? rate : 48000));
 	nframes = rate * secs;
 
 	while (total / (unsigned)(ch * 2) < (unsigned)nframes) {
-		frames = CHUNK_FRAMES;
 		for (i = 0; i < frames; i++) {
 			int16_t s = 0;
 
 			if (freq > 0) {
 				phase += inc;
-				s = (phase & 0x8000) ? 8000 : -8000;
+				s = (phase & 0x8000) ? TONE_AMP : -TONE_AMP;
 			}
 			buf[i * 2] = s;
 			buf[i * 2 + 1] = s;
