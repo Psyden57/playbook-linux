@@ -115,7 +115,7 @@ the point.
 
 **Status: the pre-Linux notes are written and the first reconciliation pass has been
 run** (2026-10-28).  It produced `docs/project/SAFETY.md`, rebuilt the
-contradictions index (ten files, four of them open), fixed the numbering and
+contradictions index (the open list is at the top of `docs/contradictions/README.md`), fixed the numbering and
 cross-references in the notes, and cleared the tree defects listed in
 `docs/project/KNOWN-ISSUES.md` §4.  A later pass is still welcome — the open
 contradictions and the instrumentation left in the patch are the obvious
@@ -154,10 +154,12 @@ We're stopping here. Record everything properly before we finish, in this order.
 Do not rely on the transcript surviving; write it to the repository.
 
 1. BENCH STATE FIRST (what the next session inherits)
-   - Is the sealed IFS on media? If not, restore it (local/images/ifs0.sealed.bin),
-     verify sha256 c72b0530…, and read BOOTCTR_FCTRY (expect 0x32).
-   - Record: which OS the unit is running, door/ssh state, BOOTCTR value, the
-     image CRC on media, and any device-side file you deployed.
+   - Record: which OS/image is on region 0 (CRC) and region 1 (sha256), whether
+     the unit is on Linux or TabletOS, door/ssh state, BOOTCTR_FCTRY (a health
+     check — the Linux /init tops it up), and any device-side file you deployed.
+   - No restore is required at wrap-up.  Reflash the 1917 IFS at block 0x825
+     only if the operator wants the unit left on TabletOS, or a test image left
+     it unbootable.
 
 2. SESSION NOTE: docs/sessions/session-NN.md, following _TEMPLATE.md.
    Capture what is NOT already in the docs:
@@ -172,14 +174,20 @@ Do not rely on the transcript surviving; write it to the repository.
    - Artefacts — reports, tools, DTS/driver changes, images (with CRC).
 
 3. CANONICAL DOCS — facts only, no narration:
-   - docs/project/STATE.md       what changed in the state table, and the single
-                                 current blocker
+   - docs/project/STATE.md       what changed; move replaced snapshots to
+                                 docs/history/STATE-HISTORY.md
    - docs/project/HANDOFF.md     the next step: the one experiment, its exact
                                  inputs, and what each possible result means
-   - docs/project/KNOWN-ISSUES.md  new traps; move fixed defects to the fixed list
+   - docs/project/KNOWN-ISSUES.md  new traps and corrections; move resolved
+                                 material to docs/history/KNOWN-ISSUES-HISTORY.md
    - docs/project/DECISIONS.md   only if a decision was actually taken, with the
                                  evidence
-   - docs/project/ROADMAP.md     if priorities moved
+   - docs/project/ROADMAP.md     open items only; move closed items to
+                                 docs/history/ROADMAP-CLOSED.md
+   - docs/project/KERNEL-PORT.md only the current base/patch; the full plan stays
+                                 in docs/history/KERNEL-PORT.md
+   - docs/parked/                if work is parked, move it here and leave a link
+                                 stub at the old path
    - docs/project/SAFETY.md      only if a safety rule changed
 
 4. CONTRADICTIONS — if two sources disagree and you cannot settle it with
@@ -195,6 +203,10 @@ Do not rely on the transcript surviving; write it to the repository.
      untested;
    - run `python3 tools/docs_audit.py` — it must print `clean` (session
      counts/ranges, stale phrases, removed tool names, report references);
+   - run `python3 tools/tests/test_offline.py` and
+     `python3 -m py_compile tools/*.py tools/legacy/*.py`;
+   - check local markdown links, and update `docs/reports/INDEX.md` /
+     `docs/captures/README.md` if you added a report or captures;
    - if the public snapshot is being updated, follow
      `docs/project/REPO-MANAGEMENT.md`: run `tools/publish_public.sh` as a dry
      run, then `--apply`, check the public tree, and commit/push there;

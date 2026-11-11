@@ -22,8 +22,8 @@ than doing something wrong.
 | `pbcon.py` | drives the bench console over `/dev/ttyACM0`: waits for the `pb> ` prompt, drains before each write, `PBCON_TMO=<s>` per command.  Usage: `PBCON_TMO=10 ./pbcon.py 'disp stat'` |
 | `pbssh.sh` | QNX/TabletOS SSH wrapper: key, legacy algorithms, `$PB_HOST` (169.254.0.1) and `$PB_USER` (default `root`; the operator enabled root SSH on 2026-11-05).  `PB_USER=devuser` still works for the unprivileged account (it cannot reboot or read `/dev/rpmb`).  It starts `tools/door-hold.sh` if the door is down |
 | `door-hold.sh` | keeps the qconn door open (`BerryShell-V4.py … hold`); the supervisor restarts it on exit |
-| `BerryShell-V4.py` | the QNX door/SSH helper itself; derived from the author's own earlier BerryShell-V3 (not a third-party project) |
-| `BerryShell-V3.py` | the author's earlier door/SSH helper, kept for reference; `BerryShell-V4.py` is the current one |
+| `BerryShell-V4.py` | the QNX door/SSH helper itself; derived from the author's own earlier BerryShell-V3 (now in `tools/legacy/`) |
+| `QCL.py` | a standalone qconn client for QNX: connects to the target's qconn port, runs commands and reads output without the door/SSH path.  Used for QNX-side tests; see the file header for usage |
 | `build_kernel_image.py` | wraps `zImage` + DTB into a copy of the sealed IFS with the chainloader, prints the image CRC.  Defaults: `local/kernel-tree/…/zImage`, `boot/chainloader/chainloader_kernel.S.in`, output `boot/chainloader/kernel.img` |
 | `pre_os_ifs_flash.py` | **older template flasher — use `bbusb.py flash` instead** (`DECISIONS.md` §29).  It writes one image per bootrom session: `--template-ifs <img>` = region 0 (`0x825`); `--payload <img> --dest-raw <hex>` (or `--dest-block`) = an arbitrary block-aligned payload, **region 1 only** unless `--allow-region0`; `--dry-run`, `--delay <s>`, `--reuse-loader`, `--keep-loader`.  It builds containers from the vendor hybrid template and patches both the V1 `qcfp` and V2 `rrcq` records (trap 55 / report 139), and reads the 560-byte `signature_data` constant from bb10mt's `qcfm.pas` (not in this tree) |
 | `ifs_build.py` | **the imagefs emitter** (IFS-REBUILD.md milestones 1–4). `build` writes `image_header + dirents + data + trailer` and appends it to RIM's stock prefix; `listing` wraps `dumpifs -vv`; `check` re-reads the output with `dumpifs` and compares names/sizes/modes plus the `Checksums:` line; `--replace NAME=PATH` swaps one file (a smaller file keeps its reference slot; only a size increase repacks) and `--add NAME=PATH` adds a **new** file (session 25, the BB10 backport), which forces a repack. Output is uncompressed, so it clears the startup header's compression bits (`flags1` at `0x80e`) and recomputes the startup checksum it invalidates.  **It does not compress**: for a BB10 imagefs that must fit the PlayBook slot, feed its output to `bb10_ifs.py splice` (`BB10-PORT.md` §4b). |
@@ -40,15 +40,22 @@ than doing something wrong.
 | `publish_public.sh` | dry-run by default: builds a clean snapshot from the private `HEAD` (`git archive`) and rsyncs it into the public checkout, preserving its `.git`. `--apply` writes; it never commits or pushes |
 | `build_rootfs.py` | builds `local/images/rootfs-region1.ext4` from `rootfs/` — the real BusyBox userland: BusyBox + `/sbin/init` + applet links, inittab/rcS/profile, `pbconsole`/`pbrpmb`, and any `--modules` `.ko` under `/lib/modules/<uname -r>`; ext4 (no journal), root-owned via `fakeroot`, 64 MiB default.  Prints the sha256 and the `bbusb.py flash --component` command.  The image lives at region-1 +16 MiB (raw `0x29000000`, loader block `0x2915`) |
 | `force_reset_loader.py` | sends `0x80EF` then `0xEF` to an enumerated ramloader (`0fca:8001`) so the unit leaves the loader and boots media.  Same as `bbusb.py reset-loader` |
-| `probe_loader.py` | watches the boot ROM / ramloader enumerate and dumps what it sees (bench debugging) |
-| `usb_watch.py` | polls `lsusb`-level identity changes of the unit |
+| `tools/legacy/probe_loader.py`, `tools/legacy/usb_watch.py` | earlier bench-debug helpers: watch the boot ROM/ramloader enumerate, and poll `lsusb` identity changes |
 | `pb_ring.py` | dumps the DRAM console ring (`--ring 88000000`) and decodes the event log |
 | `pb_events.py` | decodes the printk-free event ring (timestamps, resolved symbols) |
 | `qnx-i2c.c` / `pbi2c` | **QNX-side** I²C probe (`probe / rd / rdw / wr / scan / dump / dumpw`), built with the qnx660 toolchain; push it to `/tmp` on the unit and run it there.  `rdw`/`dumpw` read 2-byte SMBus words (LO first) and are what the ISL9519 needs.  Source is the documentation |
 | `qnx-hwi.c` | **QNX-side** syspage hwinfo dumper: `ntoarmv7-gcc -std=gnu99 -O2 -o /tmp/qnx-hwi tools/qnx-hwi.c`, then `/tmp/qnx-hwi WLAN` (or `all`) on a live TabletOS boot.  It implements the by-name search (`hwi_find` is a driver-local helper, not in libc) and prints every tag; read-only.  Built for the WL1283 `WLAN` node (report 189) |
 | `memdump3.c`, `memw32.c`, `memtest.c` | QNX-side memory reader / writer / tester sources (built for QNX ARM; the device copies live outside this repo) |
-| `build_crc_image.py`, `89-crc_tool.py`, `90-nvram2074.py` | earlier CRC/NVRAM tooling from the boot-chain phase.  `89-crc_tool.py reseal` sets `os_type` and the CRC; `--length auto --append-os-trailer` now also appends the 8-byte OS trailer and patches `LoadEnd` (`image+0x08`) for a differently-sized image (IFS-REBUILD.md milestone 3) |
+| `89-crc_tool.py` | IFS CRC verify/reseal: `reseal` sets `os_type` and the CRC; `--length auto --append-os-trailer` also appends the 8-byte OS trailer and patches `LoadEnd` (`image+0x08`) for a differently-sized image.  The earlier `build_crc_image.py` and `90-nvram2074.py` are in `tools/legacy/` |
 | `ramloader-commands.txt` | the boot-ROM/ramloader command map recovered during the boot-chain work |
+
+## Legacy tools
+
+`tools/legacy/` holds superseded tools kept for historical recipes.  They
+are not part of the current workflow: `BerryShell-V3.py`, `build_crc_image.py`,
+`90-nvram2074.py`, `probe_loader.py` and `usb_watch.py`.  `pre_os_ifs_flash.py`
+stays at the top level only because the older runbooks still cite it; use
+`bbusb.py flash` for new work.
 
 ## Verified at workspace creation
 

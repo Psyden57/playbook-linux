@@ -116,7 +116,7 @@ no longer part of any procedure.
 earlier phase, so it is neither pristine nor this project's tree
 (bootstrap §5). The working kernel tree is in the gitignored payload
 (`local/kernel-tree`); it is regenerable from
-`kernel/patches/0001-playbook-winchester-7.3.3.patch` (42 files / 6 648 lines)
+`kernel/patches/0001-playbook-winchester-7.3.3.patch` (53 files / 7 773 lines)
 plus `kernel/winchester-7.3.3.config`.  The 6.15.11 reference is
 `kernel/patches/0001-playbook-winchester-6.15.11.patch` (34 files / 5 703 lines)
 plus `kernel/winchester.config`.
@@ -147,7 +147,7 @@ rules for the device.
 
 ## 6. Python
 
-Python 3 with `pyusb` — `tools/pre_os_ifs_flash.py`, `tools/probe_loader.py` and
+Python 3 with `pyusb` — `tools/pre_os_ifs_flash.py`, `tools/legacy/probe_loader.py` and
 `tools/force_reset_loader.py` all reach `usb.core` through
 `tools/bbusb.py` (ours, tracked; the ramloader blobs it uploads stay in `local/`). The rest of `tools/` is standard library only
 (`pbcon.py` uses `termios`, `pb_ring.py`/`pb_events.py` are pure Python). The
@@ -165,7 +165,7 @@ regenerable:
 |---|---|
 | `local/proprietary/dumped4869ifs/` | the QNX 6.6 boot set (`proc/boot/.script` + 52 binaries), the `etc/` config, used for all RE |
 | `local/proprietary/device-binaries/` | other device-derived binaries |
-| `local/images/` | `ifs0.sealed.bin` (the sealed region-0 IFS — **never prune**) plus a cache of built `kernel*.img` images.  **Images are a cache, not an archive.**  Keep: the current best, one known-good fallback, and anything an *open* contradiction still needs to re-measure.  The durable record is the CRC plus what that image demonstrated, written in `STATE.md`, the reports and the session notes — an image is only worth keeping while a claim about it is live.  Note builds are **not** byte-reproducible (toolchain/ordering), so a deleted image cannot be recreated exactly; that is the one argument for keeping an old one.  It was pruned on 2026-10-28; the **current** inventory and the image to build from are in `STATE.md` §"Last known-good image". |
+| `local/images/` | `ifs0.sealed.bin` (the sealed region-0 IFS — **never prune**) plus a cache of built `kernel*.img` images.  **Images are a cache, not an archive.**  Keep: the current best, one known-good fallback, and anything an *open* contradiction still needs to re-measure.  The durable record is the CRC plus what that image demonstrated, written in `STATE.md`, the reports and the session notes — an image is only worth keeping while a claim about it is live.  Note builds are **not** byte-reproducible (toolchain/ordering), so a deleted image cannot be recreated exactly; that is the one argument for keeping an old one.  It was pruned on 2026-10-28; the **current** inventory and the image to build from are in `STATE.md` §"Current images". |
 | `local/secrets/` | `rsa` / `rsa.pub` (the SSH key for the QNX door), `playbook.ppk` |
 | `local/loaders/` | the ramloader blob the flasher uploads (`LDR_01`, RIM material; `bbusb.DEFAULT_LOADERS` resolves it) |
 | `local/vendor/` | third-party tooling: `bb10mt*`, `cellebrite-blackberry`, `CFP.exe`, `nvram-*`.  (`bbusb` is ours and lives in `tools/`; the ramloader moved to `local/loaders/`) |

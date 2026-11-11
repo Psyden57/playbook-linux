@@ -3,6 +3,10 @@
 Each file here records a *disagreement between sources*: the conflicting claims,
 the evidence for each, what is still uncertain, and what would settle it.
 
+**Open questions first:** the live list is under
+[Still open](#still-open--keep-these-in-mind).  Resolved files are kept for
+their history.
+
 The rule for the whole repository is: **do not silently resolve a contradiction.**
 A contradiction is closed by adding evidence (usually a measurement), not by
 picking the claim that reads better.  When it *is* closed, keep the file and add

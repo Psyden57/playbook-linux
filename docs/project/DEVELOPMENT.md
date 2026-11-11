@@ -1,7 +1,7 @@
 # Development loop
 
 The bench loop is: **build → wrap into the chainloader image → flash → boot →
-console → restore the sealed IFS**. The commands below are the Linux-era
+console → record the bench state**. The commands below are the Linux-era
 session 6 (absolute 12) handoff §4 loop restated against **this** tree: paths now
 come from the repository root, and every tool named here exists (`tools/`,
 `tools/README.md`). Where a step is outside the tree — the two cross-toolchains
@@ -27,7 +27,7 @@ path.
   ramloader. In `0fca:8001` there is no `/dev/ttyACM0`, so a console `reboot` is
   a silent no-op and the flasher waits out the ramloader (~90–120 s, the "two
   minutes with the green LED") before falling back to the bootrom (trap 27).
-* The flasher's bootrom window is **300 s** and it exits silently: start it
+* The flasher's bootrom window is **60 s** and it exits silently: start it
   *immediately* before the reboot and check its log tail (trap 25).
 * Every boot: `pkexec chmod 666 /dev/ttyACM0` (trap 24).
 * **`tools/pb_bootlog.sh`** captures the console's full `kmsg` to
@@ -139,10 +139,10 @@ DTB target is relative to `arch/arm/boot/dts` — passing the full path doubles 
 to be edited. `EP_TICKS=<32 kHz ticks>` re-enables the epoch-delay instrument
 (needs a WDT2 window that accommodates it).
 
-**The builder rewrites `boot/chainloader/chainloader_kernel.S`.**  It patches the
+**The builder writes `boot/chainloader/chainloader_kernel.S`.**  It patches the
 loader's `ZIMAGE_SIZE`/`DTB_SRC`/`DTB_SIZE`/`DTB_DEST` constants to match the
-image it just assembled, so that tracked file shows up modified after every
-build.  That is expected — commit it with the build, do not revert it.
+image it just assembled.  The `.S` is generated and gitignored; the source is
+`boot/chainloader/chainloader_kernel.S.in`.
 
 **Shell gotcha:** the build tools take plain hex on the command line, but
 `head -c` does not (`head -c 0x60d4` → “invalid number of bytes”).  Use
@@ -160,7 +160,7 @@ grep CONFIG_INITRAMFS_SOURCE $K/.config
 cpio -itv < $K/usr/initramfs_data.cpio | grep ' init$'   # size/mtime must be this repo's
 ```
 
-`kernel/winchester.config` (and `kernel/patches/winchester.config`) carry
+`kernel/winchester.config` carries
 `CONFIG_INITRAMFS_SOURCE="../../initramfs/root"` — relative to the kernel
 tree (`local/kernel-tree`), so it works in any clone with this layout.  If you
 build out of tree, override it (`make … CONFIG_INITRAMFS_SOURCE=$PWD/initramfs/root`).
@@ -394,7 +394,18 @@ read-only, but it injects packets into a live link: about half the reads fail
 with an ACK/error `0x0003` (that is the reference's own `PPI_TX_RX_TA = 4`) and
 it retries.
 
-## 6. Restore and verify (do this before ending a session)
+## 6. Bench state at the end of a session
+
+There is **no required restore**.  The Linux `/init` tops `BOOTCTR_FCTRY` up at
+boot (`pbrpmb topup 0x1E`), so leaving the unit on our image is a valid end
+state.  Record what the next session inherits:
+
+* which OS/image is on region 0 (CRC) and region 1 (sha256);
+* `BOOTCTR_FCTRY` (a health check, not a budget to conserve);
+* door/ssh state, and any device-side file you deployed.
+
+**Only restore TabletOS if the operator wants the unit left there** (or a test
+image left it unbootable).  The way back is the 1917 IFS at block `0x825`:
 
 ```bash
 nohup python3 tools/bbusb.py flash --component local/work/ifs-shim-sealed.ifs \
@@ -411,22 +422,17 @@ tools/pbssh.sh 'cat /dev/rpmb/BOOTCTR_FCTRY' | xxd -p     # expect 32000000
 **The boot is the verification** (operator, session 27): the loader
 CRC-verifies the image before it runs and the OS mounts `/base`, so if the unit
 comes up on 2.1.0.1917 the flashed IFS is the one on media — a read-back hash
-adds nothing and is no longer part of the loop.  Check instead that the OS
-boots, `/base` is mounted, and the counter reads `0x32` (root ssh can finally
-read `/dev/rpmb`).
+adds nothing.  Check instead that the OS boots, `/base` is mounted, and the
+counter reads `0x32`.
 
 **Restore the 1917 IFS, not `local/images/ifs0.sealed.bin`.**  That file is the
 **2.0.0.4869** IFS and is incompatible with the 1917 `/base`/UFS on the media
 (trap 84).  The 1917 IFS with the `rfs_validator` shim is
-`local/work/ifs-shim-sealed.ifs` (7 900 548 B, block `0x825`), and the full way
-back — IFS + RCFS + UFS — is `local/work/back-1917.signed`.
-
-The payload copies are `local/work/ifs-shim-sealed.ifs` (the 1917 IFS — **not**
-`local/images/ifs0.sealed.bin`, which is the 4869 IFS, trap 84) and
-`local/images/kernel*.img` (the tagged builds). If the restore flash
-misbehaves, `--delay 40` is the trick that catches the *next* WDT2 self-reset
-instead of the bootrom you just left (report 103 §6.3). The `BOOTCTR` line is a
-**read**: see `SAFETY.md` §2 before writing anything there.
+`local/work/ifs-shim-sealed.ifs` (7 900 548 B, block `0x825`); the full way
+back — IFS + RCFS + UFS — is `local/work/back-1917.signed`.  If the restore
+flash misbehaves, `--delay 40` catches the *next* WDT2 self-reset instead of the
+bootrom you just left (report 103 §6.3).  The `BOOTCTR` line is a **read**: see
+`SAFETY.md` §2 before writing anything there.
 
 ## 7. Reading the reference (QNX) while it is up
 
@@ -485,10 +491,11 @@ read_bytes(address="0x801293f8", length=48)
 * **One variable per boot.** Never mix a timing experiment with a structural
   change; the epoch instrument and the four-register timing experiment are both
   single-purpose builds.
-* Budget boots against `BOOTCTR_FCTRY` (`SAFETY.md` §2): one successful
-  factory/CRC boot spends one, a reset loop spends them faster, and only a
-  booted TabletOS puts one back. The agent must never write RPMB.
-* Restore the sealed IFS at the end of every session, and verify the sha256.
+* Read `BOOTCTR_FCTRY` as a health check (`SAFETY.md` §2): one successful
+  factory/CRC boot spends one, and the booted OS tops it back up (our Linux
+  `/init` at ≤`0x1e`, TabletOS to `0x32`).  A reset loop spends them faster.
+  The agent must never write RPMB.
+* Leave the unit on whichever image the operator wants; no restore is required.
 
 ## 9. Recovering the TabletOS UFS (`hd3`) with bb10mt
 

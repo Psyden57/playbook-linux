@@ -12,8 +12,8 @@ Component exceptions and provenance
 1. kernel/patches/0001-playbook-winchester-7.3.3.patch,
    kernel/winchester-7.3.3.config,
    kernel/patches/0001-playbook-winchester-6.15.11.patch,
-   kernel/patches/winchester.config,
-   kernel/clean-kernel-6.15.11-changes.patch (historical) and the files under
+   kernel/winchester.config,
+   kernel/archive/clean-kernel-6.15.11-changes.patch (historical) and the files under
    kernel/source/ are derived from Linux 7.3.3 / 6.15.11 and remain licensed
    under GPL-2.0-only.  They are aggregated with, not relicensed by, the
    GPL-3.0-or-later project code.
@@ -30,7 +30,7 @@ Component exceptions and provenance
    which carries the constant.
 
 4. tools/BerryShell-V4.py is derived from the author's own earlier
-   BerryShell-V3.py, not from a third-party project.  Its qconn protocol layer
+   tools/legacy/BerryShell-V3.py, not from a third-party project.  Its qconn protocol layer
    was reverse-engineered by the author.
 
 5. The protocol and format facts, register values, disassembly notes and

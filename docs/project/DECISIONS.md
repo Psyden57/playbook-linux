@@ -487,6 +487,39 @@ monitor call and `0xFF05`), 146 (static RE: no handshake; `r3` suspect);
 
 ---
 
+## 21. The reference unit may be armed, gated on RE and on the preconditions (session 20)
+
+**Decision (operator, 2026-10-31).** The last working unit is the **reference
+(`0x50175127`)**.  The operator authorises putting it on the factory/CRC path
+despite the standing "reference is read-only" rule, **provided** that the RE is
+finished first and every precondition below is verified read-only before the
+record is created.  The procedure is `ARMING-TUTORIAL.md`; **an agent still never
+writes RPMB** (`SAFETY.md` §6) — the operator runs the write.
+
+**Executed.**  The operator created the record during session 21, and the sealed
+`os_type` 6 IFS was flashed on 2026-11-01; the unit is **armed and sealed** and
+boots.  Current state: `STATE.md`.
+
+**Why this is a real decision and not a formality.** Session 20 wrote a
+*captured, genuine* record block to the spare with a correct frame, the device
+accepted it (`result=0`) and the read-back matched, and the unit is now
+permanently in the LED error loop **1-2-2 = `0x5B` (NV-record / RPMB subsystem
+unusable)** with no USB path at all (reports 149/153).  There is one unit left,
+so the cost of a second mistake is the whole project.
+
+**Preconditions to verify read-only before arming** (report 154 §Q5):
+1. The record will be **exactly 4 bytes**, value in **`1..0x32`**.
+2. NVRAM `0x2040` on media must read **`1..8`** — `0` and `≥9` route to the nuke
+   path (`0x800156E8`).
+3. The block the record lands in must keep its co-resident record budget
+   (**`L ≤ 172`** for a record sharing `BOOTCTR_FCTRY`'s block).
+4. The store must be fully readable (the mount reads **every** block).
+5. The unit must be able to boot a rooted OS afterwards, or the rollback window
+   (`rm /dev/rpmb/BOOTCTR_FCTRY`) is closed.
+
+**A failed write is not survivable**: the bootloader's write paths blink `0x2F`
+and never return (`KNOWN-ISSUES.md` trap 65).  So "we can always retry" is false.
+
 ## 22. BB10: backport the Winchester platform support into 10.3 (session 25)
 
 **Decision (operator, 2026-11-03).** The first BB10 attempt targets **Z10
@@ -1615,8 +1648,11 @@ pseudo-code we write) is committed.
 the operator's session-40 correction, recorded in `docs/sessions/session-40.md`.
 
 
-(session 23); the rest remain open and are recorded so nobody assumes a policy
-exists.
+## Open policy decisions
+
+The repository licence and visibility are decided below; the remaining
+policy questions (publication of the proprietary corpus) stay open and are
+recorded here so nobody assumes a policy exists.
 
 ### Repository license
 
@@ -1691,37 +1727,4 @@ numbering and the bootrom handshake follow the same source), and bb10mt is
 alongside the container code in `tools/bbusb.py` (see the addendum above).  Reports `135`/`141` and
 older docs still cite the pre-move `local/vendor/bbusb/...` paths — those are
 historical records and are left as written.
-
-## 21. The reference unit may be armed, gated on RE and on the preconditions (session 20)
-
-**Decision (operator, 2026-10-31).** The last working unit is the **reference
-(`0x50175127`)**.  The operator authorises putting it on the factory/CRC path
-despite the standing "reference is read-only" rule, **provided** that the RE is
-finished first and every precondition below is verified read-only before the
-record is created.  The procedure is `ARMING-TUTORIAL.md`; **an agent still never
-writes RPMB** (`SAFETY.md` §6) — the operator runs the write.
-
-**Executed.**  The operator created the record during session 21, and the sealed
-`os_type` 6 IFS was flashed on 2026-11-01; the unit is **armed and sealed** and
-boots.  Current state: `STATE.md`.
-
-**Why this is a real decision and not a formality.** Session 20 wrote a
-*captured, genuine* record block to the spare with a correct frame, the device
-accepted it (`result=0`) and the read-back matched, and the unit is now
-permanently in the LED error loop **1-2-2 = `0x5B` (NV-record / RPMB subsystem
-unusable)** with no USB path at all (reports 149/153).  There is one unit left,
-so the cost of a second mistake is the whole project.
-
-**Preconditions to verify read-only before arming** (report 154 §Q5):
-1. The record will be **exactly 4 bytes**, value in **`1..0x32`**.
-2. NVRAM `0x2040` on media must read **`1..8`** — `0` and `≥9` route to the nuke
-   path (`0x800156E8`).
-3. The block the record lands in must keep its co-resident record budget
-   (**`L ≤ 172`** for a record sharing `BOOTCTR_FCTRY`'s block).
-4. The store must be fully readable (the mount reads **every** block).
-5. The unit must be able to boot a rooted OS afterwards, or the rollback window
-   (`rm /dev/rpmb/BOOTCTR_FCTRY`) is closed.
-
-**A failed write is not survivable**: the bootloader's write paths blink `0x2F`
-and never return (`KNOWN-ISSUES.md` trap 65).  So "we can always retry" is false.
 

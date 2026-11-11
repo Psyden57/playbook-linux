@@ -35,6 +35,7 @@ hardware/
 tools/qnx6-usage-host
 boot/chainloader/chainloader_kernel.bin
 boot/chainloader/chainloader_kernel.elf
+boot/chainloader/chainloader_kernel.S
 *.o
 *.a
 *.d

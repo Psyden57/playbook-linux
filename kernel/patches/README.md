@@ -29,8 +29,9 @@ make ARCH=arm CROSS_COMPILE=<arm-linux-> -j$(nproc) zImage dtbs modules
 # then wrap it: python3 tools/build_kernel_image.py
 ```
 
-`winchester-7.3.3.config` is the exact config the 7.3.3 image boots
-(sha256 `7e0aa261…`); it is also copied at `kernel/winchester-7.3.3.config`.
+The canonical config is `kernel/winchester-7.3.3.config` (sha256
+`50d1f60a…`).  The stale copies that used to sit in this directory are archived
+under `kernel/archive/configs/`; do not build with them.
 The base had to be **upstream 7.3.3**, not the pmOS package: current pmaports
 still declares `linux-postmarketos-stable` as `arch="all !armhf !s390x"`.
 The kernel is **XZ-compressed** so the image fits the region-0 IFS slot
@@ -122,12 +123,12 @@ This directory contains the complete diff between **mainline Linux
 git checkout v6.15.11            # or unpack pristine 6.15.11
 git apply --check 0001-playbook-winchester-6.15.11.patch   # dry run
 git apply 0001-playbook-winchester-6.15.11.patch
-cp winchester.config .config     # the exact config the project boots
+cp ../winchester.config .config  # canonical 6.15.11 config (kernel/winchester.config)
 make ARCH=arm CROSS_COMPILE=<arm-linux-> -j$(nproc) zImage dtbs
 # then wrap it: python3 tools/build_kernel_image.py
 ```
 
-`winchester.config` is the shipped config (note `CONFIG_IKCONFIG=y`: the
+`kernel/winchester.config` is the shipped 6.15.11 config (note `CONFIG_IKCONFIG=y`: the
 config is also baked into every built kernel and recoverable via
 `scripts/extract-ikconfig`).
 

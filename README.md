@@ -18,8 +18,9 @@ image — no vendor kernel, no vendor device tree.
 **The current state lives in [`docs/project/STATE.md`](docs/project/STATE.md) and
 only there**; this page does not restate it. The next experiment is in
 [`docs/project/HANDOFF.md`](docs/project/HANDOFF.md), and the 7.3.3 port record
-is in [`docs/project/KERNEL-PORT.md`](docs/project/KERNEL-PORT.md).  (The
-2.1.0.1917 image-rebuild work in `IFS-REBUILD.md` is parked by the operator.)
+is in [`docs/history/KERNEL-PORT.md`](docs/history/KERNEL-PORT.md).  (The
+2.1.0.1917 image-rebuild work in `docs/parked/IFS-REBUILD.md` is parked by the
+operator.)
 
 ## How it works
 
@@ -39,11 +40,11 @@ created from a booted OS — before a CRC-sealed image will boot; see
 Our image is a **replacement for the region-0 IFS**, not an extra file: RIM's
 fixed startup prefix and header are kept, and our chainloader, `zImage` and DTB
 are placed in the image behind them.  (The separate 2.1.0.1917 work rebuilds the
-imagefs itself behind the same prefix; see `docs/project/IFS-REBUILD.md`.)  A
+imagefs itself behind the same prefix; see `docs/parked/IFS-REBUILD.md`.)  A
 small ARM chainloader at image offset `0x800` copies the 7.3.3 `zImage` and the
 board DTB to high DRAM, checks the DTB magic, and jumps with the ARM boot
 protocol.  The kernel is upstream Linux 7.3.3 plus one patch set
-(`kernel/patches/0001-playbook-winchester-7.3.3.patch`, 42 files) and the board
+(`kernel/patches/0001-playbook-winchester-7.3.3.patch`, 53 files / 7,773 lines) and the board
 config `kernel/winchester-7.3.3.config`; the 6.15.11 tree and patch are kept as
 the reference.  The initramfs contains a static PID 1 and a purpose-built
 console (the initramfs itself has no busybox or shell) whose commands read and
@@ -100,6 +101,8 @@ own command set (`peek`/`poke`, `i2c`, `i2c16`, `spi`, `fb`, `kmsg`, `disp`,
 ```
 docs/project/     canonical documentation (overview, state, architecture,
                   setup, development, decisions, known issues, roadmap, handoff)
+docs/history/     superseded state, closed roadmap items, fixed ledgers
+docs/parked/      operator-parked work (BB10, PlayBook OS image rebuild)
 docs/reports/     the analysis reports this work is built on (numbered)
 docs/sessions/    per-session notes (one file per session; the backfill trail)
 docs/captures/    live text captures (register dumps, ring buffers)

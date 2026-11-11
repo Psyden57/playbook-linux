@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.x"
       - name: Byte-compile the host tools
-        run: python3 -m py_compile tools/*.py
+        run: python3 -m py_compile tools/*.py tools/legacy/*.py
       - name: Offline tool tests (stub device, no USB)
         run: python3 tools/tests/test_offline.py
       - name: Documentation guard

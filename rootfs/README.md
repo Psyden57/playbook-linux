@@ -34,8 +34,8 @@ python3 tools/build_rootfs.py --size-mb 64 \
   --busybox local/work/src/busybox-1.36.1/busybox \
   --busybox-links local/work/src/busybox-1.36.1/busybox.links \
   --modules local/work/modules
-python3 tools/pre_os_ifs_flash.py \
-  --payload local/images/rootfs-region1.ext4 --dest-raw 0x29000000
+python3 tools/bbusb.py flash --component local/images/rootfs-region1.ext4 \
+  --dest-block 0x2915 --from-bootrom --password 0000 --apply
 ```
 
 The full loop (BusyBox, modules, hand-off, both flashes) is

@@ -5,7 +5,7 @@ for facts. Neither shares code with the other.
 
 | component | lives in | role |
 |---|---|---|
-| chainloader | `boot/chainloader/chainloader_kernel.S(.in)` | first code of ours to run; copies kernel+DTB high and jumps |
+| chainloader | `boot/chainloader/chainloader_kernel.S.in` | first code of ours to run; copies kernel+DTB high and jumps (the builder generates the `.S`) |
 | image builder | `tools/build_kernel_image.py` | assembles the chainloader image, patches the IFS header, computes the CRC |
 | flasher | `tools/bbusb.py` | the pre-OS `0xF7` writer: a `.signed` container (region 0 + region 1 in one bootrom session) or a bare component (`--component --dest-block`); `tools/pre_os_ifs_flash.py` is the older template tool (`DECISIONS.md` §29) |
 | USB tool | `tools/bbusb.py` | one CFP-style entry point: the protocol module plus `info` / `flash` / `reset-osregion` / `boot-mode` / `reset-loader` and offline `pack` / `unpack` / `split` / `parse` |
@@ -14,8 +14,8 @@ for facts. Neither shares code with the other.
 | board DTS + patched drivers | `kernel/source/` (`omap4-winchester.dts`, `tc358764.c`, `dsi.c`, `omap4bc.S`) | board description and the three display patches |
 | PID 1 | `initramfs/init.c` | mounts, creates the USB gadget, runs the boot top-up, then mounts the region-1 root rw, chroots and execs `/sbin/init`; falls back to the console; no reboot timer since session 15 |
 | console | `initramfs/console.c` | the REPL on `/dev/ttyGS0`, and the only way to touch hardware by hand |
-| host capture/drive tools | `tools/` (`pbcon.py`, `pb_ring.py`, `pb_events.py`, `pbssh.sh`, `door-hold.sh`, `pbi2c`, `usb_watch.py`, `probe_loader.py`, `force_reset_loader.py`) | console driver, DRAM capture, QNX access, I²C oracle, loader reset |
-| boot-chain tools | `tools/` (`89-crc_tool.py`, `build_crc_image.py`, `90-nvram2074.py`, `memdump3.c`, `memw32.c`, `ramloader-commands.txt`) | IFS CRC verify/reseal, the pre-chainloader images, NVRAM `0x2074`, and the QNX-side memory reader/writer |
+| host capture/drive tools | `tools/` (`pbcon.py`, `pb_ring.py`, `pb_events.py`, `pbssh.sh`, `door-hold.sh`, `pbi2c`, `QCL.py`, `force_reset_loader.py`) | console driver, DRAM capture, QNX access/door, I²C oracle, loader reset |
+| boot-chain tools | `tools/` (`89-crc_tool.py`, `memdump3.c`, `memw32.c`, `ramloader-commands.txt`; older tools in `tools/legacy/`) | IFS CRC verify/reseal, and the QNX-side memory reader/writer |
 | reference binaries | `local/proprietary/dumped4869ifs/` (+ RCFS dump) | the QNX boot set used for static RE |
 
 ## 1. The chainloader image
@@ -40,7 +40,7 @@ verification still applies (`tools/build_kernel_image.py`).
 | `end-4` | CRC32 | `zlib.crc32(image[0:-4])`, i.e. CRC-32/ISO-HDLC over `[start, end-4)`; printed by the builder and quoted everywhere |
 
 Source/destination addresses in that table are the ones the checked-in
-`chainloader_kernel.S` was generated with; `tools/build_kernel_image.py`
+`chainloader_kernel.S.in` was generated with; `tools/build_kernel_image.py`
 recomputes them from the actual zImage/DTB sizes on every build.
 Limits: the image may not exceed offset `0xB00000` (the IFS zone is
 region-0-relative `0x100000`–`0xC00000`). The base is the sealed IFS, `0x2BFE10` bytes

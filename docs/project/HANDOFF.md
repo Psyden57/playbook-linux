@@ -48,9 +48,9 @@ Config `kernel/winchester-7.3.3.config` (`CONFIG_CHARGER_ISL9519=y`,
 **The WL1283 code is NOT in it** — it is in
 `kernel/archive/wl1283/wl1283-instrumentation-7.3.3.patch` (517 lines, applies
 to the clean tree with `patch -p1`; round-trip verified).
-**The 6.15.11 backup is intact** (`local/pristine/linux-6.15.11`,
+**The 6.15.11 backup is intact** (`local/pristine/linux-6.15.11.tar.xz`,
 `local/kernel-tree-6.15.11`, `kernel/patches/0001-playbook-winchester-6.15.11.patch`);
-do not delete it; its patch is incomplete (trap 106).
+do not delete `local/kernel-tree-6.15.11`; its patch is incomplete (trap 106).
 
 **The board DTS** (`kernel/source/omap4-winchester.dts` ↔
 `local/kernel-tree/.../omap4-winchester.dts`, keep identical) carries the
@@ -348,9 +348,10 @@ rcS` (module loads + the mixer setup).
 * **OS 2.x only** for PlayBook hardware facts (trap 110, DECISIONS §34).  Ask
   the reference OS what it maps before writing a DT node (DECISIONS 30).
 * Subagents: static/file-only, never a `tools/` script (trap 109).
-* **Restore the sealed IFS at the end of every session** unless the operator
-  ends on our image.  Session 40 ended on **Linux `0xF97CD9C7`** (region 0);
-  reflashing the 1917 IFS at block `0x825` returns to TabletOS.
+* **No restore is required at wrap-up.**  Leaving the unit on Linux is a valid
+  end state; the Linux `/init` tops `BOOTCTR_FCTRY` up.  Session 40 ended on
+  **Linux `0xF97CD9C7`** (region 0); reflash the 1917 IFS at block `0x825` only
+  when the operator wants TabletOS back.
 
 ## 7. Paste-ready kickoff prompt
 
@@ -361,7 +362,7 @@ Workspace: this repository — a git checkout.  The earlier work tree
 $HOME/rea-work is READ-ONLY.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), KERNEL-PORT.md §7, ROADMAP.md item 9 (step 5), KNOWN-ISSUES.md (traps
+file), docs/history/KERNEL-PORT.md §7, ROADMAP.md item 9 (step 5), KNOWN-ISSUES.md (traps
 9-159, especially 150-159, and §3), DEVELOPMENT.md §3/3a/4/7a, DECISIONS.md
 (44-50), reports 176, 180-204, sessions/session-39.md and session-40.md.
 

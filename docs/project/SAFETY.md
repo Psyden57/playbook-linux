@@ -244,10 +244,11 @@ therefore `bb10mt flash`) cannot be used on this unit (reports `98` §2.3,
   under the session-18 decision; a writable mount of QNX's filesystem is only
   for a deliberate repurpose (and the UFS image is the way back).  See
   `docs/contradictions/safety-no-emmc-mount-vs-readonly-root.md`.
-* **Restore and verify** after every test: flash a **1917 IFS** at block
-  `0x825` and boot it.  Two are in the tree and both boot: the **compressed**
+* **The way back** is a **1917 IFS** flash at block `0x825`.  It is needed to
+  return to TabletOS or recover a bad test image, not to replenish the counter
+  (the Linux `/init` tops that up at boot).  Two are in the tree and both boot: the **compressed**
   `local/work/ifs1917-compressed.ifs` (3 466 232 B, sha256 `f14db207…`, 217
-  frames — the one on media now) and the **uncompressed**
+  frames — the smaller alternative) and the **uncompressed**
   `local/work/ifs-shim-sealed.ifs` (7 900 548 B, sha256 `b52195bb…`, 489
   frames — the conservative choice).  Both are `os_type=6`, CRC-sealed.  **The boot is the verification** (operator,
   session 27): the loader CRC-verifies the image before it runs and the OS
