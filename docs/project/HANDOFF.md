@@ -10,11 +10,12 @@ Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolut
 > stopped clock source (datasheet "Control Interface Clocking"); clearing
 > `R0x200` bit 0 thaws it.  The codec is frozen from boot because the DAPM
 > `AIF1CLK` supply powers with `rcS`'s playback path while `AIF1CLK_SRC` is
-> still MCLK1 — and **MCLK1 does not clock**: replaying the reference's own FLL
-> programme (with `FRAC` and the PM1/PM2 bias) and the datasheet's free-running
-> FLL both leave `0x732` bit 5 = 0.  Reports **201** (static RE of the 1917
-> driver) and **203** (the measurement); decision §50; traps 155–159.  No image
-> or rootfs change this session.
+> still MCLK1 — and **MCLK1 does not clock under our image**: replaying the
+> reference's own FLL programme (with `FRAC` and the PM1/PM2 bias) and the
+> datasheet's free-running FLL both leave `0x732` bit 5 = 0.  Reports **201**
+> (static RE of the 1917 driver), **203** (the measurement) and **204** (the
+> live reference read); decision §50; traps 155–160.  No image or rootfs change
+> this session.
 
 ## 0. The job, and where it stands
 
@@ -72,10 +73,7 @@ spec** (§0c) — treat it as unknown, not as truth.
   `local/images/rootfs-region1-audio-oss.ext4`) — the sensor/charger/audio
   modules, `snd-pcm-oss`/`snd-mixer-oss`, `pbplay`, `pbmix`, and the `rcS`
   mixer setup.
-  The unit is **on Linux** (`0fca:8010`, console `pb> `), not TabletOS.  The
-  previous images rebuild from `0x3B2ECFED` (session 38) and `0x50842767` /
-  `0x82FC0D35` (session 38); the saved fallbacks are `0xE36C679A` and
-  `0x04AF1433`.
+  The unit is **on Linux** (`0fca:8010`, console `pb> `), not TabletOS.
 * **The way back to TabletOS** is the 1917 IFS
   (`local/work/ifs-shim-sealed.ifs`, sha256 `b52195bb…`, 489 frames), flashed
   at block `0x825`, region 0 only:
@@ -87,19 +85,20 @@ spec** (§0c) — treat it as unknown, not as truth.
   ```
   **Do not restore `local/images/ifs0.sealed.bin`** (2.0.0.4869, trap 84).
 * The 1917 RCFS at region-0 `0xC00000` and the 1917 UFS are on media, untouched.
-* Earlier Linux images (region 0 only): the Task-3 `0x0DC36A11`, `0x05819994`,
-  the known-good `0xE36C679A`, and the touch `0x04AF1433`.
+* Earlier Linux images (region 0 only), kept as fallbacks: `0xE36C679A` (the
+  known-good), `0x0DC36A11` (WL1283 Task 3), `0x04AF1433` (touch), plus
+  `0x3B2ECFED`, `0x50842767` and `0x82FC0D35` from session 38.
 
 ## 0b. Item 9 step 4 (WL1283) — software surface exhausted
 
-**Not invalidated: reports 180–197 and traps 116–146 stand.**  The 1917-truth
-DTS redo (session 37) is **negative**: the minimal `&mmc5` host probes but
-`attach_sdio no` (report 196), the DT model is provably applied and
-1917-identical, WL_EN is high, and `GPIO2_DATAIN` bit 21 (WL_IRQ) is 0 — the
-chip is not up under Linux.  The remaining evidence is **chip-side
-(VBAT / 26 MHz TCXO / SLOW_CLK) or OMAP HSMMC sampling**, which needs a board
-view or logic analyser.  Do not re-run the closed experiments (traps 116–143)
-without stating what is new.
+**Not invalidated: reports 180–197 and the closed WL1283 experiments (traps
+116–137 and 142–143) stand.**  The 1917-truth DTS redo (session 37) is
+**negative**: the minimal `&mmc5` host probes but `attach_sdio no` (report 196),
+the DT model is provably applied and 1917-identical, WL_EN is high, and
+`GPIO2_DATAIN` bit 21 (WL_IRQ) is 0 — the chip is not up under Linux.  The
+remaining evidence is **chip-side (VBAT / 26 MHz TCXO / SLOW_CLK) or OMAP HSMMC
+sampling**, which needs a board view or logic analyser.  Do not re-run the
+closed experiments without stating what is new.
 
 * **Mainline binding (report 195 §3.6).**  `ti,wl1283` requires `interrupts`
   **and** `ref-clock-frequency`; the SDIO form is a `wlcore@2` child of
@@ -294,11 +293,15 @@ rcS` (module loads + the mixer setup).
   Linux `/init` tops `BOOTCTR_FCTRY` up at ≤`0x1e`, and TabletOS writes `0x32`;
   read the counter as a health check.
 * The 1917 QNX tools that run on the device must be `-static` (trap 131).
+  `tools/QCL.py` speaks qconn directly (no door/SSH); see `tools/README.md`.
 * **Tracepoints work on our image:** `mount -t tracefs none /sys/kernel/tracing`
   then `events/regmap/regmap_reg_write` gives the driver's exact codec write
   order.  `debugfs` must be mounted at `/sys/kernel/debug` for the regmap cache.
 
-## 4. Traps added last session (full list 9–159 in `KNOWN-ISSUES.md` §2)
+## 4. Traps added last session
+
+Full list 14–160 in `KNOWN-ISSUES.md` §2 (41/70/71/76 are unused numbers).
+The session-40 additions:
 
 * **155.** The WM8994 disables control-register access while `AIF1CLK_ENA = 1`
   with a stopped source; `R0x200 = 0` thaws it, a software reset does too.
@@ -308,6 +311,8 @@ rcS` (module loads + the mixer setup).
 * **158.** `devmem` on an unclocked module (GPIO5 `0x4805B038`) gives an L3
   external abort and taints the kernel.
 * **159.** Prove the codec is thawed before concluding writes are dropped.
+* **160.** `pbi2c` reads 16-bit-register devices (`rd16`/`wr16`/`dump16`);
+  that is how the live WM8994 state in report 204 was read.
 
 ## 5. Where things are
 
@@ -323,8 +328,9 @@ rcS` (module loads + the mixer setup).
 | touch driver | `local/kernel-tree/drivers/input/touchscreen/playbook-munin.c` |
 | audio machine driver | `local/kernel-tree/sound/soc/ti/playbook-wm8994.c` |
 | charger driver | `local/kernel-tree/drivers/power/supply/isl9519.c` |
+| qconn client (no door/SSH) | `tools/QCL.py` |
 | OSS player / mixer tool | `rootfs/pbplay.c`, `rootfs/pbmix.c` |
-| reports | `docs/reports/176…203` (201 and 203 are this session's) |
+| reports | `docs/reports/176…204` (201, 203 and 204 are the audio records) |
 | sessions | `docs/sessions/session-40.md` (last session) |
 
 ## 6. Working rules
@@ -362,9 +368,10 @@ Workspace: this repository — a git checkout.  The earlier work tree
 $HOME/rea-work is READ-ONLY.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), docs/history/KERNEL-PORT.md §7, ROADMAP.md item 9 (step 5), KNOWN-ISSUES.md (traps
-9-159, especially 150-159, and §3), DEVELOPMENT.md §3/3a/4/7a, DECISIONS.md
-(44-50), reports 176, 180-204, sessions/session-39.md and session-40.md.
+file), docs/history/KERNEL-PORT.md §7, ROADMAP.md item 9 (step 5),
+KNOWN-ISSUES.md (traps 14-160, especially 150-160, and §3), DEVELOPMENT.md
+§3/3a/4/7a, DECISIONS.md (44-51), docs/reports/INDEX.md, reports 176 and
+180-204, sessions/session-39.md and session-40.md.
 
 WHERE IT STANDS: the WM8994 "write blocker" is SOLVED — the codec disables
 control-register access while AIF1CLK_ENA=1 with a stopped clock source
@@ -430,13 +437,22 @@ A test boot is not a budget concern (the counter self-replenishes), but the
 hard hazards (0 / >0x32 / failed write / flat pack) remain.  Operator's call
 when to stop and to wrap up.
 
-NEXT (operator's call): (a) the meter on MCLK1 and the supplies, QNX vs Linux;
-(b) the driver work in the right order (AIF1CLK_ENA=0 when idle, AUXCLK1 12.8
-MHz, FLL first, ENA last); (c) touch power/reset (the touch is down); (d) the
-wl128x-nvs.bin path (hd5).  The unit is on Linux; region 0/region 1 both
+NEXT (operator's call): (a) resolve the pad carrying MCLK1 from the reference
+(hwio-omap4.so resolver) and compare the codec power path; the meter on MCLK1
+and DCVDD/DBVDD/AVDD1/AVDD2/CPVDD/RESET is the fallback if the pad and registers
+match; (b) the driver work in the right order (AIF1CLK_ENA=0 when idle, AUXCLK1
+12.8 MHz, FLL first, ENA last); (c) touch power/reset (the touch is down); (d)
+the wl128x-nvs.bin path (hd5).  The unit is on Linux; region 0/region 1 both
 change when the kernel/rootfs pair does, otherwise flash only the changed
 region; the 1917 IFS at block 0x825 is the way back to TabletOS.
 
 UPDATE THE DOCS as you go and commit: STATE.md, HANDOFF.md, ROADMAP.md,
-KNOWN-ISSUES.md, DECISIONS.md and the session note.
+KNOWN-ISSUES.md, DECISIONS.md and the session note — and move replaced or
+resolved material to docs/history/ or docs/parked/ with a link stub.
+
+WRAP-UP: the operator decides when the session stops.  Record the bench state,
+write the session note, update the canonical docs, verify with
+tools/docs_audit.py and tools/tests/test_offline.py, then commit privately and
+publish the snapshot (docs/project/REPO-MANAGEMENT.md).  No IFS restore is
+required.
 ```

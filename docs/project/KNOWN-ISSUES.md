@@ -1025,7 +1025,7 @@ report 121 §3/§11/§12.
 
 ## 3. Corrections to older reports
 
-These twenty-one are preserved deliberately. Each is newer than the text it
+These twenty-two are preserved deliberately. Each is newer than the text it
 contradicts, and the older reports have been corrected in place where they could
 be.
 

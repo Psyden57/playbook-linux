@@ -65,12 +65,14 @@ decision §50, traps 155–159.
   -110` at 58 s and `0x65` NAKs; the controller needs the power/reset lines the
   driver does not drive (session-38 nicety).  Recover with a battery pull or by
   adding the GPIO1_14/GPIO4_8 pulse.
-* **Next (in order):** (a) **measure** pad `0x19C`/the codec's MCLK1 and
-  DCVDD/DBVDD/AVDD1/AVDD2/CPVDD/`/RESET` with a meter, QNX vs Linux on the same
-  points — that is the remaining unknown; (b) only then the driver work: leave
-  `AIF1CLK_ENA = 0` when idle (the reference's rule), set AUXCLK1 to 12.8 MHz
-  before enabling the interface, configure FLL1 first with `0x224` masked to
-  bits 4:0, and enable `AIF1CLK` last.
+* **Next (in order, reference first):** (a) resolve which pad carries the
+  codec's MCLK1 (`0x19C` vs `0x19E`) with the `hwio-omap4.so` resolver and
+  compare the reference's codec power path; a meter on MCLK1 and
+  DCVDD/DBVDD/AVDD1/AVDD2/CPVDD/`/RESET` is the fallback if the pad and the
+  registers match; (b) only then the driver work: leave `AIF1CLK_ENA = 0` when
+  idle (the reference's rule), set AUXCLK1 to 12.8 MHz before enabling the
+  interface, configure FLL1 first with `0x224` masked to bits 4:0, and enable
+  `AIF1CLK` last.
 
 ## Per-subsystem state
 
