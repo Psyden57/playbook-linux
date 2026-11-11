@@ -445,6 +445,10 @@
 		reg = <0x1a>;
 		#sound-dai-cells = <0>;
 
+		/* MCLK1 = SCRM AUXCLK1 (SYS_CLK / 3 = 12.8 MHz), fref_clk2_out. */
+		clocks = <&auxclk1_ck>;
+		clock-names = "MCLK1";
+
 		DBVDD-supply = <&v1v8>;
 		DCVDD-supply = <&v1v8>;
 		AVDD1-supply = <&v1v8>;
@@ -1079,6 +1083,17 @@
 		>;
 	};
 
+	/*
+	 * The codec's MCLK1 is the SoC's SCRM AUXCLK1 output (SYS_CLK / 3 =
+	 * 12.8 MHz) on fref_clk2_out, CORE pad 0x19c.  The 1917 driver maps
+	 * AUXCLK1 and locks FLL1 from MCLK1 at 12.8 MHz (report 200).
+	 */
+	codec_mclk_pins: codec-mclk-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x19c, 0x0000)	/* fref_clk2_out */
+		>;
+	};
+
 	gpio1_en_pins: gpio1-en-pins {
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x190, 0x0003)	/* gpio_2  (GPIO1_2)  */
@@ -1232,19 +1247,16 @@
 };
 
 / {
+	/*
+	 * The board machine driver rates the codec's MCLK1 (AUXCLK1) and
+	 * locks the WM8994 FLL1 to 256 fs; the DAI link itself (McBSP2 <->
+	 * wm8994-aif1, CPU as bit/frame provider) is in
+	 * sound/soc/ti/playbook-wm8994.c.  Replaces the generic
+	 * simple-audio-card, which cannot drive the codec's clock.
+	 */
 	sound {
-		compatible = "simple-audio-card";
-		simple-audio-card,name = "PlayBook WM8994";
-		simple-audio-card,format = "i2s";
-		simple-audio-card,bitclock-master = <&dailink0_cpu>;
-		simple-audio-card,frame-master = <&dailink0_cpu>;
-
-		dailink0_cpu: simple-audio-card,cpu {
-			sound-dai = <&mcbsp2>;
-		};
-
-		simple-audio-card,codec {
-			sound-dai = <&wm8994>;
-		};
+		compatible = "blackberry,playbook-wm8994";
+		pinctrl-names = "default";
+		pinctrl-0 = <&codec_mclk_pins>;
 	};
 };

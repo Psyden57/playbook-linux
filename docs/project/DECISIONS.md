@@ -1480,7 +1480,45 @@ broke USB self-enumeration (trap 149).
 
 ---
 
-These were the open policy questions.  The licence and visibility are decided
+## 49. WM8994 playback: a board machine driver, FLL from BCLK, and the write blocker (session 39)
+
+**Decision.**  Drive the WM8994 with a **board machine driver**
+(`sound/soc/ti/playbook-wm8994.c`), not `simple-audio-card`.  Its DAI link is
+`40124000.mcbsp` ↔ `wm8994-aif1` (I2S, CPU bit/frame provider); `hw_params`
+sets the McBSP fclk (`12.288 MHz`) and `CLKGDV` so BCLK = 32 fs, moves
+`AIF1CLK` to MCLK1, configures **FLL1 from BCLK** (BCLK is a documented
+WM8994 FLL reference) at 256 fs, and switches `AIF1CLK` to FLL1.  The card
+adds the `Headphone`/`Speaker` DAPM widgets/routes, and the region-1 `rcS`
+sets the playback mixer switches with the new `pbmix` tool.  Do **not** clock
+the FLL from MCLK1 on this unit until the pin is proven.
+
+**Why.**  `simple-audio-card` cannot do it: its `mclk-fs` path calls
+`set_sysclk(codec, 0, …)` and the WM8994 driver's `WM8994_SYSCLK_MCLK1 = 1`,
+so `hw_params` fails with `AIF1CLK not configured` (trap 150).  The 1917
+driver configures FLL1 from MCLK1 at 12.8 MHz, but FLL1 never reports lock on
+this unit (`0x732` bit 5 = 0) although AUXCLK1 (12.8 MHz) and CORE pad `0x19c`
+(`fref_clk2_out`) are configured; relocking FLL1 to BCLK locks immediately
+(`0x732 = 0x6020`) (trap 151).  A second `hw_params` (`SETFMT`→`CHANNELS`→
+`SPEED`) hits `FLL1 is currently providing SYSCLK`; moving `AIF1CLK` to MCLK1
+first fixes it.
+
+**Constraint.**  The codec stops accepting register writes after boot (reads
+still answer): the regmap cache holds the FLL config while the chip keeps the
+reset values, and `regmap_update_bits()` then skips the write (trap 152).
+`cache_only` is `N`, the device is `active`, and a plain `component_write`
+does not stick, so the FLL stays unconfigured and the stream runs at the OSS
+default 8 kHz from the dead MCLK1 — **no audible output yet**.  Do not report
+playback as working until the FLL registers are seen in hardware
+(`i2ctransfer`) and `0x732` bit 5 reads 1.  The MFD gets a board quirk
+(`pm_runtime_forbid`) to stop its reset-on-suspend from complicating the
+audio path; it did not fix the write blocker.
+
+**Evidence.**  Report **200**; the live `i2ctransfer`/regmap-cache pair, the
+DAPM files, `PM4=0x0300`/`PM5=0x0303`, the `0x732 = 0x6020` BCLK lock, the
+1917 FLL1 disassembly, and the WM8994 Rev 4.6 datasheet (AIF1CLK ≤ 12.5 MHz;
+FLL reference MCLK1/2/BCLK/LRCLK; `FLL1_LOCK_STS` bit 5).  Traps 150–153.
+
+
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.
 

@@ -1,15 +1,15 @@
 # Session numbering
 
-The project spans **thirty-eight sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **thirty-nine sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-38`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-39`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
-* **Linux-era** ("session 1…32") — used inside the reports and handoffs, because
+* **Linux-era** ("session 1…33") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
   started.  **Linux session N = absolute session N + 6.**
 
@@ -50,6 +50,7 @@ So:
 | **36** | **30** | **item 9 step 5 starts; the touch bus is solved** (report 193).  The operator formally stopped the WL1283.  The Cypress touch is on **I²C2 `0x48072000` = Linux `i2c-1`** (QNX `/dev/i2c1`) at `0x65`: `graphics.conf` selects `driver = munin` and `libmtouch-munin` opens `/dev/i2c1`.  Linux never muxed i2c2's pads (`0x4A100126`/`0x4A100128` = `0x011F` safe mode), so every transfer timed out; writing them to `0x0110` made `0x65` ACK at once.  The DTS gains `i2c2_pins` (DTB builds; no image flashed).  Traps 138; DECISIONS §44 |
 | **37** | **31** | **the WL1283 code is archived; the board DTS is re-derived from 2.1.0.1917; the minimal 1917-truth `&mmc5` is booted and CMD5 is still negative; the WLAN calibration is found in QNX `hd5`** (reports 195/196/197).  The base patch is 7 305 lines / 46 files (`28e48f56…` → `d0d00009…`); the touch still works on the stripped base; the unit ends on TabletOS 2.1.0.1917 (`ti0` UP, `BOOTCTR_FCTRY = 0x32`).  `local/work/1917/{base,ifs,calib}` persists the 1917 artifacts.  Traps 142/143; DECISIONS §46 |
 | **38** | **32** | **the touch is finished and the WM8994 card is up** (reports 198/199).  The Munin report maps through the 1917 `scaling.conf` calibration to 1024×600 and the GPIO2_3 edge IRQ works (pad `0x056`, `0x410B`, irq 110).  The ABE segment is enabled with WD_TIMER3 off; McBSP2 + `simple-audio-card` give `0 [WM8994]: simple-card - PlayBook WM8994`; the sound stack is modules loaded from `rcS` after the USB gadget (trap 149).  Image `0x3B2ECFED` + rootfs `07d4e28b…`; patch 48 files / 7 530 lines (`9089ef49…`).  Traps 144–149; DECISIONS §47/§48 |
+| **39** | **33** | **the WM8994 playback path is built; the codec clock is blocked chip-side** (report 200).  A board machine driver (`playbook-wm8994.c`) replaces simple-audio-card: `0 [WM8994]: PlayBook_WM8994`, a working OSS write at 48 kHz, and the DAPM path powered (`PM4=0x0300`, `PM5=0x0303`, `AIF1CLK_ENA=1`).  FLL1 never locks from MCLK1 but locks from BCLK (`0x732=0x6020`); the chip stops accepting register writes after boot, so the driver's FLL config stays in the regmap cache (traps 150–152).  Image `0xF97CD9C7` + rootfs `968d2f20…`; patch 53 files / 7 773 lines (`434d06c3…`).  Traps 150–154; DECISIONS §49 |
 
 ## Anchors (evidence for the mapping)
 
@@ -94,7 +95,7 @@ and each session knows its own position:
 Reports `10`…`102` are the pre-Linux phase's output (boot media, monitor
 security, IRAM tables, the ROM API, `hd0`, NVRAM records `0x2801`, RPMB, the CRC
 recipe, the loader audit, the pre-OS IFS reflash).
-`103`…`199` are the Linux-era sessions (and continuing).
+`103`…`200` are the Linux-era sessions (and continuing).
 
 ## Why the two schemes are kept
 

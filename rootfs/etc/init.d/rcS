@@ -38,9 +38,28 @@ done
 # built-in probes caused).  Order matters only in that the codec and McBSP
 # should exist before the generic card binds; modprobe resolves the rest.
 for m in wm8994 snd-soc-wm-hubs snd-soc-wm8994 snd-soc-ti-sdma \
-	 snd-soc-omap-mcbsp snd-soc-simple-card-utils snd-soc-simple-card; do
+	 snd-soc-omap-mcbsp snd-soc-playbook-wm8994; do
 	modprobe "$m" 2>/dev/null
 done
+
+# OSS emulation for a simple playback probe (/dev/dsp -> the ALSA PCM).
+for m in snd-mixer-oss snd-pcm-oss; do
+	modprobe "$m" 2>/dev/null
+done
+
+# WM8994 playback path (the codec resets its DAPM switches on probe): AIF1.1
+# into both DAC1 mixers, DAC1 unmuted, DAC1 into the output mixers and the
+# speaker mixers, and the speaker output stages on.  The headphone mux stays
+# on "Mixer" (the output-mixer path).
+pbmix on "DAC1L Mixer AIF1.1"           2>/dev/null
+pbmix on "DAC1R Mixer AIF1.1"           2>/dev/null
+pbmix set "DAC1 Switch" 1               2>/dev/null
+pbmix on "Left Output Mixer DAC Switch"  2>/dev/null
+pbmix on "Right Output Mixer DAC Switch" 2>/dev/null
+pbmix on "SPKL DAC1 Switch"             2>/dev/null
+pbmix on "SPKR DAC1 Switch"             2>/dev/null
+pbmix on "SPKL Output Switch"           2>/dev/null
+pbmix on "SPKR Output Switch"           2>/dev/null
 
 # One line in the kernel log, so the boot is visible from kmsg even when the
 # console is not attached.

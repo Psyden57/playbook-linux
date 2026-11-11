@@ -35,7 +35,7 @@
         .equ ZIMAGE_SRC,  0x803BF800
         .equ ZIMAGE_SIZE, 0x006620D0
         .equ DTB_SRC,     0x80A218D0
-        .equ DTB_SIZE,    0x0001747D
+        .equ DTB_SIZE,    0x000173B2
         .equ KERNEL_DEST, 0x84000000
         .equ DTB_DEST,    0x846620D0
 

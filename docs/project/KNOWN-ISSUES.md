@@ -953,6 +953,60 @@ report 121 §3/§11/§12.
       fails with a page of `Unknown symbol simple_util_*` errors, and the card
       never registers.  (Session 38, report 199.)
 
+150. **A generic machine driver cannot clock the WM8994: `simple-audio-card`
+      cannot set its AIF1CLK source.**  `simple-audio-card,mclk-fs` calls
+      `snd_soc_dai_set_sysclk(codec_dai, 0, …)`, but the WM8994 driver expects
+      `WM8994_SYSCLK_MCLK1 = 1`, so the call returns `-EINVAL` and
+      `snd_soc_dai_hw_params()` fails with `AIF1CLK not configured`.  A board
+      machine driver must call `set_sysclk`/`set_pll` itself.  Related: the
+      FLL refuses to be reconfigured while it is the active SYSCLK
+      (`FLL1 is currently providing SYSCLK`, `-EBUSY`); move `AIF1CLK` to
+      MCLK1 before `set_pll` when `hw_params` is called again.  (Session 39,
+      report 200.)
+
+151. **The WM8994 MCLK1 pin does not clock on this unit.**  The 1917 driver
+      configures FLL1 from MCLK1 at 12.8 MHz (`REFCLK_DIV=0`, `FRATIO=0`,
+      `OUTDIV=7`, `N=7`, `K=0xAE14`), but FLL1 never reports lock
+      (`0x732` bit 5 = 0) even though SCRM `AUXCLK1 = 0x00020100`
+      (SYS_CLK/3 = 12.8 MHz, enabled, consumer `3-001a MCLK1`) and CORE pad
+      `0x19c` = `0x0000` (`fref_clk2_out`; the TRM maps `fref_clk<N>_out` to
+      `AUXCLK<N-1>`).  Relocking FLL1 to the incoming **BCLK** locks at once
+      (`0x732 = 0x6020`), so the FLL and BCLK are good and the MCLK1 path is
+      not.  BCLK is a documented FLL reference; use it, or find the real
+      MCLK1 wiring from a board view.  (Session 39, report 200.)
+
+152. **The WM8994 stops accepting register writes after boot; reads still
+      work, and the regmap cache then diverges.**  The `rcS` mixer writes and
+      the DAPM `AIF1CLK_ENA` write land, but later writes (the driver's FLL
+      configuration at `hw_params`, and even direct `i2ctransfer` writes to
+      `0x0220`/`0x0224`/`0x0601`) return success and do not change the
+      register.  The driver's cache reads `0224: 0c83`, `0220: 0001` while
+      the chip reads `0x0c80`, `0x0000`; because the cache already matches,
+      `regmap_update_bits()` skips the write, so a plain `component_write`
+      or a `cache_bypass` write is needed to see whether the chip accepts it.
+      `cache_only=N`, `cache_dirty=N`, the codec/MFD are runtime-`active`, and
+      `power/control=on` does not change it.  The stream therefore runs at the
+      OSS default 8 kHz with `AIF1CLK` from the dead MCLK1.  Next: write a
+      register at the first prompt and again after one playback, bisect the
+      boot, and try configuring the FLL in `.trigger(START)` (the earliest
+      hook after the DAPM stream event).  (Session 39, report 200.)
+
+153. **The ACM console drops lines; re-run a filtered listing to confirm a
+      result.**  `pbmix list "<name>"` returned nothing for a control that
+      `pbmix list | grep "<name>"` then showed (and the same control's
+      `0x0601` read as `1`).  Do not treat a missing line from a long console
+      command as evidence; repeat it, or filter on the device.
+
+154. **The tree-derived patch export found two files the previous export had
+      omitted.**  The session-38 48-file patch was verified 48/48
+      byte-identical but it did not list `drivers/input/touchscreen/Kconfig`
+      and `drivers/input/touchscreen/Makefile` (the touch driver's Kconfig/
+      Makefile entries), so those changes were never applied by the patch.
+      A tree-vs-pristine walk (after `make clean`, trap 139) now yields
+      **53 files / 7 773 lines**, sha256 `434d06c3…`, 0 rejects and 53/53
+      byte-identical.  Keep using the tree walk and diff its file list
+      against the old patch before exporting.  (Session 39.)
+
 ## 3. Corrections to older reports
 
 These twenty-one are preserved deliberately. Each is newer than the text it

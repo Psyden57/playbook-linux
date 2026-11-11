@@ -3,18 +3,23 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**7 530 lines / 48 files (38 modified + 10 new)** against pristine
-**linux-7.3.3** (sha256 `9089ef49…`).  It is generated from the tree, not from
+**7 773 lines / 53 files** against pristine
+**linux-7.3.3** (sha256 `434d06c3…`).  It is generated from the tree, not from
 the previous patch (trap 106), and it was verified by applying it to pristine
-7.3.3 targets and comparing all 48 files byte-for-byte with
-`local/kernel-tree` — 0 rejects, 0 mismatches.  Session 36 added the
+7.3.3 targets and comparing all 53 files byte-for-byte with
+`local/kernel-tree` — 0 rejects, 0 mismatches.  **Session 39** adds the board
+machine driver (`sound/soc/ti/playbook-wm8994.c` + Kconfig/Makefile), the
+`wm8994-core.c` runtime-PM board quirk and the board `sound` node/codec clocks,
+and it restores `drivers/input/touchscreen/{Kconfig,Makefile}`, which the
+48-file export had silently omitted (trap 154).  Session 36 added the
 `i2c2_pins` pinctrl group for the touch bus (report 193).  **Session 37 moved
 the WL1283 (MMC5) instrumentation out** into
 `kernel/archive/wl1283/wl1283-instrumentation-7.3.3.patch` (DECISIONS §46):
 `drivers/mmc/core/sdio.c` and `include/linux/mmc/host.h` are no longer
 modified (they are pristine again), and the WL1283 hunks in
 `omap_hsmmc.c`/`core.c`/`mmc_ops.c` and the board DTS are gone.  The base is
-now chainloader, display, sensors, charger, touch, WDT2 and eMMC only.
+now chainloader, display, sensors, charger, touch, WDT2, eMMC and the WM8994
+machine driver.
 
 ```bash
 # pristine 7.3.3, then:
@@ -43,15 +48,18 @@ the board's charger** (report 183): session 31 adds the real one,
 `drivers/power/supply/isl9519.c`, an Intersil ISL9519 at I²C1 0x09, and its
 `charger@9` node in the board DTS.  The BCI node/modules stay but are inert.
 
-The ten new files are the ones the old export recipe silently dropped, the
-session-31 charger driver, and the session-36 touch driver:
+The new files are the ones the old export recipe silently dropped, the
+session-31 charger driver, the session-36 touch driver, and the session-39
+machine driver:
 `arch/arm/boot/dts/ti/omap/omap4-winchester.dts`,
 `arch/arm/include/debug/omap4bc.S`, `drivers/iio/light/cm3217.c`,
 `drivers/leds/leds-fan5702.c`, `drivers/misc/pbmon.c`, `pbmon-pair.h`,
 `pbmon-page.h`, `include/linux/pb_event.h`,
-`drivers/power/supply/isl9519.c` and `drivers/input/touchscreen/
-playbook-munin.c`.  `patch -p1 --dry-run` alone does
-not prove an export: it must be applied and the result compared to the tree.
+`drivers/power/supply/isl9519.c`, `drivers/input/touchscreen/
+playbook-munin.c` and `sound/soc/ti/playbook-wm8994.c`.  `patch -p1 --dry-run`
+alone does not prove an export: it must be applied and the result compared to
+the tree.  The touchscreen Kconfig/Makefile and the machine driver's
+Kconfig/Makefile are modifications, not new files.
 
 Session 32 added two modified files — `drivers/mmc/core/sdio.c` (the CMD5
 probe-OCR quirk and `PBC: sdio` diagnostics) and `include/linux/mmc/host.h`
@@ -88,6 +96,18 @@ gains the `wdt3_target` label and the board DTS sets `&l4_abe { status =
 WM8994 codec + McBSP2 + `simple-audio-card` nodes plus the
 `SND_SOC_PLAYBOOK_WM8994` board Kconfig.  The export is **7 530 lines / 48
 files**, sha256 `9089ef49…`, verified 0 rejects / 48/48 byte-identical.
+
+**Session 39 replaces the simple-audio-card link with a board machine driver
+(report 200).**  `sound/soc/ti/playbook-wm8994.c` (new) builds the DAI link,
+the BCLK-fed FLL1 clocking and the `Headphone`/`Speaker` DAPM routes;
+`sound/soc/ti/{Kconfig,Makefile}` build it; `drivers/mfd/wm8994-core.c` gets a
+board `pm_runtime_forbid` quirk; the board DTS gains the
+`blackberry,playbook-wm8994` `sound` node, `codec_mclk_pins` and the codec
+`clocks`/`clock-names`.  A clean tree walk also found that the 48-file export
+had omitted `drivers/input/touchscreen/{Kconfig,Makefile}` (trap 154) and the
+`drivers/mfd/wm8994-core.c` modification.  The export is **7 773 lines / 53
+files**, sha256 `434d06c3…`, verified 0 rejects / 53/53 byte-identical.  Run
+`make clean` in the tree before the walk (trap 139).
 
 ## Reference base: 6.15.11
 

@@ -655,8 +655,21 @@ image is `0x0DC36A11`.
    disabled, McBSP2 is `okay` with the epson pads, and the
    `simple-audio-card` link is `0 [WM8994]: simple-card - PlayBook WM8994` on
    image `0x3B2ECFED` (report 199).  The sound stack is modules loaded from
-   `rcS` after the USB gadget (trap 149).  **Remaining:** playback
-   (MCLK/FLL/clocking).
+   `rcS` after the USB gadget (trap 149).
+   **Audio (WM8994) — playback path built, clock blocked (session 39, report
+   200).**  A **board machine driver** (`sound/soc/ti/playbook-wm8994.c`)
+   replaces simple-audio-card (`mclk-fs` passes `clk_id 0`, which the WM8994
+   rejects — trap 150): it registers `0 [WM8994]: PlayBook_WM8994`, sets the
+   McBSP fclk/CLKGDV (BCLK = 32 fs), clocks **FLL1 from BCLK** (the 1917
+   MCLK1 path never locks — trap 151), and adds the
+   `Headphone`/`Speaker` DAPM routes.  An OSS write (`pbplay`) reaches the
+   PCM at 48 kHz and the DAPM path powers (`PM4=0x0300`, `PM5=0x0303`,
+   `AIF1CLK_ENA=1`, `DAC1L`/`SPKL`/`HPOUT1L`/`SPKOUTLP` `On`) after `pbmix`
+   sets the output mixers in `rcS`.  **Open:** the chip stops accepting
+   register writes after boot, so the driver's FLL configuration stays in the
+   regmap cache (trap 152) — no audible output yet.  The next experiment is
+   `trigger(START)` (the first hook after DAPM power-up) plus a write-blocker
+   bisect.
 
 **Closes when:** each peripheral reports data under Linux (IIO/evdev/ALSA/input)
 and survives a reboot; the touch and FAN5702 have a driver; WiFi/BT/GPS are

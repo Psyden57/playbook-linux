@@ -220,6 +220,10 @@ def main():
         build_static(cc, SRC + '/init.c', stage + '/init')
         build_static(cc, ROOT + '/initramfs/console.c', stage + '/bin/pbconsole')
         build_static(cc, ROOT + '/initramfs/rpmb.c', stage + '/bin/pbrpmb')
+        if os.path.exists(SRC + '/pbplay.c'):
+            build_static(cc, SRC + '/pbplay.c', stage + '/bin/pbplay')
+        if os.path.exists(SRC + '/pbmix.c'):
+            build_static(cc, SRC + '/pbmix.c', stage + '/bin/pbmix')
         if os.path.exists(SRC + '/hci.c'):
             build_static(cc, SRC + '/hci.c', stage + '/bin/pbhci')
 
