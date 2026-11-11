@@ -964,19 +964,29 @@ report 121 §3/§11/§12.
       MCLK1 before `set_pll` when `hw_params` is called again.  (Session 39,
       report 200.)
 
-151. **The WM8994 MCLK1 pin does not clock on this unit.**  The 1917 driver
-      configures FLL1 from MCLK1 at 12.8 MHz (`REFCLK_DIV=0`, `FRATIO=0`,
-      `OUTDIV=7`, `N=7`, `K=0xAE14`), but FLL1 never reports lock
-      (`0x732` bit 5 = 0) even though SCRM `AUXCLK1 = 0x00020100`
-      (SYS_CLK/3 = 12.8 MHz, enabled, consumer `3-001a MCLK1`) and CORE pad
-      `0x19c` = `0x0000` (`fref_clk2_out`; the TRM maps `fref_clk<N>_out` to
-      `AUXCLK<N-1>`).  Relocking FLL1 to the incoming **BCLK** locks at once
-      (`0x732 = 0x6020`), so the FLL and BCLK are good and the MCLK1 path is
-      not.  BCLK is a documented FLL reference; use it, or find the real
-      MCLK1 wiring from a board view.  (Session 39, report 200.)
+151. **The WM8994 MCLK1 pin does not clock *under our Linux image* — but it does
+      under TabletOS (corrected session 40).**  The 1917 driver configures FLL1
+      from MCLK1 at 12.8 MHz (`REFCLK_DIV=0`, `FRATIO=0`, `OUTDIV=7`, `N=7`,
+      `K=0xAE14`), and on live TabletOS FLL1 **is locked**
+      (`0x732 = 0x6020`, bit 5 = 1) with `0x224 = 0x0c80`
+      (`REFCLK_SRC = MCLK1`) and `0x220 = 0x0005` (`ENA|FRAC`) — report 204.
+      Under Linux the same FLL bytes read back correctly and never lock, at any
+      SCRM `AUXCLK1` divider (÷1…÷8), with the codec reset or with the PM1/PM2
+      bias on; the datasheet's free-running FLL does not lock either.  Both OSes
+      read `AUXCLK1 = 0x00020100` and pad `0x19C` mux 0, so the difference is
+      below those registers (pad drive, a supply, or `/RESET`).  **Do not** say
+      "MCLK1 is dead on this unit"; say "it does not clock under our image".
+      Also note a Linux boot can leave `AUXCLK1 = 0x00000100` (÷1 = **38.4
+      MHz**, outside the FLL's 0.032–13.5 MHz range) until the codec driver's
+      first `set_sysclk(MCLK1, 12800000)` calls `clk_set_rate()`; the value
+      survives a warm reset, so it is not deterministic — set it, do not assume.  (Sessions 39–40,
+      reports 200/203/204.)
 
 152. **The WM8994 stops accepting register writes after boot; reads still
-      work, and the regmap cache then diverges.**  The `rcS` mixer writes and
+      work, and the regmap cache then diverges.**  *(Explained by trap 155: the
+      cause is `AIF1CLK_ENA = 1` with a stopped source, not a broken bus.  The
+      observation below stands; the "chip" conclusion was incomplete.)*
+      The `rcS` mixer writes and
       the DAPM `AIF1CLK_ENA` write land, but later writes (the driver's FLL
       configuration at `hw_params`, and even direct `i2ctransfer` writes to
       `0x0220`/`0x0224`/`0x0601`) return success and do not change the
@@ -1006,6 +1016,77 @@ report 121 §3/§11/§12.
       **53 files / 7 773 lines**, sha256 `434d06c3…`, 0 rejects and 53/53
       byte-identical.  Keep using the tree walk and diff its file list
       against the old patch before exporting.  (Session 39.)
+
+155. **The WM8994 freezes its register map when `AIF1CLK_ENA = 1` with a stopped
+      clock source.**  Datasheet Rev 4.6, "Control Interface Clocking": "If the
+      AIF1CLK source is stopped, then AIF1CLK_ENA must be set to 0 for control
+      register access."  In that state the I²C bus ACKs, writes return success
+      and are dropped, and reads keep answering (with the values from before the
+      freeze).  Clearing `R0x200` bit 0 (`= 0x0000`) thaws it immediately, and a
+      software reset does too.  Our driver is in that state from boot, because
+      the DAPM `AIF1CLK` supply powers up with the `rcS` playback path while
+      `AIF1CLK_SRC` is still MCLK1 — and MCLK1 does not clock under our image — so
+      the FLL configuration written at `hw_params` is lost.  This is report
+      200's "write blocker"; report 203 is the measurement.  **The reference does
+      the opposite and it is the rule to copy: on live TabletOS `0x200 = 0x0010`
+      — source already FLL1, `AIF1CLK_ENA = 0` while idle** (report 204), so its
+      register map is always accessible.  Never leave `AIF1CLK_ENA = 1` when
+      idle.  (Session 40.)
+
+156. **A fractional FLL1 needs `FLL1_FRAC` (R544 bit 2), and a plain whole-register
+      write of `0x220 = 0x0001` clears it.**  The 1917 driver does
+      `0x220 |= 0x0004` after N/K/FRATIO and then sets `FLL1_ENA` with a masked
+      write that preserves bit 2; the mainline `_wm8994_set_fll()` sets
+      `WM8994_FLL1_FRAC` in its enable write too.  A hand-written FLL sequence
+      that writes `0x220 = 0x0001` runs in integer mode with a fractional N/K and
+      never locks.  Use a read-modify-write (`0x0005`), and give the FLL ~100 ms.
+      (Session 40, report 201/203.)
+
+157. **Reserved bits read back 0, so one register is not a valid write test.**
+      `R0x223` holds `FLL1_N` at `[14:5]` (`N = 7` → `0x00E0`, not `0x0008`);
+      `R0x220` bit 2 is `FLL1_FRAC`; `R0x601` bit 6 is reserved.  Writing a
+      reserved bit and reading 0 looks exactly like "the chip ignored the write".
+      Probe with a register and a bit that are known writable — `R0x601` bit 5
+      (`0x0020`) works — and thaw (`R512 = 0`) first.  (Session 40.)
+
+158. **`devmem` on a module whose interconnect target is idle aborts on the L3
+      bus.**  Reading `0x4805B038` (GPIO5 `DATAIN`) eight times produced eight
+      `Unhandled fault: external abort on non-linefetch` / `L3 Custom Error:
+      MASTER MPU TARGET L4PER2` pairs and a `W`-tainted kernel.  It is not fatal
+      — the console and the unit stay up — but it costs a clean `dmesg` and a
+      reboot to clear the taint.  GPIO5 is not among the banks our DT state
+      clocks.  This is trap 100's class: do not poke a module the DT has not
+      enabled.  (Session 40.)
+
+159. **Do not conclude "the writes are dropped" without first proving the codec is
+      thawed.**  Two session-40 tests "proved" the driver's writes were lost
+      while the codec was already frozen from an earlier experiment, and one
+      "proved" the opposite by writing reserved bits.  The reliable shape is:
+      write `R512 = 0`, write/read a known-good scratch bit (`R0x601` bit 5),
+      then run the test.  (Session 40.)
+
+160. **`pbi2c` now reads 16-bit-register devices; use it to read the codec on
+      TabletOS.**  The QNX i2c ABI is a 16-byte header `{addr7, len, nbufs,
+      flags}` for writes and a 5-word descriptor `{addr7, 2, regsize, n, 1}` for
+      reads; for the WM8994 (16-bit register, 16-bit data) the header is
+      `{0x1a, 4, 2, 1}` with a 2-byte big-endian register iovec, and the read
+      descriptor's register-size word is 2.  `tools/pbi2c rd16|dump16|wr16`
+      implements it (`tools/qnx-i2c.c`, built with the in-tree QNX 6.6
+      toolchain) and reads the ID as `0x8994` on the first try.  This is how the
+      reference's live codec state was obtained (report 204).  (Session 40.)
+
+### Fixed in session 40 (documentation)
+
+* **Trap 151's wording** — "MCLK1 does not clock on this unit" is corrected to
+  "does not clock under our image": the reference locks FLL1 from MCLK1
+  (report 204).
+* **Trap 152's opening claim** — "the WM8994 stops accepting register writes
+  after boot" now points at trap 155, the actual rule.
+* **Report 203** carries a pointer to 204 at its headline, and its §5 inference
+  is marked too strong.
+* **The session-39 note that `startup-playbook` writes `AUXCLK1 = 0x00020100`
+  at `0x7980`** is now confirmed at instruction level
+  (`docs/reference/startup-playbook/clocks-and-wdt.md` §1).
 
 ## 3. Corrections to older reports
 

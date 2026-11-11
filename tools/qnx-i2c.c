@@ -82,6 +82,38 @@ static int parse_hex(const char *s, unsigned *v)
 	return (*end == '\0');
 }
 
+/*
+ * 16-bit-register variants, for a device with 16-bit register addresses and
+ * 16-bit data (the WM8994 at I2C4 0x1a).  The only differences from the 8-bit
+ * paths above are the register iovec length (2) and the descriptor's
+ * register-size word; the header/descriptor shapes are otherwise unchanged.
+ */
+static int i2c_write16(int fd, int addr, unsigned reg, unsigned val)
+{
+	int32_t hdr[4] = { addr, 4, 2, 1 };
+	unsigned char rb[2] = { (reg >> 8) & 0xff, reg & 0xff };
+	unsigned char vb[2] = { (val >> 8) & 0xff, val & 0xff };
+	iov_t iov[3];
+
+	SETIOV(&iov[0], hdr, sizeof(hdr));
+	SETIOV(&iov[1], rb, 2);
+	SETIOV(&iov[2], vb, 2);
+	return devctlv(fd, DCMD_I2C_WRITE, 3, 0, iov, NULL, NULL);
+}
+
+static int i2c_read16(int fd, int addr, unsigned reg, unsigned char *out, int n)
+{
+	int32_t desc[5] = { addr, 2, 2, n, 1 };
+	unsigned char rb[2] = { (reg >> 8) & 0xff, reg & 0xff };
+	iov_t iovA[2], iovB[2];
+
+	SETIOV(&iovA[0], desc, sizeof(desc));
+	SETIOV(&iovA[1], rb, 2);
+	SETIOV(&iovB[0], desc, sizeof(desc));
+	SETIOV(&iovB[1], out, n);
+	return devctlv(fd, DCMD_I2C_READ, 2, 2, iovA, iovB, NULL);
+}
+
 int main(int argc, char **argv)
 {
 	int fd, rc, bus, n;
@@ -93,12 +125,15 @@ int main(int argc, char **argv)
 			"usage: %s probe <bus> <addr7>\n"
 			"       %s rd    <bus> <addr7> <reg>\n"
 			"       %s rdw   <bus> <addr7> <reg>      (2-byte SMBus word)\n"
+			"       %s rd16  <bus> <addr7> <reg16>\n"
 			"       %s wr    <bus> <addr7> <reg> <val>\n"
+			"       %s wr16  <bus> <addr7> <reg16> <val16>\n"
 			"       %s scan  <bus>\n"
 			"       %s dump  <bus> <addr7> <from> <to>\n"
-			"       %s dumpw <bus> <addr7> <from> <to>  (2-byte words)\n",
+			"       %s dumpw <bus> <addr7> <from> <to>  (2-byte words)\n"
+			"       %s dump16 <bus> <addr7> <from16> <to16>\n",
 			argv[0], argv[0], argv[0], argv[0], argv[0], argv[0],
-			argv[0]);
+			argv[0], argv[0], argv[0], argv[0]);
 		return 2;
 	}
 
@@ -166,6 +201,46 @@ int main(int argc, char **argv)
 		}
 		close(fd);
 		return 0;
+	}
+
+	if (!strcmp(argv[1], "rd16") || !strcmp(argv[1], "dump16")) {
+		if (argv[1][0] == 'r') {
+			if (argc < 5 || !parse_hex(argv[4], &reg)) {
+				fprintf(stderr, "bad register\n");
+				return 2;
+			}
+			from = to = reg;
+		} else {
+			if (argc < 6 || !parse_hex(argv[4], &from) || !parse_hex(argv[5], &to)) {
+				fprintf(stderr, "bad range\n");
+				return 2;
+			}
+		}
+		for (reg = from; reg <= to; reg++) {
+			rc = i2c_read16(fd, addr, reg, buf, 2);
+			if (rc == 0)
+				printf("0x%02x[0x%04x] = 0x%04x (hi=0x%02x lo=0x%02x)\n",
+				       addr, reg, (buf[0] << 8) | buf[1], buf[0], buf[1]);
+			else
+				printf("0x%02x[0x%04x] ERR %s\n", addr, reg, strerror(errno));
+		}
+		close(fd);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "wr16")) {
+		if (argc < 6 || !parse_hex(argv[4], &reg) || !parse_hex(argv[5], &val)) {
+			fprintf(stderr, "bad register/value\n");
+			return 2;
+		}
+		rc = i2c_write16(fd, addr, reg, val);
+		if (rc == 0)
+			printf("0x%02x[0x%04x] <- 0x%04x ok\n", addr, reg, val);
+		else
+			printf("0x%02x[0x%04x] <- 0x%04x FAILED %s\n", addr, reg, val,
+			       strerror(errno));
+		close(fd);
+		return rc ? 1 : 0;
 	}
 
 	if (!strcmp(argv[1], "wr")) {

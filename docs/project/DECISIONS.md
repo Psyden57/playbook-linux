@@ -1518,6 +1518,102 @@ DAPM files, `PM4=0x0300`/`PM5=0x0303`, the `0x732 = 0x6020` BCLK lock, the
 1917 FLL1 disassembly, and the WM8994 Rev 4.6 datasheet (AIF1CLK ≤ 12.5 MHz;
 FLL reference MCLK1/2/BCLK/LRCLK; `FLL1_LOCK_STS` bit 5).  Traps 150–153.
 
+---
+
+## 50. The WM8994 write "blocker" is the clocking rule: never enable AIF1CLK from a stopped source (session 40)
+
+**Decision.**  Treat report 200's "the chip stops accepting register writes" as
+solved and closed: the codec disables **control-register access** while
+`AIF1CLK_ENA = 1` and the selected AIF1CLK source is not running (WM8994 Rev 4.6
+"Control Interface Clocking").  Do not chase `regmap`/I²C again.  When the
+register map must be writable, either keep `AIF1CLK_ENA = 0` (write `R0x200 = 0`)
+or have a live clock.  On this board the only live source at power-up would be
+MCLK1, and MCLK1 does not clock, so **the audio path is blocked on the codec
+clock, not on a write path.**
+
+**Why.**  Measured three ways on the live codec (report 203): clearing `R0x200`
+bit 0 restores writes within one write; a software reset does the same; and
+`R0x200 = 0x0001` (ENA, SRC = MCLK1) from a thawed codec freezes the next write.
+The codec is in that state from boot (the DAPM `AIF1CLK` supply powers with the
+`rcS` path and `AIF1CLK_SRC` is still MCLK1), which is why the FLL configuration
+at `hw_params` is dropped while the cache keeps it.
+
+**The reference does it in the safe order** (static RE, report 201,
+`deva-ctrl-omap4abe-wm8994.so` `FUN_0001decc`): AUXCLK1 gate on → software
+reset → PM2/PM1/AntiPOP/bias → FLL1 (`0x224 = 0` MCLK1 ÷1, `0x221 = 0x0700`,
+`0x223 = 0x00E0` (N=7), `0x220 |= 0x0004` (FRAC), `0x222 = 0xAE14` (K), delay,
+`0x220` ENA, delay) → `0x200` SRC = FLL1 → rate/format → **`0x200` ENA last**.
+AIF1CLK is always sourced from FLL1; MCLK1 is only the FLL reference.  It never
+polls the lock, never uses the free-running FLL, and never touches the write
+sequencer.
+
+**Constraint (measured).**  Replaying the reference's own power-up and FLL
+programme — including `FRAC` and the PM1/PM2 bias — still leaves `0x732` bit 5 =
+0, and the datasheet's free-running FLL1 does not lock either.  SCRM
+`AUXCLK1 = 0x00020100` (gate on, source `sys_clkin_ck`, ÷3 = 12.8 MHz) and CORE
+pad `0x19C = 0x0000` (`fref_clk2_out`) match the reference's values.  So the next
+evidence is the pin or the FLL's analogue supply (AVDD2), and it needs a QNX
+read or a meter — not another driver change.  Also note the DTS supply mapping
+is out of spec (AVDD1 mapped to 1.8 V vs a 2.4 V minimum; AVDD2/CPVDD mapped to
+2.1 V vs a 2.0 V maximum) and is a guess.
+
+**The reference read (same session, report 204).**  The 1917 IFS was booted and
+the codec read live over the door (root ssh, `tools/pbi2c dump16`; the tool
+gained 16-bit-register support).  The reference has **FLL1 locked**:
+`0x732 = 0x6020` (bit 5 = 1) with `0x224 = 0x0c80` (`REFCLK_SRC = MCLK1`) and
+`0x220 = 0x0005` (`ENA|FRAC`), and it keeps **`0x200 = 0x0010`
+(`AIF1CLK_ENA = 0`)** while idle.  So MCLK1 **is** clocked on this board and the
+codec clock is not a dead end; what fails is our Linux side, and it fails with a
+byte-identical codec register file and identical `AUXCLK1`/pad values.  A Linux
+boot can also leave `AUXCLK1 = 0x00000100` (÷1 = **38.4 MHz**, outside the
+FLL's 0.032–13.5 MHz range) until the codec driver's first
+`set_sysclk(MCLK1, 12800000)` calls `clk_set_rate()` (the SCRM value survives a
+warm reset, so it is not deterministic); sweeping that divider
+(÷1…÷8) on Linux did not lock the FLL either.  **Therefore the next step is a
+meter** on pad `0x19C`/the codec's MCLK1 and on DCVDD/DBVDD/AVDD1/AVDD2/CPVDD/
+`/RESET` — QNX vs Linux on the same points — not a driver change.  Trap 151 is
+corrected accordingly.
+
+**Do not** "fix" this by moving the FLL setup to `.trigger(START)` alone.  The
+ASoC order is `.prepare` (all three) → DAPM stream event (sets `AIF1CLK_ENA`) →
+`.trigger(START)` (starts BCLK), so the codec clock is enabled one step before
+any live reference exists.  A trigger-only change would still freeze at the
+DAPM event; it needs the codec's `AIF1CLK` DAPM supply held off until the McBSP
+runs (trap 155, session-40 backlog).
+
+**Evidence.**  Reports **201** and **203**; the live `i2ctransfer` pairs, the
+regmap tracepoints, `devmem` of `0x4A30A314`/`0x4A10019C`, and the WM8994 Rev
+4.6 datasheet ("Control Interface Clocking", "Free-Running FLL Clock", the
+recommended operating conditions).  Traps 155–159.
+
+---
+
+## 51. The reference OS is the oracle: reconstruct it before poking the hardware (session 40)
+
+**Decision.**  For any open question about how a device is meant to be driven,
+go to the **1917 reference OS** first: static RE of its binaries (REA MCP +
+Ghidra), a live read over the door, and a reconstruction committed under
+`docs/reference/`.  Do not start with meter/scope work on the unit — the
+operator's session-40 direction is that hardware poking is risky and
+unnecessary while a working reference exists.
+
+**Why.**  This session's bench work produced one real result (the AIF1CLK rule,
+because it is a documented register-level behaviour) and several false starts,
+while the reference answered the structural questions directly: the 1917
+driver's exact start-up order (report 201), the live codec state with FLL1
+locked (report 204), and `startup-playbook`'s own `AUXCLK1`/WDT2/GPIO data
+(`docs/reference/startup-playbook/`).  The reference also settled the
+`WLAN_EN_GPIO` question: 54/53 (BT 55) is correct for Winchester, and the
+151/152, 151/163 and 171 sets belong to board type 4 — a question several
+software sessions had left ambiguous.
+
+**Constraint.**  The reference artifacts are proprietary and stay in the
+gitignored `local/`; only our reconstruction (addresses, decoded tables,
+pseudo-code we write) is committed.
+
+**Evidence.**  Reports **201** and **204**; `docs/reference/startup-playbook/`;
+the operator's session-40 correction, recorded in `docs/sessions/session-40.md`.
+
 
 (session 23); the rest remain open and are recorded so nobody assumes a policy
 exists.

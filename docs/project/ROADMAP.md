@@ -670,6 +670,34 @@ image is `0x0DC36A11`.
    regmap cache (trap 152) — no audible output yet.  The next experiment is
    `trigger(START)` (the first hook after DAPM power-up) plus a write-blocker
    bisect.
+   **Audio (WM8994) — the write blocker is SOLVED; the blocker is the codec
+   clock (session 40, reports 201/203, decision §50).**  The chip disables
+   control-register access while `AIF1CLK_ENA = 1` with a stopped source
+   (datasheet "Control Interface Clocking"); clearing `R0x200` bit 0 thaws it
+   within one write, and a software reset does too.  The codec is frozen from
+   boot because the DAPM `AIF1CLK` supply powers with the `rcS` path while
+   `AIF1CLK_SRC` is still MCLK1 — so the FLL config at `hw_params` is dropped
+   (traps 155–159).  The 1917 driver (`FUN_0001decc`) programs the FLL first
+   and sets **AIF1CLK_ENA last**, always sourcing AIF1CLK from FLL1 with MCLK1
+   as the FLL reference; replaying that exact sequence (with `FRAC` and the
+   PM1/PM2 bias) still leaves `0x732` bit 5 = 0, and the datasheet's
+   free-running FLL does not lock either.  **The live read is done (session 40,
+   report 204):** on TabletOS FLL1 **is locked** (`0x732 = 0x6020`,
+   `0x220 = 0x0005`, `0x224 = 0x0c80` = MCLK1) and `AIF1CLK_ENA` is 0 while idle
+   (`0x200 = 0x0010`) — the codec clock works on this board.  Our image cannot
+   lock it with the same codec bytes, the same `AUXCLK1 = 0x00020100` and pad
+   `0x19C` mux 0, at any divider and with or without the analogue bias, so the
+   remaining unknown is **below the visible registers** (pad drive, a supply,
+   `/RESET`).  The reference's own `AUXCLK1` write is in `startup-playbook`
+   (`0x80107980` → `0x00020100`; `0x80100908` → `0x00010000`), reconstructed in
+   `docs/reference/startup-playbook/`.  **Next, reference-driven (no meter):**
+   (1) decode the `hwio-omap4.so` pad resolver and name pads `0x19C`/`0x19E`;
+   (2) decode how the reference applies the signal-group pad table
+   (`pads.md`); (3) then the driver work in order — `AIF1CLK_ENA = 0` when
+   idle, `AUXCLK1` 12.8 MHz first, FLL1 with `0x224` masked to bits 4:0,
+   `AIF1CLK` last.  A trigger-only driver change cannot work (the DAPM stream
+   event enables the codec clock before the McBSP BCLK starts); it needs the
+   `AIF1CLK` supply held off until BCLK runs.
 
 **Closes when:** each peripheral reports data under Linux (IIO/evdev/ALSA/input)
 and survives a reboot; the touch and FAN5702 have a driver; WiFi/BT/GPS are

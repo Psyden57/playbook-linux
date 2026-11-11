@@ -1,6 +1,77 @@
 # Current state
 
-## Current state — 2026-11-11 (session 39)
+## Current state — 2026-11-11 (session 40)
+
+**The WM8994 "write blocker" is solved — it is a documented clocking rule — and
+the audio blocker is now precisely the codec clock: MCLK1 does not clock.**
+The codec disables control-register access while `AIF1CLK_ENA = 1` and the
+selected AIF1CLK source is stopped (WM8994 Rev 4.6, "Control Interface
+Clocking").  Our driver is in that state from boot, so the FLL configuration
+written at `hw_params` is dropped; clearing `R0x200` bit 0 (or a software reset)
+restores writes immediately.  The 1917 driver never enables AIF1CLK before the
+FLL exists, and always sources AIF1CLK from FLL1 — but replaying its exact
+sequence (including `FRAC` and the PM1/PM2 bias) still does not lock FLL1 on this
+unit, and the datasheet's free-running FLL does not either.  Reports 201/203,
+decision §50, traps 155–159.
+
+* **The freeze, measured** (report 203): reads answer, writes are ACKed and
+  dropped; `R0x200 = 0x0000` thaws within one write; a software reset also
+  thaws; `R0x200 = 0x0001` (ENA, SRC = MCLK1) from a thawed codec freezes the
+  next write; 65 s of idle does not re-freeze it.  The chip is frozen from boot
+  because the DAPM `AIF1CLK` supply powers with the `rcS` playback path and
+  `AIF1CLK_SRC` is still MCLK1.  `regmap`'s cache divergence (report 200) is a
+  symptom.
+* **The reference's sequence** (report 201,
+  `deva-ctrl-omap4abe-wm8994.so` `FUN_0001decc`): AUXCLK1 gate → software reset
+  → PM2/PM1/AntiPOP/bias → FLL1 (`0x224=0`, `0x221=0x0700`, `0x223=0x00E0`
+  (N=7), `0x220|=4` (FRAC), `0x222=0xAE14` (K), delay, ENA, delay) → `0x200`
+  SRC = FLL1 → rate/format → **`0x200` ENA last**.  AIF1CLK is always from FLL1;
+  MCLK1 is only the FLL reference.  No lock polling, no free-running FLL, no
+  write sequencer.  `codec_set_clock_rate` clears `0x200` bit 0 around a rate
+  change; `codec_power_standby` clears FLL1_ENA and the AUXCLK1 gate.
+* **MCLK1 works on the reference and not under our image** (reports 203/204).
+  Live TabletOS: **FLL1 locked** (`0x732 = 0x6020`, bit 5 = 1) with
+  `0x224 = 0x0c80` (MCLK1) and `0x220 = 0x0005` (ENA|FRAC), and
+  **`0x200 = 0x0010` — `AIF1CLK_ENA = 0` while idle**.  Under Linux the same
+  codec bytes read back and never lock (÷1…÷8 swept, codec reset or biased), and
+  the datasheet's free-running FLL does not lock either.  A Linux boot can
+  leave `AUXCLK1 = 0x00000100` (÷1 = **38.4 MHz**, outside the FLL's
+  0.032–13.5 MHz range) until the codec driver's first `set_sysclk(MCLK1,
+  12800000)` calls `clk_set_rate()`; the value survives a warm reset, so it is
+  not deterministic.  **The reference's own AUXCLK1 write is in
+  `startup-playbook`** (`0x80107980`: `0x00020100` = ÷3, 12.8 MHz, gate on; an
+  "off" writer at `0x80100908` sets `0x00010000`), i.e. it is set before any
+  driver runs — full reconstruction in `docs/reference/startup-playbook/`.
+  Trap 151 is corrected: MCLK1 is not dead, it does not clock under our image.
+* **The reference's live register file is captured** (report 204): PM1 `0x0013`,
+  PM2 `0x6000`, `0x200 = 0x0010`, `0x208 = 0x0010`, `0x210/211 = 0x0083`,
+  `0x220 = 0x0005`, `0x221 = 0x0700`, `0x222 = 0xae14`, `0x223 = 0x00e0`,
+  `0x224 = 0x0c80`, `0x300 = 0x4018`, `0x301/302 = 0x4000` (codec is AIF1
+  master), `0x303–305 = 0x0040`, `0x601/602 = 0x0001`, `0x700 = 0x8101`,
+  `0x701–706 = 0xa101`, `0x707/708 = 0x4007/0x4008`, `0x732 = 0x6020`.
+  `tools/pbi2c` gained `rd16`/`wr16`/`dump16` for 16-bit-register devices.
+* **The DTS supplies are out of spec and are a guess:** AVDD1 mapped to `v1v8`
+  (1.8 V; the part needs 2.4–3.3 V), AVDD2/CPVDD to `v2v1` (2.1 V; max 2.0 V).
+  The FLL's analogue supply is AVDD2.  Nothing about the mapping is verified.
+* **ASoC ordering blocks a driver-only fix:** `.prepare` → DAPM stream event
+  (sets `AIF1CLK_ENA`) → `.trigger(START)` (starts BCLK), so the codec clock is
+  enabled one step before a live reference exists.  A trigger-only change cannot
+  work; it needs the `AIF1CLK` DAPM supply held off until the McBSP runs.
+* **Media unchanged:** region 0 = `0xF97CD9C7`, region 1 = `968d2f20…`.  No
+  kernel/rootfs change this session (nothing in the driver logic was wrong);
+  the IFS round trip for the reference read was region 0 only.
+* **Touch regression on the reboot:** `playbook-munin … touch did not boot:
+  -110` at 58 s and `0x65` NAKs; the controller needs the power/reset lines the
+  driver does not drive (session-38 nicety).  Recover with a battery pull or by
+  adding the GPIO1_14/GPIO4_8 pulse.
+* **Next (in order):** (a) **measure** pad `0x19C`/the codec's MCLK1 and
+  DCVDD/DBVDD/AVDD1/AVDD2/CPVDD/`/RESET` with a meter, QNX vs Linux on the same
+  points — that is the remaining unknown; (b) only then the driver work: leave
+  `AIF1CLK_ENA = 0` when idle (the reference's rule), set AUXCLK1 to 12.8 MHz
+  before enabling the interface, configure FLL1 first with `0x224` masked to
+  bits 4:0, and enable `AIF1CLK` last.
+
+## Previous state — 2026-11-11 (session 39)
 
 **The WM8994 playback path is built and the DAI streams; the codec clock is
 the open blocker.**  A board machine driver is up
@@ -979,7 +1050,7 @@ this trial.
 | USB device + gadget | **working, but not a bulk transport** | enumerates `0fca:8010`, CDC-ACM, product string "PlayBook (Linux bring-up)"; `/dev/ttyACM0` ↔ `/dev/ttyGS0`; High Speed (480 Mbps), 512-byte bulk packets.  **Drains at only ~134 KB/s and drops bytes when the host blasts** (report 136 §3.3), so it is a control/debug channel: do not send multi-MB images through `recv`.  Report 114, 136 |
 | **WL1283 (MMC5)** | **software surface exhausted (session 37: the 1917-truth minimal host also fails CMD5; the chip is not up — WL_IRQ low)** | **Session 37:** the WL1283 code is archived (`kernel/archive/wl1283/`), the DTS is re-derived from 2.1.0.1917, and the minimal 1917-truth `&mmc5` (image `0x0DC36A11`) probes but returns `attach_sdio no` (report 196); pads `0x0118`, WL_EN `0x0003`, WL_IRQ `0x410B` match QNX and WL_EN is high, but `GPIO2_DATAIN` bit 21 = 0.  Bus, pads, WL_EN/IRQ, PMIC rails, MMC5 CON/HCTL/SYSCTL and the clock manager all match the reference.  QNX enumerates at 24 MHz with CMD5 arg `0x00FFFF00`; Linux's default 400 kHz/CMD52-first also times out.  **Session 35:** `startup-playbook` (never run by our chainloader) is the source of the QNX-only GPIOs — Winchester table at image `0x80122750`; GPIO1 0/4/15/18/28/31 and GPIO2 5/7 are output-low, gpio54 (WL_EN) output-low, gpio53 input/falling (report 192 §4, trap 135).  All eight released to input on the live 1917 are **negative** (trap 136).  `CLK32KG` is base `0x8C` and APP-ON in both (CFG_TRANS identical; CFG_GRP and the CFG_STATE CON/MOD bits differ; trap 135).  **H1** (CMD0 → CMD5 only, no CMD52/CMD8, 24 MHz, arg `0x00FFFF00`, image `0x29784F48`) still times out (`err=-110`, no R4; `HCTL=0x00000b00`, `CAPA=0x04e10080`; trap 137).  The remaining difference is the chip's non-exposed VBAT/TCXO/reset pins or OMAP HSMMC sampling — needs a schematic/board view or logic analyser |
 | **Munin touch (CY8CTMA3)** | **working — calibrated, IRQ wired (session 38)** | I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c` boots the app and maps the 12-bit report through the 1917 `scaling.conf` calib (raw x 172→1108 → 102→922, y 110→658 → 60→540) to 1024×600.  IRQ gpio 35 = GPIO2_3 pad `0x056` = `0x410B`, `EDGE_FALLING`, `irq 110`; the ~330–380/s rate is the chip's report rate.  Power/reset GPIO1_14/GPIO4_8 are not driven.  Report 198, DECISIONS §47 |
-| **WM8994 audio** | **machine driver up; stream configures; FLL blocked chip-side (session 39)** | I²C4 `0x1a` (`0x8994`); a board machine driver (`playbook-wm8994.c`) makes `0 [WM8994]: PlayBook_WM8994`, and an OSS write reaches the PCM at 48 kHz S16_LE/2ch.  The DAPM path powers (`PM4=0x0300`, `PM5=0x0303`, `AIF1CLK_ENA=1`, `DAC1L`/`SPKL`/`HPOUT1L`/`SPKOUTLP` `On`) after `rcS` sets the output mixers with `pbmix`.  **Open:** MCLK1 never makes FLL1 lock (AUXCLK1/fref_clk2_out are configured but the clock is absent), while FLL1 from BCLK locks; and the chip stops accepting register writes after boot, so the driver's FLL config stays in the regmap cache (trap 152).  No audible output yet.  Report 200 |
+| **WM8994 audio** | **write path solved; the codec clock is the blocker (session 40)** | I²C4 `0x1a` (`0x8994`, revision D); the board machine driver (`playbook-wm8994.c`) makes `0 [WM8994]: PlayBook_WM8994` and an OSS write reaches the PCM at 48 kHz.  The DAPM path powers after `rcS` sets the mixers.  **Solved (report 203):** the "write blocker" is the datasheet's control-interface rule — with `AIF1CLK_ENA=1` and a stopped source the register map is not writable; clearing `R0x200` bit 0 thaws it.  **Open (report 204):** the reference keeps `AIF1CLK_ENA=0` idle and has **FLL1 locked from MCLK1** (`0x732=0x6020`), but our image cannot lock it with identical codec bytes, `AUXCLK1=0x00020100` and pad `0x19C` mux 0 — at any divider, reset or biased.  No audible output yet.  Reports 203/204 |
 | Userspace (initramfs) | **working, minimal** | `/init` = PID 1, mounts, creates the configfs ACM gadget, forks `/console` in the fallback path.  **No auto-reboot since session 15** — PID 1 reboots only on request (the timer spent a `BOOTCTR_FCTRY` unit per iteration).  **Session 28:** after the gadget and the boot-time top-up, `/init` mounts the region-1 ext4 root **read-write**, bind-mounts /dev//proc//sys, chroots and execs `/sbin/init`; with no `/sbin/init` it falls back to the console.  Report 176, session-28 note |
 | Userspace (region-1 root) | **working — a real BusyBox userland** | 64 MiB ext4 at raw `0x29000000`; BusyBox 1.36.1 + init + 401 applet links + `pbconsole`/`pbrpmb` + `/lib/modules/6.15.11`; boots to `sh -l` on `/dev/ttyGS0`; `insmod`/`modprobe` proven.  `local/images/rootfs-region1.ext4` sha256 `e1ec2bf3…`, kernel image `0xAEDF68D0` |
 | Console | **working** | `help ls cat peek poke kick disp bl i2c i2c16 spi fb kmsg grep blk recv sink blkwr qnx6 rootfs write reboot`; `spi tcon` (low-first) and `spi tconbe` (high-first); `blk info/sum/sumb/rd` is read-only FNV-1a64 over `/dev/mmcblk1` (**`blk info` prints size 0 B — `fstat` bug, see KNOWN-ISSUES**), `grep <substr> <path>` scans any-size text (for `clk_summary`); `sink <len>` measures the link, `blkwr <off> <len> [chunk]` is a timed O_DIRECT write with a deterministic pattern (report 136); `qnx6 [off-hex]` mounts hd3 read-only (report 138); `rootfs [off-hex]` mounts the region-1 ext4 root read-only on `/rootfs` (report 140); argument limit 24.  `pb_reg` op set is now `w a:v` / `r a` / `t a` (16 reads, re-arm) / `u a` (16 reads, no re-arm) / `d from:to` (range dump) / `v` (video liveness).  Every hardware access forks with a bounded wait |
@@ -1149,14 +1220,19 @@ and a failed/half-formed write or a flat pack is still a brick risk.
 
 ## The single current blocker
 
-**For the current focus (item 9 step 5 audio), the single blocker is the WM8994
-register-write/clock issue.**  The card and DAI stream are up and the DAPM path
-powers, but the chip stops accepting register writes after boot (reads still
-answer), so the driver's FLL configuration stays in the regmap cache; FLL1 also
-never locks from MCLK1 (it locks from BCLK).  See report 200, traps 150–152,
-and the ordered next experiments in "What is next" §2.  This is not a dead end:
-the reference's own codec state on live QNX and the 1917 driver's AUXCLK1 use
-are both still readable, and the FLL itself is proven to lock.
+**For the current focus (item 9 step 5 audio), the single blocker is the codec
+clock: MCLK1 does not clock under our Linux image.**  The write path is solved —
+the codec disables control-register access while `AIF1CLK_ENA = 1` with a
+stopped source, and the reference keeps it 0 while idle (report 203, trap 155) —
+and the reference's FLL1 **is** locked from MCLK1 (`0x732 = 0x6020`,
+report 204), so the codec clock works on this board.  What fails is our SoC
+side: the same codec bytes, the same `AUXCLK1 = 0x00020100` and pad `0x19C`
+mux 0 do not lock FLL1 — at any divider, with or without the analogue bias, and
+with the free-running FLL as well.  The reference's own `AUXCLK1` programming is
+in `startup-playbook` (`0x80107980` → `0x00020100`), reconstructed in
+`docs/reference/startup-playbook/`.  The next step is RE, not a meter: resolve
+which pad carries the codec's MCLK1 (`0x19C` vs `0x19E`) with the `hwio` pad
+resolver, then compare the codec power path.  See report 204 and HANDOFF §0c.
 
 **The long-standing WL1283 blocker is unchanged (chip-side, software
 exhausted).**  The 1917-truth minimal `&mmc5` host (report 195) boots and
@@ -1204,20 +1280,20 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 1. **WL1283 chip-side measurement** — the 1917-truth DT redo is done and
    negative (report 196); VBAT / 26 MHz TCXO / SLOW_CLK and MMC5
    CLK/CMD/DAT0 need a board view or logic analyser.
-2. **The WM8994 audio half of item 9 step 5 — machine driver + stream UP, clock
-   blocked (report 200).**  `0 [WM8994]: PlayBook_WM8994` is up, an OSS write
-   reaches the PCM at 48 kHz, and the DAPM path powers.  **Next (in order):**
-   (a) on live TabletOS, stop `io-audio` and read `0x200`, `0x220`–`0x224`,
-   `0x732`, PM4/5 with `pbi2c` (trap 103 — never race the vendor driver) to
-   see the reference's FLL source/lock on this board; (b) decompile the
-   `0x1ecf0` AUXCLK1 map/unmap region and the `startup-playbook` `0x7980` call
-   site; (c) characterise the Linux write blocker (write a register at the
-   first prompt vs after one stream; also `WM8994_WRITE_SEQUENCER_CTRL_1/2`
-   = `0x110`/`0x111`); (d) configure the FLL in `.trigger(START)`, the first
-   hook after the DAPM stream event.  The FLL itself works: it locks when
-   referenced to BCLK (`0x732 = 0x6020`).  The jack-detect IRQs are not wired
-   (the four `Mic detect IRQ: -22` lines are benign).  Keep
-   `0xF97CD9C7`/`0xE36C679A` ready to reflash.
+2. **The WM8994 audio half of item 9 step 5 — the codec clock (reports
+   203/204).**  The write path is solved; the reference has FLL1 locked from
+   MCLK1 and our image does not, with identical visible registers.  **Next (in
+   order, all reference-driven):** (a) resolve which pad carries the codec's
+   MCLK1 — decode the `hwio-omap4.so` pad-id → padconf tables and name pads
+   `0x19C`/`0x19E`, then read both live on QNX and Linux (the padconf is 16-bit
+   per pad, `pinctrl-single,register-width = <16>`); (b) decode how the
+   reference applies the signal-group pad table at `0x80122638` (does it write
+   the pads itself or only select them for `hwio`?); (c) only then the driver
+   work: `AIF1CLK_ENA = 0` when idle, `AUXCLK1` at 12.8 MHz before enabling the
+   interface, FLL1 first with `0x224` masked to bits 4:0, `AIF1CLK` last,
+   verifying `0x732` bit 5.  The jack-detect IRQs are not wired (the four
+   `Mic detect IRQ: -22` lines are benign).  Keep `0xF97CD9C7`/`0xE36C679A`
+   ready to reflash.
    **Also the one cheap chip-side check:** the board's FEM is a TriQuint
    TQP6M9002 (`tiwlan_winchester.ini FemVendorAndOptions = 1`); probe the FEM
    VCC (and WL1283 VBAT) on live QNX-with-WiFi vs Linux — a rail off under

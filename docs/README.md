@@ -27,6 +27,7 @@ preserves evidence, and must not restate status.
 | `project/DEVELOPMENT.md` | build → wrap → flash → boot loop, and the bench command reference | status |
 | `project/KERNEL-PORT.md` | the 6.15.11 → `linux-postmarketos-stable` 7.3.3 port: target verification, per-file risk, the checkpoint plan, and what counts as done | status |
 | `project/REPO-MANAGEMENT.md` | the private working tree vs the public snapshot, and the publish procedure | status |
+| `reference/` | our reconstruction of a reference-OS artifact (what it does, pins, registers) | status, session history, the vendor binary itself |
 | `README.md` | this index and the ownership table | session counts or ranges |
 | root `README.md` | the project front page and quick start | status (point to `STATE.md`) |
 
@@ -53,6 +54,16 @@ preserves evidence, and must not restate status.
 | `DEVELOPMENT.md` | build → wrap → flash → boot loop, and the bench console command reference |
 | `KERNEL-PORT.md` | the port of our patch set to `linux-postmarketos-stable` 7.3.3: the verified target, per-file rebase risk, the checkpoint order, and the 6.15.11 backup rule |
 | `REPO-MANAGEMENT.md` | the private/public repository split, `tools/publish_public.sh`, and the commit/push rules |
+
+## `reference/` — reconstructions of the reference OS
+
+Our own write-ups of what a vendor binary does: decoded tables, addresses and
+pseudo-code we produced.  The vendor binaries are gitignored under `local/` and
+are never committed.
+
+| folder | what |
+|---|---|
+| `reference/startup-playbook/` | the 1917 `proc/boot/startup-playbook` board bring-up: the board/silicon identity, the 75-record GPIO table, the WLAN/BT pin selection, the SCRM `AUXCLK1` programming, the WDT2 policy and the MMIO map |
 
 ## `reports/` — the analysis this is built on
 
