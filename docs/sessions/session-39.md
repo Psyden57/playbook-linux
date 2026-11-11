@@ -33,9 +33,13 @@ streams and whether the codec's clocking works.
   (S16_LE, 2ch, 48 kHz): `SETFMT -> 16`, `CHANNELS -> 2`, `SPEED -> 48000`,
   a 1.9 MB write completes, exit 0.  `snd-mixer-oss`/`snd-pcm-oss` are loaded
   by `rcS`.
-* **The DAPM path is complete.**  With the output mixers set (the new `pbmix`
-  tool, in `rcS`): `PM4=0x0300`, `PM5=0x0303`, `AIF1CLK_ENA=1`,
-  `DAC1L`/`SPKL`/`HPOUT1L`/`SPKOUTLP` = `On`.
+* **The DAPM path is complete in the driver's view.**  With the output mixers
+  set (the new `pbmix` tool, in `rcS`): the regmap reports `PM4=0x0300`,
+  `PM5=0x0303`; `AIF1CLK_ENA=1` was read **directly from the chip**
+  (`i2ctransfer` of `0x200`); the DAPM files show
+  `DAC1L`/`SPKL`/`HPOUT1L`/`SPKOUTLP` = `On`; and the mixer write
+  `0x0601 = 1` was confirmed on the chip.  (The regmap cache can diverge from
+  the chip — see the write blocker below.)
 * **A second `hw_params` no longer fails.**  The WM8994 refuses to reconfigure
   FLL1 while it is the active SYSCLK (`FLL1 is currently providing SYSCLK`,
   `-EBUSY`); moving `AIF1CLK` to MCLK1 first fixes the OSS
