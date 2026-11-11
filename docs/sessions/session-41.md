@@ -52,6 +52,14 @@ remaining fault was localised to the McBSP transmit path.
   its first write every run; every earlier session's "no audible output" was
   measured with a tool that never streamed.  Fixed to use
   `SNDCTL_DSP_GETBLKSIZE` and a larger fragment.
+* **Audio *was* produced — briefly.**  The operator heard a quiet descending
+  sweep at every stream start (plus a pop when the output stage connected, and
+  the steady noise floor).  A DAC fed silence cannot chirp, so **real samples
+  were clocked out**; the failure is a **stall after start**, not a dead path.
+  This corrects the "no audible output" summary used earlier in the session.
+  Two alternatives that also produce a sweep cannot be excluded from the bench:
+  the WM8994 DC servo at stream prepare, and an FLL re-lock under running DACs.
+  Report 205 §5o.
 * **The AIF1 word length was never programmed** (24-bit reset default `0x4050`).
   Now 16-bit.
 * **`MIXOUTL_ENA`/`MIXOUTR_ENA` are PM3 (`R0x03`) bits 5:4, not PM4.**  PM4

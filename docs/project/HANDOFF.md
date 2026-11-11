@@ -89,8 +89,11 @@ SRGR2 0x101f    FPER 31 (32 BCLK/frame), CLKSM 0, FSGM 0
 AUXCLK1 (0x4A30A314) = 0x00020100   12.8 MHz, from a cold boot
 ```
 
-and the **DAC noise floor is audible**.  Programme audio is not.  The open
-measurement is:
+and the **DAC audibly converts** — a steady noise floor, and a **brief
+descending sweep at every stream start**.  That sweep matters: a DAC fed silence
+cannot chirp, so **real samples do get clocked out**, and the failure is a
+**stall after start**, not a dead data path.  Sustained programme audio is not
+achieved.  The open measurement is:
 
 ```
 DXR   = 0x00000000      <- 32-bit transmit register, offset 0x8
@@ -114,16 +117,29 @@ inverted"):
 
 Read back `SPCR2` after the change: `XRDY` should stop being 0 with `XEMPTY` 1.
 
-### E2 — prove the transmit path without the codec (loopback, no probe)
+### E2 — capture what the McBSP actually transmitted (no probe)
 
-`abe_mcbsp2_dx` and `abe_mcbsp2_dr` are the **two halves of one register**
-(`0x4A1000F8`; TRM Table 18-420).  Set the pad to mux 3 (`gpio`) on both halves
-and drive `dx`'s GPIO function from a userspace bit-bang, reading `dr`'s
-`DATAIN`: that proves the two balls are connected and that the pad config works,
-using only `/dev/mem` writes.  Alternatively configure the McBSP for internal
-loopback (`PCR0`/`XCCR` loopback bits) and enable a **capture** stream alongside
-playback — the sDMA then delivers what the McBSP actually transmitted into a
-`/dev/dsp` read, which is a complete software-visible answer.
+**This is the discriminating test, and it matters because audio *was* heard** —
+a faint descending sweep at every stream start (report 205 §5o), which a DAC fed
+silence cannot produce.  So samples *do* get clocked out briefly and the fault is
+a **stall after start**, not a dead path.
+
+Enable a **capture** stream alongside playback: open `/dev/dsp` for reading at
+the same format while `pbplay` writes, and dump what arrives.  The sDMA delivers
+what the McBSP genuinely put on the line, so:
+
+* capture shows the square wave `pbplay` wrote → the data path works and the
+  codec is mis-framing it (compare `R0x300` `FMT` bits `[4:3]`, `XCR1`
+  `XWDLEN1`, `SRGR1` `FWID`);
+* capture shows a short burst then silence → confirms the stall, and the
+  register dump after it says whether the sDMA stopped or the shifter did;
+* capture is silent while the sweep is audible → the sweep is **not our data**,
+  and the WM8994's DC servo or an FLL re-lock is the likelier source (hold both
+  static and repeat).
+
+`dx` and `dr` are the **two halves of one register** (`0x4A1000F8`; TRM Table
+18-420), so a hardware loopback is also pure software: mux one half to `gpio`
+(mux 3), toggle it from `/dev/mem`, and read the other half's `DATAIN`.
 
 ### E3 — ask the reference the same question with a real stream
 

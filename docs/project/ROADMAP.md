@@ -45,13 +45,20 @@ known-good image.
   the machine driver thaws it, locks FLL1, enables AIF1CLK from that FLL, sets
   16-bit word length and enables the whole output chain (PM3 output mixers,
   charge pump `CP_ENA`, DAC→mixer un-mute, AIF1→DAC routing, output stage) — and
-  the DAC's noise floor is audible, the first codec output this image has made.
-  **The remaining blocker is the McBSP transmit path:** in steady state
+  the DAC audibly converts — a steady noise floor plus a brief descending
+  sweep at every stream start, which a DAC fed silence cannot produce, so real
+  samples do get clocked out.
+  **The remaining blocker is a stall in the McBSP transmit path after
+  start:** in steady state
   `DXR = 0x00000000` with `SPCR2 = 0x02F5` (`XRDY = 0` buffer full, `XEMPTY = 1`
   shifter empty) while sDMA interrupts fire at 12/s and `hw_ptr` runs at
-  48 185 frames/s.  Next: a scope on `abe_mcbsp2_dx` (pad `0x0F8` high) or a
-  `dx`→`dr` loopback, then the one structural difference left — the reference
-  runs the codec as **AIF1 master** with its McBSP as a consumer.  Report 205.
+  48 185 frames/s.  **No hardware probing is available**, so the routes are
+  software-only: a capture stream (`/dev/dsp` read) to see what the McBSP
+  actually transmitted, a `/dev/mem` `dx`→`dr` loopback, the reference's own
+  McBSP registers read mid-stream on QNX (`memdump3`, the `0x49024000` window),
+  and — most likely decisive — adopting the reference's clock roles (codec as
+  AIF1 master, McBSP as consumer) on both sides at once.  `HANDOFF.md` §0c has
+  the four as E1–E4.  Report 205 §5o/§5l.
 * **WL1283.**  Formally stopped by the operator (session 36).  The software
   surface is exhausted and the 1917-truth minimal host still fails CMD5
   (report 196).  Do not re-run traps 116–137.  The WLAN calibration/NVS is

@@ -33,7 +33,10 @@ exactly that, and ask for a larger fragment (`0x0004000E` = 4 × 16 KiB →
 interrupt cannot keep up.
 
 **This is why earlier sessions concluded "no audible output":** the test tool
-never streamed at all.
+never streamed at all.  (Qualified in §5o: brief transient output *was* heard
+this session once the chain was powered — "no audible output" was never strictly
+true once the codec was driven, and the transients are evidence in their own
+right.)
 
 ## 2. Defect 2 — the word length was never programmed (24-bit reset default)
 
@@ -463,18 +466,30 @@ Two inferences made earlier in the session were **wrong** and are retracted:
 
 The remaining gap is therefore between **the sample data and the codec's AIF1
 input**, and it cannot be resolved by reading registers — every one of them is
-already correct.  It needs:
+already correct.  And it is **not** "no data ever moves": the operator heard a
+brief descending sweep at every stream start (§5o), which a DAC fed silence
+cannot produce.  The failure mode is a **stall after start**.
 
-1. a **scope on `abe_mcbsp2_dx`** (CORE pad `0x0F8` high) during playback — is
-   the data line actually toggling?  If it is, the codec is mis-framing what it
-   receives; if it is static, the McBSP never transmits;
-2. or a **loopback** (`dx` -> `dr`) with capture, which proves the McBSP's
-   transmit path independently of the codec;
-3. or a **WAV file played through the reference** with the same capture, to
-   confirm the reference's AIF1 framing (it runs the codec as **AIF1 master**,
-   `R0x302 = 0x4000`, which we do not).
+**Hardware probing is not available** (no scope, no boardview, no pad
+knowledge — operator, session 41 end), so the routes are:
 
-Point 3 is the cheapest and most likely decisive: the reference is the clock
+1. **A capture stream** — the sDMA then delivers what the McBSP actually
+   transmitted into a `/dev/dsp` read; compare against the square wave `pbplay`
+   wrote.  This distinguishes "our data" from the DC-servo/FLL-relock
+   alternatives (§5o) and needs no hardware.
+2. **A `/dev/mem` loopback** — `dx` and `dr` are the two halves of
+   `0x4A1000F8`, so mux one as GPIO, drive it from userspace and read the
+   other's `DATAIN`.
+3. **The reference's own McBSP registers mid-stream** — we have its codec file
+   (§5g) but not its `SPCR2`/`SRGR1`/`SRGR2`/`PCR0` during playback, which is
+   the register set whose meaning differs between clock master and consumer.
+   `memdump3` reads the `0x49024000` window on QNX; Linux userspace cannot
+   (trap 158).
+4. **Adopt the reference's clock roles** — codec as AIF1 master, McBSP as
+   consumer, changed on both sides at once.  This removes the sample-rate
+   generator from the path entirely.
+
+Route 4 is the cheapest and most likely decisive: the reference is the clock
 master, so its McBSP is a *consumer*.  Ours is the master.  That is the one
 structural difference left, and it is a two-sided change (DAI link format plus
 CPU DAI clock role), not a register poke.
@@ -500,8 +515,17 @@ with `omap-dma-engine` interrupts advancing **12/s** (exactly 48 000 / 4096) and
 `hw_ptr` at 48 185 frames/s.
 
 **`XRDY = 0` means the transmit buffer is full**, and `XEMPTY = 1` means the
-shift register is empty — i.e. data sits in the buffer and never shifts out.
-Combined with `DXR` reading 0, the transmit path is not draining.
+shift register is empty — i.e. data sits in the buffer and is not shifting out.
+Combined with `DXR` reading 0, the transmit path is **not draining** at that
+moment.
+
+**Read this as a stall, not as absence.**  Audio *was* heard — a brief
+descending sweep at every stream start (§5o), and a DAC fed silence cannot
+chirp.  So the sequence is: the sDMA fills the FIFO at start, the McBSP shifts a
+burst out (the sweep), and then **both** stop — which is exactly what "buffer
+full, shifter empty, input port idle" describes.  The wrong framing, used
+earlier in this session, was "the McBSP never transmits"; the correct one is
+"it transmits once and then stalls".
 
 **The DMA address is not the problem.**  The McBSP node declares two reg
 windows (`omap4-l4-abe.dtsi`):
@@ -516,13 +540,14 @@ so `phys_dma_base = 0x49024000` and the sDMA targets `0x49024008`, while the
 CPU reads `0x40124008` through the "mpu" window.  Those are the same peripheral
 via two L3 views — the standard OMAP arrangement, and not a bug.
 
-**What this now points at:** the sDMA runs (interrupts at the right rate) but
-the McBSP's transmit FIFO never drains.  That is either a **DMA channel/port
-configuration** problem (the sDMA writing without the McBSP's threshold/sync
-being satisfied) or a **missing BCLK at the transmit shifter** — and
-`CLKSM = 0` together with `XEMPTY = 1` makes the second the stronger candidate.
-Note `CLKSM = 1` was tried and did not help; `FSGM = 0` is also worth noting,
-since the SRG is supposed to generate FS in master mode.
+**What this now points at:** a **stall after start**.  The two candidates are a
+**DMA channel/port configuration** problem (the sDMA stops being serviced once
+its first period completes) and a **missing BCLK at the transmit shifter**
+(`CLKSM = 0` with `XEMPTY = 1` makes this the stronger one).  `CLKSM = 1` was
+tried and did **not** help; `FSGM = 0` is also worth noting, since the SRG is
+supposed to generate FS in master mode.  A capture stream (§0c E2) separates
+these without hardware: it shows whether the sDMA keeps delivering after the
+first period.
 
 ## 5m. Driver bugs found and fixed while chasing this
 
@@ -546,7 +571,48 @@ Recording these because they are real defects, independent of the remaining one:
 4. **`pbplay` wrote 1024-frame chunks into a 64-frame ring** (§1).
 5. **The 48 kHz McBSP divider was never applied** (§4).
 
-## 5n. Honest summary of the session's outcome
+## 5o. Transient audio **was** produced — and the descending sweep is evidence
+
+Correcting the summary used earlier in this session ("no audible output at
+all").  Once the output chain was powered, the operator heard, repeatedly and
+in different configurations:
+
+| sound | when | what it shows |
+|---|---|---|
+| a **descending sweep** ("laser"), ~200 ms, quiet | at `pbplay` start, many times | a chirp needs **non-zero, time-varying samples**; a DAC fed silence cannot produce one |
+| a **pop** | writing `R0x60` (`HPOUT1L/R_OUTP` + `RMV_SHORT`) | the analogue output stage energising; no data needed |
+| a steady **noise floor** | charge pump + mixers on | the DAC is converting at idle — converter and supplies work |
+
+**The sweep is the important one.**  It means real samples reached the DAC and
+were clocked out at least briefly, which is *not* consistent with a reading of
+"the transmit path never carried data".  It **is** consistent with what the
+registers show, once the stall is taken as the failure mode rather than absence:
+
+```
+DXR   = 0x00000000   input port idle (nothing new from the sDMA)
+SPCR2 = 0x02f5       XRDY = 0  transmit buffer FULL
+                     XEMPTY = 1  shift register EMPTY
+```
+
+i.e. **a burst was delivered at start, shifted out (the sweep), and then both
+the sDMA feed and the buffer→shifter copy stopped.**  So the target is a
+**stall after start**, not a dead path — a materially narrower question than the
+one in §5l.
+
+**Two alternative explanations that cannot be excluded from the bench alone**,
+because both also produce a sweep and neither requires our data:
+
+1. the WM8994's **DC servo** — `wm8994_aif_mute()` and the DC-offset
+   cancellation are scheduled at stream prepare, and slewing offset correction
+   can be audible;
+2. an **FLL re-lock** — if FLL1 relocks when the stream starts while the DACs
+   are already running, the pitch sweeps in exactly this way.
+
+Distinguishing them is software-possible: capture a stream (§0c E2) and compare
+the samples the McBSP reports against the square wave `pbplay` wrote.  If the
+sweep survives with the DC servo and FLL both held static, it is our data.
+
+## 5p. Honest summary of the session's outcome
 
 **Definitively fixed and verified** (measured, not inferred):
 
@@ -563,12 +629,16 @@ Recording these because they are real defects, independent of the remaining one:
 * The codec-freeze mechanism is understood; the driver thaws, locks the FLL
   first, and repairs the chain from a delayed work once BCLK is running.
 * The complete output chain is mapped with authoritative bit positions, and the
-  **DAC audibly converts** (noise floor) — the first codec output this image
-  has ever produced.
+  **DAC audibly converts** — a steady noise floor when idle and **brief
+  transient output (a descending sweep) at every stream start** (§5o).  That
+  transient is the first time this image has moved real samples through the
+  codec, and it narrows the fault from "no data path" to "**stall after
+  start**".
 
-**Not achieved: audible programme material.**  Every register is already at the
-reference's values, so the remaining work is a scope or a structural change to
-the clock roles, not more register investigation.
+**Not achieved: sustained programme audio.**  The chain is right and a burst
+gets out, then the sDMA feed and the buffer→shifter copy both stop (§5o).  The
+next work is a software-only capture/loopback (§0c E1–E4), not register
+investigation and not hardware probing.
 
 **Two corrections to earlier documentation:**
 * The pad and register questions in the session-41 handoff are **closed**: pad
