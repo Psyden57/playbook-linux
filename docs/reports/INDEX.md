@@ -59,7 +59,7 @@ The guides are in `docs/parked/`.
 | WL1283 / MMC5 | reports 180, 185–197 | **software surface exhausted; report 196 is the minimal 1917-truth negative** |
 | WLAN calibration / NVS | report 197 | QNX `hd5` |
 | Munin touch | reports 193, 194, 198 | bus, protocol, calibration + IRQ |
-| WM8994 audio | reports 199, 200, 201, 203, 204, **205** | **205 is current**: the codec chain solved and driver-driven, the McBSP transmit path isolated; 203 = the AIF1CLK write rule; 204 = the first live reference codec read (its "MCLK1 never clocks" claim is corrected by 205 §4b) |
+| WM8994 audio | reports 199, 200, 201, 203, 204, 205, **206** | **206 is current**: E1 clock roles, the transmit path proven in consumer mode, MCLK1 dead at the pin; 205 = the codec chain solved and driver-driven, the master-mode transmit stall isolated; 203 = the AIF1CLK write rule; 204 = the first live reference codec read (its "MCLK1 never clocks" claim is corrected by 205 §4b) |
 | ISL9519 charger | report 183 | |
 | WDT2 / PMIC | reports 183, 184, 192 | |
 

@@ -1690,6 +1690,38 @@ outside the WM8994 FLL's 0.032–13.5 MHz range), so `assigned-clocks` /
 the divider cannot be left to whatever the boot chain happened to leave.
 Verified on a battery-pulled boot.
 
+---
+
+## 53. The codec is the AIF1 master and the McBSP is a clock consumer — the reference's roles (session 42)
+
+**Decision.**  The DAI link format is `SND_SOC_DAIFMT_CBP_CFP` (codec
+provider), `hw_params` locks **FLL1 from MCLK1** (12.8 MHz) — a BCLK-referenced
+FLL is circular in master mode — and the CPU-side SRG calls
+(`set_sysclk(FCLK)`, `set_clkdiv`) are dropped.  The `mcbsp2_pins` group makes
+`clkx`/`fsx` `PIN_INPUT` (`0x0100`, the reference's live pad values); `dx`
+stays an output because the McBSP still drives the data.  The free-running NCO
+(`FRC_NCO`, `FRC_NCO_VAL = 0x19`, ±10–30 %) is the accepted **mechanism probe**
+but is not a production clock and must not be shipped in the driver.
+
+**Why.**  Experiment E1 (report 206): with these roles, `PCR0 = 0x000f`
+(consumer), the SRG is never started, and with a live AIF1CLK forced from the
+NCO the transmit FIFO drains — `pbplay` ran 20 s cleanly where every run in the
+McBSP-master configuration died at ~1 s.  The session-41 `XRDY = 0` stall is a
+property of the **master/SRG configuration**, not of the silicon's transmit
+path.
+
+**Constraint.**  The design is gated by a live AIF1CLK: FLL1 never locks from
+MCLK1 (register file byte-identical to the working reference) and AIF1CLK
+sourced directly from MCLK1 is dead — the pin does not clock under our image.
+Everything readable matches the working reference, so the fault is below the
+registers and needs the probe the operator does not have (trap 165).  Session
+41's single successful MCLK1 lock keeps "marginal clock" alive.  The three
+routes forward are recorded in `STATE.md` §What is next.
+
+**Evidence.**  Report **206**; the measured `PCR0`/`SPCR2`/`R0x302` readbacks,
+the byte-identical FLL file, the direct-MCLK1 discriminator, and the 20 s NCO
+stream.  Traps 166–169.
+
 
 
 The repository licence and visibility are decided below; the remaining

@@ -3,11 +3,15 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**8 113 lines / 54 files** against pristine
-**linux-7.3.3** (sha256 `fc3b2e54…`, session-41 wrap-up).  It is generated from
-the tree, not from the previous patch (trap 106), and it was verified by
-applying it to pristine 7.3.3 targets and comparing all 54 files byte-for-byte
-with `local/kernel-tree` — 0 rejects, 0 mismatches.  **Session 41** adds
+**8 095 lines / 54 files** against pristine
+**linux-7.3.3** (sha256 `55035aac…`, session-42 wrap-up).  It is generated from
+the tree (via the session-41 file list — no new sources in session 42), and it
+was verified by applying it to pristine 7.3.3 targets and comparing all 54
+files byte-for-byte with `local/kernel-tree` — 0 rejects, 0 mismatches.
+**Session 42** picks up the E1 clock-role changes: the board DTS makes
+`clkx`/`fsx` inputs (codec AIF1 master, McBSP consumer) and the machine driver
+uses `CBP_CFP` with FLL1 from MCLK1 and no CPU-side SRG calls.
+**Session 41** adds
 `sound/soc/ti/omap-mcbsp.c` (missing from the 53-file export: the rate/width
 re-program fix, the `configured` guard, the info-level register dump and the
 steady-state dump), the AUXCLK1 `assigned-clock-rates` in the board DTS and the
@@ -353,8 +357,11 @@ cp /tmp/new.patch kernel/patches/0001-playbook-winchester-7.3.3.patch
 wc -l kernel/patches/0001-playbook-winchester-7.3.3.patch
 ```
 
-**Session 41's export is 8 113 lines / 54 files** (sha256 `fc3b2e54…`),
-verified 0 rejects / 54/54 byte-identical.  It was **not** produced with the
+**Session 42's export is 8 095 lines / 54 files** (sha256 `55035aac…`),
+verified 0 rejects / 54/54 byte-identical; it was driven from the session-41
+file list (no new sources — only `omap4-winchester.dts` and
+`playbook-wm8994.c` changed).  **Session 41's export was 8 113 lines / 54
+files** (sha256 `fc3b2e54…`); it was **not** produced with the
 tree walk below: on a built tree that walk returned **90 files** because it
 sweeps build artifacts (see the session-36 warning at the end).  Instead the
 export was driven from the previous patch's 53-file list **plus**

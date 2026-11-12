@@ -1084,14 +1084,17 @@
 	/*
 	 * McBSP2 (inside the ABE segment) is the codec's I2S bus.  The pads
 	 * are the OMAP4 ABE McBSP2 balls, as used by omap4-epson-embt2ws.dts.
-	 * CPU (McBSP) is the clock master, so clkx/fsx are outputs.
+	 * Since session 42 (E1) the CODEC is the AIF1 master, so the McBSP is
+	 * a clock consumer: clkx and fsx are inputs (PIN_INPUT, like the 1917
+	 * reference's live pad values 0x0100) and dx stays an output -- the
+	 * McBSP still drives the data.
 	 */
 	mcbsp2_pins: mcbsp2-pins {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x0f6, 0x0000)	/* abe_mcbsp2_clkx, out */
+			OMAP4_IOPAD(0x0f6, 0x0100)	/* abe_mcbsp2_clkx, in */
 			OMAP4_IOPAD(0x0f8, 0x0100)	/* abe_mcbsp2_dr, in */
 			OMAP4_IOPAD(0x0fa, 0x0000)	/* abe_mcbsp2_dx, out */
-			OMAP4_IOPAD(0x0fc, 0x0000)	/* abe_mcbsp2_fsx, out */
+			OMAP4_IOPAD(0x0fc, 0x0100)	/* abe_mcbsp2_fsx, in */
 		>;
 	};
 
@@ -1248,8 +1251,9 @@
 
 /*
  * Audio: the WM8994 codec on ABE/McBSP2.  The ABE segment is enabled in
- * omap4-l4-abe.dtsi with WD_TIMER3 off (report 199).  The CPU (McBSP2) is the
- * bit/frame clock master; the codec is the consumer.
+ * omap4-l4-abe.dtsi with WD_TIMER3 off (report 199).  Since session 42 (E1)
+ * the codec is the AIF1 bit/frame clock master (R0x302 = 0x4000, as on the
+ * 1917 reference) and the McBSP2 is the clock consumer.
  */
 &mcbsp2 {
 	#sound-dai-cells = <0>;
@@ -1262,7 +1266,7 @@
 	/*
 	 * The board machine driver rates the codec's MCLK1 (AUXCLK1) and
 	 * locks the WM8994 FLL1 to 256 fs; the DAI link itself (McBSP2 <->
-	 * wm8994-aif1, CPU as bit/frame provider) is in
+	 * wm8994-aif1, codec as bit/frame provider) is in
 	 * sound/soc/ti/playbook-wm8994.c.  Replaces the generic
 	 * simple-audio-card, which cannot drive the codec's clock.
 	 */

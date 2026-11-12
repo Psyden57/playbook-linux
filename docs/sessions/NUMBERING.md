@@ -1,15 +1,15 @@
 # Session numbering
 
-The project spans **forty-one sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **forty-two sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-41`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-42`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
-* **Linux-era** ("session 1…35") — used inside the reports and handoffs, because
+* **Linux-era** ("session 1…36") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
   started.  **Linux session N = absolute session N + 6.**
 
@@ -53,6 +53,7 @@ So:
 | **39** | **33** | **the WM8994 playback path is built; the codec clock is blocked chip-side** (report 200).  A board machine driver (`playbook-wm8994.c`) replaces simple-audio-card: `0 [WM8994]: PlayBook_WM8994`, a working OSS write at 48 kHz, and the DAPM path powered (`PM4=0x0300`, `PM5=0x0303`, `AIF1CLK_ENA=1`).  FLL1 never locks from MCLK1 but locks from BCLK (`0x732=0x6020`); the chip stops accepting register writes after boot, so the driver's FLL config stays in the regmap cache (traps 150–152).  Image `0xF97CD9C7` + rootfs `968d2f20…`; patch 53 files / 7 773 lines (`434d06c3…`).  Traps 150–154; DECISIONS §49 |
 | **40** | **34** | **the WM8994 write blocker is a clocking rule; the reference's FLL is locked and its start-up is reconstructed** (reports 201/203/204).  The codec disables control-register access while `AIF1CLK_ENA = 1` with a stopped source; the reference keeps it 0 while idle and has FLL1 **locked from MCLK1** (`0x732 = 0x6020`), while our image cannot lock it with identical codec bytes, `AUXCLK1 = 0x00020100` and pad `0x19C` mux 0.  `startup-playbook` decoded in `docs/reference/startup-playbook/` (GPIO table, WLAN/BT pin selection 54/53 + BT 55, SCRM `AUXCLK1` writers, WDT2 policy, MMIO map).  No image change: `0xF97CD9C7` + `968d2f20…`; patch 53 files / 7 773 lines (`434d06c3…`).  Traps 155–160; DECISIONS §50/§51 |
 | **41** | **35** | **the WM8994 codec chain is solved and driver-driven; the McBSP transmit path is isolated** (report 205).  From a cold boot the machine driver thaws the codec, locks FLL1 from BCLK, enables AIF1CLK from it, sets 16-bit word length and enables the whole output chain (PM3 `0x03F0`, charge pump `CP_ENA`, DAC→mixer and AIF1→DAC routing, output stage) — the DAC's noise floor is audible, the first codec output this image has made.  Fixes: `pbplay` never streamed (ring overrun), the 48 kHz McBSP divider was stuck at the 8 kHz value (`CLKGDV` 47→7, 4 025→48 177 frames/s), the AIF1 word length was never programmed <!-- audit-ok: describes the defect fixed in this very session -->, and `AUXCLK1` booted at ÷1 = 38.4 MHz (fixed in the DTS with `assigned-clock-rates`).  The regmap-cache trap recurred (`regcache_mark_dirty` before rewriting).  Remaining: steady-state `DXR = 0` with `XRDY=0`/`XEMPTY=1` — the McBSP FIFO never drains — needing a scope or `dx`→`dr` loopback.  Reference codec captured idle and playing (1905 registers each, `docs/captures/`).  Media: region 0 `0xB8830701`, region 1 `7cc63990…`.  Traps 161–164; DECISIONS §52 |
+| **42** | **36** | **E1: the clock roles inverted; the transmit path is proven; MCLK1 is the one blocker** (report 206).  The codec is now the AIF1 master (`R0x302 = 0x4000`) and McBSP2 a clock consumer (`PCR0 = 0x000f`, SRG out of the path, `clkx`/`fsx` pads inputs = the reference's values); with a live AIF1CLK forced from the free-running NCO `pbplay` streamed 20 s cleanly — the master/SRG stall is a configuration property, not silicon.  The blocker: FLL1 never locks from MCLK1 (register file byte-identical to the working reference) and AIF1CLK-direct-from-MCLK1 is dead — the pin does not clock, with every readable register matching the reference.  Touch survives warm reboots.  Media: region 0 `0x36597040`, region 1 `b20302dc…`; patch 54 files / 8 095 lines (`55035aac…`).  Traps 165–169; DECISIONS §53 |
 
 ## Anchors (evidence for the mapping)
 

@@ -2,17 +2,17 @@
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§7).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — this handoff is for **absolute 42 = Linux-era 36**.  See
-`docs/sessions/NUMBERING.md`.
+`N+6` — this handoff is for **absolute 42 = Linux-era 36**, updated at its
+wrap-up.  See `docs/sessions/NUMBERING.md`.
 
-> **Session-41 result, in one line:** the **WM8994 codec side of playback is
-> solved** — thawed, FLL1 locked, AIF1CLK from FLL1, 16-bit, and the whole output
-> chain (PM3 output mixers, charge pump, DAC→mixer, AIF1→DAC, output stage) is
-> set by the machine driver from a cold boot, and the **DAC audibly converts**
-> (its noise floor is heard).  Programme audio still does not appear because the
-> **McBSP transmit FIFO never drains**: steady-state `DXR = 0` with
-> `XRDY = 0`/`XEMPTY = 1`, while the sDMA runs at exactly the right rate.
-> Report **205**.
+> **Session-42 result, in one line:** **E1 is done and the transmit path is
+> proven** — with the codec as AIF1 master (`R0x302 = 0x4000`) and the McBSP as
+> a clock consumer (`PCR0 = 0x000f`, SRG out of the path), a stream with a live
+> AIF1CLK drains the FIFO end to end (`pbplay` ran 20 s cleanly; the old
+> configuration always died at ~1 s).  **The one remaining blocker is a live
+> AIF1CLK**: FLL1 never locks from MCLK1 (register file byte-identical to the
+> working reference) and AIF1CLK sourced directly from MCLK1 is dead — the pin
+> does not clock.  Report **206**.
 
 ## 0. The job, and where it stands
 
@@ -25,22 +25,21 @@ and the board's own sensors/peripherals working.
 **Working:** the SoC basics (DDR, UART3 console, eMMC on MMC2, WDT2), the USB
 gadget/console, the whole display chain, the 64 MiB ext4 BusyBox root in region
 1, the peripherals (I²C4 motion sensors, TMP103, BQ27541, FAN5702, CM3217,
-ISL9519 charger), the **Munin touch** (calibrated, IRQ wired — but see §0d), and
-now the **WM8994 codec up to the DAC**.
+ISL9519 charger), the **Munin touch** (calibrated, IRQ wired — see §0d), and
+the **WM8994 codec chain up to a proven transmit path**.
 
-**The audio blocker is now the McBSP, not the codec.**  See §0c.
+**The audio blocker is now one thing: a live AIF1CLK.**  See §0c.
 
-**The patch** `kernel/patches/0001-playbook-winchester-7.3.3.patch` is still the
-export at the session-41 wrap-up (**54 files / 8 113 lines**, sha256
-`fc3b2e54…`, 0 rejects and 54/54 byte-identical).  It picked up session 41's
-`omap4-winchester.dts`, `playbook-wm8994.c` changes and `sound/soc/ti/
-omap-mcbsp.c`, which the session-39 export had omitted.  Trap 161.
+**The patch** `kernel/patches/0001-playbook-winchester-7.3.3.patch` is the
+session-42 export (**54 files / 8 095 lines**, sha256 `55035aac…`, 0 rejects
+and 54/54 byte-identical).  It carries the E1 clock-role changes (DTS pads,
+machine driver).
 
 ## 0a. The media, and the way back
 
-* **region 0 = our Linux image `0xB8830701`** (`0x93A8F4` bytes; kernel `7.3.3`;
-  the AUXCLK1 DTS fix and the McBSP steady-state dump).
-* **region 1 = the audio/OSS rootfs** `7cc63990…`
+* **region 0 = our Linux image `0x36597040`** (`0x93A2EC` bytes; kernel `7.3.3`;
+  the E1 clock roles — codec AIF1 master, McBSP consumer, input pads).
+* **region 1 = the E1 audio/OSS rootfs** `b20302dc…`
   (`local/images/rootfs-region1-audio-oss.ext4`, 27 modules, `pbplay`/`pbmix`).
 * The unit is **on Linux** (`0fca:8010`, console `pb> `), not TabletOS.
 * **The way back to TabletOS** is the 1917 IFS
@@ -62,125 +61,79 @@ Unchanged and **formally stopped by the operator** (session 36).  The 1917-truth
 minimal `&mmc5` host probes but `attach_sdio no` (report 196).  Do not re-run
 traps 116–137.
 
-## 0c. Item 9 step 5 — audio: the next experiments, all bench/software only
+## 0c. Item 9 step 5 — audio: one blocker (a live AIF1CLK), three routes
 
 **Constraint (operator, session 41 end): there is no scope, no boardview and no
 pad-level knowledge.  Every experiment must be run from the bench (the unit
 itself) or from static RE.  Nothing may depend on probing a pin.**
 
-That rules out the obvious next step (watch `abe_mcbsp2_dx`) and leaves four
-software-only routes, in order of cost.
-
 ### What is already proven (do not re-derive)
 
-Under a live 48 kHz stream, all of this is set **by the driver** and holds:
+* **The codec chain is driver-driven** (session 41): thaw, FLL, AIF1CLK,
+  word length, PM3 output mixers, charge pump, DAC routing/un-mute, output
+  stage — the DAC audibly converts (noise floor, pops, the start-up sweep).
+* **The transmit path works in consumer mode** (session 42, E1): codec AIF1
+  master (`R0x302 = 0x4000`), McBSP clock consumer (`PCR0 = 0x000f`, SRG never
+  started, `clkx`/`fsx` pads = `0x0100` inputs).  With a live AIF1CLK
+  (free-running NCO) `pbplay 20 440` runs the full 20 s and exits cleanly;
+  the old McBSP-master configuration always died with
+  `Input/output error` after ~1 s.  **The session-41 `XRDY = 0` stall is a
+  property of the master/SRG configuration, not of the silicon.**
+* **MCLK1 does not clock at the pin.**  FLL1 never locks from MCLK1 with a
+  register file byte-identical to the working reference
+  (`0x220 = 0x0005, 0x221 = 0x0700, 0x222 = 0xAE14, 0x223 = 0x00E0,
+  0x224 = 0x0C80`; `R0x732 = 0x6000`), reproduced with the reference's enable
+  timing and 2–3 s settles.  The discriminator: with the FLL bypassed and
+  `AIF1CLK` sourced **directly from MCLK1** (`R0x200 = 0x0001`), the stream
+  dies like the FLL case.  `AUXCLK1 = 0x00020100` and pad `0x19C` low
+  `0x0000` re-verified on the session-42 boot — the DTS fix holds.  Caveat:
+  session 41 measured one successful MCLK1 lock, so "marginal" is still live.
+* The free-running NCO (datasheet Rev 4.6 p. 206: `OSC_ENA = 1`,
+  `OUTDIV = ÷8`, `FRC_NCO = 1`, `FRC_NCO_VAL = 0x19` ≈ 12 MHz, ±10–30 %) is a
+  switch that makes AIF1CLK exist — the mechanism probe of session 42, not a
+  hi-fi clock.
 
-```
-PM1 0x0313  PM2 0x6310  PM3 0x03F0  PM5 0x0303
-R0x04C 0x9F25   charge pump on
-R0x02D 0x0001   R0x02E 0x0001   DAC -> MIXOUT un-muted
-R0x420 0x0030   AIF1 DAC1 un-muted
-R0x601 0x0001   R0x602 0x0001   AIF1 -> DAC1 routed
-R0x200 0x0011   AIF1CLK from FLL1
-R0x732 0x6020   FLL1 locked
-R0x60  0x00EE   output stage connected
-SRGR1 0x0f07    McBSP CLKGDV /8, CLKWD 16-bit
-SRGR2 0x101f    FPER 31 (32 BCLK/frame), CLKSM 0, FSGM 0
-AUXCLK1 (0x4A30A314) = 0x00020100   12.8 MHz, from a cold boot
-```
+### The three routes forward (operator's call)
 
-and the **DAC audibly converts** — a steady noise floor, and a **brief
-descending sweep at every stream start**.  That sweep matters: a DAC fed silence
-cannot chirp, so **real samples do get clocked out**, and the failure is a
-**stall after start**, not a dead data path.  Sustained programme audio is not
-achieved.  The open measurement is:
-
-```
-DXR   = 0x00000000      <- 32-bit transmit register, offset 0x8
-SPCR2 = 0x02f5          XRST=1  XRDY=0 (FIFO full)  XEMPTY=1 (shifter empty)
-```
-
-### E1 (cheapest, most likely) — make the McBSP a clock *consumer*
-
-The reference runs the codec as **AIF1 master** (`R0x302 = 0x4000`) with its
-McBSP as a consumer; ours is the reverse.  That structural difference puts the
-McBSP's sample-rate generator in the path on our side and removes it entirely on
-theirs.  Change **both** sides together (one boot, one variable = "clock roles
-inverted"):
-
-* board DTS: the `sound` node's DAI link format, and
-* `playbook-wm8994.c`: `dai_fmt` to `SND_SOC_DAIFMT_CBC_CFC` → the codec as
-  provider (`SND_SOC_DAIFMT_CBP_CFP` is codec-provider), and
-  `snd_soc_dai_set_sysclk(cpu_dai, …, aifclk, SND_SOC_CLOCK_IN)` so the McBSP
-  takes the codec's BCLK instead of generating it; drop the
-  `set_clkdiv`/`PB_MCBSP_FCLK_HZ` maths on that path.
-
-Read back `SPCR2` after the change: `XRDY` should stop being 0 with `XEMPTY` 1.
-
-### E2 — capture what the McBSP actually transmitted (no probe)
-
-**This is the discriminating test, and it matters because audio *was* heard** —
-a faint descending sweep at every stream start (report 205 §5o), which a DAC fed
-silence cannot produce.  So samples *do* get clocked out briefly and the fault is
-a **stall after start**, not a dead path.
-
-Enable a **capture** stream alongside playback: open `/dev/dsp` for reading at
-the same format while `pbplay` writes, and dump what arrives.  The sDMA delivers
-what the McBSP genuinely put on the line, so:
-
-* capture shows the square wave `pbplay` wrote → the data path works and the
-  codec is mis-framing it (compare `R0x300` `FMT` bits `[4:3]`, `XCR1`
-  `XWDLEN1`, `SRGR1` `FWID`);
-* capture shows a short burst then silence → confirms the stall, and the
-  register dump after it says whether the sDMA stopped or the shifter did;
-* capture is silent while the sweep is audible → the sweep is **not our data**,
-  and the WM8994's DC servo or an FLL re-lock is the likelier source (hold both
-  static and repeat).
-
-`dx` and `dr` are the **two halves of one register** (`0x4A1000F8`; TRM Table
-18-420), so a hardware loopback is also pure software: mux one half to `gpio`
-(mux 3), toggle it from `/dev/mem`, and read the other half's `DATAIN`.
-
-### E3 — ask the reference the same question with a real stream
-
-Boot TabletOS, play a file, and while it plays read the **McBSP2 registers**
-with `memdump3` (they are blocked from Linux userspace, trap 158, but QNX can
-read them).  We have the codec side from a live reference (§5g of report 205) but
-**not** its `SPCR2`/`SRGR1`/`SRGR2`/`PCR0` *during playback* — and that is exactly
-the register set that differs in meaning between master and consumer.  This is
-pure static/bench work and needs no probe.
-Note `memdump3` reads physical memory, so `0x49024000`-based addresses are the
-right ones to try (the "dma" window), and QNX does not enforce the Linux L4
-firewall for these.
-
-### E4 — re-read the driver against the reference's DMA usage
-
-Static RE only: compare how the 1917 stack programs sDMA for McBSP2 (the
-`deva-ctrl-omap4abe-wm8994.so` re in report 201 covers the codec; the McBSP/sDMA
-side has **not** been decompiled).  A threshold/port mismatch would explain
-`XRDY` stuck at 0 with the sDMA running.
+1. **MCLK1 at the hardware layer** — a probe/meter on `fref_clk2_out`/MCLK1.
+   Blocked by trap 165 while no probe exists.  If one ever appears, this is a
+   two-minute measurement that decides everything.
+2. **A non-reference AIF1CLK design** — route some other live clock to the
+   codec (no reference precedent; a new design).
+3. **The master-mode SRG stall, now narrow.**  In McBSP-master mode the codec
+   was slave with a BCLK-referenced FLL that locked every time — so BCLK ran,
+   and the codec consumed.  The stall was between the SRG and the shifter.
+   The shifter is now proven good (it works when externally clocked), so the
+   question is the SRG's output distribution: `CLKSM`/`FSGM`/`CLKGDV`
+   permutations, one boot at a time, judged by `pbplay`'s survival (trap 169)
+   and the steady-state dump.  E2's capture stream (`/dev/dsp` read alongside
+   playback) remains the tool if audio is heard but wrong.
 
 ### Driver facts you need before touching it
 
-* The repair runs from a **delayed work 50 ms after `trigger(START)`** — the
-  only point where BCLK is running (the machine `.trigger` is *first* in ASoC's
-  trigger order, before the CPU DAI starts BCLK).
-* The repair begins with **`regcache_mark_dirty()` + `regcache_sync()`**.  Without
-  it every `update_bits()` is a silent no-op because the cache holds the values
-  the driver tried to write while the codec was frozen.  **Trap 162.**
-* `hw_params` writes `R0x200 = 0` to thaw, so **something must re-enable
-  `AIF1CLK` afterwards** — otherwise the DAC loses its clock.
-* The FLL is referenced from **BCLK**, not MCLK1 (MCLK1 locked only
-  intermittently; see the open contradiction).
+* The repair runs from a **delayed work 50 ms after `trigger(START)`** and
+  begins with **`regcache_mark_dirty()` + `regcache_sync()`** (trap 162).
+* `hw_params` writes `R0x200 = 0` to thaw, so the repair re-enables
+  `AIF1CLK` last.
+* The FLL is referenced from **MCLK1** since E1 (BCLK would be circular with
+  the codec as master) — and that reference never arrives, which is the whole
+  problem.
+* A frozen codec drops **raw `i2ctransfer` writes too** (trap 167): thaw
+  (`R0x200 = 0`) before any register surgery, re-enable AIF1CLK last.
+* The driver's `set_pll()` clears `FRC_NCO` (trap 168): a hand-forced NCO must
+  be injected after `trigger(START)` + the repair, or the driver must be
+  changed.
 
-## 0d. Touch — done, but it does not survive a warm reboot
+## 0d. Touch — done, and it survives a warm reboot; cold boots need the pulse
 
 I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c` boots the Munin app
 and maps the 1917 `scaling.conf` calibration to 1024×600; the GPIO2_3 edge IRQ
-works (pad `0x056`, `0x410B`, `irq 110`).  **After a reboot the controller does
-not boot** (`0x65` NAKs, `touch did not boot: -110`) until the power/reset GPIOs
-(**GPIO1_14 / GPIO4_8**) are pulsed — the driver still does not drive them.
-That pulse is the remaining work, and it is the recovery path.
+works (pad `0x056`, `0x410B`, `irq 110`).  **A warm reset keeps the controller
+up** (session 42: the touch bound and worked after the flash reboot); after a
+**cold** boot it does not (`0x65` NAKs, `touch did not boot: -110`) until the
+power/reset GPIOs (**GPIO1_14 / GPIO4_8**) are pulsed — the driver still does
+not drive them.  That pulse is the remaining work, and it is the recovery path
+for cold boots.
 
 ## 1. Useful local extracts
 
@@ -190,11 +143,12 @@ That pulse is the remaining work, and it is the recovery path.
   and pulled partitions.
 * **`local/vendor/bb10mt/bb10mt`** — the QNX6/container tool.
 * **The WM8994 datasheet** — Rev 4.6; the authority for clocking, PM3/PM4/PM5
-  and the charge pump.  A text extraction exists at
-  `/tmp/commandcode-*/…/scratchpad/wm8994.txt` **but is session-scoped — it will
-  not survive**.  Re-fetch if needed.
-* Reports **201**, **203**, **204** and the current **205**; the reference
-  captures in `docs/captures/`.
+  and the charge pump.  Fetch from
+  `https://statics.cirrus.com/pubs/proDatasheet/WM8994_Rev4.6.pdf` (the FLL and
+  free-running-NCO sections are around p. 201–208; session 42 used them).
+  A session-scoped text extraction does **not** survive between sessions.
+* Reports **201**, **203**, **204**, **205** and the current **206**; the
+  reference captures in `docs/captures/`.
 
 ## 2. Build and flash (7.3.3)
 
@@ -254,16 +208,19 @@ lost a flash to a stale staged module.  **Trap 163.**
 
 ## 4. Traps added last session
 
-Full list 14–164 in `KNOWN-ISSUES.md` §2.  The session-41 additions:
+Full list 14–169 in `KNOWN-ISSUES.md` §2.  The session-42 additions:
 
-* **161.** The kernel patch was **not re-exported** after session 41's DTS and
-  driver edits.
-* **162.** **After any period of dropped codec writes, `regcache_mark_dirty()`
-  before writing again** — otherwise `update_bits()` is a silent no-op.
-* **163.** **Copy the rebuilt `.ko` into `local/work/modules-7.3.3/`** before
-  `build_rootfs.py`, and verify with `debugfs -R 'dump …'`.
-* **164.** A console that echoes but prints nothing is a **busy shell**, not a
-  dead one.
+* **166.** `i2ctransfer` arguments are **decimal** — a shell loop over `$r`
+  reads the wrong register (`732` → `0x2DC`).  Write the address bytes
+  explicitly in hex.
+* **167.** A **frozen codec drops raw `i2ctransfer` writes too** — thaw
+  (`R0x200 = 0`) before any register surgery; a half-landing sequence looks
+  like a flaky device.
+* **168.** The driver's `set_pll()` **clears `FRC_NCO`** — a hand-forced NCO
+  does not survive the next `hw_params`; inject after `trigger(START)` + the
+  repair.
+* **169.** `pbplay`'s **`Input/output error` after five periods is a
+  stream-health observable**: a run that lives past it proves the ring drains.
 
 ## 5. Where things are
 
@@ -305,52 +262,58 @@ Full list 14–164 in `KNOWN-ISSUES.md` §2.  The session-41 additions:
 ## 7. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 42 (absolute; Linux-era 36)
+PlayBook (OMAP4430 "winchester") — session 43 (absolute; Linux-era 37)
 
 Workspace: this repository — a git checkout.  The earlier work tree
 $HOME/rea-work is READ-ONLY.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
 file), docs/history/KERNEL-PORT.md §7, ROADMAP.md item 9 (step 5),
-KNOWN-ISSUES.md (traps 14-164, especially 160-164, and §3), DEVELOPMENT.md
-§3/3a/4/7a, DECISIONS.md (44-51), docs/reports/INDEX.md, report 205 (§5g-§5n are
-the audio state), and sessions/session-41.md.
+KNOWN-ISSUES.md (traps 14-169, especially 165-169, and §3), DEVELOPMENT.md
+§3/3a/4/7a, DECISIONS.md (44-53), docs/reports/INDEX.md, report 206 (the E1
+record; 205 is the session-41 codec record), and sessions/session-42.md.
 
-WHERE IT STANDS: the WM8994 CODEC side of playback is SOLVED and driver-driven.
-From a cold boot the machine driver thaws the codec (R0x200=0), locks FLL1 from
-BCLK (0x732=0x6020), enables AIF1CLK from FLL1, sets 16-bit word length, and
-enables the whole output chain — PM3 0x03F0 (MIXOUTL/R_ENA live in PM3, NOT
-PM4), charge pump CP_ENA (R0x4C bit 15), R0x02D/0x02E un-mute, R0x420 un-mute,
-R0x601/0x602 AIF1->DAC routing, R0x60=0x00EE — and the DAC's noise floor is
-AUDIBLE.  The remaining blocker is the McBSP transmit path: in steady state
-DXR = 0x00000000 with SPCR2 = 0x02F5 (XRDY=0 FIFO full, XEMPTY=1 shifter empty),
-i.e. data enters the FIFO and never shifts out, while omap-dma-engine interrupts
-fire at exactly 48/4096 per second and hw_ptr runs at 48 185 frames/s.  The
-sDMA target address is correct (phys_dma_base = 0x49024000, the "dma" window).
-AUXCLK1 now boots at 0x00020100 (DTS assigned-clock-rates — a real defect that
-is FIXED); pads, padconf mode, SMART3 drive, DPLL_PER and all PMIC rails are
-byte-identical to QNX, so the supply and pad theories are dead.  The touch is
-DONE but does not survive a warm reboot (GPIO1_14/GPIO4_8 pulse missing).  The
-WL1283 is software-exhausted.  THE PATCH WAS NOT RE-EXPORTED — 161.
+WHERE IT STANDS: the WM8994 transmit path is PROVEN working.  E1 inverted the
+clock roles to match the reference — codec AIF1 master (R0x302=0x4000), McBSP
+clock consumer (PCR0=0x000f, SRG out of the path, clkx/fsx pads = 0x0100
+inputs) — and with a live AIF1CLK (forced from the codec's free-running NCO,
+datasheet Rev 4.6 p.206) pbplay streamed a full 20 s and exited cleanly; the
+McBSP-master configuration always died with "Input/output error" after ~1 s.
+The session-41 XRDY=0 stall is a property of the master/SRG configuration, not
+of the silicon.  THE ONE REMAINING BLOCKER IS A LIVE AIF1CLK: FLL1 never locks
+from MCLK1 (register file byte-identical to the working reference:
+0x220=0x0005, 0x221=0x0700, 0x222=0xAE14, 0x223=0x00E0, 0x224=0x0C80; 0x732
+stays 0x6000), and the discriminator — AIF1CLK sourced DIRECTLY from MCLK1
+with the FLL bypassed (R0x200=0x0001) — also dies, so THE PIN DOES NOT CLOCK.
+AUXCLK1=0x00020100 and pad 0x19C are correct on every measured boot; SCRM,
+padconf mode, SMART3 drive, DPLL_PER, all PMIC rails and the FLL file are
+byte-identical to the working reference, so the fault is below the registers.
+Caveat: session 41 measured ONE successful MCLK1 lock, so "marginal clock" is
+still live.  The NCO is ±10-30% — a mechanism probe, NOT a hi-fi clock; do not
+ship it in the driver.  The touch now survives warm reboots (cold boots still
+need the GPIO1_14/GPIO4_8 pulse).  The WL1283 is software-exhausted.  The
+kernel patch WAS re-exported at session-42 wrap-up (54 files / 8 095 lines,
+sha256 55035aac..., verified 0 rejects / 54/54 byte-identical).
 
-PHYSICAL STATE: REGION 0 HOLDS OUR LINUX IMAGE 0xB8830701 (0x93A8F4 bytes,
-kernel 7.3.3); region 1 is the audio/OSS rootfs 7cc63990... (27 modules).  The
-way back to TabletOS is the 1917 IFS (local/work/ifs-shim-sealed.ifs) at block
-0x825.  Do NOT restore local/images/ifs0.sealed.bin (2.0.0.4869, trap 84).
+PHYSICAL STATE: REGION 0 HOLDS OUR LINUX IMAGE 0x36597040 (0x93A2EC bytes,
+kernel 7.3.3, E1 clock roles); region 1 is the E1 audio/OSS rootfs b20302dc...
+(27 modules).  The way back to TabletOS is the 1917 IFS
+(local/work/ifs-shim-sealed.ifs) at block 0x825.  Do NOT restore
+local/images/ifs0.sealed.bin (2.0.0.4869, trap 84).
 
-WHERE IT IS: FOUR software-only experiments, in cost order (there is NO scope,
-NO boardview and NO pad knowledge — nothing may depend on probing a pin):
-E1 make the McBSP a CLOCK CONSUMER, matching the reference (codec as AIF1 master,
-R0x302=0x4000) on BOTH sides at once — the DAI link format plus the CPU DAI
-taking the codec's BCLK — which removes the sample-rate generator from the path
-where XRDY=0 sits.  E2 prove the transmit path without the codec: dx/dr are the
-two halves of one register (0x4A1000F8), so drive one as a GPIO and read the
-other from /dev/mem, or use internal loopback with a capture stream so the sDMA
-delivers what was transmitted into a /dev/dsp read.  E3 boot TabletOS and read
-the reference's McBSP2 SPCR2/SRGR1/SRGR2/PCR0 DURING playback with memdump3 (the
-"dma" window 0x49024000; Linux userspace cannot, trap 158) — we have its codec
-file but not its McBSP mid-stream.  E4 static RE of the 1917 sDMA/McBSP setup
-(report 201 decompiled the codec, not the McBSP/sDMA).
+WHERE IT IS — THREE ROUTES (operator's call; trap 165 still applies — no scope,
+no boardview, no pad knowledge, nothing may depend on probing a pin):
+(1) MCLK1 at the hardware layer — a probe/meter on fref_clk2_out/MCLK1 decides
+everything if one ever exists; blocked until then.
+(2) A non-reference AIF1CLK design — route some other live clock to the codec.
+(3) The master-mode SRG stall, now NARROW: in the old master config BCLK ran
+(the codec's BCLK-referenced FLL locked every time) and the codec consumed, so
+the stall was between the SRG and the shifter; the shifter is now proven good
+(externally clocked it streams), so it is the SRG's output distribution —
+CLKSM/FSGM/CLKGDV permutations, ONE per boot, judged by pbplay's survival
+(trap 169: dying at ~5 periods = stalled; running the full duration =
+draining) and the steady-state dump.  E2's capture stream (/dev/dsp read
+alongside playback) is the tool if audio is heard but wrong.
 
 BENCH: the unit is on OUR LINUX IMAGE — there is NO door.  Use tools/pbcon.py
 (prompt `pb> `), reboot with tools/pbcon.py 'reboot -f'; run
@@ -362,7 +325,9 @@ NOT start door-hold.sh if the operator already has one running (stale holders
 cause an auth loop); tools/pbssh.sh logs in as ROOT (uid:0).  Run USB/flash
 tools as the USER, never pkexec.  Device password 0000, once.  An agent NEVER
 writes RPMB; NVRAM is read-only (SAFETY §1/§6).  After every reboot/change,
-check the last 100-200 lines of dmesg.
+check the last 100-200 lines of dmesg.  WM8994 register work over i2ctransfer:
+arguments are DECIMAL (trap 166), and a frozen codec drops raw writes too
+(trap 167 — thaw with R0x200=0 first, re-enable AIF1CLK last).
 
 STATIC RE: the REA MCP server exposes Ghidra 12.1.4 (open_binary,
 binary_overview, analyze_function, procedure_pseudo_code, search_strings,
@@ -371,26 +336,33 @@ entry_point=0x80100000.  Reconcile with ntoarmv7-readelf/objdump (Ghidra may add
 +0x10000 on an ELF).  QNX device tools build -static, and /tmp is wiped by a
 reboot.  USE THE REFERENCE FIRST — and the highest-yield method is a LIVE
 REGISTER DIFF against a capture of the working reference (docs/captures/).
+The WM8994 Rev 4.6 datasheet:
+https://statics.cirrus.com/pubs/proDatasheet/WM8994_Rev4.6.pdf (FLL /
+free-running NCO ≈ p.201-208).
 
 SAFETY: read SAFETY.md first.  One variable per boot.  Flash region 0 only when
-only it changed; both regions in one bootrom session only when both changed.  A
-test boot is not a budget concern (the counter self-replenishes), but the hard
-hazards (0 / >0x32 / failed write / flat pack) remain.  Operator's call when to
-stop and to wrap up.
+only it changed; both regions in one bootrom session only when both changed.
+A test boot is not a budget concern (the counter self-replenishes; NOTE the
+chroot has no /dev/rpmb node — the counter is read from the initramfs console,
+not the BusyBox shell), but the hard hazards (0 / >0x32 / failed write / flat
+pack) remain.  Operator's call when to stop and to wrap up.
 
-NEXT (operator's call): (a) the scope/loopback on the McBSP transmit path;
-(b) the codec-as-AIF1-master pair; (c) re-export the kernel patch (trap 161);
-(d) touch power/reset (GPIO1_14/GPIO4_8); (e) the wl128x-nvs.bin path (hd5).
-The unit is on Linux; region 0/region 1 both change when the kernel/rootfs pair
-does, otherwise flash only the changed region; the 1917 IFS at block 0x825 is
-the way back to TabletOS.
+NEXT (operator's call): (a) MCLK1 hardware-layer question (needs a probe);
+(b) a non-reference AIF1CLK design; (c) the master-mode SRG stall, one SRG
+register permutation per boot; (d) touch cold-boot power/reset
+(GPIO1_14/GPIO4_8); (e) the wl128x-nvs.bin path (hd5).  The unit is on Linux;
+region 0/region 1 both change when the kernel/rootfs pair does, otherwise flash
+only the changed region; the 1917 IFS at block 0x825 is the way back to
+TabletOS.
 
 UPDATE THE DOCS as you go and commit: STATE.md, HANDOFF.md, ROADMAP.md,
 KNOWN-ISSUES.md, DECISIONS.md and the session note — and move replaced or
-resolved material to docs/history/ or docs/parked/ with a link stub.
+resolved material to docs/history/ or docs/parked/ with a link stub.  Re-export
+the kernel patch whenever the DTS or a driver changes (trap 161) and verify it
+by apply-and-compare, never by --dry-run alone.
 
-WRAP-UP: the operator decides when the session stops.  Record the bench state,
-write the session note, update the canonical docs, verify with
+WRAP-UP: only the operator decides when the session stops.  Record the bench
+state, write the session note, update the canonical docs, verify with
 tools/docs_audit.py and tools/tests/test_offline.py, then commit privately and
 publish the snapshot (docs/project/REPO-MANAGEMENT.md).  No IFS restore is
 required.

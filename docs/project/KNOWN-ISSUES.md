@@ -1082,6 +1082,38 @@ report 121 §3/§11/§12.
       reference driver.  The audio next-steps in `HANDOFF.md` §0c are written to
       this constraint.  (Session 41, operator.)
 
+166. **`i2ctransfer` arguments are DECIMAL — a shell loop over `$r` reads the
+      wrong register.**  `for r in 732 …; do i2ctransfer … $((r>>8)) $((r&255))
+      …; done` reads register `0x2DC`, not `0x732`, because the shell treats
+      `732` as decimal.  Session 42's bulk register loop therefore returned
+      zeros/garbage ("all registers read 0" was an artefact, not a device
+      state).  Always write the two address bytes explicitly in hex
+      (`i2ctransfer -f -y 3 w2@0x1a 0x07 0x32 r2`).  (Session 42.)
+
+167. **A frozen codec drops raw `i2ctransfer` writes too — not just regmap
+      writes.**  The freeze rule (`AIF1CLK_ENA = 1` with a stopped source,
+      trap 155) applies at the chip level, so hand-written register surgery
+      over I²C silently half-lands: session 42's first mid-stream injection
+      stuck `R0x224` while `R0x220` did not take.  Before any register
+      sequence on the WM8994, thaw first (`R0x200 = 0` — that write itself
+      always lands), do the surgery, then re-enable AIF1CLK last.  A sequence
+      that half-lands looks exactly like a flaky device.  (Session 42.)
+
+168. **The driver's `set_pll()` clears `FRC_NCO` — a hand-forced free-running
+      NCO does not survive the next `hw_params`.**  `wm8994_set_fll()` writes
+      `FLL1_CONTROL_5` with the `FRC_NCO` bit derived from the requested
+      source, so any stream start reverts a hand-set NCO to the (dead)
+      MCLK1-referenced FLL.  To test the NCO mid-stream, inject *after*
+      `trigger(START)` + the repair (>50 ms), using the freeze-safe sequence of
+      trap 167.  (Session 42.)
+
+169. **`pbplay`'s `Input/output error` after five periods is a usable
+      stream-health observable.**  With a stalled transmit path the OSS write
+      dies at ~5 × 4096 frames (~1 s, 82 176 bytes); with a draining path the
+      same command runs its full duration and exits cleanly.  A run that lives
+      past the five-period point proves the ring drains — i.e. XRDY asserts,
+      i.e. BCLK exists — with no scope and no register access.  (Session 42.)
+
 ## 3. Corrections to older reports
 
 These twenty-two are preserved deliberately. Each is newer than the text it

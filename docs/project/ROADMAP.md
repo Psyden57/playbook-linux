@@ -4,7 +4,7 @@ Open work only.  Closed and parked item history is archived in
 [`docs/history/ROADMAP-CLOSED.md`](../history/ROADMAP-CLOSED.md).  Each open
 item states the evidence that would close it.
 
-Current focus: **item 9** (peripherals), with the WM8994 codec clock as the one
+Current focus: **item 9** (peripherals), with the AIF1CLK source as the one
 audio experiment.  Item 7 (packaging) is untouched; item 8 (BB10) is parked by
 the operator.
 
@@ -41,30 +41,29 @@ known-good image.
 
 **Open.**
 
-* **WM8994 audio.**  The codec is **done and driver-driven**: from a cold boot
-  the machine driver thaws it, locks FLL1, enables AIF1CLK from that FLL, sets
-  16-bit word length and enables the whole output chain (PM3 output mixers,
-  charge pump `CP_ENA`, DAC→mixer un-mute, AIF1→DAC routing, output stage) — and
-  the DAC audibly converts — a steady noise floor plus a brief descending
-  sweep at every stream start, which a DAC fed silence cannot produce, so real
-  samples do get clocked out.
-  **The remaining blocker is a stall in the McBSP transmit path after
-  start:** in steady state
-  `DXR = 0x00000000` with `SPCR2 = 0x02F5` (`XRDY = 0` buffer full, `XEMPTY = 1`
-  shifter empty) while sDMA interrupts fire at 12/s and `hw_ptr` runs at
-  48 185 frames/s.  **No hardware probing is available**, so the routes are
-  software-only: a capture stream (`/dev/dsp` read) to see what the McBSP
-  actually transmitted, a `/dev/mem` `dx`→`dr` loopback, the reference's own
-  McBSP registers read mid-stream on QNX (`memdump3`, the `0x49024000` window),
-  and — most likely decisive — adopting the reference's clock roles (codec as
-  AIF1 master, McBSP as consumer) on both sides at once.  `HANDOFF.md` §0c has
-  the four as E1–E4.  Report 205 §5o/§5l.
+* **WM8994 audio.**  The transmit path is **proven working** (session 42,
+  report 206): with the codec as AIF1 master (`R0x302 = 0x4000`) and the McBSP
+  as a clock consumer (`PCR0 = 0x000f`, SRG out of the path — the reference's
+  clock roles, adopted on both sides at once), a stream with a live AIF1CLK
+  drains the FIFO end to end — `pbplay` ran 20 s cleanly where the
+  McBSP-master configuration always stalled at ~1 s.  The codec chain itself
+  (thaw, output mixers, charge pump, routing, un-mute) has been
+  driver-driven since session 41.
+  **The remaining blocker is a live AIF1CLK:** FLL1 never locks from MCLK1
+  (register file byte-identical to the working reference) and AIF1CLK sourced
+  directly from MCLK1 is dead — the pin does not clock, with every readable
+  SoC and codec register matching the reference.  The free-running NCO
+  (±10–30 %) proves the architecture but is not a hi-fi clock.  Routes: (a)
+  MCLK1 at the hardware layer (needs the probe of trap 165; session 41's one
+  lock keeps "marginal" alive), (b) a non-reference AIF1CLK design, (c) the
+  now-narrow master-mode SRG stall (SRG → shifter), one permutation per boot.
 * **WL1283.**  Formally stopped by the operator (session 36).  The software
   surface is exhausted and the 1917-truth minimal host still fails CMD5
   (report 196).  Do not re-run traps 116–137.  The WLAN calibration/NVS is
   extracted from QNX `hd5` (report 197).
 * **Touch.**  Done; the remaining nicety is driving power/reset
-  (GPIO1_14 / GPIO4_8) instead of relying on the post-boot levels.
+  (GPIO1_14 / GPIO4_8) for cold boots — a warm reset keeps the controller up
+  (session 42).
 
 ## Out of scope for now
 
