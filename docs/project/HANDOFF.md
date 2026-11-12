@@ -143,10 +143,9 @@ for cold boots.
   and pulled partitions.
 * **`local/vendor/bb10mt/bb10mt`** — the QNX6/container tool.
 * **The WM8994 datasheet** — Rev 4.6; the authority for clocking, PM3/PM4/PM5
-  and the charge pump.  Fetch from
-  `https://statics.cirrus.com/pubs/proDatasheet/WM8994_Rev4.6.pdf` (the FLL and
-  free-running-NCO sections are around p. 201–208; session 42 used them).
-  A session-scoped text extraction does **not** survive between sessions.
+  and the charge pump.  **It is in the tree at `hardware/WM8994.PDF`**
+  (gitignored, local-only) — use that, do not fetch it online.  The FLL and
+  free-running-NCO sections are around p. 201–208 (session 42 used them).
 * Reports **201**, **203**, **204**, **205** and the current **206**; the
   reference captures in `docs/captures/`.
 
@@ -336,9 +335,9 @@ entry_point=0x80100000.  Reconcile with ntoarmv7-readelf/objdump (Ghidra may add
 +0x10000 on an ELF).  QNX device tools build -static, and /tmp is wiped by a
 reboot.  USE THE REFERENCE FIRST — and the highest-yield method is a LIVE
 REGISTER DIFF against a capture of the working reference (docs/captures/).
-The WM8994 Rev 4.6 datasheet:
-https://statics.cirrus.com/pubs/proDatasheet/WM8994_Rev4.6.pdf (FLL /
-free-running NCO ≈ p.201-208).
+The WM8994 Rev 4.6 datasheet is LOCAL:
+hardware/WM8994.PDF (gitignored, do not fetch it online) — FLL /
+free-running NCO ≈ p.201-208.
 
 SAFETY: read SAFETY.md first.  One variable per boot.  Flash region 0 only when
 only it changed; both regions in one bootrom session only when both changed.
