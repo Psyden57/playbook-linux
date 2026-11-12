@@ -48,6 +48,9 @@ finally drains.
 * **Touch survived this boot** (warm reset keeps the Munin controller up).
   Consistent with the handoff §0d: only cold boots need the GPIO1_14/GPIO4_8
   pulse.
+* **At wrap-up the unit answered on the console with kernel 7.3.3**
+  (live `uname -r` read, `ttyACM0` present), still on image `0x36597040` with
+  the codec quiesced — the bench state the next session inherits.
 
 ## Inferred (reasoning from evidence, not directly measured)
 
@@ -100,6 +103,33 @@ finally drains.
    the steady-state dump and/or E2's capture stream.
 4. **Touch cold-boot power/reset (GPIO1_14/GPIO4_8)** and the
    `wl128x-nvs.bin` path are unchanged backlog items.
+
+## Superseded / uncertain
+
+* **"The McBSP transmit path on this silicon stalls after start"** (report 205
+  §5l/§5o, session 41 — "the sDMA feed and the buffer→shifter copy both stop").
+  The measurements of 205 remain valid, but the implied "this silicon's
+  transmit path is suspect" is superseded: report 206 shows the same hardware
+  streaming 20 s continuously in consumer mode.  The stall is a property of
+  the **master/SRG configuration**.
+* **"The FLL lock from MCLK1 is merely unreliable/intermittent"** (session 41
+  §5h).  Superseded in precision by session 42: AIF1CLK sourced directly from
+  MCLK1 with no FLL is also dead, which points at the pin, not the FLL — but
+  session 41's one measured lock stands, so the question is open in
+  `docs/contradictions/mclk1-locks-vs-not-under-linux.md`, not resolved.
+* **"E1 = `SND_SOC_DAIFMT_BC_FC` + `set_sysclk(cpu_dai, …, CLOCK_IN)`"**
+  (session-41 handoff §0c).  Superseded by the implementation: the link format
+  is `CBP_CFP` (codec perspective; the ASoC core flips it for the CPU DAI, so
+  `omap-mcbsp`'s `set_dai_fmt` takes its own `BC_FC` branch), and the CPU-side
+  `set_sysclk`/`set_clkdiv` calls are dropped entirely — with the SRG out of
+  the path there is nothing for them to configure.
+* **"The driver keeps the BCLK-referenced FLL"** (DECISIONS §52, session 41).
+  Superseded for the current design by DECISIONS §53: with the codec as AIF1
+  master a BCLK-referenced FLL is circular, so `hw_params` locks FLL1 from
+  MCLK1 — which is exactly why the MCLK1 question is now load-bearing.
+* **"The patch was not re-exported — trap 161"** (the session-42 handoff this
+  session started from).  Superseded at this session's wrap-up: re-exported
+  and verified (`55035aac…`).
 
 ## Artefacts produced
 

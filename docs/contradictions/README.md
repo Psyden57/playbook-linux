@@ -33,7 +33,7 @@ note after it is what a reader needs before opening the file.
 | `fref-clk2-pad-reference-decode.md` | **resolved 2026-11-08 (session 32, report 185)** — a fresh read-only dump with Wi-Fi up gives CORE `0x4A10019C = 0x41000000` (pad0 mux 0 `fref_clk2_out`) and SCRM `AUXCLK1 = 0x00020100` (12.8 MHz enabled); the session-29 "mux 3" decode was a **WKUP**-pad result (`0x4A31E058` pad0) generalised to the CORE pad.  The FREF2 output is matched and not causal for CMD5 |
 | `gpio2-24-resx-vs-datasheet.md` | **open** — report 122 calls `GPIO2_24` the bridge RESX (medium), but the reference reads that bit LOW during a working display while the datasheet says RESX is low-active; the pad's input path is disabled, so the `DATAIN` bit may be meaningless.  Not blocking: the display works |
 | `ldr01-0x10000-header.md` | **resolved — there is no header** — report 164's corrected addendum and the session-23 handoff give `file_offset = VA − 0x80100000`; session 22's note still records the `0x10000` belief and is left as written (evidence, not product) |
-| `mclk1-locks-vs-not-under-linux.md` | **open (session 41)** — report 204/203 say MCLK1 never clocks under our image; session 41 measured FLL1 **locked** from MCLK1 once (`0x732 = 0x6020`) and then failing on later boots and a cold boot with an identical register file, while every SoC register matches QNX.  Not settled; a meter on MCLK1 (or a repeated lock test across boots) would close it.  The driver uses BCLK in the meantime (report 205 §4b/§5h, DECISIONS §52) |
+| `mclk1-locks-vs-not-under-linux.md` | **open (updated session 42)** — report 204/203 say MCLK1 never clocks under our image; session 41 measured FLL1 **locked** from MCLK1 once (`0x732 = 0x6020`) and then failing on later boots and a cold boot with an identical register file; session 42's discriminator — AIF1CLK sourced **directly** from MCLK1 with the FLL bypassed — also died on its boot.  Not settled; a meter on MCLK1, or the direct test repeated across boots, would close it.  Since E1 the codec is AIF1 master (DECISIONS §53) so this file is now the single audio blocker (report 206) |
 | `open-dispc-dsi-timing-fields.md` | **resolved (falsified) 2026-10-28** — all four fields and the QNX PHY words were forced and read back identical; the panel stayed black (report 124), so the split was not the blocker.  The display was later fixed by the DISPC core clock (report 133) |
 | `rpmb-key-kek-vs-fallback-literal.md` | **resolved (session 18), key pinned (session 19)** — the monitor is handed the key bytes by pointer; the live page gives the CID-derived seed and the frame key `dfeec0ce…2274` (report 143).  The Linux consequence is **conditional on the block seal** (report 144), not on the key; the seal caller is solved (147), the transform is not (148/156) |
 | `rpmb-page-rodata-contents.md` | **open (mechanism); contents measured** — report 92 says `page+0x20/+0x40` hold the `.rodata` constants, report 141 says nothing writes them; the live page measures the constants, but who writes them is unknown (session 19) |
@@ -53,9 +53,11 @@ IFS rebuild, but each changes how a result should be read:
    do not test it.
 2. **`mclk1-locks-vs-not-under-linux.md`** — report 204 says MCLK1 never clocks
    under our image; session 41 measured FLL1 **locked** from MCLK1 once and then
-   failing on later boots with an identical register file.  *Would settle it:* a
-   meter/scope on MCLK1 on a locking and a non-locking boot.  This decides
-   whether the driver may adopt the reference's MCLK1 design.
+   failing on later boots with an identical register file; session 42's
+   direct-MCLK1 discriminator (no FLL in the path) also died on its boot.  *Would
+   settle it:* a meter/scope on MCLK1, or the direct test repeated across boots.
+   This decides the audio architecture: since E1 (report 206) the codec is AIF1
+   master and needs MCLK1 for its FLL — this is now the single audio blocker.
 3. **`gpio2-24-resx-vs-datasheet.md`** — whether `GPIO2_24` is really the
    TC358764's RESX.  The display works with the current pulse, so this matters
    only if the reset sequence is changed; do not build an experiment that depends

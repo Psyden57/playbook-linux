@@ -1,10 +1,12 @@
-# Does MCLK1 clock under our Linux image? Report 204 says no; session 41 measured yes, but unreliably
+# Does MCLK1 clock under our Linux image? Report 204 says no; session 41 measured yes, but unreliably; session 42's direct test says no on its boot
 
-**Status: OPEN (session 41).**  Both sides have live measurements.  The
-disagreement matters because the whole audio design choice rests on it: if MCLK1
-is reliable, the reference's design (`MCLK1 → FLL1 → AIF1CLK`, codec as AIF1
-master, FLL locked permanently) is available to us; if it is not, the driver must
-keep the BCLK-referenced FLL and the delayed-repair workaround.
+**Status: OPEN (updated session 42, report 206).**  Both sides have live
+measurements, and session 42 added a new discriminator that strengthens Claim A
+without settling the file: with the FLL completely bypassed, `AIF1CLK` sourced
+**directly from MCLK1** still fails.  The disagreement matters because the
+audio design now *rests* on it: since session 42's E1 the codec is the AIF1
+master (DECISIONS §53) and the FLL must reference MCLK1 — a BCLK-referenced FLL
+is circular in master mode.  A live MCLK1 is the one missing clock.
 
 ## Claim A — "MCLK1 does not clock under our image"
 
@@ -41,6 +43,29 @@ programme and `R0x224 = 0x0000` (`REFCLK_SRC = MCLK1`), `R0x221 = 0x0700`,
 **Strength:** the one lock is a direct measurement; the intermittency is a
 direct observation across several boots.
 
+## Claim C — session 42's discriminator: the pin does not clock *on its boot*
+
+**Source:** session 42, report 206 §3.
+
+**Evidence.**  With a stream running and the codec thawed, `AIF1CLK` was
+sourced **directly from MCLK1** (`R0x220 = 0x0000`, `R0x200 = 0x0001` — SRC = 0
+= MCLK1, no FLL anywhere in the path; the FLL's lock detector is not involved).
+If MCLK1 toggled at 12.8 MHz, AIF1CLK would be live (2.4 % over the 12.5 MHz
+AIF1CLK spec — acceptable for a test) and BCLK would appear; `pbplay` died with
+its stalled-path signature (`Input/output error` after five periods, trap 169)
+exactly as in the FLL case.  In the same session, the same bench with AIF1CLK
+forced from the codec's internal NCO streamed 20 s cleanly — so the test bench
+and the codec were capable; the difference was the clock source.
+
+`AUXCLK1 = 0x00020100` and CORE pad `0x19C` low half `0x0000` were re-read
+during the same boot (live `devmem`), and the FLL1 register file was
+byte-identical to the working reference — so no readable register explains the
+difference.
+
+**Strength:** a direct, single-boot, single-trial measurement.  It is the
+strongest software-visible evidence yet for Claim A, but one boot cannot
+outvote Claim B's measured lock, so the file stays open.
+
 ## What is uncertain
 
 * Whether Claim A's failures were **all** the frozen-codec artefact.  Report 203
@@ -63,12 +88,20 @@ direct observation across several boots.
 2. A **codec-only detector**: with the codec thawed, `AUXCLK1 = 0x00020100`
    forced, and nothing else configured, program the FLL from MCLK1 and read
    `R0x732` — repeated across 5+ boots to quantify the intermittency.
-3. If a differential is found, check whether `startup-playbook`'s ordering
+3. **Claim C repeated across boots** (the direct-MCLK1 source, no FLL): if the
+   stream *ever* survives with `R0x200 = 0x0001`, the pin clocks at least
+   sometimes and "marginal" wins; if it never survives in 5+ trials, Claim A
+   wins on the software-visible evidence alone.
+4. If a differential is found, check whether `startup-playbook`'s ordering
    (`AUXCLK1` programmed before the FLL is ever enabled) is what the reference
    relies on.
 
 ## Current working position
 
-The driver uses the **BCLK**-referenced FLL, which locked on every trial in
-session 41, and does not depend on MCLK1.  That is a deliberate, documented
-workaround (DECISIONS §52), not a conclusion that MCLK1 is dead.
+Since session 42 the codec is the **AIF1 master** and McBSP2 a clock consumer
+(DECISIONS §53, report 206) — the E1 architecture, which proved the transmit
+path works when AIF1CLK exists.  The FLL must therefore reference MCLK1
+(BCLK is circular in master mode), and the free-running NCO (±10–30 %) is the
+accepted *mechanism probe*, not a production clock.  The MCLK1 question is now
+the single blocker; session 41's BCLK workaround (DECISIONS §52) is superseded
+for the current design.
