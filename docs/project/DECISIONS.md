@@ -1874,6 +1874,14 @@ connected to the codec.  McBSP1 as a clock *master* does not reach the codec
 clock consumer on the same nets, data on `mcbsp1_dx`**.  DSP_A was tried and is
 not the fault.  Report 212 §10–11.
 
+**Addendum 2 (E7/E8).**  The two-engine pairing is viable: a consumer-
+configured McBSP1 consumes a word written to its DXR within 5 ms while McBSP2
+streams (`SPCR2 = 0x0237`), so the engines share the BCLK/LRCLK nets.  Raw
+register programming of McBSP2 is **forbidden** — with no link holding the
+interconnect target active the first access gave `imprecise external abort`
+and a warm reset (trap 193).  Both engines must therefore be driver-owned ASoC
+links.
+
 **Evidence.**  Report **212**;
 `docs/captures/wm8994-e5-master-srg-2026-11-13.txt`; `SRGR1 = 0x0f1f`,
 `SRGR2 = 0x301f`, `PCR0 = 0x0f0f`, `R0x302 = 0x0000`, `R0x732 = 0x6020`,

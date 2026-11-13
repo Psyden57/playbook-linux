@@ -9,7 +9,7 @@
  * Needs snd-mixer-oss.ko and snd-pcm-oss.ko; /dev/dsp appears once they load
  * and a card exists.
  *
- * Usage: pbplay [seconds] [freq]
+ * Usage: pbplay [seconds] [freq] [device]
  *        freq 0 = silence, otherwise a square wave at `freq` Hz.
  */
 #include <errno.h>
@@ -39,7 +39,6 @@ static int step(const char *what, int fd, unsigned long req, int *val)
 
 int main(int argc, char **argv)
 {
-	const char *dev = "/dev/dsp";
 	int secs = 2, freq = 440;
 	/*
 	 * Ask for 4 fragments of 2^14 bytes: 16384 frames, i.e. ~341 ms at
@@ -50,6 +49,7 @@ int main(int argc, char **argv)
 	 */
 	int fmt = AFMT_S16_LE, ch = 2, rate = 48000, frag = 0x0004000E;
 	int fd, i, frames, nframes, blksz;
+	const char *dev = "/dev/dsp";
 	uint32_t phase = 0, inc;
 	int16_t *buf;
 	unsigned long total = 0;
@@ -58,6 +58,8 @@ int main(int argc, char **argv)
 		secs = atoi(argv[1]);
 	if (argc > 2)
 		freq = atoi(argv[2]);
+	if (argc > 3)
+		dev = argv[3];
 	if (secs <= 0)
 		secs = 1;
 

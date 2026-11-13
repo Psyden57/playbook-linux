@@ -272,3 +272,53 @@ clock and is not a better state to hand over.
 * Verified after the restore: `SRGR1 = 0x0f1f`, `SRGR2 = 0x301f`,
   `PCR0 = 0x0f0f`, codec `R0x302 = 0x0000`, `R0x732 = 0x6020` (FLL1 locked),
   stream at 48 kHz.
+
+## 12. E7/E8 — the two engines DO share the clocks, and how not to program them
+
+**E7: McBSP1 is clocked by the nets McBSP2 drives.**  Progamming McBSP1 as a
+clock consumer (PCR0 = `0x000f`, no `CLKXM`/`FSXM`) and writing one word
+(`0x12345678`) to its DXR while McBSP2 streamed:
+
+```
+mcbsp1: SPCR2 after enable 0x0233
+mcbsp1: CLOCKED - word consumed after 5 ms (SPCR2 0x0237, PCR0 0x000f)
+```
+
+`XRDY` (bit 1) set 5 ms later means the shifter took the word, i.e. a frame
+sync arrived.  So **the two engines share the BCLK/LRCLK nets**: mcbsp2 can
+generate, mcbsp1 can consume, and the codec sits on the same nets.  This
+supersedes the 0x0fe GPIO probe earlier in the session, which read a constant
+zero and wrongly suggested the nets were separate (the probe was invalid: with
+the pad muxed to GPIO and the engine idle, it measured a floating line).
+
+**E8: programming McBSP2 from raw registers is not safe.**  With the data link
+moved to McBSP1, the machine driver tried to be the clock generator itself
+(ioremap `0x40124000`, then SRGR1/SRGR2/PCR0/SPCR2).  The writes landed (the
+readback logged `SRGR1 0x0f1f SRGR2 0x301f PCR0 0x0f0f`) but the codec's FLL did
+not lock, and the unit then died with
+
+```
+Unhandled fault: imprecise external abort (0x1406) at 0x00082000
+```
+
+— trap 158's class at kernel level: the L4_ABE target was idle (`clk_summary`
+showed `abe-clkctrl:0030:24` enable count 0), so the access aborted and took the
+kernel down.  `pm_runtime_get_sync()` on the mcbsp device did not make the
+target active.  **The clock generator must therefore be an ASoC link driven by
+`omap-mcbsp`**, which owns the runtime PM; raw pokes are not an option.
+
+**What that leaves for the design.**  Two links, both managed by the driver:
+`mcbsp2 + wm8994-aif1` (clocks + codec, exactly E5) and `mcbsp1 + a codec DAI
+that accepts S16` (data, clock consumer).  A `snd-soc-dummy` codec was tried
+for the data link and the OSS side rejected the format
+(`SNDCTL_DSP_SETFMT: Invalid argument` → the CPU DAI's `hw_params` saw a
+non-S16 format and returned `-EINVAL`), so the open item is which codec DAI the
+data link uses — `wm8994-aif2` (a second DAI of the real codec, needing no
+board wiring) is the obvious candidate.
+
+## 13. Bench state after the E7/E8 work
+
+Restored to the committed E5 pair: region 0 **`0x5A04ACD9`** (0x9395C4 B,
+kernel 7.3.3 #35, the exact tree at `HEAD` — no `&mcbsp1` node), region 1
+sha256 **`c6dfd25f…`**.  Verified: `SRGR1 = 0x0f1f`, `SRGR2 = 0x301f`,
+`R0x302 = 0x0000`, `R0x732 = 0x6020` (FLL1 locked), stream at 48 kHz.

@@ -1301,6 +1301,26 @@ report 121 §3/§11/§12.
       lock, so BCLK/LRCLK are on the McBSP2 balls only.  (Session 45, report
       212 §10.)
 
+193. **Never poke an idle L4_ABE peripheral from the kernel — it aborts and
+      takes the unit down.**  A machine-driver experiment that ioremap'd
+      `0x40124000` (McBSP2) and wrote SRGR1/SRGR2/PCR0/SPCR2 while nothing held
+      the interconnect target active produced
+      `Unhandled fault: imprecise external abort (0x1406) at 0x00082000` and a
+      warm reset.  `clk_summary` had `abe-clkctrl:0030:24` at enable count 0 and
+      `pm_runtime_get_sync()` on the mcbsp device did **not** activate the
+      target.  This is trap 158 at kernel level: user-space `devmem` on an idle
+      target just faults the process, the kernel version panics.  Configure a
+      McBSP only through its driver (i.e. through an ASoC link), which owns the
+      runtime PM.  (Session 45.)
+
+194. **McBSP1 and McBSP2 DO share the BCLK/LRCLK nets, and a consumer-configured
+      McBSP1 shifts off them.**  With McBSP2 streaming, McBSP1 programmed as a
+      slave (`PCR0 = 0x000f`) and one word in DXR was consumed within 5 ms
+      (`SPCR2 = 0x0237`, `XRDY` set).  Do not repeat the pad-as-GPIO test that
+      appeared to contradict this: with the pad muxed to GPIO and the engine
+      idle it measures a floating line, not the net.  (Session 45, report 212
+      §12.)
+
 ## 3. Corrections to older reports
 
 These twenty-three are preserved deliberately. Each is newer than the text it

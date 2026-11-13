@@ -105,14 +105,19 @@ traps 116–137.
   `dsp_a`) clocked `0x0fe`/`0x104`/`0x102` at 48 053 frames/s but the codec's
   **FLL did not lock** (`R0x732 = 0x6000`) — the codec's BCLK/LRCLK are on the
   **MCBSP2** balls (proven twice: E5 and the pre-E1 BCLK-referenced FLL).
-* **So the design is two engines:** McBSP2 = clock master (E5, keep it),
-  **McBSP1 = clock consumer on the same nets, transmitting on `mcbsp1_dx`**.
-  ASoC carries one CPU DAI per link: use a second `snd_soc_dai_link` with
-  `snd-soc-dummy` as its codec, or configure McBSP1 by hand in the machine
-  driver.  **First sub-question:** do mcbsp1's clock *inputs* see mcbsp2's clock
-  *outputs*?  E6 proved only that mcbsp1's clock *outputs* do not reach the
-  codec.  A consumer-mode build whose steady dump shows `XEMPTY`/`XRDY` moving
-  answers it, and it is the cheapest next step.
+* **So the design is two engines — and E7 proved the pairing works.**  McBSP1
+  as a clock consumer consumed a word written to its DXR within 5 ms while
+  McBSP2 streamed (`SPCR2 = 0x0237`): the engines share the BCLK/LRCLK nets.
+  Build two ASoC links, both driver-managed: `mcbsp2 + wm8994-aif1` (E5,
+  clocks) and `mcbsp1 + a codec DAI` (data, consumer).
+* **Do not program McBSP2 from raw registers.**  E8 tried it and the first SRGR
+  access produced `imprecise external abort` and a warm reset, because the
+  interconnect target was idle and `pm_runtime_get_sync()` did not activate it
+  (trap 193).  Only a driver-owned link is safe.
+* **Open detail:** the data link's codec DAI.  `snd-soc-dummy` made OSS reject
+  `SNDCTL_DSP_SETFMT`, so the CPU DAI's `hw_params` saw a non-S16 format and
+  returned `-EINVAL`.  Try `wm8994-aif2` — a second DAI of the real codec that
+  needs no board wiring.
 
 ### Driver facts you need before touching it
 
@@ -304,18 +309,20 @@ The playback chain matches the reference register for register (DAC1 0xc0,
 R0x601/2=1, R0x02d/2e=1, R0x060=0x00ee, R0x210=0x0083).
 MCLK1 is still dead at the pin (reports 206/208/209); E5 routes around it.
 
-THE FAULT IS THE DATA BALL (solved this session, report 212 §10): the codec's
-DACDAT is abe_mcbsp1_dx (pad 0x102) — on the oracle, actually playing, pad 0x102
-is mux 0 OUTPUT while abe_mcbsp2_dx (what E5 drives) is mux 7 SAFE MODE, and the
-configuration is static (no pad changes during vs after playback).  DSP_A is NOT
-the fault (tried).  McBSP1 cannot be the clock master: E6 clocked it at 48 053
-frames/s and the codec's FLL did not lock, so the codec's BCLK/LRCLK are on the
-MCBSP2 balls.  The board SPLITS the engines: mcbsp2 = clocks, mcbsp1 = data.
+THE FAULT IS THE DATA BALL (report 212 §10): the codec's DACDAT is
+abe_mcbsp1_dx (pad 0x102) — on the oracle, actually playing, pad 0x102 is mux 0
+OUTPUT while abe_mcbsp2_dx (what E5 drives) is mux 7 SAFE MODE, and the
+configuration is static.  DSP_A is NOT the fault.  McBSP1 cannot be the clock
+master (E6: its clocks do not reach the codec), but E7 proved the engines SHARE
+the clock nets: a consumer-configured McBSP1 consumed a DXR word in 5 ms while
+McBSP2 streamed.  So: mcbsp2 = clocks, mcbsp1 = data, as two driver-managed
+ASoC links.  E8's attempt to be the clock generator with raw mcbsp2 registers
+CRASHED the SoC (imprecise external abort, trap 193) — do not do that.
 CLOSES WHEN: pbplay's 440 Hz tone is audible at 48 kHz +/-1%.
 
-PHYSICAL STATE: REGION 0 HOLDS OUR LINUX IMAGE (CRC 0x92458D00, 0x939C5C,
-kernel 7.3.3 #33, E5 + the disabled &mcbsp1 node).  REGION 1 holds the
-audio/OSS rootfs a026a454... (67,108,864 B, 27 modules).  The unit is on LINUX (0fca:8010, console `pb> `).
+PHYSICAL STATE: REGION 0 HOLDS OUR LINUX IMAGE (CRC 0x5A04ACD9, 0x9395C4,
+kernel 7.3.3 #35, the committed E5 tree).  REGION 1 holds the audio/OSS rootfs
+c6dfd25f... (67,108,864 B, 27 modules).  The unit is on LINUX (0fca:8010, console `pb> `).
 To boot the ORACLE: flash local/work/ifs-shim-sealed.ifs at 0x825 (the pruned
 RCFS is still at 0x8D5).  To stock TabletOS: flash
 local/work/minimal/wayback.signed.  Do NOT restore local/images/ifs0.sealed.bin
@@ -362,16 +369,15 @@ a MODULE-only change keeps the CRC and needs a region-1-only flash (trap 190).
 The UFS top-up keeps BOOTCTR_FCTRY at 0x32; the hard hazards (0 / >0x32 / failed
 write / flat pack) remain.  Operator's call when to stop and to wrap up.
 
-NEXT (the one experiment): THE TWO-ENGINE DESIGN.  Keep McBSP2 as the clock
-master (E5, proven) and make McBSP1 a clock CONSUMER on the same nets,
-transmitting on mcbsp1_dx.  The cheapest first step is a consumer-mode McBSP1
-build whose steady dump shows XEMPTY/XRDY moving — that proves mcbsp1's clock
-INPUTS see mcbsp2's clock OUTPUTS (E6 proved only that mcbsp1's clock outputs do
-not reach the codec).  Then carry the samples: a second snd_soc_dai_link with
-snd-soc-dummy as its codec, or McBSP1 configured by hand in the machine driver.
-The DTS already carries (disabled) &mcbsp1 and mcbsp1_pins (clkx 0x0fe, dr 0x100,
-dx 0x102, fsx 0x104).  Inputs: sound/soc/ti/playbook-wm8994.c, the DTS, and the
-two diagnostics already in the tree (pcm: ring readback, live N: FIFO dump).
+NEXT (the one experiment): THE TWO-ENGINE DESIGN, with the data link's codec
+DAI fixed.  Two ASoC links, both driver-managed: (1) mcbsp2 + wm8994-aif1,
+exactly E5 (clocks + codec; app writes here); (2) mcbsp1 as a clock consumer +
+a codec DAI that accepts S16.  snd-soc-dummy was rejected by the OSS format path
+(SETFMT: Invalid argument -> the CPU DAI saw a non-S16 format, -EINVAL), so use
+wm8994-aif2 (a second DAI of the real codec, no board wiring needed).  The app
+then opens both PCMs (/dev/dsp for clocks+codec, /dev/adsp for data — pbplay now
+takes a device argument).  DTS: mcbsp1_pins clkx/fsx INPUTS (0x0100), dx output
+(0x0000), dr input.  Do NOT program mcbsp2 from raw registers (trap 193).
 Results: an audible 440 Hz tone at 48 kHz closes item 9 step 5's audio half.  Backlog: (a) the MCLK1 probe (trap 165); (b) the speaker path (SPKMIX
 is not routed — headphones only); (c) touch cold-boot power/reset
 (GPIO1_14/GPIO4_8); (d) the wl128x-nvs.bin path (hd5).

@@ -5,10 +5,11 @@
 > (`absolute = Linux-era + 6`).
 
 Date / span: 2026-11-13 (single day).
-Unit state at the end: **on our Linux image `0x92458D00`** (0x939C5C B, kernel
-7.3.3 #33, E5 clock roles + the disabled `&mcbsp1` node for E6), region 1 = the
-audio/OSS rootfs sha256 **`a026a454…`** (67,108,864 B, 27 modules, with the two
-session-45 diagnostics); console `pb> ` on `ttyACM0`.  No door.  `BOOTCTR_FCTRY`
+Unit state at the end: **on our Linux image `0x5A04ACD9`** (0x9395C4 B, kernel
+7.3.3 #35 — the committed E5 tree), region 1 = the audio/OSS rootfs sha256
+**`c6dfd25f…`** (67,108,864 B, 27 modules, with the two session-45
+diagnostics); console `pb> ` on `ttyACM0`.  E7/E8 were bench experiments and are
+not on media.  No door.  `BOOTCTR_FCTRY`
 was not readable from the chroot userland (no `/dev/rpmb` node); the initramfs
 `/init` top-up ran at boot as designed.
 
@@ -90,8 +91,24 @@ to a live AIF1CLK, since MCLK1 does not clock (reports 206/209).
 * **DSP_A is not the fault.**  A DSP_A build (`SRGR1 = 0x001f`, `PCR0 = 0x0f03`,
   codec `R0x300 = 0x6018` = the reference's format, FLL1 locked) was also
   silent — consistent with the ball being the cause.
-* **The restore is verified**: image `0x92458D00`, `SRGR1 = 0x0f1f`,
+* **The restore is verified**: image `0x5A04ACD9`, `SRGR1 = 0x0f1f`,
   `SRGR2 = 0x301f`, `PCR0 = 0x0f0f`, `R0x302 = 0x0000`, `R0x732 = 0x6020`.
+* **E7: the two engines DO share the clock nets.**  McBSP1 configured as a
+  clock consumer consumed a word written to its DXR within 5 ms while McBSP2
+  streamed (`SPCR2 = 0x0237`, `XRDY` set).  So the two-engine design is viable
+  and the codec sits on the same nets.  (The earlier 0x0fe GPIO probe that
+  suggested otherwise was invalid — a GPIO-muxed idle pad measures a floating
+  line.)
+* **E8: raw McBSP2 register programming crashes the kernel.**  With no ASoC
+  link owning McBSP2, `pm_runtime_get_sync()` did not activate its interconnect
+  target and the first SRGR access produced
+  `Unhandled fault: imprecise external abort (0x1406) at 0x00082000` and a warm
+  reset.  Trap 158 at kernel level.  The clock generator must be a driver-owned
+  link.
+* **The dummy-codec PCM path needs work**: `snd-soc-dummy` as the data link's
+  codec made OSS reject `SNDCTL_DSP_SETFMT` (`Invalid argument`), which then
+  reached the CPU DAI's `hw_params` as a non-S16 format (`-EINVAL`).  Next
+  candidate for that link: `wm8994-aif2` (a second DAI of the real codec).
 
 ## Inferred (reasoning from evidence, not directly measured)
 
@@ -177,6 +194,6 @@ to a live AIF1CLK, since MCLK1 does not clock (reports 206/209).
 * **Tooling** — `tools/99-playbook-cdc-acm.rules` (udev, CDC-ACM → `0666`).
 * **Patch** — `kernel/patches/0001-playbook-winchester-7.3.3.patch`, 54 files /
   8 305 lines, sha256 `180f5e19…`, 54/54 byte-identical.
-* **Images** — region 0 `0x92458D00` (0x939C5C B, current; E5 restore + the
-  disabled `&mcbsp1` node), the E6 experiment `0x3DC4508D` (not a good state),
-  and E5 as first built `0x7A5DD941`; region 1 `a026a454…`.
+* **Images** — region 0 `0x5A04ACD9` (0x9395C4 B, current), E5 as built
+  `0x7A5DD941`/`0x92458D00`, the E6 experiment `0x3DC4508D`, the E7/E8
+  experiment `0xA66B40EF`; region 1 `c6dfd25f…`.
