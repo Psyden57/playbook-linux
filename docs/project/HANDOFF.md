@@ -114,11 +114,12 @@ traps 116–137.
 * **E7 is withdrawn** (trap 197): "a word was consumed in 5 ms" was a misread
   of `XRDY`, which is 1 in both "ready" and "never moved" cases.  McBSP1's
   clock pins are **not** on McBSP2's nets.
-* **The wall:** the board's clocks are on McBSP2's balls and the data on
-  McBSP1's DX.  The reference clocks McBSP1 through the SoC's **ABE**
-  (`StereoAudioCodecRequestMcbspClk`, `abe_connect_serial_port … mcbsp_id` in
-  its driver's strings), not through a pad.  Mainline `omap-mcbsp` has no such
-  path, so **this is now a design question**, not a register one.
+* **The wall, and it is now proven from the reference's code:** decompiling
+  `deva-ctrl-omap4abe-wm8994.so` (report 212 §16) shows its McBSP is a clock
+  **consumer** — `SRGR2` is written `FPER | 0x1000` (`FSGM=1`, `CLKSM=0`) and
+  slave mode sets only `XRST`/`RRST`, never `GRST`/`FRST` — clocked through the
+  **ABE** (`abe_connect_serial_port … mcbsp_id`).  Mainline has no ABE
+  serial-port clocking (`omap-abe-twl6040.c` is a machine driver only).
 * **Do not program a McBSP from raw registers** — E8's attempt aborted on the
   idle L4_ABE target and took the unit down (trap 193).
 
@@ -372,19 +373,16 @@ a MODULE-only change keeps the CRC and needs a region-1-only flash (trap 190).
 The UFS top-up keeps BOOTCTR_FCTRY at 0x32; the hard hazards (0 / >0x32 / failed
 write / flat pack) remain.  Operator's call when to stop and to wrap up.
 
-NEXT (a design question now, not a register poke): how to clock McBSP1 from
-the same reference as McBSP2.  The reference does it through the ABE; mainline
-omap-mcbsp cannot.  Options, in order of cost: (a) read the QNX driver's clock
-plumbing (report 210 §5 lists `StereoAudioCodecRequestMcbspClk` /
-`abe_connect_serial_port` as unread) and see whether the ABE's clock can be
-routed with the PRCM's existing clock tree — e.g. whether
-`abe-clkctrl:0028:*` can be parented so McBSP1's SRG runs from the same BCLK
-source; (b) investigate the OMAP4 ABE (`l4_abe`) driver surface in this kernel
-(`sound/soc/ti/omap-abe-twl6040.c` exists as a module) for a usable serial-port
-clock path; (c) accept the limitation and document that the board's codec
-cannot be clocked by the plain McBSP driver.  Everything up to the data port is
-proven: E5's clocks, the codec's FLL lock from our BCLK (cold and warm), the
-rate, and the data in the DMA ring.  Backlog: (a) the MCLK1 probe (trap 165); (b) the speaker path (SPKMIX
+NEXT (an ABE bring-up question, not a McBSP one): can the OMAP4 ABE's
+serial-port clock be programmed **without** the DSP firmware?  The TRM's ABE
+chapter (and the ABE register block reachable at `l4_abe`) is the place to
+start; the QNX driver's `abe_*` HAL calls (`abe_initialize`,
+`abe_connect_serial_port`, `abe_configure_port`) name the sequence to look for.
+If it can, route the codec's BCLK/LRCLK to McBSP1 and E9's two-link build
+(report 212 §14) becomes the audio path.  If it cannot, record the limitation.
+Everything up to the data port is proven: E5's clocks, the codec's FLL lock
+from our BCLK (cold and warm), the 48 kHz rate, and the samples in the DMA
+ring.  Backlog: (a) the MCLK1 probe (trap 165); (b) the speaker path (SPKMIX
 is not routed — headphones only); (c) touch cold-boot power/reset
 (GPIO1_14/GPIO4_8); (d) the wl128x-nvs.bin path (hd5).
 

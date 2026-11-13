@@ -234,12 +234,12 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    (`XRDY = 0`, `XEMPTY = 1`) and the write dies after five periods, so **no
    frame sync reaches McBSP1**.  E7's "word consumed" was an artifact and is
    withdrawn (trap 197).  The board's clocks are on McBSP2's balls and the data
-   on McBSP1's DX; the reference clocks McBSP1 through the **ABE**
-   (`StereoAudioCodecRequestMcbspClk`, `abe_connect_serial_port … mcbsp_id`),
-   which mainline `omap-mcbsp` does not implement.  **The next question is a
-   design one:** route the codec's BCLK/LRCLK to McBSP1 via the ABE, or accept
-   that the reference clocking cannot be reproduced with the plain McBSP
-   driver;
+   on McBSP1's DX.  **The reference's driver settles it (report 212 §16):** its
+   McBSP is a clock *consumer* (`SRGR2 = FPER | 0x1000`; in slave mode only
+   `XRST`/`RRST` are set, no `GRST`/`FRST`), clocked through the **ABE**
+   (`abe_connect_serial_port … mcbsp_id`), which mainline has no equivalent of
+   (`omap-abe-twl6040.c` is a machine driver only).  **So the remaining work is
+   an ABE bring-up project, not a driver tweak** — see ROADMAP item 9;
    (c) the **DSP_A build** was tried and is not the fault (E6 note in report
    212 §4/§10: `R0x300 = 0x6018` matched the reference's format and stayed
    silent, because the ball was wrong);

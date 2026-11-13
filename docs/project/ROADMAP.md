@@ -78,11 +78,15 @@ known-good image.
   (`SPCR2 = 0x0235`), so its clock pins are **not** on McBSP2's nets (E7's
   positive result is withdrawn, trap 197).  The board splits clocks (mcbsp2)
   from data (mcbsp1), and the reference clocks McBSP1 through the **ABE**
-  (`StereoAudioCodecRequestMcbspClk`) — a path mainline `omap-mcbsp` does not
-  implement.  Raw register pokes to McBSP2 are forbidden (trap 193).  **The
-  remaining work is a design question:** route the codec's BCLK/LRCLK to
-  McBSP1 via the ABE, or document the limitation.  The MCLK1 route stays closed
-  by trap 165 (no probe).  The free-running NCO remains a mechanism
+  through the ABE — confirmed by decompiling that driver (report 212 §16: a
+  clock *consumer*, `SRGR2 = FPER | 0x1000`, slave mode starts no SRG).  Mainline
+  has no ABE serial-port clocking (`omap-abe-twl6040.c` is only a machine
+  driver), so the remaining work is an **ABE bring-up project**: establish
+  whether the OMAP4 ABE's serial-port clock can be programmed without the DSP
+  firmware, and if so route the codec's BCLK/LRCLK to McBSP1.  Raw register
+  pokes to McBSP2 are forbidden (trap 193); the MCLK1 route stays closed by
+  trap 165 (no probe).  **Closes when:** a 440 Hz tone from `pbplay` is audible
+  at 48 kHz.  The free-running NCO remains a mechanism
   probe only.  **Closes when:** a 440 Hz tone from `pbplay` is audible at the
   measured rate (48 kHz ±1 %).
 * **WL1283.**  Formally stopped by the operator (session 36).  The software

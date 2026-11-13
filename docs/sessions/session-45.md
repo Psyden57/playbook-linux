@@ -119,9 +119,13 @@ to a live AIF1CLK, since MCLK1 does not clock (reports 206/209).
 * **E7 is withdrawn.**  Its "word consumed in 5 ms" was a misread of `XRDY`
   (trap 197).  Repeating it with the driver driving the port does not drain.
   **McBSP1's clock pins are not on McBSP2's nets.**
-* **The wall:** the reference clocks McBSP1 through the ABE (its driver has
-  `StereoAudioCodecRequestMcbspClk` and `abe_connect_serial_port …
-  mcbsp_id`), which mainline `omap-mcbsp` does not implement.
+* **The wall, proven from the reference's own code (REA/Ghidra, report 212
+  §16).**  `mcbsp_update_port_clock_rate` writes `SRGR2 = FPER | 0x1000`
+  (`FSGM = 1`, `CLKSM = 0`) and, in slave mode, sets only `XRST`/`RRST` — no
+  `GRST`/`FRST`: the reference's McBSP is a clock **consumer** clocked through
+  the **ABE** (`abe_connect_serial_port … mcbsp_id`).  Mainline has no ABE
+  serial-port clocking (`omap-abe-twl6040.c` is a machine driver only), so the
+  remaining work is an ABE bring-up project, not a McBSP driver change.
 * **Boot stability:** one boot hung and reset on the loader WDT after E8; it did
   not reproduce over three warm reboots and a cold boot, so it is attributed to
   leftover state, not code (report 212 §15).

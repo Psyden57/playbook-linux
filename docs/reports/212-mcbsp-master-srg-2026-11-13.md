@@ -403,3 +403,52 @@ The cold boot also settled a standing worry: the WM8994 starts at `R0x732 =
 0x6000` (FLL1 enabled, unlocked) and `R0x224 = 0x0c80` (MCLK1), and E5's stream
 then locks it (`0x6020`, `0x224 = 0x0c83`).  **The FLL lock from BCLK is genuine
 on a cold codec**, not a stale bit carried across a warm reset.
+
+## 16. The reference's clock plumbing, from its own driver (REA/Ghidra)
+
+`local/work/1917/base/lib/dll/deva-ctrl-omap4abe-wm8994.so`
+(sha256 `2b346de3…`, 954 procedures) decompiled with the REA/Ghidra provider.
+Two functions answer the question §14 left open:
+
+**`mcbsp_update_port_clock_rate`** (VA `0x25158`) — the port's rate/role setup:
+
+```c
+if (master) { SPCR2 &= ~0xffffff3e; SPCR1 &= ~1; mclk = port[0x124]; }
+else        { SPCR2 &= ~0xffffff7e; SPCR1 &= ~1; mclk = port[0x128]; }
+...
+SRGR1(0x2c) = CLKGDV-1 | FWID-1<<8          /* protocol 2 (DSP) */
+SRGR2(0x28) = FPER-1 | 0x1000               /* FSGM = 1, CLKSM = 0 */
+...
+if (master) { SPCR2 |= 0x41 (XRST|GRST); SPCR1 |= 1 (RRST);
+              nanospin_ns(1000); SPCR2 |= 0x80 (FRST); }
+else        { SPCR2 |= 1 (XRST);        SPCR1 |= 1 (RRST); }
+```
+
+So the reference sets **`CLKSM = 0`** — the SRG, if it ran, would take its clock
+from the CLKS pin — and **in slave mode it never starts the SRG at all** (no
+`GRST`, no `FRST`): the shifter is clocked entirely from outside.
+
+**`mcbsp_configure_port`** (VA `0x25d6c`) programs SPCR1/SPCR2, RCR/XCR, SRGR1/2,
+the channel-enable pairs and the FIFO thresholds (`0x90`/`0x94`), then calls the
+rate function.  There is no pad/clock-source setup here, and no CLKS mux.
+
+**Conclusion.**  The reference's McBSP port is a **clock consumer**, and its
+clocks do not come from a pad that mainline can use: E6 showed that driving
+McBSP1's clock outputs does not reach the codec, and E5 showed the codec's BCLK
+is on McBSP2's pin.  The reference therefore clocks its port through the SoC's
+**audio back end** (`abe_connect_serial_port … mcbsp_id=%d`, and the driver's
+`abe_*` HAL), which is a firmware/HAL-managed clock path, not a pad.
+
+**What mainline has.**  `sound/soc/ti/omap-abe-twl6040.c` is a *machine driver*
+for twl6040 boards; it contains no ABE DSP, no serial-port clock routing and no
+`abe_connect_serial_port` equivalent, and the tree has no ABE firmware loader.
+So reproducing the reference's data path on Linux means bringing up the OMAP4
+ABE's serial-port clocking — a project in its own right, not a driver tweak.
+
+**Where that leaves the audio goal.**  Everything up to the data port is proven
+and stable on Linux: McBSP2 generates BCLK/LRCLK (`CLKSM=1`, 48 096 frames/s),
+the codec's FLL locks from them (cold and warm), the codec is a slave with its
+output chain matching the reference, and the application's samples reach the
+DMA ring.  The one missing piece is clocking McBSP1 — or, equivalently, carrying
+the data on a pin that McBSP2 clocks.  The board does not offer the latter, and
+mainline offers no ABE path for the former.

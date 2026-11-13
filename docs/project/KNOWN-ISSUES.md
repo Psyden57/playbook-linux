@@ -1359,6 +1359,16 @@ report 121 §3/§11/§12.
       `Documentation/sound/soc/*.rst` and `sound/core/oss/pcm_oss.c` rather than
       recalling how ASoC and OSS behave.  (Session 45, operator.)
 
+199. **The reference's McBSP is a clock *consumer*, and its clocks come through
+      the ABE — not through a pad.**  Decompiled
+      `deva-ctrl-omap4abe-wm8994.so` (report 212 §16): `SRGR2` is written as
+      `FPER | 0x1000` (`FSGM = 1`, `CLKSM = 0`), and in slave mode only
+      `XRST`/`RRST` are set — no `GRST`/`FRST`, so the SRG never runs.  Mainline
+      `omap-mcbsp` can only be a *pad* slave, and McBSP1's pads are not on the
+      codec's clock net (E5/E6), so the reference's data path is not reachable
+      with the plain driver.  Do not spend another session looking for a pad or
+      SRGR permutation that reproduces it.  (Session 45.)
+
 ## 3. Corrections to older reports
 
 These twenty-three are preserved deliberately. Each is newer than the text it
