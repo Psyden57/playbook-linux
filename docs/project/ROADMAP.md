@@ -71,24 +71,38 @@ known-good image.
   mux 0, output — a static configuration), while `abe_mcbsp2_dx`, which E5
   drives, is mux 7 safe mode and not connected to the codec.  DSP_A was tried
   and is not the fault.  McBSP1 as a *clock master* loses the codec clock, so
-  the board splits the engines: **mcbsp2 = clocks, mcbsp1 = data**.  Next: make
-  McBSP1 a clock *consumer* on the same nets and carry the samples on
-  `mcbsp1_dx`.  E9 built that (two links, `wm8994-aif2` on the data link) and
-  the data port **stalls**: McBSP1 as a consumer never gets a frame sync
-  (`SPCR2 = 0x0235`), so its clock pins are **not** on McBSP2's nets (E7's
-  positive result is withdrawn, trap 197).  The board splits clocks (mcbsp2)
-  from data (mcbsp1), and the reference clocks McBSP1 through the **ABE**
-  through the ABE — confirmed by decompiling that driver (report 212 §16: a
-  clock *consumer*, `SRGR2 = FPER | 0x1000`, slave mode starts no SRG).  Mainline
-  has no ABE serial-port clocking (`omap-abe-twl6040.c` is only a machine
-  driver), so the remaining work is an **ABE bring-up project**: establish
-  whether the OMAP4 ABE's serial-port clock can be programmed without the DSP
-  firmware, and if so route the codec's BCLK/LRCLK to McBSP1.  Raw register
-  pokes to McBSP2 are forbidden (trap 193); the MCLK1 route stays closed by
-  trap 165 (no probe).  **Closes when:** a 440 Hz tone from `pbplay` is audible
-  at 48 kHz.  The free-running NCO remains a mechanism
-  probe only.  **Closes when:** a 440 Hz tone from `pbplay` is audible at the
-  measured rate (48 kHz ±1 %).
+  the board splits the engines: **mcbsp2 = clocks, mcbsp1 = data**.  E9 built the
+  two-engine design (two links, `wm8994-aif2` on the data link) and the data port
+  **stalls**: McBSP1 as a consumer never gets a frame sync (`SPCR2 = 0x0235`), so
+  its clock pins are **not** on McBSP2's nets (E7's positive result is
+  withdrawn, trap 197).
+
+  **The reference settles why (report 212 §16).**  Its driver decompiles to a
+  McBSP that is a clock *consumer*: `SRGR2 = FPER | 0x1000` (`FSGM = 1`,
+  `CLKSM = 0`), and in slave mode only `XRST`/`RRST` are set — no `GRST`/`FRST`,
+  so the SRG never runs.  The port's `mcbsp_id` comes from a per-port field in
+  the driver's table, and the clocks arrive through the **ABE**
+  (`abe_connect_serial_port`), not through a pad.  Mainline has no equivalent:
+  `omap-abe-twl6040.c` is a machine driver only, and there is no ABE firmware
+  loader.
+
+  **Remaining work is an ABE bring-up project**, in this order:
+  1. **Feasibility, static (cheap).**  Read the TRM's ABE chapter for the
+     serial-port clocking: whether an ABE serial port can be clocked and pointed
+     at a McBSP *without* the DSP firmware, or whether the ABE DSP must run.
+     The reference's firmware is available — `abe_firmware_array` is embedded in
+     `local/work/1917/base/lib/libabe.so.1` — and the QNX HAL's call sequence
+     (`abe_initialize`, `abe_init_mem`, `abe_connect_serial_port`,
+     `abe_configure_port`) is the map to follow.
+  2. **Confirm the routing on the live oracle.**  Which `mcbsp_id` the audio
+     port actually binds to, and whether `abe_clks` (a pad) or an internal ABE
+     clock feeds it — read while the reference plays.
+  3. **Only then a driver.**  If the ABE can clock a McBSP, the E9 two-link
+     build becomes the audio path; if it cannot, record the limitation and stop.
+
+  Raw register pokes to McBSP2 are forbidden (trap 193); the MCLK1 route stays
+  closed by trap 165 (no probe); the free-running NCO remains a mechanism probe
+  only.  **Closes when:** a 440 Hz tone from `pbplay` is audible at 48 kHz ±1 %.
 * **WL1283.**  Formally stopped by the operator (session 36).  The software
   surface is exhausted and the 1917-truth minimal host still fails CMD5
   (report 196).  Do not re-run traps 116–137.  The WLAN calibration/NVS is

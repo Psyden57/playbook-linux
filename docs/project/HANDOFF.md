@@ -373,17 +373,22 @@ a MODULE-only change keeps the CRC and needs a region-1-only flash (trap 190).
 The UFS top-up keeps BOOTCTR_FCTRY at 0x32; the hard hazards (0 / >0x32 / failed
 write / flat pack) remain.  Operator's call when to stop and to wrap up.
 
-NEXT (an ABE bring-up question, not a McBSP one): can the OMAP4 ABE's
-serial-port clock be programmed **without** the DSP firmware?  The TRM's ABE
-chapter (and the ABE register block reachable at `l4_abe`) is the place to
-start; the QNX driver's `abe_*` HAL calls (`abe_initialize`,
-`abe_connect_serial_port`, `abe_configure_port`) name the sequence to look for.
-If it can, route the codec's BCLK/LRCLK to McBSP1 and E9's two-link build
-(report 212 §14) becomes the audio path.  If it cannot, record the limitation.
-Everything up to the data port is proven: E5's clocks, the codec's FLL lock
-from our BCLK (cold and warm), the 48 kHz rate, and the samples in the DMA
-ring.  Backlog: (a) the MCLK1 probe (trap 165); (b) the speaker path (SPKMIX
-is not routed — headphones only); (c) touch cold-boot power/reset
+NEXT (an ABE bring-up project, in three steps — ROADMAP item 9 has the same
+list): (1) **feasibility, static and free** — read the TRM's ABE chapter for the
+serial-port clocking and decide whether an ABE serial port can be clocked and
+pointed at a McBSP *without* the DSP firmware.  The reference's firmware is in
+hand (`abe_firmware_array` is embedded in
+`local/work/1917/base/lib/libabe.so.1`) and the QNX HAL's sequence
+(`abe_initialize`, `abe_init_mem`, `abe_connect_serial_port`,
+`abe_configure_port`) is the map.  (2) **confirm the routing on the live oracle**
+— which `mcbsp_id` the audio port binds to (it comes from a per-port field in
+the driver's table, not a constant) and whether `abe_clks` or an internal ABE
+clock feeds it.  (3) **only then a driver**: if the ABE can clock a McBSP, E9's
+two-link build (report 212 §14) becomes the audio path; if it cannot, record the
+limitation and stop.  Everything up to the data port is proven: E5's clocks, the
+codec's FLL lock from our BCLK (cold and warm), the 48 kHz rate, and the samples
+in the DMA ring.  Backlog: (a) the MCLK1 probe (trap 165); (b) the speaker path
+(SPKMIX is not routed — headphones only); (c) touch cold-boot power/reset
 (GPIO1_14/GPIO4_8); (d) the wl128x-nvs.bin path (hd5).
 
 UPDATE THE DOCS as you go and commit: STATE.md, HANDOFF.md, ROADMAP.md,

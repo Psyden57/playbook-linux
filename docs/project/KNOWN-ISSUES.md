@@ -1369,6 +1369,16 @@ report 121 §3/§11/§12.
       with the plain driver.  Do not spend another session looking for a pad or
       SRGR permutation that reproduces it.  (Session 45.)
 
+200. **Edit documentation with the native read/edit tools — never `python`,
+      `sed`, `awk` or any script.**  Read the whole target document first, then
+      edit it in place.  Scripted rewriting has repeatedly left duplicated
+      paragraphs, broken tables, stale cross-references and text in the wrong
+      document; the docs have needed a dedicated cleanup pass roughly every ten
+      sessions, and scripted editing is the cause.  A script is fine for
+      *generating* an artefact (a patch, an image, a capture, a CSV); it is not
+      fine for rewriting prose that was not read in full.  (Session 45,
+      operator.)
+
 ## 3. Corrections to older reports
 
 These twenty-three are preserved deliberately. Each is newer than the text it

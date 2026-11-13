@@ -4,6 +4,17 @@ Current state lives in **`project/STATE.md`** and only there.  The next-session
 kickoff is **`project/HANDOFF.md`**.  Everything else describes a mechanism or
 preserves evidence, and must not restate status.
 
+## Editing these documents (operator rule, session 45)
+
+**Edit documentation with the native read/edit tools, never with `python`,
+`sed`, `awk` or any script.**  Read the whole target document first, then make
+the change in place.  Scripted edits have repeatedly left duplicated
+paragraphs, broken tables and stale text that a later session then has to audit
+and repair — roughly every ten sessions the docs have needed a dedicated
+cleanup pass, and that is the cause.  A script is fine for *generating* an
+artefact (a patch, an image, a capture); it is not fine for rewriting prose you
+have not read in full.  (Trap 200 in `project/KNOWN-ISSUES.md`.)
+
 ## Ownership — one document per kind of fact
 
 | doc | owns | must not contain |

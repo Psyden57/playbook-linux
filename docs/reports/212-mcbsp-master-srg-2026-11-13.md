@@ -432,6 +432,14 @@ from the CLKS pin — and **in slave mode it never starts the SRG at all** (no
 the channel-enable pairs and the FIFO thresholds (`0x90`/`0x94`), then calls the
 rate function.  There is no pad/clock-source setup here, and no CLKS mux.
 
+**`abe_configure_port`** (VA `0x19d24`) is the ABE-side counterpart: for a
+serial port it calls `abe_connect_serial_port(port_id, fmt, mcbsp_id)` and logs
+`port is connected to mcbsp id %d`.  The `mcbsp_id` is not a constant in the
+code — it is read from a per-port field of the driver's port table
+(`*(ushort *)(port + 0x34)`), i.e. the port map is **data**, loaded from the
+board configuration, so the mapping must be read from the reference at runtime
+or from that table, not inferred from the call sites.
+
 **Conclusion.**  The reference's McBSP port is a **clock consumer**, and its
 clocks do not come from a pad that mainline can use: E6 showed that driving
 McBSP1's clock outputs does not reach the codec, and E5 showed the codec's BCLK
