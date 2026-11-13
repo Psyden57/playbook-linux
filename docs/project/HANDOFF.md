@@ -105,19 +105,22 @@ traps 116–137.
   `dsp_a`) clocked `0x0fe`/`0x104`/`0x102` at 48 053 frames/s but the codec's
   **FLL did not lock** (`R0x732 = 0x6000`) — the codec's BCLK/LRCLK are on the
   **MCBSP2** balls (proven twice: E5 and the pre-E1 BCLK-referenced FLL).
-* **So the design is two engines — and E7 proved the pairing works.**  McBSP1
-  as a clock consumer consumed a word written to its DXR within 5 ms while
-  McBSP2 streamed (`SPCR2 = 0x0237`): the engines share the BCLK/LRCLK nets.
-  Build two ASoC links, both driver-managed: `mcbsp2 + wm8994-aif1` (E5,
-  clocks) and `mcbsp1 + a codec DAI` (data, consumer).
-* **Do not program McBSP2 from raw registers.**  E8 tried it and the first SRGR
-  access produced `imprecise external abort` and a warm reset, because the
-  interconnect target was idle and `pm_runtime_get_sync()` did not activate it
-  (trap 193).  Only a driver-owned link is safe.
-* **Open detail:** the data link's codec DAI.  `snd-soc-dummy` made OSS reject
-  `SNDCTL_DSP_SETFMT`, so the CPU DAI's `hw_params` saw a non-S16 format and
-  returned `-EINVAL`.  Try `wm8994-aif2` — a second DAI of the real codec that
-  needs no board wiring.
+* **The two-engine design is built, and it reaches the wall (E9, report 212
+  §14).**  Two links work mechanically — `mcbsp2 + wm8994-aif1` (clocks+codec)
+  and `mcbsp1 + wm8994-aif2` (data, consumer; the link must be `CBP_CFP`, and
+  the second PCM must open at the card's rate — traps 195/196).  But the data
+  port **stalls**: McBSP1 sits at `SPCR2 = 0x0235` (`XRDY = 0`, `XEMPTY = 1`)
+  and the write dies after five periods, i.e. **no frame sync reaches it**.
+* **E7 is withdrawn** (trap 197): "a word was consumed in 5 ms" was a misread
+  of `XRDY`, which is 1 in both "ready" and "never moved" cases.  McBSP1's
+  clock pins are **not** on McBSP2's nets.
+* **The wall:** the board's clocks are on McBSP2's balls and the data on
+  McBSP1's DX.  The reference clocks McBSP1 through the SoC's **ABE**
+  (`StereoAudioCodecRequestMcbspClk`, `abe_connect_serial_port … mcbsp_id` in
+  its driver's strings), not through a pad.  Mainline `omap-mcbsp` has no such
+  path, so **this is now a design question**, not a register one.
+* **Do not program a McBSP from raw registers** — E8's attempt aborted on the
+  idle L4_ABE target and took the unit down (trap 193).
 
 ### Driver facts you need before touching it
 
@@ -369,16 +372,19 @@ a MODULE-only change keeps the CRC and needs a region-1-only flash (trap 190).
 The UFS top-up keeps BOOTCTR_FCTRY at 0x32; the hard hazards (0 / >0x32 / failed
 write / flat pack) remain.  Operator's call when to stop and to wrap up.
 
-NEXT (the one experiment): THE TWO-ENGINE DESIGN, with the data link's codec
-DAI fixed.  Two ASoC links, both driver-managed: (1) mcbsp2 + wm8994-aif1,
-exactly E5 (clocks + codec; app writes here); (2) mcbsp1 as a clock consumer +
-a codec DAI that accepts S16.  snd-soc-dummy was rejected by the OSS format path
-(SETFMT: Invalid argument -> the CPU DAI saw a non-S16 format, -EINVAL), so use
-wm8994-aif2 (a second DAI of the real codec, no board wiring needed).  The app
-then opens both PCMs (/dev/dsp for clocks+codec, /dev/adsp for data — pbplay now
-takes a device argument).  DTS: mcbsp1_pins clkx/fsx INPUTS (0x0100), dx output
-(0x0000), dr input.  Do NOT program mcbsp2 from raw registers (trap 193).
-Results: an audible 440 Hz tone at 48 kHz closes item 9 step 5's audio half.  Backlog: (a) the MCLK1 probe (trap 165); (b) the speaker path (SPKMIX
+NEXT (a design question now, not a register poke): how to clock McBSP1 from
+the same reference as McBSP2.  The reference does it through the ABE; mainline
+omap-mcbsp cannot.  Options, in order of cost: (a) read the QNX driver's clock
+plumbing (report 210 §5 lists `StereoAudioCodecRequestMcbspClk` /
+`abe_connect_serial_port` as unread) and see whether the ABE's clock can be
+routed with the PRCM's existing clock tree — e.g. whether
+`abe-clkctrl:0028:*` can be parented so McBSP1's SRG runs from the same BCLK
+source; (b) investigate the OMAP4 ABE (`l4_abe`) driver surface in this kernel
+(`sound/soc/ti/omap-abe-twl6040.c` exists as a module) for a usable serial-port
+clock path; (c) accept the limitation and document that the board's codec
+cannot be clocked by the plain McBSP driver.  Everything up to the data port is
+proven: E5's clocks, the codec's FLL lock from our BCLK (cold and warm), the
+rate, and the data in the DMA ring.  Backlog: (a) the MCLK1 probe (trap 165); (b) the speaker path (SPKMIX
 is not routed — headphones only); (c) touch cold-boot power/reset
 (GPIO1_14/GPIO4_8); (d) the wl128x-nvs.bin path (hd5).
 

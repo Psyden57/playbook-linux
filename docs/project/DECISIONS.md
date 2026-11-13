@@ -1874,6 +1874,13 @@ connected to the codec.  McBSP1 as a clock *master* does not reach the codec
 clock consumer on the same nets, data on `mcbsp1_dx`**.  DSP_A was tried and is
 not the fault.  Report 212 §10–11.
 
+**Addendum 3 (E9).**  The two-link build works mechanically (link format must
+be `CBP_CFP` for a consumer CPU DAI; the card enforces rate symmetry) but the
+data port does not shift: McBSP1 gets no frame sync, so it is not clocked by
+McBSP2's nets.  E7's positive result is withdrawn (trap 197).  The reference
+clocks McBSP1 through the ABE, which mainline `omap-mcbsp` does not implement;
+the next step is a design decision about that path.
+
 **Addendum 2 (E7/E8).**  The two-engine pairing is viable: a consumer-
 configured McBSP1 consumes a word written to its DXR within 5 ms while McBSP2
 streams (`SPCR2 = 0x0237`), so the engines share the BCLK/LRCLK nets.  Raw

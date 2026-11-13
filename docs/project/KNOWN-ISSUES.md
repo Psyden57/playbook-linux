@@ -1321,6 +1321,31 @@ report 121 §3/§11/§12.
       idle it measures a floating line, not the net.  (Session 45, report 212
       §12.)
 
+195. **ASoC `dai_fmt` is codec-perspective, and getting it backwards fails in a
+      misleading place.**  A link declared `CBC_CFC` makes the *CPU* DAI the
+      clock provider; `omap_mcbsp_dai_hw_params()` then runs its master-mode
+      bandwidth check and returns `-EINVAL` with
+      `omap_mcbsp_dai_hw_params: not enough bandwidth…`, which reads like a
+      format problem.  For a CPU DAI that must be a clock *consumer*, declare
+      the link `CBP_CFP`.  (Session 45, report 212 §14.)
+
+196. **A second PCM on the same card must run at the same rate as the first.**
+      ASoC's parameter symmetry rejects `hw_params` with
+      `unmatched rate symmetry: <cpu>:8000 - soc_pcm_params_symmetry:48000`
+      when one link is running at another rate.  `snd-pcm-oss` re-negotiates
+      the whole parameter set on every `SNDCTL_DSP_*` ioctl using the runtime's
+      *current* rate, so a device opened at the 8 kHz default must be given
+      `SNDCTL_DSP_SPEED` **first**; otherwise `CHANNELS`/`SETFMT` fail with
+      `-EINVAL`.  (Session 45, report 212 §14.)
+
+197. **Do not read `XRDY` (SPCR2 bit 1) as "the shifter consumed the word".**
+      It is 1 both when the transmitter is ready and after a word that never
+      left; an E7 experiment read it 5 ms after a DXR write and wrongly
+      concluded that McBSP1 was clocked by McBSP2's nets.  The honest
+      discriminator is a *stream*: with the driver driving the port, McBSP1 as a
+      consumer sits at `SPCR2 = 0x0235` (`XRDY = 0`, `XEMPTY = 1`) and the write
+      fails after five periods.  (Session 45, report 212 §14.)
+
 ## 3. Corrections to older reports
 
 These twenty-three are preserved deliberately. Each is newer than the text it

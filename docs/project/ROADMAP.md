@@ -73,12 +73,16 @@ known-good image.
   and is not the fault.  McBSP1 as a *clock master* loses the codec clock, so
   the board splits the engines: **mcbsp2 = clocks, mcbsp1 = data**.  Next: make
   McBSP1 a clock *consumer* on the same nets and carry the samples on
-  `mcbsp1_dx`.  E7 proved that pairing works (a consumer McBSP1 consumes a DXR
-  word in 5 ms while McBSP2 streams); E8 showed raw register pokes to McBSP2
-  crash the SoC (trap 193), so both engines must be driver-managed ASoC links.
-  Open detail: the data link's codec DAI (`snd-soc-dummy` was rejected by the
-  OSS format path; try `wm8994-aif2`).  The MCLK1 route stays closed by trap
-  165 (no probe).  The free-running NCO remains a mechanism
+  `mcbsp1_dx`.  E9 built that (two links, `wm8994-aif2` on the data link) and
+  the data port **stalls**: McBSP1 as a consumer never gets a frame sync
+  (`SPCR2 = 0x0235`), so its clock pins are **not** on McBSP2's nets (E7's
+  positive result is withdrawn, trap 197).  The board splits clocks (mcbsp2)
+  from data (mcbsp1), and the reference clocks McBSP1 through the **ABE**
+  (`StereoAudioCodecRequestMcbspClk`) — a path mainline `omap-mcbsp` does not
+  implement.  Raw register pokes to McBSP2 are forbidden (trap 193).  **The
+  remaining work is a design question:** route the codec's BCLK/LRCLK to
+  McBSP1 via the ABE, or document the limitation.  The MCLK1 route stays closed
+  by trap 165 (no probe).  The free-running NCO remains a mechanism
   probe only.  **Closes when:** a 440 Hz tone from `pbplay` is audible at the
   measured rate (48 kHz ±1 %).
 * **WL1283.**  Formally stopped by the operator (session 36).  The software

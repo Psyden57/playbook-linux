@@ -322,3 +322,84 @@ Restored to the committed E5 pair: region 0 **`0x5A04ACD9`** (0x9395C4 B,
 kernel 7.3.3 #35, the exact tree at `HEAD` — no `&mcbsp1` node), region 1
 sha256 **`c6dfd25f…`**.  Verified: `SRGR1 = 0x0f1f`, `SRGR2 = 0x301f`,
 `R0x302 = 0x0000`, `R0x732 = 0x6020` (FLL1 locked), stream at 48 kHz.
+
+## 14. E9 — the two-link build: the link format, the rate symmetry, and the wall
+
+Built the two-engine design properly (session 45, after §12): link 1 =
+`mcbsp2 + wm8994-aif1` exactly as E5 (clocks + codec), link 2 = `mcbsp1` as a
+clock consumer + `wm8994-aif2` (data on `mcbsp1_dx`).  Three findings, one
+negative result:
+
+**1. The data link must be `CBP_CFP`, not `CBC_CFC`.**  The link format is
+codec-perspective and the core flips it for the CPU DAI.  With `CBC_CFC` the CPU
+Dai becomes the clock *provider*, so `omap_mcbsp_dai_hw_params()` ran the
+master-mode bandwidth check and failed:
+
+```
+omap_mcbsp_dai_hw_params: not enough bandwidth for desired rate and channels
+omap-mcbsp 40122000.mcbsp: ASoC error (-22): at snd_soc_dai_hw_params()
+```
+
+an `-EINVAL` that looks like a format problem but is not.  `CBP_CFP` gives the
+CPU DAI the `BC_FC` (consumer) branch: no SRG, no bandwidth check.
+
+**2. `wm8994-aif2` is a usable codec DAI for the data link.**  It advertises the
+same S16/S24/S32 set as AIF1, so the OSS format negotiation lands on S16 (a
+`snd-soc-dummy` codec advertises 8-bit and drags the negotiation to U8, which
+`omap-mcbsp` rejects).  AIF2's dividers need `aifclk[1]`, so the machine driver's
+`hw_params` calls `snd_soc_dai_set_sysclk(codec_dai, WM8994_SYSCLK_FLL1, …)`.
+
+**3. The card enforces rate symmetry between the two links.**  `hw_params` at
+8 kHz on the data PCM is rejected while the clock PCM runs at 48 kHz:
+
+```
+ASoC error (-22): unmatched rate symmetry: 40122000.mcbsp:8000 - soc_pcm_params_symmetry:48000
+```
+
+so the data PCM must be opened at the same rate.  With `pbplay` setting `SPEED`
+before `CHANNELS`/`SETFMT` (OSS re-negotiates the whole parameter set on every
+`SNDCTL_DSP_*` ioctl, using the runtime's current rate), the data PCM opens
+cleanly at 48 kHz/S16/2ch.
+
+**4. The data port still stalls — and this is the wall.**  With the data PCM
+open at 48 kHz the write dies with `Input/output error (after 82176 bytes)` and
+McBSP1 sits at
+
+```
+SPCR2 = 0x0235    XRST = 1, XRDY = 0, XEMPTY = 1
+```
+
+i.e. the transmit buffer is full and the shifter never loads a word: **no frame
+sync arrives at McBSP1**.  Repeating the E7 experiment with the *driver*
+configuring the port (instead of a hand-written DXR poke) does not reproduce
+E7's "word consumed".
+
+**E7 is therefore withdrawn**: its "CLOCKED - word consumed after 5 ms" was an
+artifact of reading `XRDY` (which reads 1 both for "ready" and for "nothing
+pending").  **McBSP1's clock pins are not on the same nets as McBSP2's**, which
+agrees with the pad-as-GPIO probe (§12) after all.
+
+**What this means.**  The board splits its audio signals across two engines —
+clocks on McBSP2's balls, data on McBSP1's DX — and the only way to clock
+McBSP1 from the same reference is the SoC's internal audio back end: the
+reference driver's strings include `StereoAudioCodecRequestMcbspClk` and
+`abe_connect_serial_port … mcbsp_id=%d`, i.e. QNX clocks the McBSP from the ABE
+rather than from a pad.  Mainline `omap-mcbsp` has no such path.  **A Linux
+design for this board's codec has to route the codec's BCLK/LRCLK to McBSP1
+through the ABE, or accept that the reference's clocking cannot be reproduced
+with the plain McBSP driver.**  That is the next question, and it is a design
+question, not a register one.
+
+## 15. Boot stability (session 45, operator-observed)
+
+One boot after the E8 build came up with the backlight on, hung ~10 s and reset
+(the *loader's* 7.8 s WDT, i.e. the kernel died before its own 58.6 s WDT was
+programmed).  It did not reproduce: three warm reboots on the same image and a
+**cold boot** (battery pulled) all came up cleanly with no `external abort` /
+`oops`.  Treated as leftover state from the E8 crash and the pad pokes, not a
+code regression — but it is recorded because it was real.
+
+The cold boot also settled a standing worry: the WM8994 starts at `R0x732 =
+0x6000` (FLL1 enabled, unlocked) and `R0x224 = 0x0c80` (MCLK1), and E5's stream
+then locks it (`0x6020`, `0x224 = 0x0c83`).  **The FLL lock from BCLK is genuine
+on a cold codec**, not a stale bit carried across a warm reset.

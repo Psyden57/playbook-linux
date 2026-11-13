@@ -71,11 +71,17 @@ int main(int argc, char **argv)
 	printf("pbplay: opened %s (S16_LE %d ch %d Hz, %d s, %d Hz tone)\n",
 	       dev, ch, rate, secs, freq);
 
-	if (step("SETFMT", fd, SNDCTL_DSP_SETFMT, &fmt))
+	/*
+	 * Order matters for snd-pcm-oss: SNDCTL_DSP_SETFMT re-runs the whole
+	 * OSS parameter negotiation (snd_pcm_oss_change_params) with the
+	 * runtime's current rate/channels, so set those first -- otherwise it
+	 * negotiates at the 8 kHz mono defaults.
+	 */
+	if (step("SPEED", fd, SNDCTL_DSP_SPEED, &rate))
 		return 1;
 	if (step("CHANNELS", fd, SNDCTL_DSP_CHANNELS, &ch))
 		return 1;
-	if (step("SPEED", fd, SNDCTL_DSP_SPEED, &rate))
+	if (step("SETFMT", fd, SNDCTL_DSP_SETFMT, &fmt))
 		return 1;
 	step("SETFRAGMENT", fd, SNDCTL_DSP_SETFRAGMENT, &frag);
 

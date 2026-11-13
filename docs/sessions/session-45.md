@@ -110,6 +110,24 @@ to a live AIF1CLK, since MCLK1 does not clock (reports 206/209).
   reached the CPU DAI's `hw_params` as a non-S16 format (`-EINVAL`).  Next
   candidate for that link: `wm8994-aif2` (a second DAI of the real codec).
 
+* **E9: the two-link build works mechanically but the data port stalls.**
+  `mcbsp2 + wm8994-aif1` (clocks) and `mcbsp1 + wm8994-aif2` (data, consumer)
+  is the right shape — the link format must be `CBP_CFP` (trap 195) and the
+  card enforces rate symmetry (trap 196) — but with the data PCM open at
+  48 kHz the write dies after five periods and McBSP1 sits at `SPCR2 = 0x0235`
+  (`XRDY = 0`, `XEMPTY = 1`): **no frame sync reaches it**.
+* **E7 is withdrawn.**  Its "word consumed in 5 ms" was a misread of `XRDY`
+  (trap 197).  Repeating it with the driver driving the port does not drain.
+  **McBSP1's clock pins are not on McBSP2's nets.**
+* **The wall:** the reference clocks McBSP1 through the ABE (its driver has
+  `StereoAudioCodecRequestMcbspClk` and `abe_connect_serial_port …
+  mcbsp_id`), which mainline `omap-mcbsp` does not implement.
+* **Boot stability:** one boot hung and reset on the loader WDT after E8; it did
+  not reproduce over three warm reboots and a cold boot, so it is attributed to
+  leftover state, not code (report 212 §15).
+* **The cold boot proves the FLL lock is real:** cold codec `R0x732 = 0x6000`,
+  `R0x224 = 0x0c80`; E5's stream then gives `0x6020` / `0x0c83`.
+
 ## Inferred (reasoning from evidence, not directly measured)
 
 * **The transport and the codec's clocking are no longer the fault.**  *Strong.*
@@ -194,6 +212,7 @@ to a live AIF1CLK, since MCLK1 does not clock (reports 206/209).
 * **Tooling** — `tools/99-playbook-cdc-acm.rules` (udev, CDC-ACM → `0666`).
 * **Patch** — `kernel/patches/0001-playbook-winchester-7.3.3.patch`, 54 files /
   8 305 lines, sha256 `180f5e19…`, 54/54 byte-identical.
-* **Images** — region 0 `0x5A04ACD9` (0x9395C4 B, current), E5 as built
-  `0x7A5DD941`/`0x92458D00`, the E6 experiment `0x3DC4508D`, the E7/E8
-  experiment `0xA66B40EF`; region 1 `c6dfd25f…`.
+* **Images** — region 0 `0x58F85337` (0x939A6C B, current, `#40`), E5 as
+  built `0x7A5DD941`/`0x92458D00`/`0x5A04ACD9`, the E6 experiment
+  `0x3DC4508D`, E7/E8 `0xA66B40EF`, E9 `0xE5A13DE7`/`0x6AD9E204`; region 1
+  `6d92428e…`.

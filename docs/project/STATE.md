@@ -45,10 +45,9 @@ across the two engines: **mcbsp2 for clocks, mcbsp1 for data**.  The design that
 follows is McBSP2 as clock master plus McBSP1 as a clock *consumer* on the same
 nets, transmitting on `mcbsp1_dx` — see "What is next".
 
-**Bench:** the unit is on **our Linux image `0x5A04ACD9`** (region 0, 0x9395C4
-bytes, kernel #35 — the committed E5 tree); region 1 = the audio/OSS rootfs
-`c6dfd25f…` (with the session-45 diagnostics).  E7/E8 were bench experiments and
-are not on media.  Console `pb> `, no door.
+**Bench:** the unit is on **our Linux image `0x58F85337`** (region 0, 0x939A6C
+bytes, kernel #40 — the committed E5 tree); region 1 = the audio/OSS rootfs
+`6d92428e…`.  E7/E8/E9 were bench experiments and are not on media.  Console `pb> `, no door.
 `BOOTCTR_FCTRY` is not readable from the chroot userland (no `/dev/rpmb` node);
 the initramfs `/init` top-up ran at boot.  The oracle IFS is no longer on media
 (region 0 holds the Linux image); re-flash `local/work/ifs-shim-sealed.ifs` at
@@ -114,7 +113,9 @@ the durable record is the CRC and what it demonstrated, not the file.
 
 | image | base | role |
 |---|---|---|
-| `0x5A04ACD9` | 7.3.3 | **current region 0** (session 45: the committed E5 tree; `#35`) |
+| `0x58F85337` | 7.3.3 | **current region 0** (session 45: the committed E5 tree; `#40`) |
+| `0x5A04ACD9` | 7.3.3 | session-45 E5 restore (`#35`) |
+| `0xE5A13DE7`, `0x6AD9E204` | 7.3.3 | session-45 E9 two-link experiments (data port stalls — §14) |
 | `0x92458D00` | 7.3.3 | session-45 E5 + the disabled `&mcbsp1` node (experiment, not on media) |
 | `0x3DC4508D` | 7.3.3 | session-45 E6 experiment (McBSP1 as the port; codec clock lost) |
 | `0xA66B40EF` | 7.3.3 | session-45 E7/E8 (two PCMs; raw clock pokes crashed the SoC — see trap 193) |
@@ -139,13 +140,13 @@ Do not boot `0x5E40C5C1` or `0xB9A1BC4F` (two lanes), or `0x3B04298E`
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **the session-45 Linux image `0x5A04ACD9`** (`0x9395C4`, kernel `7.3.3` #35, the committed E5 tree; `boot/chainloader/kernel.img`), region 0.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier Linux images (region 0 only, block `0x825`): `0x36597040` (session 42), `0xB43F169B` (session 44), `0xB8830701` (session 41), `0xF97CD9C7` (session 39), `0x3B2ECFED` (session 38), `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A` (`local/images/kernel-0xE36C679A-wdt58s.img`, 0x91A748, sha256 `bdbaf5fc…`), and the touch `0x04AF1433` |
-| region-0 RCFS (`/base`) | **still the 1917 RCFS at region-0 offset 0xC00000** — outside the 7.3.3 test image (which ends at 0x9395C4) and not touched this session; not readable as `/base` without the 1917 IFS |
+| region-0 IFS on media | **the session-45 Linux image `0x58F85337`** (`0x939A6C`, kernel `7.3.3` #40, the committed E5 tree; `boot/chainloader/kernel.img`), region 0.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier Linux images (region 0 only, block `0x825`): `0x36597040` (session 42), `0xB43F169B` (session 44), `0xB8830701` (session 41), `0xF97CD9C7` (session 39), `0x3B2ECFED` (session 38), `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A` (`local/images/kernel-0xE36C679A-wdt58s.img`, 0x91A748, sha256 `bdbaf5fc…`), and the touch `0x04AF1433` |
+| region-0 RCFS (`/base`) | **still the 1917 RCFS at region-0 offset 0xC00000** — outside the 7.3.3 test image (which ends at 0x939A6C) and not touched this session; not readable as `/base` without the 1917 IFS |
 | UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
 | `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it last ran during the session-35 S3/S2 TabletOS bench and topped `BOOTCTR_FCTRY` back to `0x32` |
 | `BOOTCTR_FCTRY` | **self-replenishing** — the Linux `/init` tops it up at ≤`0x1e` and a TabletOS boot writes `0x32`; read it as a health check (`SAFETY.md` §2) |
-| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`c6dfd25f…`** (`local/images/rootfs-region1-audio-oss.ext4`), **27 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus `snd-pcm-oss`, `snd-mixer-oss`, `snd-soc-playbook-wm8994`), `pbplay` and `pbmix`; the initramfs mounts it **read-write** and chroots into it |
-| TabletOS / OS | **NOT running** — the unit is on our Linux image `0x5A04ACD9` (`0fca:8010`, console `pb> `).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; the door (`169.254.0.1`, root ssh) is available only on TabletOS |
+| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`6d92428e…`** (`local/images/rootfs-region1-audio-oss.ext4`), **27 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus `snd-pcm-oss`, `snd-mixer-oss`, `snd-soc-playbook-wm8994`), `pbplay` and `pbmix`; the initramfs mounts it **read-write** and chroots into it |
+| TabletOS / OS | **NOT running** — the unit is on our Linux image `0x58F85337` (`0fca:8010`, console `pb> `).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; the door (`169.254.0.1`, root ssh) is available only on TabletOS |
 | device-side files | **persistent on the UFS**: `/accounts/devuser/bin/{memdump3,memw32,pbi2c}`, the cleaned `/accounts/devuser/startup.sh`, and our `.ssh/authorized_keys` (root ssh).  Re-push QNX `/tmp` tools only after a TabletOS restore |
 
 The factory boot budget is **self-maintaining in bench use**: every successful
@@ -225,17 +226,20 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    48 096 frames/s, data verified in the ring.  **Next, in order:**
    (a) **resolved (E6):** the data ball is `abe_mcbsp1_dx` (`0x102`) —
    `abe_mcbsp2_dx`, which E5 drives, is not connected to the codec;
-   (b) **the two-engine design — now proven viable (E7).**  McBSP1 configured
-   as a clock consumer consumes a word written to its DXR within 5 ms while
-   McBSP2 streams (`SPCR2 = 0x0237`), so the engines **share the BCLK/LRCLK
-   nets**.  Build it as two ASoC links (both driver-managed): `mcbsp2 +
-   wm8994-aif1` (E5, clocks) and `mcbsp1 + a codec DAI` (data, consumer).
-   **Do not program McBSP2 from raw registers** — that aborts on the idle
-   L4_ABE target and takes the unit down (trap 193).  The open detail is the
-   data link's codec DAI: `snd-soc-dummy` was rejected by the OSS format path
-   (`SETFMT: Invalid argument` → `-EINVAL` in the CPU DAI's `hw_params`), so
-   try `wm8994-aif2`, a second DAI of the real codec that needs no board
-   wiring;
+   (b) **the two-engine design is built and it reaches a wall (E9, report 212
+   §14).**  Two links work mechanically: `mcbsp2 + wm8994-aif1` (clocks+codec,
+   E5) and `mcbsp1 + wm8994-aif2` (data, clock consumer; the link must be
+   `CBP_CFP`, and the second PCM must open at the same rate — traps 195/196).
+   But the data port **stalls**: McBSP1 as a consumer sits at `SPCR2 = 0x0235`
+   (`XRDY = 0`, `XEMPTY = 1`) and the write dies after five periods, so **no
+   frame sync reaches McBSP1**.  E7's "word consumed" was an artifact and is
+   withdrawn (trap 197).  The board's clocks are on McBSP2's balls and the data
+   on McBSP1's DX; the reference clocks McBSP1 through the **ABE**
+   (`StereoAudioCodecRequestMcbspClk`, `abe_connect_serial_port … mcbsp_id`),
+   which mainline `omap-mcbsp` does not implement.  **The next question is a
+   design one:** route the codec's BCLK/LRCLK to McBSP1 via the ABE, or accept
+   that the reference clocking cannot be reproduced with the plain McBSP
+   driver;
    (c) the **DSP_A build** was tried and is not the fault (E6 note in report
    212 §4/§10: `R0x300 = 0x6018` matched the reference's format and stayed
    silent, because the ball was wrong);
