@@ -49,6 +49,7 @@ Taken to run and close the power-domain/CM hypothesis, then to fix
 | file | when |
 |---|---|
 | `wm8994-pm-cm-2026-11-12.txt` | both OSes: `PM_*_PWSTST` and `CM*_CLKSTCTRL`, the oracle causal test (Linux CM policy on the working reference), the Linux detector runs and the write-order replay, and the three-image DPLL_ABE comparison |
+| `wm8994-e5-master-srg-2026-11-13.txt` | session 45, both E5 boots (the wrong 12.288 MHz SRG base and the correct 49.152 MHz one), the clock tree, the rate measurements, the codec reads, the PCM-ring and FIFO-status diagnostics, the pad dump, the full register diff against the reference, and E6/E9 (oracle pads during playback; the two-link build and the stalled data port) |
 
 
 ## Exact duplicates

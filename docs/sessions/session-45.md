@@ -5,13 +5,16 @@
 > (`absolute = Linux-era + 6`).
 
 Date / span: 2026-11-13 (single day).
-Unit state at the end: **on our Linux image `0x5A04ACD9`** (0x9395C4 B, kernel
-7.3.3 #35 — the committed E5 tree), region 1 = the audio/OSS rootfs sha256
-**`c6dfd25f…`** (67,108,864 B, 27 modules, with the two session-45
-diagnostics); console `pb> ` on `ttyACM0`.  E7/E8 were bench experiments and are
-not on media.  No door.  `BOOTCTR_FCTRY`
-was not readable from the chroot userland (no `/dev/rpmb` node); the initramfs
-`/init` top-up ran at boot as designed.
+Unit state at the end: **on our Linux image `0x58F85337`** (`0x939A6C` B, kernel
+7.3.3 #40 — the committed E5 tree; image sha256 `39891a20…`), region 1 = the
+audio/OSS rootfs sha256 **`6d92428e…`** (67,108,864 B, 27 modules, with the two
+session-45 diagnostics); enumerates `0fca:8010`, console `pb> ` on `ttyACM0`, no
+door and no ssh.  `BOOTCTR_FCTRY` read **0x20** at this boot (`/init` logged
+`BOOTCTR_FCTRY at block 0x3a record@196 = 20000000`, `0x20 >= threshold 0x1e, no
+write`); it is not readable as a node in this userland (no `/dev/rpmb`, and the
+record block is sealed so `pbrpmb scan` finds no marker).  No device-side files
+were deployed to the Linux image.  E7/E8/E9 were bench experiments and are not
+on media.
 
 ## Goal of this session
 
@@ -126,11 +129,22 @@ to a live AIF1CLK, since MCLK1 does not clock (reports 206/209).
   the **ABE** (`abe_connect_serial_port … mcbsp_id`).  Mainline has no ABE
   serial-port clocking (`omap-abe-twl6040.c` is a machine driver only), so the
   remaining work is an ABE bring-up project, not a McBSP driver change.
+* **The ABE port's `mcbsp_id` is table data, not a constant.**
+  `abe_configure_port` (`0x19d24`) passes `*(ushort *)(port + 0x34)` to
+  `abe_connect_serial_port`; the only hardcoded ids are for ports 5 and 7.  So
+  the actual binding has to be read from the reference (log line
+  `port is connected to mcbsp id %d`) or its port table.
+* **The ABE firmware ships with the reference**: `abe_firmware_array` and
+  `abe_force_reload_fw` are symbols in
+  `local/work/1917/base/lib/libabe.so.1` (157,892 B), so the blob is in hand
+  for a Linux ABE bring-up.
 * **Boot stability:** one boot hung and reset on the loader WDT after E8; it did
   not reproduce over three warm reboots and a cold boot, so it is attributed to
   leftover state, not code (report 212 §15).
 * **The cold boot proves the FLL lock is real:** cold codec `R0x732 = 0x6000`,
   `R0x224 = 0x0c80`; E5's stream then gives `0x6020` / `0x0c83`.
+* **Operator rule recorded:** documentation must be edited with the native
+  read/edit tools, never `python`/`sed` — `docs/README.md` and trap 200.
 
 ## Inferred (reasoning from evidence, not directly measured)
 
@@ -170,26 +184,47 @@ to a live AIF1CLK, since MCLK1 does not clock (reports 206/209).
   assuming.
 * **`pkexec` is the rule.**  It failed here only because the operator was away;
   the documented path is to wait and re-run it, not to invent a workaround.
+* **"Docs can be edited with a Python one-liner."**  They cannot, safely.  This
+  session's scripted edits left a duplicated phrase ("through the **ABE** through
+  the ABE") and two duplicate "Closes when:" sentences in `ROADMAP.md`, and the
+  operator reports a cleanup pass roughly every ten sessions for exactly this.
+  The rule is now `docs/README.md` and trap 200: read the whole document, then
+  edit with the native tools.
+* **"`XRDY = 1` after a DXR write means the shifter consumed the word."**  It is
+  1 in both cases; only a stream (write path + five periods) distinguishes them
+  (trap 197).
+* **Reading Linux GPIO line numbers from a note.**  The bases move with probe
+  order (`/sys/kernel/debug/gpio` on this boot: GPIO4 = base 608, so `gpio_114`
+  = 626, not 594).  Read the runtime table (trap 185/198).
 
 ## Unknown / open questions
 
-* **Which OMAP ball carries the WM8994's DACDAT?**  *Would settle it:* an
-  oracle capture of `0x4A1000F0`–`0x4A100100` **and** the codec's AIF1
-  registers while the reference is actually playing; or the QNX audio driver's
-  pad setup from static RE (report 210 §5).
-* **Does DSP_A framing make our stream audible?**  *Would settle it:* the E6
-  build — `SND_SOC_DAIFMT_DSP_A` on the link and the CPU DAI, one boot, judged
-  by ear plus the `hw_ptr` rate.
-* **Why does the codec accept (and lock its FLL to) BCLK but decode nothing?**
-  If the ball and the format are both right, the AIF1 slave path itself needs a
-  closer look (e.g. an LRCLK polarity/edge mismatch that swaps channels rather
-  than silencing — not observed, so unlikely).
+* **Can the OMAP4 ABE clock a McBSP without its DSP firmware?**  This decides
+  whether the board's audio is reachable from mainline at all.  *Would settle it:*
+  the TRM's ABE chapter plus the reference's own `abe_*` HAL sequence
+  (`abe_initialize`, `abe_init_mem`, `abe_connect_serial_port`,
+  `abe_configure_port`); the firmware blob is in
+  `local/work/1917/base/lib/libabe.so.1`.
+* **Which `mcbsp_id` does the ABE bind the WM8994's playback port to, and what
+  clocks it — the `abe_clks` pad or an internal ABE clock?**  *Would settle it:*
+  boot the oracle, run `io-audio` with logging on and read
+  `port is connected to mcbsp id %d`; the id is per-port table data, not a
+  constant (report 212 §16).
+* **Does the codec's BCLK net reach any pad besides `abe_mcbsp2_clkx`?**  E5
+  (lock from our mcbsp2 output) and E6 (no lock from mcbsp1 output) bracket it,
+  but the pad-as-GPIO probe gave two contradictory readings (report 212 §12).
+  *Would settle it:* a validated pad probe on the reference while it plays.
 * **Is the SRG clock exactly 49.152 MHz?**  The 4.009× measurement is consistent
   with it; a 12.288 MHz SRG with an extra ÷2 is arithmetically impossible given
   `CLKGDV = 7` read back from hardware, so no.
 
 ## Superseded / uncertain
 
+* **"The codec's DACDAT ball is unknown / the reference capture shows neither
+  data ball driven."**  Resolved this session by E6: it is `abe_mcbsp1_dx`
+  (pad `0x102`, mux 0, output), static.
+* **"DSP_A framing may be the fault."**  Tried (E6) and not the fault; the data
+  ball was.
 * **Report 205 §5c's correction ("`0x18` is I2S")** — the codec driver encodes
   DSP_A as `0x18` and I2S as `0x10`, so the original DSP reading was right and
   the correction is wrong.  Report 212 §8 records it; report 205 is history and
@@ -201,22 +236,20 @@ to a live AIF1CLK, since MCLK1 does not clock (reports 206/209).
   not for data.  This session separates the two and shows the data never sounded
   even when the ring carried it.
 
-* **"The ball question cannot be answered from the stored capture."**  It can,
-  by booting the oracle and looking for pads that are *outputs* (not for pads
-  that change).  The stored capture was of an idle system.
-
 ## Artefacts produced
 
-* **Report 212** — `docs/reports/212-mcbsp-master-srg-2026-11-13.md`.
+* **Report 212** — `docs/reports/212-mcbsp-master-srg-2026-11-13.md` (E5, E6,
+  E7/E8, E9, boot stability, and the reference's clock plumbing).
 * **Capture** — `docs/captures/wm8994-e5-master-srg-2026-11-13.txt`.
 * **Machine driver** — E5 clock roles (`CBC_CFC`, CPU `set_sysclk`/`set_clkdiv`,
   FLL1 from BCLK, `PB_MCBSP_FCLK_HZ = 49152000`) and the PCM-ring diagnostic.
 * **McBSP driver** — the eight-sample live FIFO dump (`XBUFFSTAT`/`IRQST`).
 * **Board DTS** — `mcbsp2_pins` `clkx`/`fsx` back to `PIN_OUTPUT`.
+* **`rootfs/pbplay.c`** — takes a device argument and sets `SPEED` first.
 * **Tooling** — `tools/99-playbook-cdc-acm.rules` (udev, CDC-ACM → `0666`).
 * **Patch** — `kernel/patches/0001-playbook-winchester-7.3.3.patch`, 54 files /
-  8 305 lines, sha256 `180f5e19…`, 54/54 byte-identical.
-* **Images** — region 0 `0x58F85337` (0x939A6C B, current, `#40`), E5 as
-  built `0x7A5DD941`/`0x92458D00`/`0x5A04ACD9`, the E6 experiment
-  `0x3DC4508D`, E7/E8 `0xA66B40EF`, E9 `0xE5A13DE7`/`0x6AD9E204`; region 1
-  `6d92428e…`.
+  8 331 lines, sha256 `82d08fcc…`, verified 0 rejects / 54/54 byte-identical.
+* **Images** — region 0 `0x58F85337` (`0x939A6C` B, current, `#40`; sha256
+  `39891a20…`), E5 as built `0x7A5DD941`/`0x92458D00`/`0x5A04ACD9`, the E6
+  experiment `0x3DC4508D`, E7/E8 `0xA66B40EF`, E9 `0xE5A13DE7`/`0x6AD9E204`;
+  region 1 `6d92428e…`.

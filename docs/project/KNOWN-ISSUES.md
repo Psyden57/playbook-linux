@@ -1313,13 +1313,16 @@ report 121 §3/§11/§12.
       McBSP only through its driver (i.e. through an ASoC link), which owns the
       runtime PM.  (Session 45.)
 
-194. **McBSP1 and McBSP2 DO share the BCLK/LRCLK nets, and a consumer-configured
-      McBSP1 shifts off them.**  With McBSP2 streaming, McBSP1 programmed as a
-      slave (`PCR0 = 0x000f`) and one word in DXR was consumed within 5 ms
-      (`SPCR2 = 0x0237`, `XRDY` set).  Do not repeat the pad-as-GPIO test that
-      appeared to contradict this: with the pad muxed to GPIO and the engine
-      idle it measures a floating line, not the net.  (Session 45, report 212
-      §12.)
+194. **McBSP1 and McBSP2 do NOT share the BCLK/LRCLK nets.**  A one-off probe
+      (McBSP1 as a slave with one word in DXR, `XRDY` set 5 ms later) suggested
+      they did; it is **withdrawn** — `XRDY` reads 1 both when a word is consumed
+      and when nothing pending was ever shifted (trap 197), and repeating the
+      experiment through a real stream does not drain: McBSP1 sits at
+      `SPCR2 = 0x0235` while the write fails after five periods.  Combined with
+      E5 (the codec's BCLK is on McBSP2's pin) and E6 (driving McBSP1's clock
+      outputs does not reach the codec), the board has **clocks on McBSP2, data
+      on McBSP1**, and the reference bridges them through the ABE (trap 199).
+      (Session 45, report 212 §12/§14.)
 
 195. **ASoC `dai_fmt` is codec-perspective, and getting it backwards fails in a
       misleading place.**  A link declared `CBC_CFC` makes the *CPU* DAI the

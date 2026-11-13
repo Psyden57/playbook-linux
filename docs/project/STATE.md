@@ -45,14 +45,21 @@ across the two engines: **mcbsp2 for clocks, mcbsp1 for data**.  The design that
 follows is McBSP2 as clock master plus McBSP1 as a clock *consumer* on the same
 nets, transmitting on `mcbsp1_dx` — see "What is next".
 
-**Bench:** the unit is on **our Linux image `0x58F85337`** (region 0, 0x939A6C
-bytes, kernel #40 — the committed E5 tree); region 1 = the audio/OSS rootfs
-`6d92428e…`.  E7/E8/E9 were bench experiments and are not on media.  Console `pb> `, no door.
-`BOOTCTR_FCTRY` is not readable from the chroot userland (no `/dev/rpmb` node);
-the initramfs `/init` top-up ran at boot.  The oracle IFS is no longer on media
-(region 0 holds the Linux image); re-flash `local/work/ifs-shim-sealed.ifs` at
-`0x825` to boot it.  **To stock TabletOS**, flash
-`local/work/minimal/wayback.signed`.
+**Bench (end of session 45, measured).**  The unit is on **our Linux image
+`0x58F85337`** (region 0, `0x939A6C` bytes, kernel `7.3.3` #40 — the committed
+E5 tree; image sha256 `39891a20…`); region 1 = the audio/OSS rootfs sha256
+**`6d92428e…`** (67,108,864 B).  The unit enumerates `0fca:8010`; console `pb> `
+on `ttyACM0`, no door and no ssh (both exist only on the oracle).  `BOOTCTR_FCTRY`
+read **0x20** at this boot — the initramfs `/init` logged
+`pbrpmb: topup: BOOTCTR_FCTRY at block 0x3a record@196 = 20000000` and
+`0x20 >= threshold 0x1e, no write`, so the budget is healthy and no write was
+made.  It is **not** readable as a node here: this userland has no `/dev/rpmb`,
+and `pbrpmb scan` (read-only) finds no marker because the record block is
+sealed — the `/init` log is the reading.  No device-side files were deployed to
+the Linux image this session.  E7/E8/E9 were bench experiments and are not on
+media.  The oracle IFS is not on media (region 0 holds the Linux image);
+re-flash `local/work/ifs-shim-sealed.ifs` at `0x825` to boot it.  **To stock
+TabletOS**, flash `local/work/minimal/wayback.signed`.
 
 **The magic-`pkexec` rule still holds.**  A flash re-enumerates the ACM gadget
 and the tty comes back `root:uucp 0660`; `tools/99-playbook-cdc-acm.rules`

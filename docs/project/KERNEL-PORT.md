@@ -6,10 +6,13 @@ and the exported patch reproduces the tree from pristine 7.3.3.
 
 * Base: **upstream 7.3.3** (not the pmOS package, which is still `!armhf`).
 * Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **54 files /
-  8 214 lines**, sha256 `90391b96…`, verified 0 rejects / 54/54
-  byte-identical against pristine 7.3.3 targets (session 44 wrap-up).  It
-  carries the E1 clock roles, the `&l4_abe` ABE-refclk assignment and the
-  codec-GPIO init (reports 206/209/211).  Trap 161.
+  8 331 lines**, sha256 `82d08fcc…`, verified 0 rejects / 54/54
+  byte-identical against pristine 7.3.3 targets (session 45 wrap-up).  It
+  carries the E5 clock roles (`CBC_CFC`, CPU `CLKSM = 1`/`CLKGDV = 32`, FLL1
+  from BCLK, `mcbsp2_pins` `clkx`/`fsx` as outputs), the two session-45
+  diagnostics (the machine driver's `pcm:` ring readback and the McBSP `live N:`
+  FIFO dump), the `&l4_abe` ABE-refclk assignment and the codec-GPIO init
+  (reports 206/209/211/212).  Trap 161.
 * Config: `kernel/winchester-7.3.3.config` (the canonical copy).
 * 6.15.11 reference: `local/pristine/linux-6.15.11.tar.xz`
   `local/kernel-tree-6.15.11`, and

@@ -1866,28 +1866,30 @@ noise floor).  The open question is the codec's AIF1 **data input** — which ba
 carries DACDAT, and whether the reference's DSP_A format is required.  Do not
 describe E5 as "audio works": it is **transport works**.
 
-**Addendum (same session, E6).**  The codec's **DACDAT is `abe_mcbsp1_dx`**
-(pad `0x102`) — read live on the oracle while it played a wav the operator
-confirmed audible — and `abe_mcbsp2_dx`, which this design drives, is not
-connected to the codec.  McBSP1 as a clock *master* does not reach the codec
-(FLL unlocked), so the follow-on design is **McBSP2 = clocks (E5), McBSP1 =
-clock consumer on the same nets, data on `mcbsp1_dx`**.  DSP_A was tried and is
-not the fault.  Report 212 §10–11.
+**Addendum 1 (E6).**  The codec's **DACDAT is `abe_mcbsp1_dx`** (pad `0x102`)
+— read live on the oracle while it played a wav the operator confirmed audible —
+and `abe_mcbsp2_dx`, which this design drives, is not connected to the codec.
+McBSP1 as a clock *master* does not reach the codec (FLL unlocked).  DSP_A was
+tried and is not the fault.  The follow-on design assumption — "McBSP1 as a clock
+consumer on the same nets" — was tested in E9 and does **not** hold; see
+Addendum 3.  Report 212 §10–11.
 
-**Addendum 3 (E9).**  The two-link build works mechanically (link format must
-be `CBP_CFP` for a consumer CPU DAI; the card enforces rate symmetry) but the
-data port does not shift: McBSP1 gets no frame sync, so it is not clocked by
-McBSP2's nets.  E7's positive result is withdrawn (trap 197).  The reference
-clocks McBSP1 through the ABE, which mainline `omap-mcbsp` does not implement;
-the next step is a design decision about that path.
+**Addendum 2 (E7/E8).**  Raw register programming of a McBSP is **forbidden**:
+with no ASoC link holding its interconnect target active, `pm_runtime_get_sync()`
+did not wake it and the first SRGR access gave `imprecise external abort` and a
+warm reset (trap 193).  Both engines must therefore be driver-owned links.  E7's
+probe (a consumer-configured McBSP1 "consuming a word in 5 ms") is **withdrawn**
+in Addendum 3.
 
-**Addendum 2 (E7/E8).**  The two-engine pairing is viable: a consumer-
-configured McBSP1 consumes a word written to its DXR within 5 ms while McBSP2
-streams (`SPCR2 = 0x0237`), so the engines share the BCLK/LRCLK nets.  Raw
-register programming of McBSP2 is **forbidden** — with no link holding the
-interconnect target active the first access gave `imprecise external abort`
-and a warm reset (trap 193).  Both engines must therefore be driver-owned ASoC
-links.
+**Addendum 3 (E9, and the reference RE).**  The two-link build works
+mechanically — `mcbsp2 + wm8994-aif1` (clocks) and `mcbsp1 + wm8994-aif2` (data),
+link format `CBP_CFP` for a consumer CPU DAI, with card rate symmetry — but the
+data port **does not shift**: McBSP1 gets no frame sync (`SPCR2 = 0x0235`), so it
+is not clocked by McBSP2's nets.  E7 is withdrawn (trap 197).  The reference's
+own driver explains how it is done there: its McBSP is a clock **consumer**
+(`SRGR2 = FPER | 0x1000`; slave mode starts no SRG) clocked through the **ABE**,
+which mainline `omap-mcbsp` does not implement.  The next step is therefore an
+ABE feasibility question, not a McBSP one (ROADMAP item 9).
 
 **Evidence.**  Report **212**;
 `docs/captures/wm8994-e5-master-srg-2026-11-13.txt`; `SRGR1 = 0x0f1f`,

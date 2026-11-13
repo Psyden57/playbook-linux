@@ -75,6 +75,7 @@ The guides are in `docs/parked/`.
 | **Power-domain/CM comparison (negative) + the ABE-refclk fix** | **report 209** | live captures both sides, the oracle causal test, three-image DPLL_ABE comparison, `docs/captures/wm8994-pm-cm-2026-11-12.txt` |
 | **QNX audio chain RE — board pad database, codec-GPIO init** | **report 210** | `docs/reference/qnx-hwio/` (249-record pad table + resolver) |
 | **Codec-GPIO init implemented in the machine driver** | **report 211** | negative for MCLK1; fixes the WM8994 probe; Linux/OMAP gpio-numbering trap |
+| **E5/E6/E7-E9: the McBSP as clock provider, the data ball, and the ABE wall** | **report 212** | current for the audio transport and the fault: `CLKSM`/SRG-clock findings, 48 kHz, the data ball `abe_mcbsp1_dx`, the two-link build, and the reference's ABE-clocked McBSP; `docs/captures/wm8994-e5-master-srg-2026-11-13.txt` |
 | Public snapshot / repository management | `docs/project/REPO-MANAGEMENT.md` |
 
 ## Superseded or read-with-care
