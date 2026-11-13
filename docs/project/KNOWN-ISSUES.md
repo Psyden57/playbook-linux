@@ -1346,6 +1346,19 @@ report 121 §3/§11/§12.
       consumer sits at `SPCR2 = 0x0235` (`XRDY = 0`, `XEMPTY = 1`) and the write
       fails after five periods.  (Session 45, report 212 §14.)
 
+198. **Read the raw `dmesg` tail (and the subsystem's own documentation) before
+      reasoning about a failure.**  Session 45 lost time on an `-EINVAL` from
+      `SNDCTL_DSP_SETFMT` because the greps looked for "ASAoC error"/format
+      words; the unfiltered tail carried
+      `omap_mcbsp_dai_hw_params: not enough bandwidth for desired rate and
+      channels` — a master-mode bandwidth check caused by a backwards
+      `dai_fmt`, not a format problem.  The same applies to runtime facts:
+      Linux GPIO bases move with probe order, so read
+      `/sys/kernel/debug/gpio` (or the chip's `base` file) instead of trusting a
+      number from an earlier boot (trap 185), and read
+      `Documentation/sound/soc/*.rst` and `sound/core/oss/pcm_oss.c` rather than
+      recalling how ASoC and OSS behave.  (Session 45, operator.)
+
 ## 3. Corrections to older reports
 
 These twenty-three are preserved deliberately. Each is newer than the text it
