@@ -101,6 +101,25 @@ static int i2c_write16(int fd, int addr, unsigned reg, unsigned val)
 	return devctlv(fd, DCMD_I2C_WRITE, 3, 0, iov, NULL, NULL);
 }
 
+/* Reference-driver write ABI (deva-ctrl-omap4abe-wm8994.so `codec_write`,
+ * file 0x18294): a 20-byte inline devctl struct, {addr,2,4,1,reg,val} with
+ * reg/val stored big-endian.  devctlv with iovs is not what the driver does. */
+static int i2c_write16r(int fd, int addr, unsigned reg, unsigned val)
+{
+	struct {
+		int32_t addr, f1, f2, f3;
+		uint16_t reg, val;
+	} wr;
+
+	wr.addr = addr;
+	wr.f1 = 2;
+	wr.f2 = 4;
+	wr.f3 = 1;
+	wr.reg = (uint16_t)(((reg >> 8) & 0xff) | ((reg & 0xff) << 8));
+	wr.val = (uint16_t)(((val >> 8) & 0xff) | ((val & 0xff) << 8));
+	return devctl(fd, DCMD_I2C_WRITE, &wr, sizeof(wr), 0);
+}
+
 static int i2c_read16(int fd, int addr, unsigned reg, unsigned char *out, int n)
 {
 	int32_t desc[5] = { addr, 2, 2, n, 1 };
@@ -236,6 +255,22 @@ int main(int argc, char **argv)
 		rc = i2c_write16(fd, addr, reg, val);
 		if (rc == 0)
 			printf("0x%02x[0x%04x] <- 0x%04x ok\n", addr, reg, val);
+		else
+			printf("0x%02x[0x%04x] <- 0x%04x FAILED %s\n", addr, reg, val,
+			       strerror(errno));
+		close(fd);
+		return rc ? 1 : 0;
+	}
+
+	if (!strcmp(argv[1], "wr16r")) {
+		if (argc < 6 || !parse_hex(argv[4], &reg) || !parse_hex(argv[5], &val)) {
+			fprintf(stderr, "bad register/value\n");
+			return 2;
+		}
+		rc = i2c_write16r(fd, addr, reg, val);
+		if (rc == 0)
+			printf("0x%02x[0x%04x] <- 0x%04x ok (ref-abi)\n",
+			       addr, reg, val);
 		else
 			printf("0x%02x[0x%04x] <- 0x%04x FAILED %s\n", addr, reg, val,
 			       strerror(errno));

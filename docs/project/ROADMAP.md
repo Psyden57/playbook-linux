@@ -41,22 +41,29 @@ known-good image.
 
 **Open.**
 
+* **The minimal 1917 oracle is built and has been used** (session 43, reports
+  207/208).  A debloated 2.1.0.1917 IFS+RCFS — services reduced to
+  `filesystem pps random pty net powerman phyctrl usbmgr rimusb`, GUI/app/font/
+  browser/DRM subtrees pruned (live `/base` 90.4 MiB) — boots in ~30 s with
+  `qconn` on `169.254.0.1:9090` and root `sshd`; built by
+  `tools/build_minimal_qnx.py`.  **It settled the MCLK1 model:** AUXCLK1 IS the
+  codec's MCLK1 (gate off + codec reset + FLL power-up → no lock; restore →
+  lock), and on Linux MCLK1 is measurably **absent** with identical
+  AUXCLK1/pad/stream-time FLL file (codec freeze detector, validated on the
+  reference).  A broad register sweep ruled out every readable difference; the
+  next experiment is the **power-domain/CM comparison** (`STATE.md` §What is
+  next; `HANDOFF.md` §0c).  **Separate audio bug:** `CM_ABE_PLL_REF_CLKSEL` is
+  SYS_32K on Linux, SYS_CLK on the reference — fix it in the DTS.
 * **WM8994 audio.**  The transmit path is **proven working** (session 42,
-  report 206): with the codec as AIF1 master (`R0x302 = 0x4000`) and the McBSP
-  as a clock consumer (`PCR0 = 0x000f`, SRG out of the path — the reference's
-  clock roles, adopted on both sides at once), a stream with a live AIF1CLK
-  drains the FIFO end to end — `pbplay` ran 20 s cleanly where the
-  McBSP-master configuration always stalled at ~1 s.  The codec chain itself
-  (thaw, output mixers, charge pump, routing, un-mute) has been
-  driver-driven since session 41.
-  **The remaining blocker is a live AIF1CLK:** FLL1 never locks from MCLK1
-  (register file byte-identical to the working reference) and AIF1CLK sourced
-  directly from MCLK1 is dead — the pin does not clock, with every readable
-  SoC and codec register matching the reference.  The free-running NCO
-  (±10–30 %) proves the architecture but is not a hi-fi clock.  Routes: (a)
-  MCLK1 at the hardware layer (needs the probe of trap 165; session 41's one
-  lock keeps "marginal" alive), (b) a non-reference AIF1CLK design, (c) the
-  now-narrow master-mode SRG stall (SRG → shifter), one permutation per boot.
+  report 206): codec AIF1 master (`R0x302 = 0x4000`), McBSP consumer
+  (`PCR0 = 0x000f`, SRG out of the path); `pbplay` ran 20 s cleanly with a live
+  AIF1CLK where the McBSP-master config stalled at ~1 s.  The codec chain is
+  driver-driven (session 41).  **Blocker: a live AIF1CLK** — MCLK1 is absent on
+  Linux (above) and the fault is below the readable registers.  Routes: (a) the
+  power-domain/CM comparison (the one next experiment); (b) a probe on
+  `fref_clk2_out`/MCLK1 (trap 165); (c) a non-reference AIF1CLK design; (d) the
+  master-mode SRG stall (one permutation per boot).  The free-running NCO
+  (±10–30 %) is a mechanism probe, not a hi-fi clock.
 * **WL1283.**  Formally stopped by the operator (session 36).  The software
   surface is exhausted and the 1917-truth minimal host still fails CMD5
   (report 196).  Do not re-run traps 116–137.  The WLAN calibration/NVS is

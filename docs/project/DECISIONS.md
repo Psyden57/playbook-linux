@@ -1722,6 +1722,49 @@ routes forward are recorded in `STATE.md` §What is next.
 the byte-identical FLL file, the direct-MCLK1 discriminator, and the 20 s NCO
 stream.  Traps 166–169.
 
+---
+
+## 54. Run the reference itself: a debloated 2.1.0.1917 image as the hardware oracle (session 43)
+
+**Decision.**  For any behaviour the reference OS implements (clocking for the
+WM8994, pads, I²C, HAL start-up), the first tool is a **minimal 1917 QNX image**
+we build ourselves: the stock IFS (the session-24 `rfs_validator` shim) plus a
+**copy** of the vendor `.1.rcfs` whose `startup.sh` starts only
+`filesystem pps random pty net powerman phyctrl usbmgr rimusb` and whose GUI,
+app, font, browser and DRM subtrees are deleted.  The image starts `qconn` on
+port **9090** and root `sshd`; it is driven with `tools/QCL.py` or
+`tools/pbssh.sh`.  Then the reference's own code is run (e.g. `io-audio`) and
+the registers are read while it runs, instead of inferring them from Linux.
+
+**Why.**  The MCLK1 fault is below every register Linux can read, while the
+reference clocks the codec correctly.  Observing the reference directly is the
+highest-yield evidence; the operator's session-43 direction was to stop
+guessing and watch the reference.
+
+**How (and the operator's rule).**  `tools/build_minimal_qnx.py` copies the
+vendor `.1.rcfs`, mounts the copy read-write with `bb10mt qnx6 mount`, makes
+every change **through the mount** (patch `startup.sh`, delete subtrees),
+unmounts, and re-mounts to verify.  An OS 2.x `.rcfs` is a **QNX6 filesystem**;
+do not use `rcfs_extract.py` (that is for BB10 `.rimf`-style images) and do not
+rebuild the filesystem from a tree.  The prune is a live-filesystem win, not a
+flash-byte win (the packer skips only `0xFF`).
+
+**Constraint.**  The minimal image is **unauthenticated** (qconn on 9090, root
+sshd, packet filter off): bench-only, never a product image and never on a
+networked unit.  The UFS `/accounts/devuser` automation is ours; keep it to the
+top-up, dev mode, qconn and sshd.
+
+**Evidence.**  Report **207**, session-43; Stage A and Stage B both boot and
+answer qconn; `pidin arg` shows the intended services; `BOOTCTR_FCTRY` = `0x32`;
+`tools/pbssh.sh` gives `uid:0`.
+
+**Update (session 43, same day).**  The oracle's first use confirmed the model:
+clearing the AUXCLK1 gate on the live reference, resetting the codec and running
+its FLL1 power-up leaves FLL1 **unlocked** (`R0x732 = 0x6000`); restoring
+AUXCLK1 re-locks it (`0x6020`).  So **SCRM AUXCLK1 is the codec's MCLK1**
+(report **208**), and the open question is why the identical AUXCLK1 value does
+not produce a clock at the pin under Linux.
+
 
 
 The repository licence and visibility are decided below; the remaining

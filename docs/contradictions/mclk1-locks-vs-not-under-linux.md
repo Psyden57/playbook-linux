@@ -1,12 +1,13 @@
 # Does MCLK1 clock under our Linux image? Report 204 says no; session 41 measured yes, but unreliably; session 42's direct test says no on its boot
 
-**Status: OPEN (updated session 42, report 206).**  Both sides have live
-measurements, and session 42 added a new discriminator that strengthens Claim A
-without settling the file: with the FLL completely bypassed, `AIF1CLK` sourced
-**directly from MCLK1** still fails.  The disagreement matters because the
-audio design now *rests* on it: since session 42's E1 the codec is the AIF1
-master (DECISIONS §53) and the FLL must reference MCLK1 — a BCLK-referenced FLL
-is circular in master mode.  A live MCLK1 is the one missing clock.
+**Status: OPEN (updated session 43, reports 207/208).**  Session 43 added a
+**causality** proof and a **software detector**: SCRM `AUXCLK1` IS the codec's
+MCLK1 (gate it off + reset the codec + FLL power-up → no lock; restore → lock),
+and the codec freeze detector (validated on the reference) proves MCLK1 is
+**absent** on Linux with identical `AUXCLK1`/pad/FLL file.  Claim A is now the
+strong side; Claim B's one lock stands as an unexplained outlier.  The file
+stays OPEN only because the "dead vs marginal" distinction still needs the
+probe (trap 165).
 
 ## Claim A — "MCLK1 does not clock under our image"
 
@@ -105,3 +106,27 @@ path works when AIF1CLK exists.  The FLL must therefore reference MCLK1
 accepted *mechanism probe*, not a production clock.  The MCLK1 question is now
 the single blocker; session 41's BCLK workaround (DECISIONS §52) is superseded
 for the current design.
+
+## Session-43 update (reports 207/208, this session's captures)
+
+* **Causality.**  On the minimal 1917 oracle with `io-audio` running, FLL1 is
+  locked (`R0x732 = 0x6020`).  Clearing the AUXCLK1 gate (`0x00020000`),
+  resetting the codec (`R0x000 = 1`) and running its exact FLL1 power-up leaves
+  `R0x732 = 0x6000`; restoring `AUXCLK1 = 0x00020100` and restarting `io-audio`
+  re-locks it.  So AUXCLK1 really is the codec's MCLK1, not merely a
+  co-incident register.  [report 208]
+* **The Linux side is measured, not inferred.**  On the Linux image `AUXCLK1 =
+  0x00020100`, the fref pad low half is `0x0000`, and during a stream
+  `R0x200 = 0x0011` with the exact reference FLL file, yet `R0x732 = 0x6000`.
+  The **freeze detector** (thaw; `R0x200 = 0x0001`; write `R0x220`; read back)
+  drops the write on Linux and lands on the reference, so MCLK1 is absent on
+  Linux.  [captures `docs/captures/wm8994-linux-capture-2026-11-12.txt`,
+  `docs/captures/wm8994-oracle-live-2026-11-12.txt`]
+* **Every readable difference was tested and ruled out**: `PMICSETUPTIME`,
+  `AUXCLK4`, the pads `0x190/0x194/0x198/0x19C` high halves, the CM2 PER-PLL
+  dividers, `CM_ABE_PLL_REF_CLKSEL` and the PRM IRQ/CAM registers.  [capture]
+* **What this means for the file:** Claim A is established for the Linux boot
+  (a validated software detector), and the model (AUXCLK1 → fref_clk2_out →
+  codec) is causal.  What remains open is only "dead vs marginal" and "why the
+  AUXCLK1 output is absent with the register correct" — both need the probe
+  (trap 165) or the power-domain/CM comparison in `HANDOFF.md` §0c.

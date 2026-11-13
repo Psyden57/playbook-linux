@@ -1,9 +1,39 @@
 # Current state
 
-## Current state — 2026-11-12 (session 42)
+## Current state — 2026-11-12 (session 43)
 
-**The McBSP transmit path is proven working — in clock-consumer mode.**  E1
-inverted the clock roles to match the reference (codec AIF1 master
+**A debloated 2.1.0.1917 QNX image is now a live hardware oracle (report
+207).**  It boots in ~30 s, enumerates as `0fca:8012`, and answers
+`tools/QCL.py` at `169.254.0.1:9090` and root `sshd`; services are reduced to
+`filesystem pps random pty net powerman phyctrl usbmgr rimusb`, with 224.5 MiB
+of GUI/app/font/browser/DRM subtrees pruned (live `/base` 314.9 → 90.4 MiB).
+Built by `tools/build_minimal_qnx.py`; the UFS `/accounts/devuser` automation
+was cleaned to the top-up, dev mode, qconn and sshd.  **The oracle is the tool
+for the MCLK1/audio question** — run the reference's own HAL and read the
+registers while it runs.
+
+**The oracle proved the model and then measured the Linux side.**  Causally,
+SCRM `AUXCLK1` IS the codec's MCLK1: gating its output off, resetting the codec
+and running its FLL power-up leaves `R0x732 = 0x6000`; restoring AUXCLK1
+re-locks it (`0x6020`) (report 208).  On Linux the same `AUXCLK1 = 0x00020100`,
+the same fref pad, and the exact reference FLL file during a stream, yet
+`R0x732 = 0x6000`; a codec freeze detector (validated on the reference) proves
+**MCLK1 is absent under Linux**.  A broad register sweep (SCRM, pads, CM1/CM2,
+PRM/CKGEN) found no difference that restores it — every candidate was tested and
+ruled out.  The fault is below the readable registers (dynamic/domain/pad/board).
+**The one real clock-definition bug found is not MCLK1:** `CM_ABE_PLL_REF_CLKSEL`
+(0x4A30610C) is SYS_32K on Linux but SYS_CLK on the reference; fix that for the
+ABE path regardless.
+
+**Bench:** the unit is on **our Linux image `0x36597040`** (region 0, CRC
+re-verified from the file's trailer); region 1 = the audio/OSS rootfs
+`b20302dc…`; console `pb> `, no door.  The oracle IFS is no longer on media (the
+Linux image overwrote block `0x825`); re-flash
+`local/work/ifs-shim-sealed.ifs` there to boot the oracle again.  **To stock
+TabletOS**, flash `local/work/minimal/wayback.signed`.
+
+**The McBSP transmit path is proven working — in clock-consumer mode (session
+42).**  E1 inverted the clock roles to match the reference (codec AIF1 master
 `R0x302 = 0x4000`, McBSP consumer `PCR0 = 0x000f`, SRG out of the path), and
 with a live AIF1CLK forced from the codec's internal oscillator `pbplay`
 streamed a full 20-second tone and exited cleanly — every run before died
@@ -102,7 +132,7 @@ Do not boot `0x5E40C5C1` or `0xB9A1BC4F` (two lanes), or `0x3B04298E`
 | `BOOTCTR_FCTRY` | **self-replenishing** — the Linux `/init` tops it up at ≤`0x1e` and a TabletOS boot writes `0x32`; read it as a health check (`SAFETY.md` §2) |
 | region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`b20302dc…`** (`local/images/rootfs-region1-audio-oss.ext4`), **27 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus `snd-pcm-oss`, `snd-mixer-oss`, `snd-soc-playbook-wm8994`), `pbplay` and `pbmix`; the initramfs mounts it **read-write** and chroots into it |
 | TabletOS / OS | **NOT running** — the unit is on our Linux image `0x36597040` (`0fca:8010`, console `pb> `).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; the door (`169.254.0.1`, root ssh) is available only on TabletOS |
-| device-side files | none needed on Linux; QNX `/tmp` tools must be re-pushed after a TabletOS restore |
+| device-side files | **persistent on the UFS**: `/accounts/devuser/bin/{memdump3,memw32,pbi2c}`, the cleaned `/accounts/devuser/startup.sh`, and our `.ssh/authorized_keys` (root ssh).  Re-push QNX `/tmp` tools only after a TabletOS restore |
 
 The factory boot budget is **self-maintaining in bench use**: every successful
 factory/CRC boot spends one unit, and the booted OS puts it back — our Linux
@@ -115,18 +145,20 @@ and a failed/half-formed write or a flat pack is still a brick risk.
 
 ## Blockers in play
 
-**For the current focus (item 9 step 5 audio), the single blocker is a live
-AIF1CLK.**  The transmit path is proven: with the codec as AIF1 master and the
-McBSP as a clock consumer (session 42, E1), a stream drains the FIFO end to
-end.  What fails is the codec's clock: FLL1 never locks from MCLK1 — with a
-register file byte-identical to the working reference — and a direct test
-(AIF1CLK from MCLK1, FLL bypassed) shows the pin itself does not clock.  Every
-readable SoC and codec register matches the working reference (SCRM `AUXCLK1`,
-pad `0x19C`, padconf mode, SMART3 drive, DPLL_PER, PMIC rails, FLL file), so
-the fault is below the registers and needs the probe/boardview the operator
+**For the current focus (item 9 step 5 audio), the blocker is a live AIF1CLK,
+and it is now causal.**  The transmit path is proven (session 42, E1): with the
+codec as AIF1 master and the McBSP as a clock consumer, a stream drains the FIFO
+end to end.  Session 43 settled the model: SCRM `AUXCLK1` IS the codec's MCLK1
+(gate it off + codec reset + FLL power-up → no lock; restore → lock; report
+208), and on Linux MCLK1 is measurably **absent** although `AUXCLK1 =
+0x00020100`, the fref pad and the stream-time FLL file are identical to the
+reference (codec freeze detector, validated on the reference).  A broad
+register sweep (SCRM, pads, CM1/CM2, PRM/CKGEN) found every difference
+irrelevant (tested), so the fault is below the readable registers —
+pad/clock-domain/power or board — and needs the probe/boardview the operator
 does not have (trap 165).  The free-running NCO (±10–30 %) proves the
-architecture but is not a hi-fi clock.  Caveat: session 41's one successful
-MCLK1 lock keeps "marginal clock" alive.  Report 206.
+architecture, not a hi-fi clock.  Caveat: session 41's one MCLK1 lock keeps
+"marginal" alive.  Reports 206, 208.
 
 **The long-standing WL1283 blocker is unchanged (chip-side, software
 exhausted).**  The 1917-truth minimal `&mmc5` host (report 195) boots and
@@ -168,16 +200,18 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    is done and negative (report 196); the remaining measurements (VBAT / 26 MHz
    TCXO / SLOW_CLK, MMC5 CLK/CMD/DAT0) need a board view or logic analyser.  Do
    not re-open it without the operator.
-2. **The WM8994 audio half of item 9 step 5 — one blocker: a live AIF1CLK
-   (report 206).**  The transmit path is proven; the codec chain is proven.
-   The options, in the operator's order of preference:
-   (a) MCLK1 at the hardware layer — a probe/meter on `fref_clk2_out`/MCLK1
-   (blocked by trap 165; session 41's single FLL lock keeps "marginal" alive);
-   (b) a non-reference AIF1CLK design — any live clock routed to the codec;
-   (c) the master-mode SRG stall, now a narrow question (SRG → shifter
-   distribution) attackable one register permutation per boot with the
-   steady-state dump, or with E2's capture stream.  Keep `0xB8830701` /
-   `0xE36C679A` ready to reflash.
+2. **The WM8994 audio half of item 9 step 5 — MCLK1 is the blocker, now proven
+   causal (reports 206/208).**  The transmit path and the codec chain are
+   proven; Linux's config matches the reference; MCLK1 is measurably absent.
+   The next experiment is the **power-domain/CM comparison** (`PM_CORE_PWRSTST`
+   `0x4A306704`, `PM_WKUP_PWRSTST` `0x4A307704`, `PM_L4PER_PWRSTST`
+   `0x4A307404`, `PM_ABE_PWRSTST` `0x4A306504`, and the CM `*_CLKSTCTRL`):
+   capture on the oracle and on Linux and diff; if a domain differs, force it
+   and re-run the codec freeze detector.  Separately, fix
+   `CM_ABE_PLL_REF_CLKSEL = SYS_CLK` in the DTS for the ABE path.  The other
+   routes remain: (a) a probe on `fref_clk2_out`/MCLK1 (trap 165); (b) a
+   non-reference AIF1CLK design; (c) the master-mode SRG stall (one permutation
+   per boot).  Keep `0xB8830701`/`0xE36C679A` ready to reflash.
 3. **Touch: DONE (session 38, report 198) but down after a cold boot.**  The
    calibration and the IRQ are in the tree and proven; after a cold boot the
    controller does not boot (`0x65` NAKs) until the power/reset GPIOs

@@ -1114,6 +1114,76 @@ report 121 §3/§11/§12.
       past the five-period point proves the ring drains — i.e. XRDY asserts,
       i.e. BCLK exists — with no scope and no register access.  (Session 42.)
 
+170. **An OS 2.x `.rcfs` is a QNX6 filesystem, not a BB10 `rimh` container.**
+      Mount it with `local/vendor/bb10mt/bb10mt qnx6 mount -i <copy.rcfs> -m
+      <dir>`; `tools/rcfs_extract.py` is for BB10 `.RCFS` images and will not
+      read it.  Work on a **copy**: the mount is read-write and edits/deletions
+      persist on unmount.  Do not rebuild the filesystem from a tree.  (Session
+      43, operator.)
+
+171. **Pruning the RCFS does not shrink the flashed container.**  `bbusb.py`
+      packs only runs of non-`0xFF` blocks, and the blocks freed by
+      `bb10mt qnx6 mount` are not `0xFF`; Stage A and the pruned Stage B both
+      packed to 363,790,928 B.  Pruning is a live-filesystem win (314.9 → 90.4
+      MiB).  `bb10mt qnx6 compact` is the tool for a smaller file.  (Session
+      43.)
+
+172. **`slay -f <script>.sh` does not kill a script.**  `slay` matches the
+      executable name (the script runs under `/bin/sh`), so
+      `slay -f sshd-watchdog.sh` is a no-op.  Match the argument via
+      `pidin arg` and `slay -f <pid>`.  Killing a parent can also take its
+      child (e.g. `sshd -D`) with it; restart `sshd` with `on -d /usr/sbin/sshd`.
+      (Session 43.)
+
+173. **The minimal 1917 oracle is unauthenticated.**  `qconn port=9090`, root
+      `sshd` (`PermitRootLogin yes`, `StrictModes no`) and the packet filter
+      off are a **bench-only** configuration.  Never ship it or connect it to a
+      network.  Root SSH needs our `local/secrets/rsa.pub` written to
+      `/accounts/devuser/.ssh/authorized_keys`; the host key is
+      `/var/etc/ssh/ssh_host_rsa_key`.  (Session 43.)
+
+174. **`/base/air` and `/air` are runtime (RAM) entries, not on the RCFS.**
+      `pps_common` creates `/base/air/native*` symlinks at boot; the pruned
+      image itself has no `air`.  Do not "fix" the image to remove it.  (Session
+      43.)
+
+175. **`bb10mt qnx6 compact` is broken/incomplete — do not use it.**  It
+      corrupts files in the image (operator, session 43).  The pruned RCFS's
+      flash container does not shrink anyway (trap 171); leave the file size
+      alone.
+
+176. **WM8994 register writes need the reference driver's write ABI.**  The
+      1917 `codec_write` uses a 20-byte inline `devctl` struct
+      `{addr, 2, 4, 1, reg, val}` with `reg`/`val` big-endian; `devctlv` with
+      iovecs returns an error and the write is dropped.  `tools/pbi2c wr16r`
+      implements the reference ABI (`rd16`/`dump16` already work).  Verified by
+      toggling `R0x220` and watching `R0x732` follow.  (Session 43.)
+
+177. **Put device tools in `/accounts/devuser/bin`, not `/tmp`.**  `/tmp` is
+      wiped by a reboot; the UFS persists.  A **reboot is the fast, clean way
+      to restore the reference's register state** after a volatile experiment
+      (the minimal image boots in ~30 s).  (Operator, session 43.)
+
+178. **`CM_ABE_PLL_REF_CLKSEL` (0x4A30610C) is the DPLL_ABE reference, and our
+      Linux image leaves it at the reset default SYS_32K.**  The reference sets
+      it to SYS_CLK (`0`).  It is not the MCLK1 cause (setting it to SYS_CLK on
+      Linux does not unfreeze the codec), but it is a real ABE/audio-path bug
+      and should be fixed in the DTS/machine driver.  (Session 43.)
+
+179. **The WM8994 freeze detector is a software-only MCLK1 presence probe.**
+      Thaw (`R0x200=0`), set `R0x220` to a baseline, select MCLK1 + ENA
+      (`R0x200=0x0001`), then write `R0x220` to a different value and read it
+      back.  If it lands, MCLK1 is present (unfrozen); if it is dropped, MCLK1
+      is absent.  **Validated on the working reference** (write lands) and used
+      to prove MCLK1 is absent under Linux.  Do not use a bare FLL toggle with
+      the clock removed — the lock bit freezes at its last value.  (Session 43.)
+
+180. **`CM_SYS_CLKSEL` (0x4A306110) is a frequency declaration, not a clock
+      mux.**  It is warm-reset-insensitive and tells the hardware the SYS_CLK
+      frequency (7 = 38.4 MHz, the reference's value); it does not gate the
+      clock or the AUXCLK1 output.  Do not treat it as a suspect for a missing
+      clock.  (Session 43.)
+
 ## 3. Corrections to older reports
 
 These twenty-two are preserved deliberately. Each is newer than the text it

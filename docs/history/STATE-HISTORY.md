@@ -10,6 +10,10 @@ state is [`docs/project/STATE.md`](../project/STATE.md).
 `docs/project/STATE.md`; it was replaced by the session-42 state and is not
 duplicated here because the commit preserves it verbatim.
 
+**The session-42 state snapshot** (2026-11-12) is at git commit `3ea577e` in
+`docs/project/STATE.md`; it was replaced by the session-43 state and is not
+duplicated here because the commit preserves it verbatim.
+
 ## Previous state — 2026-11-11 (session 39)
 
 **The WM8994 playback path is built and the DAI streams; the codec clock is

@@ -70,6 +70,8 @@ The guides are in `docs/parked/`.
 | CFP info opcodes and action log | reports 161–166 |
 | LDR_01 opcode map / `reset-osregion` | reports 163, 164 |
 | Documentation audit | report 167 |
+| **Minimal 1917 oracle image** (debloated reference, qconn on 9090) | **report 207** | `tools/build_minimal_qnx.py` |
+| **Oracle causality: AUXCLK1 is the codec MCLK1** | **report 208** | live AUXCLK1 gate test, `docs/captures/wm8994-oracle-live-2026-11-12.txt` |
 | Public snapshot / repository management | `docs/project/REPO-MANAGEMENT.md` |
 
 ## Superseded or read-with-care

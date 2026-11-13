@@ -31,6 +31,16 @@ These are the baseline for any future WM8994 comparison: **diff our live registe
 file against these first** before theorising (report 205 §5f).
 
 
+## WM8994 oracle + Linux captures (session 43)
+
+Taken to settle why MCLK1 does not clock under Linux (reports 207/208).
+
+| file | when |
+|---|---|
+| `wm8994-oracle-live-2026-11-12.txt` | minimal 1917 oracle, `io-audio` running: codec ranges, SCRM `AUXCLK1`/pad/CM2, and the AUXCLK1 causality tests |
+| `wm8994-linux-capture-2026-11-12.txt` | our Linux image: idle/stream codec, the SoC-vs-reference diff table, the codec freeze detector, the PRM/CKGEN diff, and the ruled-out list |
+
+
 ## Exact duplicates
 
 These pairs are byte-identical; keep one of each when pruning.

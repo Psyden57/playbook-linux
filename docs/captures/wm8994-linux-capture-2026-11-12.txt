@@ -1,0 +1,193 @@
+# Linux capture — WM8994 MCLK1 / SoC clock state (2026-11-12, session 43)
+
+Bench: our Linux image (region 0 = `boot/chainloader/kernel.img`, session-42
+E1; region 1 = the audio/OSS rootfs).  `uname -r` = 7.3.3.  Console `pb> `,
+I²C via `i2ctransfer`, SoC via `busybox devmem`.
+
+Comparison target: `docs/captures/wm8994-oracle-live-2026-11-12.txt` (the same
+readings on the minimal 1917 reference, report 207/208).
+
+## SoC — Linux vs reference
+
+| register | Linux | reference | note |
+|---|---|---|---|
+| SCRM AUXCLK1 `0x4A30A314` | `0x00020100` | `0x00020100` | **identical** (gate on, src sys_clkin, /3) |
+| CORE pad `0x4A10019C` | `0x41180000` | `0x41000000` | low half (fref_clk2_out) `0x0000` in both; only the *other* pad's pull differs |
+| pad `0x4A100190` | `0x011F0003` | `0x000F0003` | other pads |
+| pad `0x4A100194` | `0x00080008` | `0x00000008` | other pads |
+| pad `0x4A100198` | `0x010F0008` | `0x00000000` | other pads |
+| SCRM `0x4A30A300..0x30C` | all `0` | (not captured) | |
+| SCRM `0x4A30A318/31C` | `0 / 0` | `0 / 0` | AUXCLK2/3 off |
+| SCRM `0x4A30A320` | `0x00010100` | (not captured) | |
+| CM2 `0x4A008140` | `0x00000007` | `0x00000007` | DPLL_PER M/N |
+| CM2 `0x4A008144` | `0x00000001` | `0x00000001` | |
+| CM2 `0x4A008148` | `0x00000001` | `0x00000001` | |
+| CM2 `0x4A00814c` | `0x0000C326` | `0x00002801` | divider regs differ |
+| CM2 `0x4A008150` | `0x00000802` | `0x00000808` | |
+| CM2 `0x4A008154` | `0x00000003` | `0x0000000d` | |
+| CM2 `0x4A008158` | `0x00000003` | `0x0000022c` | |
+| CM2 `0x4A00815c` | `0x00000204` | `0x00000329` | |
+| CM2 `0x4A008200/204/208/338/340/358` | all `0` | (not captured) | |
+| CM1 `0x4A004420/400/500` | `0x00070000 / 0x3 / 0x3` | (not captured; startup-playbook writes these) | |
+
+## Codec (WM8994, i2c-3, 0x1a)
+
+**Idle (no stream):**
+```
+R0x200 = 0x0001   (AIF1CLK_ENA=1, SRC=MCLK1)   <-- the frozen-on state
+R0x208 = 0x001a
+R0x210 = 0x0083
+R0x220 = 0x0000   R0x221 = 0x0000   R0x222 = 0x0000
+R0x223 = 0x0000   R0x224 = 0x0C80   (FLL NOT programmed)
+R0x302 = 0x4000
+R0x732 = 0x6000   (FLL1 not locked)
+```
+
+**During `pbplay 10 440`:**
+```
+R0x200 = 0x0011   (AIF1CLK_ENA=1, SRC=FLL1)
+R0x220 = 0x0005   R0x221 = 0x0700   R0x222 = 0xAE14
+R0x223 = 0x00E0   R0x224 = 0x0C80   (identical to the reference)
+R0x302 = 0x4000
+R0x732 = 0x6000   (STILL not locked)
+```
+So the driver *does* program the exact reference FLL file during a stream; the
+FLL still does not lock.
+
+## The MCLK1 freeze detector (decisive)
+
+The WM8994 freezes its control interface when `AIF1CLK_ENA=1` and the selected
+source is stopped (trap 155/167).  That makes it a software-only MCLK1
+presence detector:
+
+```
+1. R0x200 <- 0x0000   (thaw; this write always lands)   -> reads 0x0000
+2. R0x200 <- 0x0001   (SRC=MCLK1, ENA=1)                -> reads 0x0001
+3. R0x220 <- 0x0004   (test write)
+4. R0x220 reads 0x0005 (unchanged)  <-- the write was DROPPED
+   R0x732 = 0x6000
+```
+
+**Conclusion: MCLK1 is absent under Linux.**  The codec freezes as soon as
+AIF1CLK is sourced from MCLK1 and enabled, exactly as it does on the reference
+with the AUXCLK1 gate cleared (report 208).  Combined with the identical
+`AUXCLK1` and fref pad, this proves the fault is *below the readable register*:
+the SCRM AUXCLK1 output is not reaching the pad under Linux.
+
+## AUXCLK1 source test — every source is frozen
+
+Using the same freeze detector, set `AUXCLK1` to each source mux and divider and
+check whether the detector write lands:
+
+```
+AUXCLK1=0x00020100 (src sys_clkin)     R0x220 stayed 0x0002  -> frozen
+AUXCLK1=0x00020102 (src dpll_core_m3x2) R0x220 stayed 0x0002 -> frozen
+AUXCLK1=0x00020104 (src dpll_per_m3x2)  R0x220 stayed 0x0002 -> frozen
+AUXCLK1=0x00020000 (gate off)           R0x220 stayed 0x0002 -> frozen
+```
+
+So **no AUXCLK1 source produces a clock at the codec under Linux**.  The
+AUXCLK1 register is writable and reads back; the source mux changes; the output
+is still absent.  That moves the fault out of the AUXCLK1 configuration and
+into the SCRM output stage / CORE pad / board MCLK1 path (or a clock-domain
+state the reference enables and Linux does not).
+
+## Next
+
+Capture the **same broad SoC set on the reference** (re-flash the oracle IFS at
+`0x825`; the pruned RCFS is still in place) — in particular SCRM `0x4A30A104`
+(the reference startup-playbook writes it), `0x4A30A300-0x330`, CM2
+`0x4A008200-0x360` and CM1 `0x4A004400-0x500` — and diff.  A differing gate
+there is the missing enable.
+
+## Reference broad capture (for the diff) — re-flashed oracle
+
+```
+SCRM 0x4A30A100 = 0x003f0fff   ***0x104 = 0x00160016 (PMICSETUPTIME; Linux 0)***
+SCRM 0x4A30A110/118/11c = 0 (ALTCLKSRC = 0)
+SCRM 0x4A30A300..0x310 = 0
+SCRM 0x4A30A314 = 0x00020100   (AUXCLK1, same)
+SCRM 0x4A30A318/31c = 0
+SCRM 0x4A30A320 = 0x00010000   ***AUXCLK4; Linux 0x00010100***
+CM2 0x4A008140..15c = 07/01/01/2801/0808/0d/022c/0329 (Linux 07/01/01/C326/0802/03/03/0204)
+CM2 0x4A008200..20c = 0; 0x4A008330..35c = 0
+CM1 0x4A004400=3 0x4A004408=0x0400002c 0x4A004420=0x00070000 0x4A004500=3
+PRM/CKGEN 0x4A306000=0x40000100 0x4A306010=0x00000100 0x4A306020=0x00004110
+          0x4A306030=0x00000010 0x4A306110=7 (CM_SYS_CLKSEL = 38.4 MHz)
+```
+
+## Ruled out on the working reference (FLL stayed 0x6020)
+
+Set each to the Linux value on the live reference (io-audio running, FLL locked)
+and re-read `R0x732`; the lock survived every one:
+
+- `PMICSETUPTIME` 0x4A30A104 = 0 (Linux value)
+- `AUXCLK4` 0x4A30A320 = 0x00010100 (Linux value)
+- pad 0x190 high = 0x011F0003, pad 0x194 high = 0x00080008,
+  pad 0x198 high = 0x010F0000 (fref_clk1_out -> safe mode),
+  pad 0x19C high = 0x41180000 (SYS_NIRQ1 pull)
+- CM2 DPLL_PER dividers are not in the AUXCLK1 path (AUXCLK1 = sys_clkin/3).
+
+## Detector validation (control on the reference)
+
+Same freeze detector on the reference (MCLK1 known present): thaw, set
+`R0x220=0x0002`, select MCLK1 + ENA (`R0x200=0x0001`), write `R0x220=0x0004` ->
+**reads back 0x0004** (the write landed: unfrozen).  On Linux the same write was
+dropped (stayed 0x0002).  So the detector is sound, and the Linux "MCLK1 absent"
+result stands.
+
+## Where it stands
+
+The AUXCLK1 register, its source (sys_clkin/3), the fref_clk2_out pad, the FLL
+file and the write ABI all match, and the codec-detector proves MCLK1 is absent
+under Linux.  Every differing SCRM/pad/CM register found so far has been shown
+NOT to affect the working reference's MCLK1.  The remaining suspects are a
+power/clock-domain state (`PM_CORE_PWRSTST` / PRM/CKGEN, the CORE pad's power) or
+a board/PMIC SYS_CLK difference — to be compared by capturing the same PRM/CKGEN
+and power-domain registers on Linux.
+
+## PRM/CKGEN diff (reference vs Linux) — the last readable-register gap
+
+Captured `0x4A306000-0x4A30615C` and `0x4A307000-0x4A30765C` on both.
+
+```
+0x4A306000 block = PRM (interrupt/CAM), not clocks:
+  0x4A306010 PRM_IRQSTATUS_MPU_A9   ref 0x100      Linux 0x4100
+  0x4A306018 PRM_IRQENABLE_MPU_A9   ref 0          Linux 0x200
+  0x4A306020 PRM_IRQSTATUS_MPU_M3   ref 0x4110     Linux 0x4500
+  0x4A306030 PRM_IRQSTATUS_DSP      ref 0x10       Linux 0x400
+0x4A306100 block = CKGEN_PRM:
+  0x4A30610C CM_ABE_PLL_REF_CLKSEL  ref 0 (SYS_CLK)  Linux 1 (SYS_32K, reset default)
+  0x4A306110 CM_SYS_CLKSEL          ref 7 (38.4 MHz) Linux 7   (same)
+0x4A307000 = PM_CAM_PWRSTCTRL       ref 0x00030000   Linux 0x00030003  (camera domain)
+```
+
+**CM_ABE_PLL_REF_CLKSEL is a genuine audio-path difference**: the reference
+references the ABE PLL (DPLL_ABE) to SYS_CLK; our Linux image leaves it at the
+reset default, SYS_32K.  (It does not affect the codec's FLL, which is clocked
+from AUXCLK1 — see below.)
+
+## Ruled out on Linux by the freeze detector
+
+- `CM_ABE_PLL_REF_CLKSEL` 0x4A30610C set to 0 (SYS_CLK): `R0x220` test write
+  still dropped (0x0002) -> **not** the MCLK1 cause.
+- (Earlier, on the reference: PMICSETUPTIME, AUXCLK4, and every differing pad
+  were also shown not to unlock FLL1.)
+
+## Conclusion after the full register sweep
+
+The AUXCLK1 register, its fields, its source (sys_clkin/3), the fref_clk2_out
+pad, the FLL file, the write ABI, CM_SYS_CLKSEL, the ABE PLL reference, the PRM
+interrupt/CAM registers, the pads and the CM2 dividers are all identical or
+proven irrelevant.  Yet the codec freeze detector (validated on the working
+reference) proves MCLK1 is **absent** under Linux.  What remains is not a
+readable configuration difference: it is a dynamic state — the CORE pad's
+output/power, the clock-domain low-power state, or a board/PMIC SYS_CLK path.
+That is the point at which trap 165 (no probe) bites again.
+
+## Actionable side finding
+
+Our Linux image references DPLL_ABE to SYS_32K (reset default).  The reference
+sets it to SYS_CLK (`CM_ABE_PLL_REF_CLKSEL = 0`).  This should be fixed in the
+DTS/machine driver regardless of the MCLK1 question, because the ABE/audio path
+otherwise has the wrong reference.
