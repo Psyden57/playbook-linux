@@ -6,10 +6,10 @@ and the exported patch reproduces the tree from pristine 7.3.3.
 
 * Base: **upstream 7.3.3** (not the pmOS package, which is still `!armhf`).
 * Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **54 files /
-  8 113 lines**, sha256 `fc3b2e54…`, verified 0 rejects / 54/54
-  byte-identical against pristine 7.3.3 targets (session 41 wrap-up).  Session
-  41 added `sound/soc/ti/omap-mcbsp.c`, which the session-39 export had
-  omitted.  Trap 161.
+  8 214 lines**, sha256 `90391b96…`, verified 0 rejects / 54/54
+  byte-identical against pristine 7.3.3 targets (session 44 wrap-up).  It
+  carries the E1 clock roles, the `&l4_abe` ABE-refclk assignment and the
+  codec-GPIO init (reports 206/209/211).  Trap 161.
 * Config: `kernel/winchester-7.3.3.config` (the canonical copy).
 * 6.15.11 reference: `local/pristine/linux-6.15.11.tar.xz`
   `local/kernel-tree-6.15.11`, and

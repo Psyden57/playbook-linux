@@ -1184,9 +1184,64 @@ report 121 §3/§11/§12.
       clock or the AUXCLK1 output.  Do not treat it as a suspect for a missing
       clock.  (Session 43.)
 
+181. **`PM_*_PWSTST[25:24]` is `LASTPOWERSTATEENTERED`, a debug latch — not a
+      power state.**  TRM Table 3-416: it is a W1toSet field with reset 0, and
+      the reference writes 3 (CORE/L4PER/L3INIT) or 2 (MPU); Linux leaves it 0.
+      Reading the high half of `PM_CORE_PWSTST` (`0x03003FF7` vs `0x00003FF7`)
+      as evidence of a different power history is wrong; the actual state is
+      `[1:0]` (`POWERSTATEST`), `[2]` (`LOGICSTATEST`) and the memory-bank
+      fields, all identical.  (Session 44, report 209.)
+
+182. **`CM_ABE_PLL_REF_CLKSEL` is forced by the kernel's own clock init, and a
+      DTS reparent must include the rate.**  `clk-44xx.c` deliberately sets
+      `abe_dpll_refclk_mux_ck` to `sys_32k_ck` and `dpll_abe_ck` to 98.304 MHz
+      at clock init.  Changing only the parent leaves the DPLL's M/N programmed
+      for 32 kHz, and DPLL_ABE never locks (`clock: dpll_abe_ck failed
+      transition to 'locked'` seven times during boot).  The working form is
+      `assigned-clocks = <&abe_dpll_refclk_mux_ck>, <&dpll_abe_ck>;`
+      `assigned-clock-parents = <&sys_clkin_ck>;`
+      `assigned-clock-rates = <0>, <98304000>;` — parents are applied before
+      rates, so the M/N are recomputed for SYS_CLK (`CM_CLKSEL_DPLL_ABE =
+      0x00804018`, `ST_DPLL_CLK = 1`).  (Session 44, report 209 §7.)
+
+183. **The Linux clock-domain framework re-asserts its own `CLKTRCTRL`
+      policy.**  A `devmem` write to `CM*_CLKSTCTRL` is often reverted by the
+      kernel within the same command (driver runtime PM / clockdomain state);
+      only domains it does not manage keep the new value (`CM2_L4SEC` did).
+      Do not read "the write did not stick" as a hardware or interconnect
+      fault — compare readbacks and, for a causal test, use the oracle.
+      (Session 44, report 209 §6.)
+
+184. **After a kernel flash the ACM gadget may not enumerate until the USB
+      cable is physically replugged.**  Twice this session `lsusb` showed no
+      `0fca:` device and `/dev/ttyACM0` was absent while the unit was
+      demonstrably booted; a replug brought it straight back.  Replug before
+      diagnosing the image or the gadget code.  (Session 44, operator.)
+
+185. **Linux gpio numbers are not OMAP gpio numbers — resolve by phandle, never
+      by arithmetic.**  `/sys/class/gpio` assigns chip bases in *probe order*:
+      GPIO2=512, GPIO3=544, GPIO4=576, GPIO5=608, GPIO6=640, GPIO1=676 (labels
+      are just names).  So `gpio_127` = **607** (`&gpio4 31`), `gpio_44` = 524,
+      `gpio_49` = 529.  A session-44 replay used 639/556/561 and therefore drove
+      GPIO5_31 / GPIO3_12 / GPIO3_17 — the wrong pins entirely.  Use the DT
+      phandle plus the chip's `base` file.  **Also audit the WL1283 work:** any
+      experiment that used sysfs/global gpio numbers rather than DT/OF phandles
+      should be re-checked against this list before the "software exhausted"
+      claim is final.  (Session 44, report 211 §3.)
+
+186. **The WM8994's ID read needs the audio "ldo" line (GPIO4_31) high before
+      the codec module probes.**  On two builds where the line was left as an
+      input until the machine driver loaded, `wm8994 3-001a` failed with
+      `Failed to read ID register` (-121) and no card registered; with a
+      boot-on `regulator-fixed` on that line (enabled at `late_initcall`, before
+      the rcS module load) it probes every boot.  Also: a boot-on regulator has
+      use count 0, so `regulator_disable()` warns "unbalanced disables" and
+      returns `-EIO` — use `regulator_force_disable()` to gate it.  (Session 44,
+      report 211 §1–§2.)
+
 ## 3. Corrections to older reports
 
-These twenty-two are preserved deliberately. Each is newer than the text it
+These twenty-three are preserved deliberately. Each is newer than the text it
 contradicts, and the older reports have been corrected in place where they could
 be.
 
@@ -1391,6 +1446,18 @@ V2V1 2127 mV, VANA 2100 mV, VDAC 1800 mV, VAUX1/2/3 2800 mV, all ON — the same
 rails and voltages, and the same PM2/PM3/PM5 codec values as the working
 reference.  The mapping is still out of the datasheet's range and worth fixing,
 but it does not explain the fault.  (Session 41, report 205 §5.)
+
+**3.26 `CM_ABE_PLL_REF_CLKSEL = SYS_32K` is upstream's deliberate choice, not a
+bootloader leftover or a bug in our image.**  `drivers/clk/ti/clk-44xx.c`
+reparents `abe_dpll_refclk_mux_ck` to `sys_32k_ck` and sets `dpll_abe_ck` to
+98.304 MHz at clock init ("On OMAP4460 the ABE DPLL fails to turn on if in idle
+low-power state … Lock the ABE DPLL in any case to avoid issues with audio").
+The 1917 reference runs the same DPLL from `SYS_CLK`, so matching it is a
+legitimate board choice — but the register difference alone is **not** the
+MCLK1 cause (setting it on Linux never unfroze the codec), and reparenting
+without re-applying the rate breaks DPLL_ABE locking (trap 182).  Session 44
+fixed it with parent + rate, and DPLL_ABE locks at 98.304 MHz from SYS_CLK
+(report 209 §7).
 
 **Also corrected elsewhere, for completeness:** `0x1cce0` in `winch_lcdctl` is a
 HAL parameter-block defaults initialiser, not the register programmer — the

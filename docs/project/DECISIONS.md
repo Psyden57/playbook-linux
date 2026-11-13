@@ -1765,6 +1765,73 @@ AUXCLK1 re-locks it (`0x6020`).  So **SCRM AUXCLK1 is the codec's MCLK1**
 (report **208**), and the open question is why the identical AUXCLK1 value does
 not produce a clock at the pin under Linux.
 
+---
+
+## 55. The power/CM domains are not the MCLK1 gate; the ABE-refclk fix needs parent **and** rate (session 44)
+
+**Decision.**  Close the power-domain/CM hypothesis: do not look for the missing
+MCLK1 in `PM_*_PWSTST`, the `CM*_CLKSTCTRL` policies, or the CAM/GFX/IVAHD
+domain states.  The next audio work is a **design** change (the McBSP-master/SRG
+permutation, one per boot, judged by `pbplay`'s survival) or a board probe —
+not another register sweep.  Separately, express the reference's ABE reference
+clock in the board DTS as **both** `assigned-clock-parents = <&sys_clkin_ck>`
+and `assigned-clock-rates = <0>, <98304000>` on
+`<&abe_dpll_refclk_mux_ck>, <&dpll_abe_ck>`.
+
+**Why.**  Captured on the Linux image and on the live 1917 oracle with
+`io-audio` running: every field that is a power *state* matches
+(`POWERSTATEST`, `LOGICSTATEST`, memory-bank states), and `CM2_CORE_CLKSTCTRL` —
+the domain that owns the CORE pad and the SCRM — is byte-identical
+(`0x00000103`).  The only high-half difference is
+`PM_*_PWSTST[25:24] = LASTPOWERSTATEENTERED`, a W1toSet debug latch (TRM Table
+3-416).  Causally, setting every differing CM policy to Linux's value on the
+working oracle leaves MCLK1 present (the freeze detector still writes
+`R0x220 = 0x0004`).  Replaying the reference's write order on Linux (pad mux
+transition, then the AUXCLK1 gate) does not restore it.  For the ABE clock,
+`clk-44xx.c` forces SYS_32K and 98.304 MHz at clock init; reparenting alone
+leaves the M/N for 32 kHz and DPLL_ABE never locks (7 boot errors), while
+parent+rate recomputes them and the DPLL locks at 98.304 MHz from SYS_CLK with
+zero failures.
+
+**Constraint.**  This is a **negative** result about the readable state, not a
+proof about the board: the remaining candidates are the pad's output path, the
+board's clock net, or a PMIC/analogue condition (trap 165) — the probe the
+operator does not have.  The ABE fix is an ABE-path correctness fix and must
+not be reported as an MCLK1 fix (the freeze detector is unchanged).  No
+RPMB/NVRAM/MCT writes; the oracle is bench-only.
+
+**Evidence.**  Report **209** and
+`docs/captures/wm8994-pm-cm-2026-11-12.txt` — both live captures, the oracle
+causal test, the Linux detector runs, and the three-image DPLL_ABE comparison.
+Traps 181–184.
+
+---
+
+## 56. Hardware tests are driver changes, rebuilt and flashed — not raw pokes (session 44)
+
+**Decision (operator, session 44).**  A test that matters is expressed as a
+change in the driver/kernel, built into the image and flashed.  Raw
+`i2ctransfer`, `devmem` and sysfs pokes are for read-only inspection or a quick
+confirmation, **never** the evidence behind a conclusion.  Build+flash time is
+cheap compared with the cost of a flawed test.
+
+**Why.**  The session's own history is the argument: a frozen codec silently
+drops raw writes (trap 167), `i2ctransfer` arguments are decimal (trap 166),
+the Linux clock-domain framework rewrites `CLKSTCTRL` after a `devmem` poke
+(trap 183), and a sysfs replay of the reference's codec-GPIO sequence cannot
+reproduce the driver's ordering.  Each of those can turn a real difference into
+a "negative" result.
+
+**Constraint.**  One variable per boot still applies; register *reads* are
+always fine.  The correct form of the next audio experiment is therefore a
+machine-driver change (the reference's `codec_gpio_init` sequence and its init
+order, report 210 §3), not another hand-poked sequence.
+
+**Evidence.**  The operator's session-44 direction; report 210 §4 records the
+sysfs replay and why it is not trustworthy as the test (and trap 185: it also
+drove the wrong gpio numbers); report 211 is the first test done under this
+rule — implemented in the driver, rebuilt, flashed.
+
 
 
 The repository licence and visibility are decided below; the remaining

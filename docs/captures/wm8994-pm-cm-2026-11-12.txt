@@ -1,0 +1,153 @@
+# Capture — PM/CM comparison, freeze detector, and the ABE-refclk fix (session 44)
+
+Date: 2026-11-12.  Unit: PlayBook "winchester", the reference unit (0x50175127).
+Two images were used: the Linux image (region 0) and the minimal 1917 oracle
+(report 207).  Values are raw register reads unless stated.
+
+## 1. Linux — PM power state (idle, kernel `#30`, before any DTS change)
+
+Console (`tools/pbcon.py`), `busybox devmem <addr> 32`:
+
+```
+4A306304=0x000003F7   4A306404=0x00000000   4A306504=0x00000000
+4A306604=0x00000000   4A306704=0x00003FF7   4A306F04=0x01000541
+4A307004=0x00000000   4A307104=0x00000037   4A307204=0x00000000
+4A307304=0x00000037   4A307404=0x000000F7   4A307604=0x00000000
+4A307704=0x00000000   4A307904=0x00000000
+```
+
+During a stream (`pbplay 25 440`):
+
+```
+4A306504=0x00000000   4A306704=0x00003FF7   4A307404=0x000000F7
+4A30610C=0x00000000   4A004500=0x00000003   4A008700=0x00000103
+4A009400=0x00040103   4A307800=0x00001903   4A306500=0x00330100
+```
+
+Kernel view: `/sys/kernel/debug/pm_genpd/pm_genpd_summary` →
+`prm_abe off-0`, `prm_core on`, `prm_l4per on`, `prm_wkup on`,
+`prm_l3init off-0`.
+
+## 2. Linux — CM clock-domain control (idle)
+
+```
+4A004300=0x00000103   4A004400=0x00000003   4A004500=0x00000003
+4A008700=0x00000103   4A008F00=0x00000003   4A009000=0x00000001
+4A009100=0x00000702   4A009200=0x00000003   4A009300=0x00045303
+4A009400=0x000C0103   4A009580=0x00000101   4A009600=0x00000003
+4A307800=0x00001903   4A307A00=0x00000003
+```
+
+## 3. Oracle (minimal 1917) — same registers, `io-audio` running
+
+`/base/sbin/io-audio -d omap4abe-wm8994 aif=0,secure_capture -o enable_buffering`
+(run from root ssh; `slay io-audio` used later for the detector baseline).
+
+Codec state with the HAL running (`pbi2c rd16 3 0x1a <reg>`):
+
+```
+0x0732 = 0x6020   0x0200 = 0x0010   0x0220 = 0x0005
+0x0224 = 0x0c80   0x0302 = 0x4000
+```
+
+PM power state (`/accounts/devuser/bin/memdump3 <addr> 4`):
+
+```
+4a306304: 020003f7   4a306404: 00000000   4a306504: 00000000
+4a306604: 00000000   4a306704: 03003ff7   4a306f04: 00000000
+4a307004: 00000037   4a307104: 00000037   4a307204: 00000037
+4a307304: 03000037   4a307404: 030000f7   4a307604: 00000000
+4a307704: 00000000   4a307904: 00000000
+```
+
+CM CLKSTCTRL:
+
+```
+4a004300: 00000103   4a004400: 00000003   4a004500: 00000001
+4a008700: 00000103   4a008f00: 00000003   4a009000: 00000702
+4a009100: 00000f02   4a009200: 00000203   4a009300: 00045302
+4a009400: 00040102   4a009580: 00000103   4a009600: 00000003
+4a307800: 00001903   4a307a00: 00000003
+```
+
+SCRM / pad / clock select:
+
+```
+4a30a314: 00020100   4a30a318: 00000000
+4a100190: 000f0003   4a100194: 00000008   4a100198: 00000000
+4a10019c: 41000000   4a30610c: 00000000   4a306110: 00000007
+```
+
+## 4. Causal test on the oracle — Linux CM policy in place
+
+Baseline detector (reference ABI writes):
+
+```
+pbi2c wr16r 3 0x1a 0x0200 0x0000   -> ok
+pbi2c wr16r 3 0x1a 0x0200 0x0001   -> ok
+pbi2c wr16r 3 0x1a 0x0220 0x0004   -> ok
+pbi2c rd16  3 0x1a 0x0220            -> 0x0004     (MCLK1 present)
+pbi2c rd16  3 0x1a 0x0732            -> 0x6000
+```
+
+Apply the Linux-side CM values to the oracle (`memw32 <addr> <val>`):
+
+```
+0x4a004500: 0x00000001 -> 0x00000003 (readback 0x00000003)
+0x4a009000: 0x00000702 -> 0x00000001 (readback 0x00000701)
+0x4a009100: 0x00000f02 -> 0x00000702 (readback 0x00000f02)
+0x4a009200: 0x00000203 -> 0x00000003 (readback 0x00000203)
+0x4a009400: 0x00040102 -> 0x000c0103 (readback 0x00040103)
+0x4a009580: 0x00000103 -> 0x00000101 (readback 0x00000101)
+0x4a009300: 0x00045302 -> 0x00045303 (readback 0x00045303)
+```
+
+Detector after all of them: `rd16 0x220 -> 0x0004` **still lands**.
+
+## 5. Detector on Linux, and the write-order replay
+
+Cold boot (`CM_ABE_PLL_REF_CLKSEL = 0x00000001`):
+
+```
+i2ctransfer -f -y 3 w4@0x1a 0x02 0x00 0x00 0x00
+i2ctransfer -f -y 3 w4@0x1a 0x02 0x00 0x00 0x01
+i2ctransfer -f -y 3 w4@0x1a 0x02 0x20 0x00 0x04
+i2ctransfer -f -y 3 w2@0x1a 0x02 0x20 r2      -> 0x00 0x00   (write DROPPED)
+```
+
+After writing the reference's CM values (kernel re-asserted most of its own
+policy; `CM2_L4SEC` stayed `0x103`): `0x220` still reads `0x0000`.
+
+After replaying the reference's write order —
+
+```
+busybox devmem 0x4A10019C 16 0x0007
+busybox devmem 0x4A10019C 16 0x0000
+busybox devmem 0x4A30A314 32 0x00000000
+busybox devmem 0x4A30A314 32 0x00020100
+```
+
+— the detector still reads `0x0000`.
+
+## 6. The ABE-refclk fix — three states
+
+`CM_ABE_PLL_REF_CLKSEL` = `0x4A30610C`; `CM_CLKMODE_DPLL_ABE` = `0x4A0041E0`;
+`CM_IDLEST_DPLL_ABE` = `0x4A0041E4`; `CM_CLKSEL_DPLL_ABE` = `0x4A0041EC`.
+
+| image | 0x4A30610C | 0x4A0041E0 | 0x4A0041E4 | 0x4A0041EC | dmesg lock failures |
+|---|---|---|---|---|---|
+| `0x36597040` (previous) | 1 | 0x00000C07 | 0x00000000 | 0x0082EE00 | (not captured) |
+| `0x5E97FEBE` (parent only) | 0 | 0x00000C07 | 0x00000000 | 0x0082EE00 | 7 × `clock: dpll_abe_ck failed transition to 'locked'` |
+| `0x7C56BDC0` (parent + rate) | 0 | 0x00000C07 | **0x00000001** | **0x00804018** | **0** |
+
+`0x00804018`: M = `(v >> 8) & 0x7FF` = 64, N = `v & 0x7F` = 24 →
+38.4 MHz × 64 / 25 = **98.304 MHz**.
+
+Reboot test (image `0x7C56BDC0`): `devmem 0x4A30610C 32 0x00000001`, `reboot -f`,
+then after boot `devmem 0x4A30610C 32` → `0x00000000` and
+`devmem 0x4A0041E4 32` → `0x00000001` (locked).  The DTS assignment re-applies.
+
+Boot sanity on `0x7C56BDC0`: `wm8994 3-001a: WM8994 revision D`,
+`PBR: 40124000.mcbsp <- omap-mcbsp`, `PBR: sound <- playbook-wm8994`,
+`Munin touchscreen ready (irq 110)`, display PLL forced, ACM gadget up.
+`pbrpmb: topup: BOOTCTR_FCTRY ... = 2e000000` (≥ threshold, no write).

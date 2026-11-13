@@ -651,6 +651,20 @@
  */
 &l4_abe {
 	status = "okay";
+
+	/*
+	 * CM_ABE_PLL_REF_CLKSEL (PRM 0x4A30610C) resets to SYS_32K, and the
+	 * OMAP4 clock init forces it there too (clk-44xx.c: "lock the ABE DPLL
+	 * on boot ... to avoid issues with audio", set to 98.304 MHz from
+	 * 32 kHz).  The 1917 reference runs DPLL_ABE from SYS_CLK.  Reparent it
+	 * here and re-apply the same output rate, so the DPLL's M/N are
+	 * recomputed for the 38.4 MHz reference instead of keeping the values
+	 * that were programmed for 32 kHz -- reparenting alone leaves the DPLL
+	 * unable to lock (measured session 44).
+	 */
+	assigned-clocks = <&abe_dpll_refclk_mux_ck>, <&dpll_abe_ck>;
+	assigned-clock-parents = <&sys_clkin_ck>;
+	assigned-clock-rates = <0>, <98304000>;
 };
 
 &wdt3_target {
@@ -1043,12 +1057,13 @@
 		output-high;
 		line-name = "gpio4-28";
 	};
-	ref-hog-31 {
-		gpio-hog;
-		gpios = <31 GPIO_ACTIVE_HIGH>;
-		output-high;
-		line-name = "gpio4-31";
-	};
+	/*
+	 * GPIO4_31 is NOT hogged: it is the audio "ldo" line (hwio signal 0x92,
+	 * report 210 §3) and the machine driver owns it -- it pulses it low for
+	 * 100 ms and leaves it high, exactly as the reference's codec_gpio_init
+	 * does.  It was only ever a mirror of the reference's boot DATAOUT, and
+	 * the live OE bit is 0 (an input) anyway.
+	 */
 };
 
 /*
@@ -1109,6 +1124,15 @@
 		>;
 	};
 
+	/*
+	 * The reference audio driver's codec_gpio_init (hwio signals 0x92/0x93/
+	 * 0x94, report 210 §3): hdq_sio = gpio_127 ("ldo"), gpmc_a20 =
+	 * gpio_44 ("spk"), gpmc_a25 = gpio_49 ("hp").  The pads are already in
+	 * GPIO mode at boot (0x120 = 0x0003) or in panel_en_pins (0x068/0x072),
+	 * so there is deliberately no pinctrl group here: pinctrl-single pins
+	 * are exclusive, and the gpio2 hog already claims 0x068.
+	 */
+
 	gpio1_en_pins: gpio1-en-pins {
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x190, 0x0003)	/* gpio_2  (GPIO1_2)  */
@@ -1159,6 +1183,24 @@
 		compatible = "regulator-fixed";
 		regulator-name = "panel_vdd";
 		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	/*
+	 * Audio "ldo": hwio signal 0x92, hdq_sio / gpio_127 (GPIO4_31).  It must
+	 * be high before the rcS-loaded codec module probes (two boots with it
+	 * left as an input failed the WM8994 ID read with -121), and the
+	 * reference's codec_gpio_init then pulses it low for 100 ms (report 210
+	 * §3).  A boot-on fixed regulator (not always-on) gives both: enabled at
+	 * late_initcall, and the machine driver can force it off/on.
+	 */
+	audio_ldo: regulator-audio-ldo {
+		compatible = "regulator-fixed";
+		regulator-name = "audio-ldo";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		gpio = <&gpio4 31 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
 		regulator-boot-on;
 	};
 
@@ -1274,5 +1316,14 @@
 		compatible = "blackberry,playbook-wm8994";
 		pinctrl-names = "default";
 		pinctrl-0 = <&codec_mclk_pins>;
+
+		/*
+		 * Board audio enables, from the reference's codec_gpio_init
+		 * (report 210 §3): pulse the "ldo" line low for 100 ms and
+		 * leave it high; hp is an input.  The spk line is already held
+		 * high by the gpio2 hog.
+		 */
+		ldo-supply = <&audio_ldo>;
+		hp-gpios = <&gpio2 17 GPIO_ACTIVE_HIGH>;
 	};
 };

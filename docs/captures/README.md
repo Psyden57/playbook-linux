@@ -41,6 +41,16 @@ Taken to settle why MCLK1 does not clock under Linux (reports 207/208).
 | `wm8994-linux-capture-2026-11-12.txt` | our Linux image: idle/stream codec, the SoC-vs-reference diff table, the codec freeze detector, the PRM/CKGEN diff, and the ruled-out list |
 
 
+## WM8994 PM/CM comparison and the ABE-refclk fix (session 44)
+
+Taken to run and close the power-domain/CM hypothesis, then to fix
+`CM_ABE_PLL_REF_CLKSEL` (report 209).
+
+| file | when |
+|---|---|
+| `wm8994-pm-cm-2026-11-12.txt` | both OSes: `PM_*_PWSTST` and `CM*_CLKSTCTRL`, the oracle causal test (Linux CM policy on the working reference), the Linux detector runs and the write-order replay, and the three-image DPLL_ABE comparison |
+
+
 ## Exact duplicates
 
 These pairs are byte-identical; keep one of each when pruning.

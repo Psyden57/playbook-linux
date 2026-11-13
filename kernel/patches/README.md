@@ -3,11 +3,19 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**8 095 lines / 54 files** against pristine
-**linux-7.3.3** (sha256 `55035aac…`, session-42 wrap-up).  It is generated from
-the tree (via the session-41 file list — no new sources in session 42), and it
-was verified by applying it to pristine 7.3.3 targets and comparing all 54
+**8 214 lines / 54 files** against pristine
+**linux-7.3.3** (sha256 `90391b96…`, session-44 wrap-up).  It is generated from
+the tree (via the session-41 file list — no new sources in sessions 42–44), and
+it was verified by applying it to pristine 7.3.3 targets and comparing all 54
 files byte-for-byte with `local/kernel-tree` — 0 rejects, 0 mismatches.
+**Session 44 (later)** adds the reference codec-GPIO init: the boot-on
+`audio-ldo` regulator on GPIO4_31, `ldo-supply`/`hp-gpios` on the sound node,
+and `playbook_wm8994_board_enables()` in the machine driver (report 211).
+**Session 44** adds the `&l4_abe` ABE-refclk assignment
+(`assigned-clocks = <&abe_dpll_refclk_mux_ck>, <&dpll_abe_ck>`,
+`assigned-clock-parents = <&sys_clkin_ck>`,
+`assigned-clock-rates = <0>, <98304000>`), so `CM_ABE_PLL_REF_CLKSEL` is SYS_CLK
+and DPLL_ABE locks at 98.304 MHz (report 209).
 **Session 42** picks up the E1 clock-role changes: the board DTS makes
 `clkx`/`fsx` inputs (codec AIF1 master, McBSP consumer) and the machine driver
 uses `CBP_CFP` with FLL1 from MCLK1 and no CPU-side SRG calls.

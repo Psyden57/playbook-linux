@@ -41,8 +41,8 @@ known-good image.
 
 **Open.**
 
-* **The minimal 1917 oracle is built and has been used** (session 43, reports
-  207/208).  A debloated 2.1.0.1917 IFS+RCFS — services reduced to
+* **The minimal 1917 oracle is built and has been used** (session 43/44, reports
+  207/208/209).  A debloated 2.1.0.1917 IFS+RCFS — services reduced to
   `filesystem pps random pty net powerman phyctrl usbmgr rimusb`, GUI/app/font/
   browser/DRM subtrees pruned (live `/base` 90.4 MiB) — boots in ~30 s with
   `qconn` on `169.254.0.1:9090` and root `sshd`; built by
@@ -50,24 +50,32 @@ known-good image.
   codec's MCLK1 (gate off + codec reset + FLL power-up → no lock; restore →
   lock), and on Linux MCLK1 is measurably **absent** with identical
   AUXCLK1/pad/stream-time FLL file (codec freeze detector, validated on the
-  reference).  A broad register sweep ruled out every readable difference; the
-  next experiment is the **power-domain/CM comparison** (`STATE.md` §What is
-  next; `HANDOFF.md` §0c).  **Separate audio bug:** `CM_ABE_PLL_REF_CLKSEL` is
-  SYS_32K on Linux, SYS_CLK on the reference — fix it in the DTS.
+  reference).  **The power-domain/CM comparison is done and negative** (report
+  209): every power *state* matches, the only difference is the
+  `LASTPOWERSTATEENTERED` debug latch, and forcing Linux's CM policies on the
+  working oracle leaves MCLK1 present (report 209).  **ABE path fixed:**
+  `CM_ABE_PLL_REF_CLKSEL` is SYS_CLK with DPLL_ABE locked at 98.304 MHz.  **The
+  reference's codec-GPIO init is implemented** (report 211): a boot-on
+  `audio-ldo` on GPIO4_31 pulsed 100 ms at probe, spk high via the hog, hp
+  input.  It does **not** restore MCLK1 (`FLL1 NOT locked`) but it fixes the
+  WM8994 probe (-121 without it).
 * **WM8994 audio.**  The transmit path is **proven working** (session 42,
   report 206): codec AIF1 master (`R0x302 = 0x4000`), McBSP consumer
   (`PCR0 = 0x000f`, SRG out of the path); `pbplay` ran 20 s cleanly with a live
   AIF1CLK where the McBSP-master config stalled at ~1 s.  The codec chain is
   driver-driven (session 41).  **Blocker: a live AIF1CLK** — MCLK1 is absent on
   Linux (above) and the fault is below the readable registers.  Routes: (a) the
-  power-domain/CM comparison (the one next experiment); (b) a probe on
-  `fref_clk2_out`/MCLK1 (trap 165); (c) a non-reference AIF1CLK design; (d) the
-  master-mode SRG stall (one permutation per boot).  The free-running NCO
-  (±10–30 %) is a mechanism probe, not a hi-fi clock.
+  **McBSP master/SRG permutation** — one per boot, judged by `pbplay`'s
+  survival (trap 169); (b) the free-running NCO (±10–30 %, a mechanism probe);
+  (c) a probe on `fref_clk2_out`/MCLK1 (trap 165).  The free-running NCO is not
+  a shipping clock.
 * **WL1283.**  Formally stopped by the operator (session 36).  The software
   surface is exhausted and the 1917-truth minimal host still fails CMD5
   (report 196).  Do not re-run traps 116–137.  The WLAN calibration/NVS is
-  extracted from QNX `hd5` (report 197).
+  extracted from QNX `hd5` (report 197).  **Audit note (session 44):** trap 185
+  shows Linux gpio numbers are by probe order; any WL1283 experiment that used
+  sysfs/global gpio numbers (not DT/OF phandles) should be re-checked before
+  the software-exhausted claim is treated as final.
 * **Touch.**  Done; the remaining nicety is driving power/reset
   (GPIO1_14 / GPIO4_8) for cold boots — a warm reset keeps the controller up
   (session 42).

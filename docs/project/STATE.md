@@ -1,36 +1,41 @@
 # Current state
 
-## Current state — 2026-11-12 (session 43)
+## Current state — 2026-11-12 (session 44)
 
-**A debloated 2.1.0.1917 QNX image is now a live hardware oracle (report
-207).**  It boots in ~30 s, enumerates as `0fca:8012`, and answers
-`tools/QCL.py` at `169.254.0.1:9090` and root `sshd`; services are reduced to
-`filesystem pps random pty net powerman phyctrl usbmgr rimusb`, with 224.5 MiB
-of GUI/app/font/browser/DRM subtrees pruned (live `/base` 314.9 → 90.4 MiB).
-Built by `tools/build_minimal_qnx.py`; the UFS `/accounts/devuser` automation
-was cleaned to the top-up, dev mode, qconn and sshd.  **The oracle is the tool
-for the MCLK1/audio question** — run the reference's own HAL and read the
-registers while it runs.
+**The power-domain / CM comparison is done and it is negative.**  The last
+software-visible hypothesis for the missing MCLK1 was the power/clock-domain
+state.  Captured on both the Linux image and the minimal 1917 oracle (report
+207) with its audio HAL running, the two systems agree in **every field that is
+a state**: all `POWERSTATEST`/`LOGICSTATEST`/memory-bank fields match, and
+`CM2_CORE_CLKSTCTRL` — the domain that owns the CORE pad and the SCRM — is
+identical.  The only high-half difference is `PM_*_PWSTST[25:24] =
+LASTPOWERSTATEENTERED`, a W1toSet **debug latch** (the reference sets it, Linux
+leaves reset 0).  The CM `CLKTRCTRL` policies differ only in domains that do not
+own the pad.  **Causally:** setting every differing policy to Linux's value on
+the live working oracle leaves FLL1 locked and the freeze detector landing
+(`R0x220` writes `0x0004`), so the answer is **`R0x220 = 0x0002` — the domain
+is not the gate** (report 209).  The fault is below the readable registers
+(pad/board/PMIC; trap 165).  Replaying the reference's write order on Linux
+(pad transition, then the AUXCLK1 gate) does not restore the clock either.
 
-**The oracle proved the model and then measured the Linux side.**  Causally,
-SCRM `AUXCLK1` IS the codec's MCLK1: gating its output off, resetting the codec
-and running its FLL power-up leaves `R0x732 = 0x6000`; restoring AUXCLK1
-re-locks it (`0x6020`) (report 208).  On Linux the same `AUXCLK1 = 0x00020100`,
-the same fref pad, and the exact reference FLL file during a stream, yet
-`R0x732 = 0x6000`; a codec freeze detector (validated on the reference) proves
-**MCLK1 is absent under Linux**.  A broad register sweep (SCRM, pads, CM1/CM2,
-PRM/CKGEN) found no difference that restores it — every candidate was tested and
-ruled out.  The fault is below the readable registers (dynamic/domain/pad/board).
-**The one real clock-definition bug found is not MCLK1:** `CM_ABE_PLL_REF_CLKSEL`
-(0x4A30610C) is SYS_32K on Linux but SYS_CLK on the reference; fix that for the
-ABE path regardless.
+**`CM_ABE_PLL_REF_CLKSEL` is now fixed properly on Linux.**  It is forced to
+`SYS_32K` by the kernel's own clock init (`clk-44xx.c`), not by a bootloader
+leftover.  Reparenting `abe_dpll_refclk_mux_ck` to `SYS_CLK` in the DTS **alone**
+leaves the DPLL's M/N programmed for 32 kHz and it never locks (7 boot errors);
+with `assigned-clock-rates = <98304000>` the framework recomputes M/N after the
+switch and DPLL_ABE locks at **98.304 MHz from SYS_CLK** with zero failures
+(`CM_CLKSEL_DPLL_ABE = 0x00804018`, `ST_DPLL_CLK = 1`).  Verified across a warm
+reboot.  It is an ABE-path correctness fix, **not** the MCLK1 cause (the
+detector is unchanged: still dropped).
 
-**Bench:** the unit is on **our Linux image `0x36597040`** (region 0, CRC
-re-verified from the file's trailer); region 1 = the audio/OSS rootfs
-`b20302dc…`; console `pb> `, no door.  The oracle IFS is no longer on media (the
+**Bench:** the unit is on **our Linux image `0xB43F169B`** (region 0, 0x93A3E0
+bytes; ABE-refclk fix + the reference codec-GPIO init); region 1 = the audio/OSS
+rootfs `3df8056c…`; console `pb> `, no door; `BOOTCTR_FCTRY` read `0x28` at the
+last boot (≥ threshold, no write).  The oracle IFS is no longer on media (the
 Linux image overwrote block `0x825`); re-flash
 `local/work/ifs-shim-sealed.ifs` there to boot the oracle again.  **To stock
-TabletOS**, flash `local/work/minimal/wayback.signed`.
+TabletOS**, flash `local/work/minimal/wayback.signed`.  A kernel change needs a
+USB replug for the ACM gadget to re-enumerate after the flash (observed twice).
 
 **The McBSP transmit path is proven working — in clock-consumer mode (session
 42).**  E1 inverted the clock roles to match the reference (codec AIF1 master
@@ -61,12 +66,13 @@ shows the pin is not clocking.  Report 206.
 * **The mechanism proof used the free-running NCO** (datasheet Rev 4.6 p. 206:
   `OSC_ENA` + `FRC_NCO` + `FRC_NCO_VAL = 0x19` ≈ 12 MHz, ±10–30 %).  It is a
   switch that makes AIF1CLK exist — a mechanism probe, **not** a hi-fi clock.
-* **The kernel patch was re-exported** (trap 161 discipline): 8 095 lines /
-  54 files, sha256 `55035aac…`, verified 0 rejects / 54/54 byte-identical.
+* **The kernel patch was re-exported** (trap 161 discipline): 8 109 lines /
+  54 files, sha256 `2fc1a865…`, verified 0 rejects / 54/54 byte-identical.
 * **Touch survived this warm boot** (the Munin controller stays up through a
   warm reset; only cold boots need the GPIO1_14/GPIO4_8 pulse).
-* **Media:** region 0 = `0x36597040` (kernel `7.3.3`, E1 DTS); region 1 =
-  `b20302dc…` (E1 machine driver, 27 modules).
+* **Media:** region 0 = `0xB43F169B` (kernel `7.3.3`, E1 DTS + ABE refclk
+  fix + the codec-GPIO init); region 1 = `3df8056c…` (E1 machine driver, 27
+  modules).
 
 
 ## Per-subsystem state
@@ -81,7 +87,7 @@ shows the pin is not clocking.  Report 206.
 | USB device + gadget | **working, but not a bulk transport** | enumerates `0fca:8010`, CDC-ACM, product string "PlayBook (Linux bring-up)"; `/dev/ttyACM0` ↔ `/dev/ttyGS0`; High Speed (480 Mbps), 512-byte bulk packets.  **Drains at only ~134 KB/s and drops bytes when the host blasts** (report 136 §3.3), so it is a control/debug channel: do not send multi-MB images through `recv`.  Report 114, 136 |
 | **WL1283 (MMC5)** | **software surface exhausted (session 37: the 1917-truth minimal host also fails CMD5; the chip is not up — WL_IRQ low)** | **Session 37:** the WL1283 code is archived (`kernel/archive/wl1283/`), the DTS is re-derived from 2.1.0.1917, and the minimal 1917-truth `&mmc5` (image `0x0DC36A11`) probes but returns `attach_sdio no` (report 196); pads `0x0118`, WL_EN `0x0003`, WL_IRQ `0x410B` match QNX and WL_EN is high, but `GPIO2_DATAIN` bit 21 = 0.  Bus, pads, WL_EN/IRQ, PMIC rails, MMC5 CON/HCTL/SYSCTL and the clock manager all match the reference.  QNX enumerates at 24 MHz with CMD5 arg `0x00FFFF00`; Linux's default 400 kHz/CMD52-first also times out.  **Session 35:** `startup-playbook` (never run by our chainloader) is the source of the QNX-only GPIOs — Winchester table at image `0x80122750`; GPIO1 0/4/15/18/28/31 and GPIO2 5/7 are output-low, gpio54 (WL_EN) output-low, gpio53 input/falling (report 192 §4, trap 135).  All eight released to input on the live 1917 are **negative** (trap 136).  `CLK32KG` is base `0x8C` and APP-ON in both (CFG_TRANS identical; CFG_GRP and the CFG_STATE CON/MOD bits differ; trap 135).  **H1** (CMD0 → CMD5 only, no CMD52/CMD8, 24 MHz, arg `0x00FFFF00`, image `0x29784F48`) still times out (`err=-110`, no R4; `HCTL=0x00000b00`, `CAPA=0x04e10080`; trap 137).  The remaining difference is the chip's non-exposed VBAT/TCXO/reset pins or OMAP HSMMC sampling — needs a schematic/board view or logic analyser |
 | **Munin touch (CY8CTMA3)** | **working — calibrated, IRQ wired (session 38)** | I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c` boots the app and maps the 12-bit report through the 1917 `scaling.conf` calib (raw x 172→1108 → 102→922, y 110→658 → 60→540) to 1024×600.  IRQ gpio 35 = GPIO2_3 pad `0x056` = `0x410B`, `EDGE_FALLING`, `irq 110`; the ~330–380/s rate is the chip's report rate.  Power/reset GPIO1_14/GPIO4_8 are not driven.  Report 198, DECISIONS §47 |
-| **WM8994 audio** | **transmit path proven (consumer mode); MCLK1 is the one blocker (session 42)** | I²C4 `0x1a` (`0x8994`, revision D); the board machine driver (`playbook-wm8994.c`) makes `0 [WM8994]: PlayBook_WM8994`.  **Session 42 (E1):** the codec is the AIF1 master (`R0x302 = 0x4000`, = the reference) and McBSP2 is a clock consumer (`PCR0 = 0x000f`, SRG never started; `clkx`/`fsx` pads are inputs).  With a live AIF1CLK (forced from the free-running NCO) `pbplay` streamed 20 s cleanly — the transmit FIFO drains.  The session-41 `XRDY = 0` stall is a property of the master/SRG configuration.  **Open:** FLL1 never locks from MCLK1 (register file byte-identical to the reference) and AIF1CLK-direct-from-MCLK1 is dead — the pin does not clock; everything readable matches the working reference.  The NCO (±10–30 %) is a mechanism probe, not a hi-fi clock.  Report 206 |
+| **WM8994 audio** | **transmit path proven (consumer mode); MCLK1 is the one blocker (session 44)** | I²C4 `0x1a` (`0x8994`, revision D); the board machine driver (`playbook-wm8994.c`) makes `0 [WM8994]: PlayBook_WM8994`.  **Session 42 (E1):** the codec is the AIF1 master (`R0x302 = 0x4000`, = the reference) and McBSP2 is a clock consumer (`PCR0 = 0x000f`, SRG never started; `clkx`/`fsx` pads are inputs).  With a live AIF1CLK (forced from the free-running NCO) `pbplay` streamed 20 s cleanly — the transmit FIFO drains.  The session-41 `XRDY = 0` stall is a property of the master/SRG configuration.  **Open:** FLL1 never locks from MCLK1 (register file byte-identical to the reference) and AIF1CLK-direct-from-MCLK1 is dead — the pin does not clock; everything readable matches the working reference, and **session 44 ruled out the power/CM domains causally** (report 209).  The NCO (±10–30 %) is a mechanism probe, not a hi-fi clock.  Reports 206, 209.  **ABE path:** `CM_ABE_PLL_REF_CLKSEL` = SYS_CLK and DPLL_ABE locked at 98.304 MHz since session 44.  **Session 44 also implemented the reference's codec-GPIO init** (report 211): a boot-on `audio-ldo` on GPIO4_31 (pulsed 100 ms via `regulator_force_disable`), spk high via the gpio2 hog, hp input.  It does **not** restore MCLK1 (`FLL1 NOT locked`), but it did fix a real probe fault: the WM8994 needs that line high before its module loads. |
 | Userspace (initramfs) | **working, minimal** | `/init` = PID 1, mounts, creates the configfs ACM gadget, forks `/console` in the fallback path.  **No auto-reboot since session 15** — PID 1 reboots only on request (the timer spent a `BOOTCTR_FCTRY` unit per iteration).  **Session 28:** after the gadget and the boot-time top-up, `/init` mounts the region-1 ext4 root **read-write**, bind-mounts /dev//proc//sys, chroots and execs `/sbin/init`; with no `/sbin/init` it falls back to the console.  Report 176, session-28 note |
 | Userspace (region-1 root) | **working — a real BusyBox userland** | 64 MiB ext4 at raw `0x29000000`; BusyBox 1.36.1 + init + 401 applet links + `pbconsole`/`pbrpmb` + `/lib/modules/7.3.3`; boots to `sh -l` on `/dev/ttyGS0`; `insmod`/`modprobe` proven.  Current image: `local/images/rootfs-region1-audio-oss.ext4` (sha256 `968d2f20…`, 27 modules).  The earlier plain userland was image `0xAEDF68D0`. |
 | Console | **working** | `help ls cat peek poke kick disp bl i2c i2c16 spi fb kmsg grep blk recv sink blkwr qnx6 rootfs write reboot`; `spi tcon` (low-first) and `spi tconbe` (high-first); `blk info/sum/sumb/rd` is read-only FNV-1a64 over `/dev/mmcblk1` (**`blk info` prints size 0 B — `fstat` bug, see KNOWN-ISSUES**), `grep <substr> <path>` scans any-size text (for `clk_summary`); `sink <len>` measures the link, `blkwr <off> <len> [chunk]` is a timed O_DIRECT write with a deterministic pattern (report 136); `qnx6 [off-hex]` mounts hd3 read-only (report 138); `rootfs [off-hex]` mounts the region-1 ext4 root read-only on `/rootfs` (report 140); argument limit 24.  `pb_reg` op set is now `w a:v` / `r a` / `t a` (16 reads, re-arm) / `u a` (16 reads, no re-arm) / `d from:to` (range dump) / `v` (video liveness).  Every hardware access forks with a bounded wait |
@@ -95,7 +101,7 @@ shows the pin is not clocking.  Report 206.
 | Panel identity | **Hitachi (definitive)** | on TabletOS: `GPIO6_DATAIN = 0x00010800` (bit 16 = 1), slog `LCD is Hitachi`.  Report 127 §1 |
 | **Image on the panel** | **WORKING** | With `0x8C146805` (and the same source as `0x068C867F`) the panel shows a clean, stable image: solid white, solid red, and the kernel console as legible text.  The three necessary fixes were the bridge delivery (VC0/HS null packet), the LVDS porches + TCON table at bring-up, and the DISPC core clock. Report 133 |
 | QNX oracle tool | **`tools/qnx-dsiread.c` → `tools/pbdsi`** | Reads any TC358764 register over DSI from a TabletOS user process (generic read request `0x24` on hw VC1, BTA, RX FIFO pop; response is a generic long read, DT `0x1A`).  Read-only.  This is how the reference values in this document were obtained. Report 132 §2 |
-| Kernel patch + config | **7.3.3 (session 42 export); 6.15.11 kept as reference** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **8 095 lines / 54 files**, sha256 `55035aac…`, applied to pristine 7.3.3 targets with 0 rejects and **54/54 files byte-identical** (session-42 wrap-up; it picks up the E1 clock-role changes in `omap4-winchester.dts` and `playbook-wm8994.c` and adds `sound/soc/ti/omap-mcbsp.c`, which the session-39 export had omitted).  Session 39 adds the board machine driver (`sound/soc/ti/playbook-wm8994.c`, Kconfig/Makefile), the `wm8994-core.c` runtime-PM quirk and the board `sound` node/codec clocks; it also restores `drivers/input/touchscreen/{Kconfig,Makefile}`, which the 48-file export had silently omitted (trap 154).  Config: `kernel/winchester-7.3.3.config` (includes `CONFIG_CHARGER_ISL9519=y`, `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`, `CONFIG_KERNEL_XZ=y`, `CONFIG_SND_PCM_OSS=m`, `CONFIG_SND_MIXER_OSS=m`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
+| Kernel patch + config | **7.3.3 (session 44 export)** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **8 109 lines / 54 files**, sha256 `2fc1a865…`, applied to pristine 7.3.3 targets with 0 rejects and **54/54 files byte-identical** (session-44 wrap-up; it picks up the `&l4_abe` ABE-refclk assignment, the E1 clock-role changes in `omap4-winchester.dts` and `playbook-wm8994.c`, and `sound/soc/ti/omap-mcbsp.c`).  Session 39 adds the board machine driver (`sound/soc/ti/playbook-wm8994.c`, Kconfig/Makefile), the `wm8994-core.c` runtime-PM quirk and the board `sound` node/codec clocks; it also restores `drivers/input/touchscreen/{Kconfig,Makefile}`, which the 48-file export had silently omitted (trap 154).  Config: `kernel/winchester-7.3.3.config` (includes `CONFIG_CHARGER_ISL9519=y`, `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`, `CONFIG_KERNEL_XZ=y`, `CONFIG_SND_PCM_OSS=m`, `CONFIG_SND_MIXER_OSS=m`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
 | **ISL9519 charger** | **WORKING under Linux (session 31)** | I²C1 `0x48070000`, slave `0x09`; VendorID `0x0049`, DeviceID `0x0003`.  `isl9519.c` (built-in, DTS `charger@9`) sets the four registers in RIM's order with the masked fields and refreshes every 5 s.  Measured **+358 → +397 mA**, 3.775 → 3.794 V, capacity 8 → 9 %, `Charging`; still on at 197 s (watchdog).  Registers read back `0x14=0x0280`, `0x15=0x1070`, `0x3E=0x0D00`, `0x3F=0x0180`.  Report 183 |
 | TWL6030 BCI | **probes after the session-31 fix; NOT the board's charger** | `twl6030_charger` probes with the `simple-battery` profile and sets `CONTROLLER_CTRL1=0x10`, `VOREG=0x21`, `VICHRG=0x08`, `CINLIMIT=0x09`, but the stock OS leaves the whole block at bootloader reset values — it charges through the ISL9519.  The BCI node/modules are inert; `twl6030_usb` reports `ONLINE=1`, VBUS 4.81–4.91 V |
 
@@ -107,7 +113,9 @@ the durable record is the CRC and what it demonstrated, not the file.
 
 | image | base | role |
 |---|---|---|
-| `0x36597040` | 7.3.3 | **current region 0** (session 42: E1 clock roles — codec AIF1 master, McBSP consumer, input pads) |
+| `0xB43F169B` | 7.3.3 | **current region 0** (session 44: reference codec-GPIO init — boot-on `audio-ldo` + pulse, hp input) |
+| `0x7C56BDC0` | 7.3.3 | previous region 0 (session 44: `CM_ABE_PLL_REF_CLKSEL` = SYS_CLK + DPLL_ABE 98.304 MHz; E1 clock roles) |
+| `0x36597040` | 7.3.3 | previous region 0 (session 42: E1 clock roles — codec AIF1 master, McBSP consumer, input pads) |
 | `0xB8830701` | 7.3.3 | previous region 0 (session 41: AUXCLK1 DTS fix, McBSP dump) |
 | `0xE36C679A` | 7.3.3 | known-good region 0 (WDT2 + ISL9519 charger) |
 | `0x0F6AC47F` | 7.3.3 | last full-regression image (sensors, CM3217) |
@@ -125,12 +133,12 @@ Do not boot `0x5E40C5C1` or `0xB9A1BC4F` (two lanes), or `0x3B04298E`
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **the session-42 Linux E1 image `0x36597040`** (`0x93A2EC`, kernel `7.3.3`; `boot/chainloader/kernel.img`), region 0.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier Linux images (region 0 only, block `0x825`): `0xB8830701` (session 41), `0xF97CD9C7` (session 39), `0x3B2ECFED` (session 38), `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A` (`local/images/kernel-0xE36C679A-wdt58s.img`, 0x91A748, sha256 `bdbaf5fc…`), and the touch `0x04AF1433` |
-| region-0 RCFS (`/base`) | **still the 1917 RCFS at region-0 offset 0xC00000** — outside the 7.3.3 test image (which ends at 0x9396B4) and not touched this session; not readable as `/base` without the 1917 IFS |
+| region-0 IFS on media | **the session-44 Linux image `0xB43F169B`** (`0x93A3E0`, kernel `7.3.3`; `boot/chainloader/kernel.img`), region 0.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier Linux images (region 0 only, block `0x825`): `0x36597040` (session 42), `0xB8830701` (session 41), `0xF97CD9C7` (session 39), `0x3B2ECFED` (session 38), `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A` (`local/images/kernel-0xE36C679A-wdt58s.img`, 0x91A748, sha256 `bdbaf5fc…`), and the touch `0x04AF1433` |
+| region-0 RCFS (`/base`) | **still the 1917 RCFS at region-0 offset 0xC00000** — outside the 7.3.3 test image (which ends at 0x93A324) and not touched this session; not readable as `/base` without the 1917 IFS |
 | UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
 | `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it last ran during the session-35 S3/S2 TabletOS bench and topped `BOOTCTR_FCTRY` back to `0x32` |
 | `BOOTCTR_FCTRY` | **self-replenishing** — the Linux `/init` tops it up at ≤`0x1e` and a TabletOS boot writes `0x32`; read it as a health check (`SAFETY.md` §2) |
-| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`b20302dc…`** (`local/images/rootfs-region1-audio-oss.ext4`), **27 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus `snd-pcm-oss`, `snd-mixer-oss`, `snd-soc-playbook-wm8994`), `pbplay` and `pbmix`; the initramfs mounts it **read-write** and chroots into it |
+| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`3df8056c…`** (`local/images/rootfs-region1-audio-oss.ext4`), **27 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus `snd-pcm-oss`, `snd-mixer-oss`, `snd-soc-playbook-wm8994`), `pbplay` and `pbmix`; the initramfs mounts it **read-write** and chroots into it |
 | TabletOS / OS | **NOT running** — the unit is on our Linux image `0x36597040` (`0fca:8010`, console `pb> `).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; the door (`169.254.0.1`, root ssh) is available only on TabletOS |
 | device-side files | **persistent on the UFS**: `/accounts/devuser/bin/{memdump3,memw32,pbi2c}`, the cleaned `/accounts/devuser/startup.sh`, and our `.ssh/authorized_keys` (root ssh).  Re-push QNX `/tmp` tools only after a TabletOS restore |
 
@@ -146,19 +154,23 @@ and a failed/half-formed write or a flat pack is still a brick risk.
 ## Blockers in play
 
 **For the current focus (item 9 step 5 audio), the blocker is a live AIF1CLK,
-and it is now causal.**  The transmit path is proven (session 42, E1): with the
-codec as AIF1 master and the McBSP as a clock consumer, a stream drains the FIFO
-end to end.  Session 43 settled the model: SCRM `AUXCLK1` IS the codec's MCLK1
-(gate it off + codec reset + FLL power-up → no lock; restore → lock; report
-208), and on Linux MCLK1 is measurably **absent** although `AUXCLK1 =
-0x00020100`, the fref pad and the stream-time FLL file are identical to the
-reference (codec freeze detector, validated on the reference).  A broad
-register sweep (SCRM, pads, CM1/CM2, PRM/CKGEN) found every difference
-irrelevant (tested), so the fault is below the readable registers —
-pad/clock-domain/power or board — and needs the probe/boardview the operator
-does not have (trap 165).  The free-running NCO (±10–30 %) proves the
-architecture, not a hi-fi clock.  Caveat: session 41's one MCLK1 lock keeps
-"marginal" alive.  Reports 206, 208.
+and it is now below every readable register.**  The transmit path is proven
+(session 42, E1): with the codec as AIF1 master and the McBSP as a clock
+consumer, a stream drains the FIFO end to end.  Session 43 settled the model:
+SCRM `AUXCLK1` IS the codec's MCLK1 (gate it off + codec reset + FLL power-up →
+no lock; restore → lock; report 208), and on Linux MCLK1 is measurably
+**absent** although `AUXCLK1 = 0x00020100`, the fref pad and the stream-time FLL
+file are identical to the reference (codec freeze detector, validated on the
+reference).  **Session 44 ran the last readable hypothesis — the power/CM
+domains — and it is negative** (report 209): every state field matches, the only
+difference is the `LASTPOWERSTATEENTERED` debug latch, and setting every
+differing CM policy to Linux's value on the live working oracle leaves MCLK1
+present.  The fault is therefore the pad's output path, the board's clock net,
+or a PMIC/analogue condition — trap 165's probe, which the operator does not
+have.  The remaining software-only routes are a non-reference AIF1CLK design
+(the McBSP master/SRG permutation, one per boot) or the free-running NCO (a
+±10–30 % mechanism probe, not a hi-fi clock).  Caveat: session 41's one MCLK1
+lock keeps "marginal" alive.  Reports 206, 209.
 
 **The long-standing WL1283 blocker is unchanged (chip-side, software
 exhausted).**  The 1917-truth minimal `&mmc5` host (report 195) boots and
@@ -183,13 +195,13 @@ GPIO2_3 edge IRQ works (`irq 110`); the power/reset lines are still not driven
 by the driver.  It survived this session's warm boot; only cold boots need the
 GPIO pulse.
 
-**Media state: region 0 = the session-42 image `0x36597040`** (kernel `7.3.3`
-with the E1 clock roles and input pads); region 1 = the audio/OSS rootfs
-(`b20302dc…`, 27 modules;
+**Media state: region 0 = the session-44 image `0xB43F169B`** (kernel `7.3.3`
+with the E1 clock roles, the ABE-refclk fix and the codec-GPIO init); region 1 =
+the audio/OSS rootfs (`3df8056c…`, 27 modules;
 `local/images/rootfs-region1-audio-oss.ext4`).
 The unit is on Linux, not TabletOS.  The way back to TabletOS is
 the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, block `0x825`); the previous
-Linux images `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x0DC36A11`,
+Linux images `0x36597040`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x0DC36A11`,
 `0xE36C679A` and `0x04AF1433` remain.
 NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 (`SAFETY.md` §6).
@@ -200,18 +212,25 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    is done and negative (report 196); the remaining measurements (VBAT / 26 MHz
    TCXO / SLOW_CLK, MMC5 CLK/CMD/DAT0) need a board view or logic analyser.  Do
    not re-open it without the operator.
-2. **The WM8994 audio half of item 9 step 5 — MCLK1 is the blocker, now proven
-   causal (reports 206/208).**  The transmit path and the codec chain are
-   proven; Linux's config matches the reference; MCLK1 is measurably absent.
-   The next experiment is the **power-domain/CM comparison** (`PM_CORE_PWRSTST`
-   `0x4A306704`, `PM_WKUP_PWRSTST` `0x4A307704`, `PM_L4PER_PWRSTST`
-   `0x4A307404`, `PM_ABE_PWRSTST` `0x4A306504`, and the CM `*_CLKSTCTRL`):
-   capture on the oracle and on Linux and diff; if a domain differs, force it
-   and re-run the codec freeze detector.  Separately, fix
-   `CM_ABE_PLL_REF_CLKSEL = SYS_CLK` in the DTS for the ABE path.  The other
-   routes remain: (a) a probe on `fref_clk2_out`/MCLK1 (trap 165); (b) a
-   non-reference AIF1CLK design; (c) the master-mode SRG stall (one permutation
-   per boot).  Keep `0xB8830701`/`0xE36C679A` ready to reflash.
+2. **The WM8994 audio half of item 9 step 5 — MCLK1 is the blocker, and every
+   readable cause is now excluded (reports 206/208/209).**  The transmit path
+   is proven, Linux's config matches the reference, MCLK1 is measurably absent,
+   and the power/CM domains are causally ruled out (session 44).  What remains
+   is the pad/board/PMIC (trap 165) or a non-reference design.  Software-only
+   options: (a) the **McBSP master/SRG permutation** — one per boot, judged by
+   `pbplay`'s survival (trap 169); (b) the free-running NCO (mechanism probe
+   only); (c) a probe on `fref_clk2_out`/MCLK1, if one ever appears.  Keep
+   `0x36597040`/`0xE36C679A` ready to reflash.  The `CM_ABE_PLL_REF_CLKSEL` fix
+   is done (SYS_CLK, DPLL_ABE 98.304 MHz) and is **not** the MCLK1 cause.
+   **The QNX-side RE is now active (report 210):** the board's complete pad
+   database is extracted (`docs/reference/qnx-hwio/`) and the reference audio
+   driver's `codec_gpio_init` is decoded — it pulses `hdq_sio`/gpio_127 ("ldo"),
+   drives gpmc_a20/gpio_44 ("spk") high and makes gpmc_a25/gpio_49 ("hp") an
+   input, then maps AUXCLK1 and runs `StereoAudioCodecInit`.  Our driver does
+   none of that.  **Done (report 211):** implemented in `playbook-wm8994.c`,
+   rebuilt and flashed; FLL1 still does **not** lock, and the WM8994 probe is
+   now reliable (line high before module load).  What remains is the
+   McBSP-master/SRG design or a probe.
 3. **Touch: DONE (session 38, report 198) but down after a cold boot.**  The
    calibration and the IRQ are in the tree and proven; after a cold boot the
    controller does not boot (`0x65` NAKs) until the power/reset GPIOs
@@ -221,8 +240,8 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    `wlcore@2` child the mainline binding requires (`ti,wl1283`, `reg = <2>`,
    `interrupts` for WL_IRQ, `ref-clock-frequency`/`tcxo-clock-frequency` 26 MHz),
    for the post-enumeration `wl12xx` path — report 195 §3.6, HANDOFF §0b.
-5. **The unit is on Linux `0x36597040`** (region 0) + the E1 audio/OSS rootfs
-   (`b20302dc…`, region 1).  To return to TabletOS, flash the 1917 IFS at
+5. **The unit is on Linux `0xB43F169B`** (region 0) + the E1 audio/OSS rootfs
+   (`3df8056c…`, region 1).  To return to TabletOS, flash the 1917 IFS at
    block `0x825`; the previous Linux images remain.
 
 ## Workspace location

@@ -59,7 +59,7 @@ The guides are in `docs/parked/`.
 | WL1283 / MMC5 | reports 180, 185–197 | **software surface exhausted; report 196 is the minimal 1917-truth negative** |
 | WLAN calibration / NVS | report 197 | QNX `hd5` |
 | Munin touch | reports 193, 194, 198 | bus, protocol, calibration + IRQ |
-| WM8994 audio | reports 199, 200, 201, 203, 204, 205, **206** | **206 is current**: E1 clock roles, the transmit path proven in consumer mode, MCLK1 dead at the pin; 205 = the codec chain solved and driver-driven, the master-mode transmit stall isolated; 203 = the AIF1CLK write rule; 204 = the first live reference codec read (its "MCLK1 never clocks" claim is corrected by 205 §4b) |
+| WM8994 audio | reports 199, 200, 201, 203, 204, 205, **206**, **209** | **206 is current for the transmit path**: E1 clock roles, the transmit path proven in consumer mode, MCLK1 dead at the pin; 205 = the codec chain solved and driver-driven, the master-mode transmit stall isolated; 203 = the AIF1CLK write rule; 204 = the first live reference codec read (its "MCLK1 never clocks" claim is corrected by 205 §4b).  **209 is current for the fault localisation**: the power-domain/CM comparison is negative, and the ABE reference clock is fixed (SYS_CLK, 98.304 MHz). |
 | ISL9519 charger | report 183 | |
 | WDT2 / PMIC | reports 183, 184, 192 | |
 
@@ -72,6 +72,9 @@ The guides are in `docs/parked/`.
 | Documentation audit | report 167 |
 | **Minimal 1917 oracle image** (debloated reference, qconn on 9090) | **report 207** | `tools/build_minimal_qnx.py` |
 | **Oracle causality: AUXCLK1 is the codec MCLK1** | **report 208** | live AUXCLK1 gate test, `docs/captures/wm8994-oracle-live-2026-11-12.txt` |
+| **Power-domain/CM comparison (negative) + the ABE-refclk fix** | **report 209** | live captures both sides, the oracle causal test, three-image DPLL_ABE comparison, `docs/captures/wm8994-pm-cm-2026-11-12.txt` |
+| **QNX audio chain RE — board pad database, codec-GPIO init** | **report 210** | `docs/reference/qnx-hwio/` (249-record pad table + resolver) |
+| **Codec-GPIO init implemented in the machine driver** | **report 211** | negative for MCLK1; fixes the WM8994 probe; Linux/OMAP gpio-numbering trap |
 | Public snapshot / repository management | `docs/project/REPO-MANAGEMENT.md` |
 
 ## Superseded or read-with-care
@@ -81,4 +84,4 @@ The guides are in `docs/parked/`.
 * **118 §8.2** and **111 §8 item 4** are corrected inline.
 * The session-13 "partial live image" was withdrawn by report 129 §5.
 * Old patch-size statements (42, 46, 47, 48 files) are historical; the current
-  export is 54 files / 8,113 lines (`kernel/patches/README.md`).
+  export is 54 files / 8,109 lines (`kernel/patches/README.md`).

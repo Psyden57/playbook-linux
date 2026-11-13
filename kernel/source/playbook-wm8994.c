@@ -15,9 +15,12 @@
  */
 
 #include <linux/clk.h>
+#include <linux/delay.h>
+#include <linux/gpio/consumer.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/pinctrl/consumer.h>
+#include <linux/regulator/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/workqueue.h>
 
@@ -89,7 +92,66 @@
 struct playbook_wm8994_priv {
 	struct snd_soc_component *codec;
 	struct delayed_work repair;
+	struct regulator *ldo;
+	struct gpio_desc *hp;
 };
+
+/*
+ * Board-level audio enables, from the reference driver's inlined
+ * codec_gpio_init (report 210 §3).  At io-audio init it resolves three hwio
+ * signals and drives them, in this order:
+ *
+ *   signal 0x92 "ldo" -- hdq_sio, pad 0x120 low, gpio_127 (GPIO4_31):
+ *                        output, low, delay(100), high
+ *   signal 0x93 "spk" -- gpmc_a20, pad 0x068 low, gpio_44 (GPIO2_12):
+ *                        output, high
+ *   signal 0x94 "hp"  -- gpmc_a25, pad 0x070 high, gpio_49 (GPIO2_17):
+ *                        input
+ *
+ * The spk line is already held high by the board's gpio hog, and hp is a pad
+ * input; the ldo line is the one action our boot never performed, and the
+ * reference does it *before* it configures the codec.  The machine driver
+ * probes before any stream (and therefore before hw_params/FLL setup), so this
+ * is the same point in the chain.
+ */
+static void playbook_wm8994_board_enables(struct device *dev,
+					  struct playbook_wm8994_priv *priv)
+{
+	int ret;
+
+	/*
+	 * The ldo is a boot-on fixed regulator: it is already up when this
+	 * module loads, and force_disable() is what actually gates a boot-on
+	 * regulator with no explicit enable count.  Off -> 100 ms -> on is the
+	 * reference's codec_gpio_init pulse.
+	 */
+	priv->ldo = devm_regulator_get_optional(dev, "ldo");
+	if (IS_ERR(priv->ldo)) {
+		dev_warn(dev, "ldo regulator unavailable: %ld\n",
+			 PTR_ERR(priv->ldo));
+		priv->ldo = NULL;
+	}
+	if (priv->ldo) {
+		ret = regulator_force_disable(priv->ldo);
+		if (ret)
+			dev_warn(dev, "ldo force-disable failed: %d\n", ret);
+		msleep(100);
+		ret = regulator_enable(priv->ldo);
+		if (ret)
+			dev_warn(dev, "ldo enable failed: %d\n", ret);
+		else
+			dev_info(dev, "audio ldo pulsed, now on\n");
+	}
+
+	priv->hp = devm_gpiod_get_optional(dev, "hp", GPIOD_IN);
+	if (IS_ERR(priv->hp)) {
+		dev_warn(dev, "hp gpio unavailable: %ld\n", PTR_ERR(priv->hp));
+		priv->hp = NULL;
+	}
+	if (priv->hp)
+		dev_info(dev, "audio hp detect on gpio %d (input)\n",
+			 desc_to_gpio(priv->hp));
+}
 
 static int playbook_wm8994_hw_params(struct snd_pcm_substream *substream,
 				     struct snd_pcm_hw_params *params)
@@ -324,6 +386,12 @@ static int playbook_wm8994_probe(struct platform_device *pdev)
 	pinctrl = devm_pinctrl_get_select_default(&pdev->dev);
 	if (IS_ERR(pinctrl) && PTR_ERR(pinctrl) != -ENODEV)
 		return PTR_ERR(pinctrl);
+
+	/*
+	 * Reference order: board enables (ldo pulse, hp input) first, then the
+	 * codec work -- which happens at hw_params, after this probe.
+	 */
+	playbook_wm8994_board_enables(&pdev->dev, priv);
 
 	card->dev = &pdev->dev;
 	return devm_snd_soc_register_card(&pdev->dev, card);
