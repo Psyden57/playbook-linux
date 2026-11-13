@@ -1,0 +1,14 @@
+# PlayBook CDC-ACM console (our Linux bring-up image, 0fca:8010) and the
+# 1917/QNX oracle (0fca:8012).  Without this the kernel creates the tty as
+# root:uucp 0660, so the *user* who runs the bench tools loses the console
+# after every re-enumeration (a flash always re-enumerates; trap 184).
+#
+# Install as root:
+#   sudo install -m 0644 tools/99-playbook-cdc-acm.rules \
+#        /etc/udev/rules.d/99-playbook-cdc-acm.rules
+#   sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=tty
+#
+# The bench tools themselves are always run as the user, never under pkexec.
+
+SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="0fca", \
+    KERNEL=="ttyACM*", MODE="0666"

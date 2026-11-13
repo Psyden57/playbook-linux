@@ -3,11 +3,20 @@
  * playbook-wm8994.c -- SoC audio for the BlackBerry PlayBook (OMAP4430).
  *
  * The board has a Wolfson WM8994 on I2C4.  The CPU side is McBSP2 (inside
- * l4_abe).  Since session 42 (experiment E1) the CODEC is the AIF1 master
- * (R0x302 = 0x4000, as on the 1917 reference) and the McBSP is a clock
- * consumer: CLKX/FSX are inputs, the sample-rate generator is out of the
- * path, and FLL1 is referenced from MCLK1 (12.8 MHz) instead of BCLK --
- * with the codec as master a BCLK-referenced FLL would be circular.
+ * l4_abe).  Since session 45 (experiment E5) the McBSP is the bit/frame
+ * provider again -- the non-reference design -- so that a live AIF1CLK does
+ * not depend on the codec's MCLK1 pin, which does not clock under our image
+ * (reports 206/209).  The codec is the AIF1 slave and its FLL1 is referenced
+ * from the incoming BCLK, which this design generates and which was measured
+ * to lock FLL1 every time (report 205 §3).
+ *
+ * The sample-rate generator is clocked from the CPU clock (SRGR2.CLKSM = 1,
+ * i.e. OMAP_MCBSP_SYSCLK_CLK).  The session-41 build left CLKSM = 0, which
+ * per TRM Table 23-52 derives the SRG clock from the **CLKS pin**; this board
+ * drives no CLKS (clk_summary: pad_clks_ck is 12 MHz with no consumer and not
+ * enabled), so the SRG never produced CLKG and the transmitter stalled with
+ * XRDY = 0 / XEMPTY = 1 (report 205 §5l).  The internal path is live:
+ * abe_24m_fclk = 12.288 MHz -> abe-clkctrl:0030:24 -> 40124000.mcbsp.
  *
  * The card is a module so it loads after the USB gadget (trap 149); the
  * output widgets/routes complete the DAPM path from AIF1 to the headphone and
@@ -24,6 +33,7 @@
 #include <linux/platform_device.h>
 #include <linux/workqueue.h>
 
+#include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
 
@@ -33,8 +43,15 @@
  * Values from sound/soc/codecs/wm8994.h and sound/soc/ti/omap-mcbsp.h.
  */
 #define PB_WM8994_FLL1			1
-#define PB_WM8994_FLL_SRC_MCLK1		1
+#define PB_WM8994_FLL_SRC_BCLK		4
 #define PB_WM8994_SYSCLK_FLL1		3
+
+/*
+ * OMAP_MCBSP_SYSCLK_CLK: SRGR2.CLKSM = 1, "SRG clock derived from the CPU
+ * clock" (TRM Table 23-52).  OMAP_MCBSP_CLKGDV: SRGR1.CLKGDV.
+ */
+#define PB_OMAP_MCBSP_SYSCLK_CLK		2
+#define PB_OMAP_MCBSP_CLKGDV		0
 
 /* WM8994 register addresses (include/linux/mfd/wm8994/registers.h). */
 #define PB_WM8994_PM1			0x001
@@ -85,7 +102,18 @@
 /* AIF1DAC1L/R -> DAC1L/R (R0x601/R0x602 bit 0, AIF1 timeslot 0). */
 #define PB_AIF1DAC1_TO_DAC1		0x0001
 
-#define PB_MCLK1_HZ			12800000
+/*
+ * The clock the sample-rate generator actually divides.
+ *
+ * The clock framework reports the McBSP's functional clock as 12.288 MHz
+ * (abe_24m_fclk -> abe-clkctrl:0030:24), but with CLKSM = 1 the SRG divides
+ * the ABE **interface** clock: measured on the bench, CLKGDV = 7 (/8) and
+ * FPER = 31 (32 CLKG/frame) produced 192 450 frames/s, i.e. exactly 4.0x the
+ * requested 48 kHz, and 49.152 MHz = 4 x 12.288 MHz = ocp_abe_iclk (the L4_ABE
+ * interface clock, DPLL_ABE/2).  32 = 49.152 MHz / 1.536 MHz, so CLKGDV = 31
+ * gives BCLK = 1.536 MHz and FPER = 32 gives 48 kHz.
+ */
+#define PB_MCBSP_FCLK_HZ		49152000
 #define PB_AIFCLK_FS			256
 #define PB_BITS_PER_FRAME		32	/* 2 channels x 16 bit */
 
@@ -94,6 +122,7 @@ struct playbook_wm8994_priv {
 	struct delayed_work repair;
 	struct regulator *ldo;
 	struct gpio_desc *hp;
+	struct snd_pcm_substream *substream;
 };
 
 /*
@@ -157,27 +186,40 @@ static int playbook_wm8994_hw_params(struct snd_pcm_substream *substream,
 				     struct snd_pcm_hw_params *params)
 {
 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
 	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, 0);
 	struct snd_soc_component *codec = codec_dai->component;
 	unsigned int rate = params_rate(params);
 	unsigned int aifclk = rate * PB_AIFCLK_FS;
 	unsigned int bclk = rate * PB_BITS_PER_FRAME;
+	unsigned int div = PB_MCBSP_FCLK_HZ / bclk;
 	int ret;
 
+	if (!div)
+		div = 1;
+
 	/*
-	 * E1 (session 42): the codec is the AIF1 MASTER and the McBSP is a
-	 * clock CONSUMER, matching the 1917 reference (R0x302 = 0x4000).  The
-	 * dai_fmt below says CBP_CFP from the codec's perspective; the ASoC
-	 * core flips it for the CPU DAI, so omap-mcbsp's set_dai_fmt takes the
-	 * BC_FC (slave) branch: CLKXM/FSXM stay clear, CLKX/FSX are inputs, and
-	 * the sample-rate generator is not started at all (omap_mcbsp_start()
-	 * only raises GRST/FRST for a master).  That removes the SRG from the
-	 * path where XRDY sat stuck at 0 with XEMPTY 1 (report 205 §5l).
+	 * E5 (session 45): the McBSP is the bit/frame provider and the codec is
+	 * the AIF1 slave.  The ASoC core flips the link's codec-perspective
+	 * CBC_CFC to BP_FP for the CPU DAI, so omap-mcbsp's set_dai_fmt takes
+	 * the master branch (CLKXM/FSXM/CLKRM/FSRM set, SRGR2.FSGM = 1 -- the
+	 * SRG's FSG drives FSX) and omap_mcbsp_start() releases GRST/FRST.
 	 *
-	 * No set_sysclk/set_clkdiv on the CPU DAI: with the SRG out of the path
-	 * the McBSP shifts on the codec's BCLK directly.  (The pads for clkx
-	 * and fsx are PIN_INPUT in the DTS to match.)
+	 * CLKSM = 1 is the fix for the session-41 stall: with CLKSM = 0 the SRG
+	 * is clocked from the CLKS pin, and this board has no CLKS source (the
+	 * pad_clks clock is unused and gated).  The internal path read live:
+	 * abe_24m_fclk 12.288 MHz -> abe-clkctrl:0030:24 -> 40124000.mcbsp.
+	 * With CLKGDV = 8 that is BCLK = 1.536 MHz = 48 kHz x 32 bits, and
+	 * FPER = 32 (computed in omap-mcbsp from in_freq/div/rate).
 	 */
+	ret = snd_soc_dai_set_sysclk(cpu_dai, PB_OMAP_MCBSP_SYSCLK_CLK,
+				     PB_MCBSP_FCLK_HZ, SND_SOC_CLOCK_IN);
+	if (ret < 0 && ret != -ENOTSUPP)
+		return ret;
+
+	ret = snd_soc_dai_set_clkdiv(cpu_dai, PB_OMAP_MCBSP_CLKGDV, div);
+	if (ret < 0 && ret != -ENOTSUPP)
+		return ret;
 
 	/*
 	 * Only the thaw and the word length here.  Everything else -- supplies,
@@ -191,17 +233,14 @@ static int playbook_wm8994_hw_params(struct snd_pcm_substream *substream,
 				      0x0060, PB_AIF1_WL_16);
 
 	/*
-	 * Lock FLL1 from **MCLK1** (AUXCLK1 = 12.8 MHz) and source AIF1CLK
-	 * from it -- the reference's exact design (report 205 §5g).
-	 *
-	 * The BCLK reference used through session 41 is IMPOSSIBLE here: with
-	 * the codec as AIF1 master, BCLK is the codec's own output, so an FLL
-	 * referenced to it is circular.  MCLK1 locked once in session 41 with
-	 * the codec thawed (§5h) but not on every boot; this experiment rides
-	 * on that open question.
+	 * Lock FLL1 from **BCLK** and source AIF1CLK from it.  With the McBSP
+	 * as master, BCLK is our own output, so the FLL reference exists as
+	 * soon as the port starts -- and this reference was measured to lock
+	 * FLL1 on every attempt (R0x732 = 0x6020, report 205 §3), unlike the
+	 * MCLK1 reference, whose pin does not clock under our image.
 	 */
 	ret = snd_soc_dai_set_pll(codec_dai, PB_WM8994_FLL1,
-				  PB_WM8994_FLL_SRC_MCLK1, PB_MCLK1_HZ, aifclk);
+				  PB_WM8994_FLL_SRC_BCLK, bclk, aifclk);
 	if (ret < 0 && ret != -ENOTSUPP)
 		return ret;
 
@@ -209,8 +248,8 @@ static int playbook_wm8994_hw_params(struct snd_pcm_substream *substream,
 			       aifclk, SND_SOC_CLOCK_IN);
 
 	dev_info(rtd->dev,
-		 "rate %u Hz: AIF1CLK %u Hz, BCLK %u Hz (codec AIF1 master, FLL1 from MCLK1)\n",
-		 rate, aifclk, bclk);
+		 "rate %u Hz: AIF1CLK %u Hz, BCLK %u Hz (McBSP bit/frame provider, CLKSM=1, CLKGDV=%u, FLL1 from BCLK)\n",
+		 rate, aifclk, bclk, div);
 	return 0;
 }
 
@@ -245,6 +284,36 @@ static void playbook_wm8994_repair(struct work_struct *work)
 	 */
 	regcache_mark_dirty(codec->regmap);
 	regcache_sync(codec->regmap);
+
+	/*
+	 * Session-45 diagnostic: is the application's audio actually in the
+	 * ALSA ring the sDMA copies from?  The transport reaches the shifter
+	 * (XBUFFSTAT toggles) and the codec is clocked, yet nothing is audible,
+	 * so the two live candidates are "the ring holds silence" and "the
+	 * codec ignores our framing".  DXR cannot be read back on this silicon
+	 * (it returns a constant), so read the ring itself.
+	 */
+	if (priv->substream && priv->substream->runtime) {
+		struct snd_pcm_runtime *rt = priv->substream->runtime;
+
+		if (rt->dma_area && rt->dma_bytes >= 8) {
+			s16 *s = (s16 *)rt->dma_area;
+			unsigned int n = rt->dma_bytes / 4; /* frames (stereo s16) */
+
+			dev_info(codec->dev,
+				 "pcm: rate %u fmt %d width %u area %u B first %d %d %d %d | at hw_ptr %u: %d %d %d %d\n",
+				 rt->rate, rt->format, rt->sample_bits,
+				 rt->dma_bytes, s[0], s[1], s[2], s[3],
+				 rt->status ? rt->status->hw_ptr % n : 0,
+				 s[(rt->status ? rt->status->hw_ptr % n : 0) * 2],
+				 s[(rt->status ? rt->status->hw_ptr % n : 0) * 2 + 1],
+				 s[(rt->status ? (rt->status->hw_ptr + 1) % n : 0) * 2],
+				 s[(rt->status ? (rt->status->hw_ptr + 1) % n : 0) * 2 + 1]);
+		} else {
+			dev_info(codec->dev, "pcm: no dma_area (bytes %u)\n",
+				 rt->dma_bytes);
+		}
+	}
 
 	/* FLL1 must be locked before the rest lands. */
 	if (!(snd_soc_component_read(codec, 0x732) & 0x0020))
@@ -316,6 +385,7 @@ static int playbook_wm8994_trigger(struct snd_pcm_substream *substream, int cmd)
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
 		priv->codec = codec_dai->component;
+		priv->substream = substream;
 		schedule_delayed_work(&priv->repair, msecs_to_jiffies(50));
 		break;
 	case SNDRV_PCM_TRIGGER_STOP:
@@ -354,7 +424,7 @@ SND_SOC_DAILINK_DEFS(playbook,
 static struct snd_soc_dai_link playbook_wm8994_dai = {
 	.name = "WM8994",
 	.stream_name = "PlayBook WM8994",
-	.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBP_CFP |
+	.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBC_CFC |
 		   SND_SOC_DAIFMT_NB_NF,
 	.ops = &playbook_wm8994_ops,
 	SND_SOC_DAILINK_REG(playbook),

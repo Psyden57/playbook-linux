@@ -1833,6 +1833,53 @@ drove the wrong gpio numbers); report 211 is the first test done under this
 rule — implemented in the driver, rebuilt, flashed.
 
 
+---
+
+## 57. E5: the McBSP is the bit/frame provider, `CLKSM = 1` clocks the SRG, and the SRG divides the ABE interface clock (session 45)
+
+**Decision.**  Keep the **non-reference clock design**: the McBSP is the bit
+and frame provider, the codec is the AIF1 **slave**, and the codec's FLL1 is
+referenced from the **BCLK we generate**.  In the CPU DAI: `set_sysclk(
+OMAP_MCBSP_SYSCLK_CLK)` — i.e. **`SRGR2.CLKSM = 1`** — and
+`set_clkdiv(CLKGDV, 49 152 000 / (rate × 32))`; the DAI link is
+`SND_SOC_DAIFMT_CBC_CFC`.  The DTS `clkx`/`fsx` pads are `PIN_OUTPUT`.
+
+**Why.**  This was the last software-only route to a live AIF1CLK after MCLK1
+was proved dead at the pin (reports 206/208/209).  Two mechanisms had to be
+right and both were measurable:
+
+* `CLKSM = 0` derives the sample-rate generator clock from the **CLKS pad**
+  (TRM Table 23-52).  This board drives no CLKS — `pad_clks_ck` is 12 MHz with
+  `enable 0` and no consumer — so the session-41 master-mode build never
+  produced `CLKG`, and the transmitter sat at `XRDY = 0` / `XEMPTY = 1`.  That
+  is the whole of the "SRG→shifter stall".
+* With `CLKSM = 1` the SRG divides the **ABE interface clock**, not the 12.288
+  MHz functional clock the clock framework reports: measured 192 450 frames/s
+  (4.009× the request) with `CLKGDV = 8`, and 49.152 MHz = `ocp_abe_iclk` =
+  `DPLL_ABE / 2`.  `CLKGDV = 32` gives 48 096 frames/s.  This also depends on
+  session 44's DPLL_ABE lock: before it `ST_DPLL_CLK = 0`.
+
+**Constraint.**  The design is **not audibly verified**: the codec is clocked
+and the DMA delivers the application's samples (verified in `runtime->dma_area`
+and by `XBUFFSTAT`), but the codec decodes nothing (a start crackle, then the
+noise floor).  The open question is the codec's AIF1 **data input** — which ball
+carries DACDAT, and whether the reference's DSP_A format is required.  Do not
+describe E5 as "audio works": it is **transport works**.
+
+**Addendum (same session, E6).**  The codec's **DACDAT is `abe_mcbsp1_dx`**
+(pad `0x102`) — read live on the oracle while it played a wav the operator
+confirmed audible — and `abe_mcbsp2_dx`, which this design drives, is not
+connected to the codec.  McBSP1 as a clock *master* does not reach the codec
+(FLL unlocked), so the follow-on design is **McBSP2 = clocks (E5), McBSP1 =
+clock consumer on the same nets, data on `mcbsp1_dx`**.  DSP_A was tried and is
+not the fault.  Report 212 §10–11.
+
+**Evidence.**  Report **212**;
+`docs/captures/wm8994-e5-master-srg-2026-11-13.txt`; `SRGR1 = 0x0f1f`,
+`SRGR2 = 0x301f`, `PCR0 = 0x0f0f`, `R0x302 = 0x0000`, `R0x732 = 0x6020`,
+`R0x224 = 0x0c83`, the 48 096/s measurement, and the PCM-ring readback.
+
+---
 
 The repository licence and visibility are decided below; the remaining
 policy questions (publication of the proprietary corpus) stay open and are

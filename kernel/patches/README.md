@@ -3,11 +3,18 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**8 214 lines / 54 files** against pristine
-**linux-7.3.3** (sha256 `90391b96…`, session-44 wrap-up).  It is generated from
+**8 331 lines / 54 files** against pristine
+**linux-7.3.3** (sha256 `82d08fcc…`, session-45 wrap-up).  It is generated from
 the tree (via the session-41 file list — no new sources in sessions 42–44), and
 it was verified by applying it to pristine 7.3.3 targets and comparing all 54
 files byte-for-byte with `local/kernel-tree` — 0 rejects, 0 mismatches.
+**Session 45** adds E5: the machine driver goes back to `SND_SOC_DAIFMT_CBC_CFC`
+with the CPU DAI as bit/frame provider (`set_sysclk(CLKSM=1)` +
+`set_clkdiv(CLKGDV, 49.152 MHz / BCLK)`, FLL1 referenced from BCLK,
+`PB_MCBSP_FCLK_HZ = 49152000`), the board DTS `mcbsp2_pins` `clkx`/`fsx` are
+outputs again, and two diagnostics are in the tree (the machine driver's `pcm:`
+DMA-ring readback and `omap-mcbsp`'s eight-sample `live N:` FIFO dump) — retire
+them when the audio path is fixed.  Report 212 §10–11.  The DTS also carries the (disabled) `&mcbsp1` node and the `mcbsp1_pins` group — the codec's DATA ball is `abe_mcbsp1_dx` — as the groundwork for the two-engine design.
 **Session 44 (later)** adds the reference codec-GPIO init: the boot-on
 `audio-ldo` regulator on GPIO4_31, `ldo-supply`/`hp-gpios` on the sound node,
 and `playbook_wm8994_board_enables()` in the machine driver (report 211).

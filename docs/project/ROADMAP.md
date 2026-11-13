@@ -59,16 +59,25 @@ known-good image.
   `audio-ldo` on GPIO4_31 pulsed 100 ms at probe, spk high via the hog, hp
   input.  It does **not** restore MCLK1 (`FLL1 NOT locked`) but it fixes the
   WM8994 probe (-121 without it).
-* **WM8994 audio.**  The transmit path is **proven working** (session 42,
-  report 206): codec AIF1 master (`R0x302 = 0x4000`), McBSP consumer
-  (`PCR0 = 0x000f`, SRG out of the path); `pbplay` ran 20 s cleanly with a live
-  AIF1CLK where the McBSP-master config stalled at ~1 s.  The codec chain is
-  driver-driven (session 41).  **Blocker: a live AIF1CLK** — MCLK1 is absent on
-  Linux (above) and the fault is below the readable registers.  Routes: (a) the
-  **McBSP master/SRG permutation** — one per boot, judged by `pbplay`'s
-  survival (trap 169); (b) the free-running NCO (±10–30 %, a mechanism probe);
-  (c) a probe on `fref_clk2_out`/MCLK1 (trap 165).  The free-running NCO is not
-  a shipping clock.
+* **WM8994 audio — the transport works, the codec does not decode (session 45,
+  report 212).**  E5 put the McBSP back as the bit/frame provider with the codec
+  as AIF1 slave and FLL1 referenced to our BCLK: **no MCLK1 in the path**.  The
+  session-41 stall was `CLKSM = 0` (SRG clocked from the undriven CLKS pad);
+  `CLKSM = 1` plus `CLKGDV = 32` runs the port at **48 096 frames/s**, the
+  codec's FLL1 locks, `AIF1CLK` exists, and the application's tone is verified
+  in the DMA ring and at the transmitter (`XBUFFSTAT`).  **Open:** the codec
+  still outputs silence.  **The cause is the data ball (E6, report 212 §10):**
+  on the live reference the codec's DACDAT is `abe_mcbsp1_dx` (pad `0x102`,
+  mux 0, output — a static configuration), while `abe_mcbsp2_dx`, which E5
+  drives, is mux 7 safe mode and not connected to the codec.  DSP_A was tried
+  and is not the fault.  McBSP1 as a *clock master* loses the codec clock, so
+  the board splits the engines: **mcbsp2 = clocks, mcbsp1 = data**.  Next: make
+  McBSP1 a clock *consumer* on the same nets and carry the samples on
+  `mcbsp1_dx` (a second DAI link with `snd-soc-dummy`, or a hand-configured
+  McBSP1), first proving mcbsp1's clock inputs see mcbsp2's clock outputs.  The
+  MCLK1 route stays closed by trap 165 (no probe).  The free-running NCO remains a mechanism
+  probe only.  **Closes when:** a 440 Hz tone from `pbplay` is audible at the
+  measured rate (48 kHz ±1 %).
 * **WL1283.**  Formally stopped by the operator (session 36).  The software
   surface is exhausted and the 1917-truth minimal host still fails CMD5
   (report 196).  Do not re-run traps 116–137.  The WLAN calibration/NVS is

@@ -59,7 +59,7 @@ The guides are in `docs/parked/`.
 | WL1283 / MMC5 | reports 180, 185–197 | **software surface exhausted; report 196 is the minimal 1917-truth negative** |
 | WLAN calibration / NVS | report 197 | QNX `hd5` |
 | Munin touch | reports 193, 194, 198 | bus, protocol, calibration + IRQ |
-| WM8994 audio | reports 199, 200, 201, 203, 204, 205, **206**, **209** | **206 is current for the transmit path**: E1 clock roles, the transmit path proven in consumer mode, MCLK1 dead at the pin; 205 = the codec chain solved and driver-driven, the master-mode transmit stall isolated; 203 = the AIF1CLK write rule; 204 = the first live reference codec read (its "MCLK1 never clocks" claim is corrected by 205 §4b).  **209 is current for the fault localisation**: the power-domain/CM comparison is negative, and the ABE reference clock is fixed (SYS_CLK, 98.304 MHz). |
+| WM8994 audio | reports 199, 200, 201, 203, 204, 205, 206, 209, **212** | **206 is current for the transmit path**: E1 clock roles, the transmit path proven in consumer mode, MCLK1 dead at the pin; 205 = the codec chain solved and driver-driven, the master-mode transmit stall isolated; 203 = the AIF1CLK write rule; 204 = the first live reference codec read (its "MCLK1 never clocks" claim is corrected by 205 §4b).  209 is the fault localisation (power/CM negative; ABE reference clock fixed).  **212 is current for the transport AND the fault**: E5 — McBSP bit/frame provider, `CLKSM`/SRG-clock findings, 48 kHz, data verified in the ring; E6 — the codec's DACDAT is `abe_mcbsp1_dx` (not `abe_mcbsp2_dx`), and the board splits clocks (mcbsp2) from data (mcbsp1). |
 | ISL9519 charger | report 183 | |
 | WDT2 / PMIC | reports 183, 184, 192 | |
 

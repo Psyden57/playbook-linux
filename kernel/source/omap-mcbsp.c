@@ -39,6 +39,7 @@ static void omap_mcbsp_steady_dump(struct work_struct *work)
 {
 	struct omap_mcbsp *mcbsp =
 		container_of(work, struct omap_mcbsp, steady_dump);
+	int i;
 
 	/* Let the sDMA run for a while so DXR carries live samples. */
 	msleep(500);
@@ -58,6 +59,24 @@ static void omap_mcbsp_steady_dump(struct work_struct *work)
 	dev_info(mcbsp->dev, "XCR1:  0x%04x\n", MCBSP_READ(mcbsp, XCR1));
 	dev_info(mcbsp->dev, "XCR2:  0x%04x\n", MCBSP_READ(mcbsp, XCR2));
 	dev_info(mcbsp->dev, "******************************\n");
+
+	/*
+	 * A single sample of DXR cannot distinguish "the sDMA is feeding the
+	 * port" from "the port is being written zeros": a square wave has long
+	 * runs and one read can land on anything, while a stalled port reads 0
+	 * every time.  XBUFFSTAT is the transmit FIFO level, so sample the pair
+	 * repeatedly instead.  (Session 45: DXR read 0 twice in a row with a
+	 * +/-12000 square wave playing, which is what prompted this.)
+	 */
+	for (i = 0; i < 8; i++) {
+		msleep(20);
+		dev_info(mcbsp->dev,
+			 "live %d: DXR 0x%08x DRR 0x%08x XBUFFSTAT 0x%04x "
+			 "RBUFFSTAT 0x%04x SPCR2 0x%04x IRQST 0x%04x\n",
+			 i, MCBSP_READ(mcbsp, DXR), MCBSP_READ(mcbsp, DRR),
+			 MCBSP_READ(mcbsp, XBUFFSTAT), MCBSP_READ(mcbsp, RBUFFSTAT),
+			 MCBSP_READ(mcbsp, SPCR2), MCBSP_READ(mcbsp, IRQST));
+	}
 }
 
 static void omap_mcbsp_dump_reg(struct omap_mcbsp *mcbsp)

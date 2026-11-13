@@ -1239,6 +1239,68 @@ report 121 §3/§11/§12.
       returns `-EIO` — use `regulator_force_disable()` to gate it.  (Session 44,
       report 211 §1–§2.)
 
+187. **`SRGR2.CLKSM = 0` clocks the sample-rate generator from the CLKS pad,
+      and this board drives no CLKS.**  TRM Table 23-52: `CLKSM = 0` (with
+      `SCLKME = 0`) derives the SRG clock from the CLKS pin; `CLKSM = 1` from
+      the internal CPU clock.  Read live: `pad_clks_ck` is 12 MHz with
+      `enable_cnt 0` and **no consumer**, while the internal path is up
+      (`abe_24m_fclk -> abe-clkctrl:0030:24 -> 40124000.mcbsp`).  So a
+      `CLKSM = 0` build has no `CLKG`, no FSX/BCLK, and the transmitter sits at
+      `XRDY = 0` / `XEMPTY = 1` — this is the session-41 "SRG→shifter stall",
+      not a silicon fault.  `OMAP_MCBSP_SYSCLK_CLK` (the `set_sysclk` id that
+      sets `CLKSM`) is what to use; `CLKS_FCLK`'s `clk_set_parent(fclk,
+      prcm_fck)` is **not** the SRG mux and does not substitute for it.
+      (Session 45, report 212.)
+
+188. **The McBSP SRG divides the ABE *interface* clock, not the functional
+      clock the clock framework reports.**  `clk_summary` calls
+      `abe-clkctrl:0030:24` (12.288 MHz) the McBSP `fck`, but with `CLKSM = 1`
+      the SRG divides `ocp_abe_iclk` = **49.152 MHz** (`DPLL_ABE / 2`).
+      Measured: `CLKGDV = 8`, `FPER = 32` gave 192 450 frames/s (4.009× the
+      requested 48 kHz).  Compute `CLKGDV` from 49.152 MHz, and **verify by
+      measuring `hw_ptr` over a known interval** rather than trusting the
+      reported fclk.  (Session 45, report 212 §3.)
+
+189. **`DXR` and `DRR` are not readable data registers on the OMAP4 McBSP.**
+      They return constants (`0x00000000` / `0xc8318118`) regardless of
+      traffic, which two sessions read as "the transmitter is empty".  The
+      registers that answer the question are **`XBUFFSTAT`** (transmit FIFO
+      level: it toggles while the sDMA feeds the port) and **`IRQST`**
+      (`0x0710` = XFSX|XBR|XEOF while framing).  (Session 45, report 212 §5;
+      withdraws report 205 §5l's DXR reasoning.)
+
+190. **`omap-mcbsp` / the machine driver are modules — a change to them does
+      not change the chainloader image CRC.**  `make zImage` after editing
+      `sound/soc/ti/omap-mcbsp.c` legitimately prints the *same* CRC, so
+      "the CRC did not change ⇒ the build was stale" (trap 39) does not apply
+      to module-only changes.  Build `modules`, copy the `.ko` into
+      `local/work/modules-7.3.3/` (trap 163) and flash **region 1 only** — a
+      single-region flash, which is allowed with our Linux image on media.
+      (Session 45.)
+
+191. **A listening test must state what is actually playing, and a permission
+      failure is a wait-for-the-operator, not a workaround.**  A "no tone"
+      verdict in this session came from `pbplay 900 0` — **freq 0 is silence**
+      — that had been started for a register dump; the codec was behaving
+      correctly.  Read `/proc/asound/card0/pcm0p/sub0/status` (state, owner_pid)
+      and the `pbplay` line before judging by ear.  Separately: `pkexec chmod
+      666 /dev/ttyACM0` hangs when the operator is away, and the right response
+      is to wait and re-run it — not to install a workaround.  (Session 45,
+      operator.)
+
+192. **The codec's data ball is `abe_mcbsp1_dx` (pad `0x102`), not
+      `abe_mcbsp2_dx`.**  Read live on the oracle while it was actually playing
+      a wav: `0x4A100100` = `0x00001108` → pad `0x100` (`abe_mcbsp1_dr`) an
+      input with pull-up and pad `0x102` (`abe_mcbsp1_dx`) **mux 0, output**;
+      `0x4A1000F8` = `0x000F1108` → `abe_mcbsp2_dx` **mux 7 = safe_mode**.  A
+      during-vs-after dump of `0x4A100000`–`0x4A1001FC` shows **no changes**
+      (the pad configuration is static), so answer "which pads are outputs",
+      never "which pads changed".  Driving `mcbsp2_dx` (E5) is why the codec
+      stayed silent.  Also: **McBSP1 cannot be the clock master** — an E6 build
+      clocked `0x0fe`/`0x104` at 48 053 frames/s and the codec's FLL did not
+      lock, so BCLK/LRCLK are on the McBSP2 balls only.  (Session 45, report
+      212 §10.)
+
 ## 3. Corrections to older reports
 
 These twenty-three are preserved deliberately. Each is newer than the text it

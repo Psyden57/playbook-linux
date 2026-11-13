@@ -1,0 +1,200 @@
+wm8994 E5 (McBSP bit/frame provider, codec slave, FLL1 from BCLK) — live capture
+2026-11-13, session 45.  Unit on our Linux image 0x7A5DD941 (kernel 7.3.3 #31,
+region 0) + rootfs 636bfa20… (region 1).  Console tools/pbcon.py.
+
+All reads are READ-ONLY except the stream itself (pbplay).  No NVRAM/RPMB/MCT
+write; the image's own /init top-up ran at boot.
+
+== build under test ==
+  BOOT 1 (both regions, DTS pads + driver): kernel image 0x7A5DD941, 0x939AA8 B,
+         rootfs sha256 636bfa20…, driver PB_MCBSP_FCLK_HZ = 12288000 (WRONG)
+  BOOT 2 (region 1 only, driver):           kernel 0x7A5DD941 unchanged,
+         driver PB_MCBSP_FCLK_HZ = 49152000 (correct SRG clock)
+
+== BOOT 1: register design right, rate 4x too fast ==
+$ time pbplay 10 440
+  pbplay: opened /dev/dsp (S16_LE 2 ch 48000 Hz, 10 s, 440 Hz tone)
+  pbplay: SETFMT     -> 16 / CHANNELS -> 2 / SPEED -> 48000
+  pbplay: SETFRAGMENT -> 262158
+  pbplay: block size 16384 bytes (4096 frames)
+  pbplay: wrote 1933312 bytes, done          <-- full 10 s, no EIO
+  real 0m 2.67s
+
+dmesg:
+  [  22.9] WM8994: rate 48000 Hz: AIF1CLK 12288000 Hz, BCLK 1536000 Hz
+           (McBSP bit/frame provider, CLKSM=1, CLKGDV=8, FLL1 from BCLK)
+  omap-mcbsp 40124000.mcbsp: DRR2  0xc8318118 / DXR 0x00000000
+  omap-mcbsp 40124000.mcbsp: SPCR2 0x02f7 (start) / 0x02f5 (steady)
+  omap-mcbsp 40124000.mcbsp: SRGR1 0x0f07   CLKGDV=7 (/8), FWID=15
+  omap-mcbsp 40124000.mcbsp: SRGR2 0x301f   FPER=31 (32 CLKG), FSGM=1, CLKSM=1
+  omap-mcbsp 40124000.mcbsp: PCR0  0x0f0f   CLKXM=1 FSXM=1 (outputs)
+  wm8994-codec: repair: done, FLL1 locked
+
+rate measurement (two reads 6 s apart, stream RUNNING):
+  hw_ptr 355524 -> 1510225           = 1 154 701 frames / 6 s = 192 450 /s
+  192 450 / 48 000 = 4.009              (exactly the 49.152 / 12.288 ratio)
+
+codec during/after that stream:
+  R0x302 0x0000   AIF1 slave
+  R0x200 0x0011   AIF1CLK source = FLL1, AIF1CLK_ENA = 1
+  R0x732 0x6020   FLL1 enabled, FLL1_LOCK_STS = 1
+
+== clock tree (debugfs mounted by hand this session) ==
+  sys_clkin_ck                  38400000
+   abe_dpll_refclk_mux_ck       38400000
+    dpll_abe_ck               98304000   (session-44 fix: locks from SYS_CLK)
+     dpll_abe_m2_ck           49152000
+      dpll_abe_m2x2_ck        98304000
+       abe_clk                98304000
+        ocp_abe_iclk          49152000   <-- the SRG divides THIS
+        abe_24m_fclk          12288000   <-- what the framework calls the
+                                            McBSP functional clock
+         abe-clkctrl:0030:24  12288000   consumer 40124000.mcbsp, "fck"
+  pad_clks_src_ck             12000000
+   pad_clks_ck                12000000   enable_cnt 0, no consumer, "N"
+                                          (CLKSM=0 would take this: dead)
+
+== BOOT 2: CLKGDV = 32 (49.152 MHz / 1.536 MHz), rate correct ==
+dmesg:
+  [  22.961] WM8994: rate 48000 Hz: AIF1CLK 12288000 Hz, BCLK 1536000 Hz
+             (McBSP bit/frame provider, CLKSM=1, CLKGDV=32, FLL1 from BCLK)
+  omap-mcbsp: SRGR1 0x0f1f   CLKGDV=31 (/32), FWID=15
+  omap-mcbsp: SRGR2 0x301f   FPER=31, FSGM=1, CLKSM=1
+  omap-mcbsp: PCR0  0x0f0f   CLKXM=1 FSXM=1
+  wm8994-codec: repair: done, FLL1 locked
+
+rate measurement (6 s apart, stream RUNNING):
+  hw_ptr 91171 -> 379746            = 288 575 frames / 6 s = 48 096 /s
+  cross-check at t = 103.05 s, trigger_time 23.021 s, hw_ptr 3 846 551:
+  3 846 551 / 80.03 s = 48 065 frames/s
+
+hw_params:
+  rate: 48000 (48000/1)   format S16_LE   channels 2
+  period_size 4096   buffer_size 16384   OSS period frames 4096
+
+codec mid-stream:
+  R0x300 0x6010   16-bit I2S (AIF1_FMT = 0x10)
+  R0x302 0x0000   AIF1 slave
+  R0x200 0x0011   AIF1CLK from FLL1, enabled
+  R0x732 0x6020   FLL1 locked
+  R0x220 0x0001   FLL1 ENA
+  R0x224 0x0C83   REFCLK_SRC = 3 (BCLK), REFCLK_DIV = 0
+  R0x003 0x03F0   MIXOUTL/R + volume enables
+  R0x005 0x0303   DAC1L/R enables
+  R0x04c 0x9F25   charge pump on (CP_ENA)
+  R0x02d 0x0001   DAC1L -> MIXOUTL
+  R0x02e 0x0001   DAC1R -> MIXOUTR
+  R0x060 0x00EE   HPOUT1 analogue path
+
+dmesg noise: "omap-mcbsp 40124000.mcbsp: RX Buffer Underflow!" exactly twice per
+stream (once at start, once at the first steady dump); the receiver is not in
+the path (PCR0 has FSRM set but SPCR1 RRST = 0).  No other error.
+
+== what the operator reported ==
+(tone was on the headphone jack only; SPKMIX is not routed by the repair)
+
+Test 1 (INVALID): run against `pbplay 900 0` (freq 0 = silence) started for the
+full-register dump, so "no tone, only the floor" was correct behaviour.
+
+Test 2 (valid, `pbplay 240 440`): a crackle/pop at stream start, then only the
+DAC noise floor.  No tone.
+
+== diagnostics added this session (both are in the patch) ==
+
+playbook_wm8994_repair(), 50 ms after trigger(START), reads the ALSA ring:
+  pcm: rate 48000 fmt 2 width 16 area 65536 B first -12000 -12000 -12000 -12000
+       | at hw_ptr 2734: -12000 -12000 -12000 -12000
+  -> the app's +/-12000 square wave IS in the DMA ring, at the header and at the
+     current position.
+
+omap_mcbsp_steady_dump(), eight samples 20 ms apart:
+  live 0: DXR 0x00000000 DRR 0xc8318118 XBUFFSTAT 0x0000 RBUFFSTAT 0x0000 SPCR2 0x02f5 IRQST 0x0710
+  live 1: DXR 0x00000000 DRR 0xc8318118 XBUFFSTAT 0x0000 RBUFFSTAT 0x0000 SPCR2 0x02f5 IRQST 0x0710
+  live 2: DXR 0x00000000 DRR 0xc8318118 XBUFFSTAT 0x0000 RBUFFSTAT 0x0000 SPCR2 0x02f5 IRQST 0x0710
+  live 3: DXR 0x00000000 DRR 0xc8318118 XBUFFSTAT 0x0001 RBUFFSTAT 0x0000 SPCR2 0x02f5 IRQST 0x0710
+  live 4: DXR 0x00000000 DRR 0xc8318118 XBUFFSTAT 0x0001 RBUFFSTAT 0x0000 SPCR2 0x02f5 IRQST 0x0710
+  live 5: DXR 0x00000000 DRR 0xc8318118 XBUFFSTAT 0x0000 RBUFFSTAT 0x0000 SPCR2 0x02f5 IRQST 0x0710
+  live 6: DXR 0x00000000 DRR 0xc8318118 XBUFFSTAT 0x0001 RBUFFSTAT 0x0000 SPCR2 0x02f5 IRQST 0x0710
+  live 7: DXR 0x00000000 DRR 0xc8318118 XBUFFSTAT 0x0001 RBUFFSTAT 0x0000 SPCR2 0x02f5 IRQST 0x0710
+  -> XBUFFSTAT toggles: the sDMA fills the transmitter.  IRQST 0x0710 =
+     XFSX|XBR|XEOF: the transmitter is framing.  DXR/DRR read constants on this
+     silicon and are NOT usable as data checks (withdraws report 205 §5l's
+     "DXR = 0 means empty").
+
+  "omap-mcbsp 40124000.mcbsp: RX Buffer Underflow!" appears once per ~30 ms
+  while streaming: the receiver is disabled (SPCR1 RRST = 0) but the RX logic is
+  clocked by FSX.  Benign noise, and itself evidence that FSX runs.
+
+== pads (debugfs pinctrl, during the stream) ==
+  pin 91 4a1000f6 00000000   abe_mcbsp2_clkx  mux 0, output
+  pin 92 4a1000f8 00000100   abe_mcbsp2_dr    mux 0, input
+  pin 93 4a1000fa 00000000   abe_mcbsp2_dx    mux 0, output
+  pin 94 4a1000fc 00000000   abe_mcbsp2_fsx   mux 0, output
+
+== full codec dump vs the reference's playback capture ==
+1905 registers on each side, 76 differ.  Playback chain identical:
+  R0x610/R0x611 DAC1 volume    ref 0x00c0  ours 0x00c0
+  R0x601/R0x602 DAC1 mixer     ref 0x0001  ours 0x0001
+  R0x02d/R0x02e OUTMIX         ref 0x0001  ours 0x0001
+  R0x060 ANALOGUE_HP_0         ref 0x00ee  ours 0x00ee
+  R0x210 AIF1_RATE             ref 0x0083  ours 0x0083   (SR=48k, CLK=256)
+  R0x420 AIF1DAC1_FILTERS_1    ref 0x0030  ours 0x0000   (MUTE clear on both)
+By design / open:
+  R0x300 AIF1_CONTROL_1        ref 0xc018  ours 0x6010   (DSP_A vs I2S)
+  R0x302 master/slave          ref 0x4000  ours 0x0000   (E5 inverts it)
+  R0x305 AIF1DAC_LRCLK         ref 0x0040  ours 0x0020   (BCLK/LRCLK 64 vs 32)
+
+== the open question: which ball carries the codec's DACDAT? ==
+The reference's playback capture has abe_mcbsp2_dx at mux 7 = safe_mode
+(0x000F) and abe_mcbsp2_dr as an input (0x1108): the reference drives neither
+data ball while that capture was taken.  Either the capture was not during real
+playback, or the codec's DACDAT is not on dx.  Not resolved this session.
+
+
+== E6 — the oracle, PLAYING (session 45, after the bench was moved to QNX) ==
+Oracle: IFS local/work/ifs-shim-sealed.ifs at block 0x825; qconn/ssh up
+(0fca:8012).  io-audio started, then the reference's own player:
+
+  /base/usr/bin/audio_out -i /tmp/long.wav
+    Multimedia graph: StreamReader0 -> WAVParser0 -> AudioCard0
+
+The operator confirmed the tone is AUDIBLE on the unit.  Codec during playback:
+  R0x200 = 0x0011   AIF1CLK on, from FLL1
+  R0x302 = 0x4000   AIF1 master (the reference's design)
+  R0x300 = 0xc018   DSP_A, 16-bit
+  R0x732 = 0x6020   FLL1 locked
+  R0x220 = 0x0005   R0x224 = 0x0c80   (FLL from MCLK1)
+
+Pads during playback (identical after it — the configuration is STATIC):
+  0x4A1000F4 = 0x0100000F   abe_mcbsp2_clkx = 0x0100 input
+  0x4A1000F8 = 0x000F1108   abe_mcbsp2_dr   = 0x1108 input+pull
+                            abe_mcbsp2_dx   = 0x000F mux 7 = SAFE MODE
+  0x4A1000FC = 0x01000100   abe_mcbsp2_fsx  = 0x0100 input
+                            abe_mcbsp1_clkx = 0x0100 input
+  0x4A100100 = 0x00001108   abe_mcbsp1_dr   = 0x1108 input+pull
+                            abe_mcbsp1_dx   = 0x0000 MUX 0, OUTPUT   <--
+
+  (before/after diff over 0x4A100000-0x4A1001FC, 128 registers: 0 changes)
+
+== E6 build on Linux: McBSP1 as the port (FAILED to clock the codec) ==
+DTS: &mcbsp1 enabled, &mcbsp2 disabled, mcbsp1_pins 0x0fe/0x102/0x104 = 0x0000,
+0x100 = 0x0100; DAI CPU 40122000.mcbsp; DSP_A.
+Boot #32, image 0x3DC4508D:
+  pads:     0x0fe 0x0000  0x100 0x0100  0x102 0x0000  0x104 0x0000
+  dmesg:    SRGR1 0x001f  SRGR2 0x301f  PCR0 0x0f03
+  rate:     hw_ptr 142032 -> 430352 over 6 s = 48 053 frames/s
+  codec:    R0x224 0x0c83 (BCLK), R0x220 0x0001, R0x302 0x0000,
+            R0x732 0x6000  <-- FLL1 NOT locked: no BCLK reached the codec
+  dmesg:    "repair: done, FLL1 NOT locked"
+
+Conclusion: BCLK/LRCLK are on the McBSP2 balls only (E5 locks; report 205 §3
+locked in the pre-E1 BCLK-referenced build).  The board splits the engines:
+mcbsp2 = clocks, mcbsp1 = data (pad 0x102).
+
+== DSP_A on McBSP2 (I2S replaced, one boot) — also silent ==
+  SRGR1 0x001f  SRGR2 0x301f  PCR0 0x0f03  R0x300 0x6018 (DSP_A)  FLL1 locked
+  hw_ptr at 48 kHz; operator: only the floor.  The format is not the fault.
+
+== restored state (bench left on this) ==
+  region 0 = 0x92458D00 (0x939C5C, kernel #33), region 1 = a026a454…
+  SRGR1 0x0f1f  SRGR2 0x301f  PCR0 0x0f0f  R0x302 0x0000  R0x732 0x6020

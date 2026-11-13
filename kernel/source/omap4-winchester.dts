@@ -1099,17 +1099,35 @@
 	/*
 	 * McBSP2 (inside the ABE segment) is the codec's I2S bus.  The pads
 	 * are the OMAP4 ABE McBSP2 balls, as used by omap4-epson-embt2ws.dts.
-	 * Since session 42 (E1) the CODEC is the AIF1 master, so the McBSP is
-	 * a clock consumer: clkx and fsx are inputs (PIN_INPUT, like the 1917
-	 * reference's live pad values 0x0100) and dx stays an output -- the
-	 * McBSP still drives the data.
+	 * Since session 45 (E5) the McBSP is the bit/frame PROVIDER again, so
+	 * clkx and fsx are outputs (PIN_OUTPUT); dr stays an input and dx an
+	 * output -- the McBSP drives both the clock/frame and the data.  The
+	 * 1917 reference is the mirror image (codec master, pads 0x0100 = in).
 	 */
 	mcbsp2_pins: mcbsp2-pins {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x0f6, 0x0100)	/* abe_mcbsp2_clkx, in */
+			OMAP4_IOPAD(0x0f6, 0x0000)	/* abe_mcbsp2_clkx, out */
 			OMAP4_IOPAD(0x0f8, 0x0100)	/* abe_mcbsp2_dr, in */
 			OMAP4_IOPAD(0x0fa, 0x0000)	/* abe_mcbsp2_dx, out */
-			OMAP4_IOPAD(0x0fc, 0x0100)	/* abe_mcbsp2_fsx, in */
+			OMAP4_IOPAD(0x0fc, 0x0000)	/* abe_mcbsp2_fsx, out */
+		>;
+	};
+
+	/*
+	 * The codec's data ball is McBSP1's DX, not McBSP2's.  Live on the
+	 * reference while it plays: abe_mcbsp1_dx (pad 0x102) = 0x0000 (mux 0,
+	 * output) and abe_mcbsp1_dr (0x100) = 0x1108 (input, pull-up), while
+	 * abe_mcbsp2_dx sits in mux 7 (safe_mode).  The BCLK/LRCLK nets fan out
+	 * to both engines' clock balls -- the reference has mcbsp1_clkx (0x0fe),
+	 * mcbsp1_fsx (0x104), mcbsp2_clkx (0x0f6) and mcbsp2_fsx (0x0fc) all as
+	 * inputs while the codec is master.
+	 */
+	mcbsp1_pins: mcbsp1-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x0fe, 0x0000)	/* abe_mcbsp1_clkx, out */
+			OMAP4_IOPAD(0x100, 0x0100)	/* abe_mcbsp1_dr, in */
+			OMAP4_IOPAD(0x102, 0x0000)	/* abe_mcbsp1_dx, out */
+			OMAP4_IOPAD(0x104, 0x0000)	/* abe_mcbsp1_fsx, out */
 		>;
 	};
 
@@ -1293,9 +1311,10 @@
 
 /*
  * Audio: the WM8994 codec on ABE/McBSP2.  The ABE segment is enabled in
- * omap4-l4-abe.dtsi with WD_TIMER3 off (report 199).  Since session 42 (E1)
- * the codec is the AIF1 bit/frame clock master (R0x302 = 0x4000, as on the
- * 1917 reference) and the McBSP2 is the clock consumer.
+ * omap4-l4-abe.dtsi with WD_TIMER3 off (report 199).  Since session 45 (E5)
+ * the McBSP2 is the bit/frame clock provider and the codec is the AIF1 slave
+ * (the non-reference design: the codec's MCLK1 does not clock under our
+ * image, reports 206/209).
  */
 &mcbsp2 {
 	#sound-dai-cells = <0>;
@@ -1304,12 +1323,21 @@
 	status = "okay";
 };
 
+/* McBSP1 is the codec's DATA port on this board (pad 0x102), see §E6. */
+&mcbsp1 {
+	#sound-dai-cells = <0>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&mcbsp1_pins>;
+	status = "disabled";
+};
+
 / {
 	/*
-	 * The board machine driver rates the codec's MCLK1 (AUXCLK1) and
-	 * locks the WM8994 FLL1 to 256 fs; the DAI link itself (McBSP2 <->
-	 * wm8994-aif1, codec as bit/frame provider) is in
-	 * sound/soc/ti/playbook-wm8994.c.  Replaces the generic
+	 * The board machine driver owns the DAI link (McBSP2 <-> wm8994-aif1).
+	 * Since E5 the McBSP2 is the bit/frame provider and the codec's FLL1 is
+	 * locked from the BCLK it generates, so the codec's MCLK1 (AUXCLK1) is
+	 * no longer on the audio path -- the pad stays muxed only because the
+	 * reference has it and it is harmless.  Replaces the generic
 	 * simple-audio-card, which cannot drive the codec's clock.
 	 */
 	sound {
