@@ -1293,3 +1293,25 @@ without an MCT edit.**
    boot/root-selection path, not `fs-qnx6`).  The base seed is unprovisioned,
    hence setup.  **A smaller hd3 root needs an MCT/partition change
    (operator-only); do not retry an FS-only shrink.**
+
+---
+
+## Session 45 snapshot (superseded by the session-46 working audio)
+
+Region 0 `0x58F85337` (kernel #40), region 1 `6d92428e…`.  E5 solved the audio
+transport: McBSP2 the bit/frame provider, codec AIF1 slave, FLL1 from our
+BCLK, 48 096 frames/s; the codec still decoded nothing.  The data ball was
+believed to be `abe_mcbsp1_dx` (E6) and the ABE question was open; the
+proposed next test was the corrected two-engine build with `mcbsp1`.  Full
+detail: report 212 and `docs/sessions/session-45.md`.
+
+## Session 46, the ABE feasibility state (superseded by the working audio)
+
+The ABE serial port is a firmware data path; the McBSP clocks are CM1_ABE/McBSP
+hardware that mainline drives; the reference's playback port is a
+codec-master slave; the ABE bring-up was cancelled (report 213, DECISIONS
+§58).  The next test was the corrected two-engine build with
+`mcbsp1_pins` `clkx`/`fsx` = `0x0100`.  The bench then found the codec is on
+**McBSP3** and the two-link design works in stereo: image `0xF8BADFF3`
+(kernel #42), rootfs `c0719d28…`; report 214 and
+`docs/sessions/session-46.md` are current.

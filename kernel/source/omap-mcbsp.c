@@ -1034,8 +1034,22 @@ static int omap_mcbsp_dai_hw_params(struct snd_pcm_substream *substream,
 
 	dma_data->maxburst = pkt_size;
 
+	format = mcbsp->fmt & SND_SOC_DAIFMT_FORMAT_MASK;
+
+	/*
+	 * The OSS layer opens a stream at its defaults and re-negotiates on
+	 * every SNDCTL_DSP_* ioctl, so the first hw_params can be mono at the
+	 * final rate and width; a later stereo call would then be skipped by a
+	 * rate/width comparison alone.  That leaves XPHASE clear (one word per
+	 * frame): the left channel plays and the right slot is silent.
+	 * Compare the channel layout the register shadow was programmed for as
+	 * well -- XPHASE is what the driver sets for 2-channel I2S/LEFT_J.
+	 */
 	if (mcbsp->configured && mcbsp->active_rate == params_rate(params) &&
-	    mcbsp->active_width == params_width(params)) {
+	    mcbsp->active_width == params_width(params) &&
+	    !!(mcbsp->cfg_regs.xcr2 & XPHASE) ==
+	    (channels > 1 && (format == SND_SOC_DAIFMT_I2S ||
+			      format == SND_SOC_DAIFMT_LEFT_J))) {
 		/* McBSP already configured by another stream, same format */
 		return 0;
 	}
@@ -1044,7 +1058,6 @@ static int omap_mcbsp_dai_hw_params(struct snd_pcm_substream *substream,
 	regs->xcr2	&= ~(RPHASE | XFRLEN2(0x7f) | XWDLEN2(7));
 	regs->rcr1	&= ~(RFRLEN1(0x7f) | RWDLEN1(7));
 	regs->xcr1	&= ~(XFRLEN1(0x7f) | XWDLEN1(7));
-	format = mcbsp->fmt & SND_SOC_DAIFMT_FORMAT_MASK;
 	wpf = channels;
 	if (channels == 2 && (format == SND_SOC_DAIFMT_I2S ||
 			      format == SND_SOC_DAIFMT_LEFT_J)) {

@@ -1,15 +1,15 @@
 # Session numbering
 
-The project spans **forty-five sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **forty-six sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-45`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-46`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
-* **Linux-era** ("session 1…39") — used inside the reports and handoffs, because
+* **Linux-era** ("session 1…40") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
   started.  **Linux session N = absolute session N + 6.**
 
@@ -56,6 +56,8 @@ So:
 | **42** | **36** | **E1: the clock roles inverted; the transmit path is proven; MCLK1 is the one blocker** (report 206).  The codec is now the AIF1 master (`R0x302 = 0x4000`) and McBSP2 a clock consumer (`PCR0 = 0x000f`, SRG out of the path, `clkx`/`fsx` pads inputs = the reference's values); with a live AIF1CLK forced from the free-running NCO `pbplay` streamed 20 s cleanly — the master/SRG stall is a configuration property, not silicon.  The blocker: FLL1 never locks from MCLK1 (register file byte-identical to the working reference) and AIF1CLK-direct-from-MCLK1 is dead — the pin does not clock, with every readable register matching the reference.  Touch survives warm reboots.  Media: region 0 `0x36597040`, region 1 `b20302dc…`; patch 54 files / 8 095 lines (`55035aac…`).  Traps 165–169; DECISIONS §53 |
 | **43** | **37** | **a debloated 2.1.0.1917 image is now a live hardware oracle** (report 207).  The vendor `.1.rcfs` **copy** is mounted read-write with `bb10mt qnx6 mount`, `startup.sh` is reduced to `filesystem pps random pty net powerman phyctrl usbmgr rimusb`, and 224.5 MiB of GUI/app/font/browser/DRM subtrees is pruned (live `/base` 314.9 → 90.4 MiB).  It boots in ~30 s, enumerates as `0fca:8012`, and answers `tools/QCL.py` on `169.254.0.1:9090` and root `sshd`; the UFS `/accounts/devuser` automation was cleaned to top-up + dev mode + qconn + sshd.  Built by `tools/build_minimal_qnx.py`; Stage A and Stage B both boot; the stock way-back is packed.  Its first use proves **SCRM AUXCLK1 is the codec's MCLK1** (report 208) |
 | **44** | **38** | **the power-domain/CM comparison is negative; the ABE reference clock is fixed** (report 209).  Captured on Linux and on the live oracle with `io-audio` running: every power *state* field matches (`CM2_CORE_CLKSTCTRL` identical), the only high-half difference is the `LASTPOWERSTATEENTERED` debug latch, and forcing every differing CM policy to Linux's value on the working oracle leaves MCLK1 present.  So the fault is below the readable registers (pad/board/PMIC).  `CM_ABE_PLL_REF_CLKSEL` is now SYS_CLK with DPLL_ABE locked at 98.304 MHz (image `0x7C56BDC0`); a DTS reparent alone leaves the M/N for 32 kHz and breaks the lock.  Patch 54 files / 8 109 lines (`2fc1a865…`).  Traps 181–184; DECISIONS §55 |
+| **45** | **39** | **E5/E6/E9: the McBSP is the bit/frame provider again; the codec's data ball is `abe_mcbsp1_dx`; the two-engine build stalls** (report 212).  `CLKSM = 1` + `CLKGDV = 32` (the SRG divides the 49.152 MHz ABE interface clock) runs the transport at **48 096 frames/s**; the codec is AIF1 slave with FLL1 locked from BCLK, and the ±12000 tone is verified in the DMA ring.  E6 (live oracle) puts the DACDAT ball on `abe_mcbsp1_dx` (pad `0x102`) and `abe_mcbsp2_dx` in safe mode — **corrected by 214: the codec is on `abe_mcbsp3_dx`**; DSP_A is not the fault.  E9's two links work mechanically but the data port stalls (`SPCR2 = 0x0235`); the reference's slave path starts no SRG.  Image `0x58F85337` (#40), rootfs `6d92428e…`; patch 54 files / 8 331 lines (`82d08fcc…`).  Traps 187–200 |
+| **46** | **40** | **Audio works: the WM8994 is on McBSP3; the two-engine Linux path plays 440 Hz in both ears at 48 kHz** (reports 213/214).  The ABE question is closed first (the serial port is a firmware data path; the McBSP clocks are mainline's; DECISIONS §58).  The oracle's routing log and live McBSP3 registers put the codec's AIF1 on McBSP3 (PDM pads mode 1); the card is `mcbsp2 + wm8994-aif1` (clocks) plus `mcbsp3 + wm8994-aif2` (data).  The right channel needed the `omap-mcbsp` channel-layout guard (`XPHASE`), so `XCR2` is `0x8041`.  Image `0xF8BADFF3` (#42), rootfs `c0719d28…`; patch 54 files / 8 440 lines (`fd2774fb…`).  Traps 201–206; DECISIONS §58/§59 |
 
 ## Anchors (evidence for the mapping)
 
@@ -100,7 +102,7 @@ and each session knows its own position:
 Reports `10`…`102` are the pre-Linux phase's output (boot media, monitor
 security, IRAM tables, the ROM API, `hd0`, NVRAM records `0x2801`, RPMB, the CRC
 recipe, the loader audit, the pre-OS IFS reflash).
-`103`…`204` are the Linux-era sessions (and continuing).
+`103`…`213` are the Linux-era sessions (and continuing).
 
 ## Why the two schemes are kept
 

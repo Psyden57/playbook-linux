@@ -1891,10 +1891,113 @@ own driver explains how it is done there: its McBSP is a clock **consumer**
 which mainline `omap-mcbsp` does not implement.  The next step is therefore an
 ABE feasibility question, not a McBSP one (ROADMAP item 9).
 
+**Addendum 4 (session 46, report 213) — the ABE reading is wrong.**  The
+consumer half is confirmed, but the clocks do **not** come through the ABE:
+the reference's codec is the AIF1 master (`R0x302 = 0x4000`), all four McBSP
+clock pads are inputs, the slave path never starts the SRG, and the driver's
+`StereoAudioCodecRequestMcbspClk` is a stub.  The ABE serial port is a
+firmware data path, not a clock.  E9's stall is equally explained by the
+consumer's pads being left at `0x0000` (input buffer disabled) instead of the
+reference's `0x0100`; E9's pad values were not recorded and its source was not
+committed.  See §58 before building anything on this addendum.
+
 **Evidence.**  Report **212**;
 `docs/captures/wm8994-e5-master-srg-2026-11-13.txt`; `SRGR1 = 0x0f1f`,
 `SRGR2 = 0x301f`, `PCR0 = 0x0f0f`, `R0x302 = 0x0000`, `R0x732 = 0x6020`,
 `R0x224 = 0x0c83`, the 48 096/s measurement, and the PCM-ring readback.
+
+---
+
+## 58. The ABE is a firmware data path; do not build an ABE bring-up for the McBSP (session 46)
+
+**Decision.**  Close the ABE bring-up project as unnecessary.  The audio path
+uses mainline's `omap-mcbsp` **legacy mode** (sDMA ↔ McBSP FIFO; CPU DAI =
+McBSP2, the bit/frame provider; codec AIF1 slave).  Do not port `libabe`, do
+not load `abe_firmware_array`, and do not implement
+`abe_connect_serial_port`/ATC in Linux.  The next audio experiment is the
+**corrected two-engine build**: E5's McBSP2 clock link, plus McBSP1 as a
+consumer with its clock pads **input-enabled** (`mcbsp1_pins` `clkx`/`fsx` =
+`0x0100`, the reference's live values) and the second PCM at the card rate.
+
+**Why.**  The HAL Addendum (SWPU245F) and the shipped HAL settle the
+division of labour.  `abe_connect_serial_port` only writes the AE's software
+port table and ATC descriptors in ABE memory; `abe_init_atc`'s serial-port
+case is a no-op; `abe_load_fw` loads the firmware that consumes them.  The
+McBSP clocks are separate hardware: `CLKS` is the CM1_ABE functional clock
+(`MCBSPx_FCLK`) or the `abe_clks` pad, selected by
+`CM1_ABE_MCBSPx_CLKCTRL[25:24]/[27:26]`, and the SRG selects
+CLKS/ICLK/CLKX by `SCLKME`/`CLKSM` — all programmed by mainline.  The
+reference's own playback port is a **slave**: the codec is AIF1 master
+(`R0x302 = 0x4000`), all four McBSP clock pads are inputs, the slave path
+sets no `GRST`/`FRST`, and `StereoAudioCodecRequestMcbspClk`/
+`StereoAudioCodecRequestABEClk` are stubs (`mov r0, #1; bx lr`).  The
+Addendum recommends a McBSP as the 256×Fs clock source clocked from ABE_CLK,
+and starts the serial port from its device driver after the AE port.  So a
+firmware-less ABE serial port cannot move audio, but the legacy McBSP path
+needs no ABE at all — and E5 already ran it at 48 096 frames/s.
+
+**Constraint.**  The ABE engine is still the only route to the reference's
+on-SoC mixing/low-power features; the firmware blob (`abe_firmware_array`)
+and HAL are in hand if that ever becomes a goal, but it is optional and out
+of scope for audible playback.  Do not read "ABE_CLK / DPLL_ABE / CM1_ABE"
+as "the ABE firmware" — the first is PRCM clock hardware, the second is the
+AE.  The E9 data-port stall is **not** evidence that the clock nets are
+separate: the committed `mcbsp1_pins` group leaves `clkx`/`fsx` at `0x0000`
+(input buffer disabled), while a consumer needs `0x0100`; the E9 build's pad
+values were not recorded, so re-test before concluding.  Raw McBSP register
+pokes remain forbidden (trap 193).
+
+**Evidence.**  Report **213**; `hardware/abe-hal-addendum.txt` (SWPU245F
+§§2.1.1/2.1.2/3.2.7/3.9/4.13.1); TRM chapter 12 (legacy mode) and
+§23.5.4.3/§23.5.4.9; the shipped `libabe.so.1` (`abe_connect_serial_port`
+`0x4a4c`, `abe_init_atc` `0x8a34`, `abe_load_fw` `0x59d0`, `abe_block_copy`
+`0x9714`) and `deva-ctrl-omap4abe-wm8994.so` (`mcbsp_update_port_clock_rate`
+`0x25158`, `mcbsp_poweron_port_int` `0x25608`, the stubs `0x6e94`/`0x6e9c`);
+the reference capture (`R0x302 = 0x4000`, `R0x304 = 0x0040`, `R0x601/2 = 1`,
+all four clock pads `0x0100`).
+
+**Executed (session 46).**  The corrected two-engine build was retargeted from
+McBSP1 to **McBSP3** after the oracle's routing probe, and it works: the
+440 Hz tone is audible in both ears at 48 kHz.  See §59 and report 214.
+
+---
+
+## 59. The WM8994 is on McBSP3; the working path is two ASoC links, and the OSS channel re-negotiation must reconfigure the McBSP (session 46)
+
+**Decision.**  Keep the two-link card: link 1 `40124000.mcbsp` +
+`wm8994-aif1` (E5 clocks/codec, `CBC_CFC`), link 2 `40126000.mcbsp` +
+`wm8994-aif2` (data, `CBP_CFP`, consumer).  The board DTS enables `&mcbsp3`
+with the PDM pad group (`0x106/0x108/0x10a/0x10c` =
+`0x0109/0x0009/0x0109/0x0109`), disables `&mcbsp1`, and keeps `&mcbsp2` as the
+clock provider.  In `omap-mcbsp`, the `hw_params` early-return guard compares
+the channel layout (`XPHASE`) as well as rate/width, so the OSS mono-first
+negotiation reconfigures for stereo.
+
+**Why.**  The oracle's own routing log is `AIF 0 Downlink:
+MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3`; McBSP3 is the only L4_ABE target active
+during playback, its `PCR0 = 0x0003` (consumer), and its pads are the PDM
+group in mode 1.  The codec is AIF1 master (`R0x302 = 0x4000`), AIF2 slave
+(`R0x304 = 0x0040`), DAC1 from AIF1DAC1.  `abe_mcbsp1_dx` is the
+`AIF 4 → MCBSP1` route, not the codec.  On Linux, the E5 mcbsp2 clock net
+reaches McBSP3 (the same BCLK/LRCLK the codec uses); the data link drains and
+the codec outputs.  The right channel was silent because the OSS first
+`hw_params` is mono at 48 kHz/S16, and the driver's guard (rate/width only)
+skipped the later stereo call, leaving `XPHASE` clear.  Comparing `XPHASE`
+reconfigures; `XCR2` becomes `0x8041` and both slots play.
+
+**Constraint.**  The data link's codec DAI is `wm8994-aif2` only as an ASoC
+stand-in (the physical data is AIF1's DACDAT); a dummy codec drags the format
+to U8.  The second PCM must open at the card's rate (trap 196).  The speaker
+path was not exercised (headphones only); its controls read routed, so the
+next experiment is the same tone without headphones.  The `pcm:` and `live N:`
+diagnostics remain in the tree to be retired.  MCLK1 is still dead; this
+design does not need it.
+
+**Evidence.**  Report **214** and
+`docs/captures/wm8994-e10-mcbsp3-2026-11-13.txt`: the oracle slog/pads/McBSP3
+registers; Linux `XCR2 = 0x8041`, the 40 s / 7 684 096-byte data stream, the
+codec's `R0x732 = 0x6020` and `R0x601/2 = 1`, and the operator's both-ears
+verdict.
 
 ---
 

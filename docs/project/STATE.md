@@ -1,65 +1,43 @@
 # Current state
 
-## Current state — 2026-11-13 (session 45)
+## Current state — 2026-11-13 (session 46)
 
-**The McBSP is the bit/frame clock provider again (E5) and the transport now
-runs — at 48 kHz and with data in the ring — but the codec still does not
-decode it.**  Two findings made this the biggest step on the audio blocker
-since E1:
+**Audio works: `pbplay`'s 440 Hz tone is audible in both ears at 48 kHz ±1 %
+(operator, headphones), image `0xF8BADFF3` (kernel #42) + rootfs
+`c0719d28…`.**  Two findings closed it:
 
-1. **The session-41 master-mode stall was `CLKSM`.**  `CLKSM = 0` derives the
-   sample-rate generator clock from the **CLKS pad** (TRM Table 23-52), and this
-   board drives no CLKS: `pad_clks_ck` is 12 MHz with no consumer and not
-   enabled.  `CLKSM = 1` uses the internal path, and the port then frames
-   (`SRGR2 = 0x301f`, `SRGR1 = 0x0f1f`, `PCR0 = 0x0f0f`).
-2. **The SRG divides 49.152 MHz, not the 12.288 MHz the clock framework reports
-   as the McBSP functional clock.**  Measured 4.009× fast with `CLKGDV = 8`;
-   `CLKGDV = 32` gives **48 096 frames/s**.  49.152 MHz = `ocp_abe_iclk` =
-   `DPLL_ABE/2`, which is why the fix also depends on session 44's DPLL_ABE
-   lock: before it, `ST_DPLL_CLK = 0` and the ABE clock was not at its nominal
-   rate.
+1. **The WM8994's AIF1 is on McBSP3, not McBSP1/2.**  The oracle's routing log
+   is `AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3`; McBSP3 is the only
+   L4_ABE target active during playback, `PCR0 = 0x3` (consumer), and its pads
+   are the PDM group in mode 1 (`0x106/0x108/0x10a/0x10c` =
+   `0x0109/0x0009/0x0109/0x0109`).  `abe_mcbsp1_dx` is the AIF4/MCBSP1 route.
+2. **The right channel was silent** because the OSS first `hw_params` is mono
+   at the final rate/width and the `omap-mcbsp` guard skipped the later stereo
+   call, leaving `XPHASE` clear (`XCR2 = 0x0041`).  Comparing the channel
+   layout as well makes the second call reconfigure; `XCR2 = 0x8041` and both
+   slots play.
 
-**The codec is now the AIF1 slave and its FLL1 locks from our BCLK** —
-`R0x302 = 0x0000`, `R0x732 = 0x6020`, `R0x224 = 0x0c83`, `R0x200 = 0x0011`.
-**AIF1CLK exists with no MCLK1 in the path.**  The playback chain is identical
-to the reference register for register (DAC1 volume `0xc0`, `R0x601/0x602 = 1`,
-`R0x02d/0x02e = 1`, `R0x060 = 0x00ee`, `R0x210 = 0x0083`).
+**The working card is two ASoC links** (both in `playbook-wm8994.c`): link 1
+`40124000.mcbsp + wm8994-aif1` (E5 clocks/codec, `CBC_CFC`), link 2
+`40126000.mcbsp + wm8994-aif2` (data, `CBP_CFP`, consumer).  The codec is the
+AIF1 slave and its FLL1 locks from our BCLK (`R0x302 = 0x0000`,
+`R0x732 = 0x6020`, `R0x200 = 0x0011`), so **no MCLK1 is in the path**.  The
+data link's `wm8994-aif2` is an ASoC stand-in; the physical data is AIF1's
+DACDAT on `mcbsp3_dx`, and DAC1 selects AIF1DAC1 (`R0x601/2 = 1`).
 
-**It is still silent.**  The application's ±12000 square wave was read back out
-of `runtime->dma_area` (both at the header and at `hw_ptr`), `XBUFFSTAT` shows
-the sDMA filling the transmitter, and the operator hears only a start crackle
-plus the DAC noise floor.  The remaining candidates are **the ball that carries
-DACDAT** (the reference's own playback capture leaves *both* `dx` — mux 7 safe
-mode — and `dr` undriven) and **the frame format** (the reference uses DSP_A,
-`R0x300 = 0xc018`; we use I2S).  Report **212**.
+**The ABE is not needed:** its serial port is a firmware data path and the
+McBSP clocks are CM1_ABE/McBSP hardware (report 213, DECISIONS §58).  The
+transport is E5's: `CLKSM = 1` + `CLKGDV = 32` divides the 49.152 MHz ABE
+interface clock and gives 48 096 frames/s; the SRG/CLKSM history is in report
+212.
 
-**The codec's DATA ball is `abe_mcbsp1_dx`, not `abe_mcbsp2_dx` (E6, report
-212 §10).**  The oracle was booted and made to play a wav (operator confirmed it
-is audible), and its pads read `abe_mcbsp1_dx` = mux 0 **output** while
-`abe_mcbsp2_dx` = mux 7 safe mode — a static configuration (no pad changes
-between playing and idle).  That is the silence: E5 drives a ball the codec is
-not connected to.  A first attempt at using McBSP1 as the port (E6) clocked
-its own pads at 48 053 frames/s but the codec's **FLL did not lock**, so the
-codec's *clock* is on the McBSP2 balls.  The board therefore splits the signals
-across the two engines: **mcbsp2 for clocks, mcbsp1 for data**.  The design that
-follows is McBSP2 as clock master plus McBSP1 as a clock *consumer* on the same
-nets, transmitting on `mcbsp1_dx` — see "What is next".
-
-**Bench (end of session 45, measured).**  The unit is on **our Linux image
-`0x58F85337`** (region 0, `0x939A6C` bytes, kernel `7.3.3` #40 — the committed
-E5 tree; image sha256 `39891a20…`); region 1 = the audio/OSS rootfs sha256
-**`6d92428e…`** (67,108,864 B).  The unit enumerates `0fca:8010`; console `pb> `
-on `ttyACM0`, no door and no ssh (both exist only on the oracle).  `BOOTCTR_FCTRY`
-read **0x20** at this boot — the initramfs `/init` logged
-`pbrpmb: topup: BOOTCTR_FCTRY at block 0x3a record@196 = 20000000` and
-`0x20 >= threshold 0x1e, no write`, so the budget is healthy and no write was
-made.  It is **not** readable as a node here: this userland has no `/dev/rpmb`,
-and `pbrpmb scan` (read-only) finds no marker because the record block is
-sealed — the `/init` log is the reading.  No device-side files were deployed to
-the Linux image this session.  E7/E8/E9 were bench experiments and are not on
-media.  The oracle IFS is not on media (region 0 holds the Linux image);
-re-flash `local/work/ifs-shim-sealed.ifs` at `0x825` to boot it.  **To stock
-TabletOS**, flash `local/work/minimal/wayback.signed`.
+**Bench (session 46, measured).**  Unit on our Linux image `0xF8BADFF3`
+(region 0, `0x93993C` B, kernel `7.3.3` #42); region 1 = rootfs
+`c0719d28…` (67,108,864 B).  `0fca:8010`, console `pb> ` on `ttyACM0`; no
+door/ssh (oracle only).  `BOOTCTR_FCTRY` read **0x20** from the `/init` log
+(`0x20 >= threshold 0x1e, no write`).  The oracle is not on media; flash
+`local/work/ifs-shim-sealed.ifs` at `0x825` to boot it.  To stock TabletOS,
+flash `local/work/minimal/wayback.signed`.
 
 **The magic-`pkexec` rule still holds.**  A flash re-enumerates the ACM gadget
 and the tty comes back `root:uucp 0660`; `tools/99-playbook-cdc-acm.rules`
@@ -72,15 +50,17 @@ the operator rather than inventing a workaround.
   to `PIN_OUTPUT`.  `pbplay 10 440` writes its full 1 933 312 bytes.
 * **The two session-45 diagnostics are in the patch** — the machine driver's
   `pcm:` ring readback and the McBSP driver's eight-sample `live N:` dump.  They
-  are instrumentation; retire them when the audio path is fixed.
+  are instrumentation; retire them now that the audio path works.
 * **`DXR`/`DRR` are not readable data registers on this silicon** — they return
   constants (`0` / `0xc8318118`) regardless of traffic.  Report 205 §5l's
   "`DXR = 0` means empty" is withdrawn; `XBUFFSTAT` is the register that
   answers the question.
-* **The kernel patch was re-exported**: 54 files / **8 331 lines**, sha256
-  `82d08fcc…`, 0 rejects / 54/54 byte-identical.
-* **No boot regressions:** codec revision D, McBSP2, the sound card, the touch,
-  the display and the ACM gadget all come up on the final image.
+* **The kernel patch was re-exported**: 54 files / **8 440 lines**, sha256
+  `fd2774fb…`, 0 rejects / 54/54 byte-identical (session-46 export; the
+  McBSP3 two-link card and the `XPHASE` guard are in it).
+* **No boot regressions:** codec revision D, McBSP2/McBSP3, the two-link sound
+  card, the touch, the display and the ACM gadget all come up on the final
+  image.
 
 ## Per-subsystem state
 
@@ -94,9 +74,9 @@ the operator rather than inventing a workaround.
 | USB device + gadget | **working, but not a bulk transport** | enumerates `0fca:8010`, CDC-ACM, product string "PlayBook (Linux bring-up)"; `/dev/ttyACM0` ↔ `/dev/ttyGS0`; High Speed (480 Mbps), 512-byte bulk packets.  **Drains at only ~134 KB/s and drops bytes when the host blasts** (report 136 §3.3), so it is a control/debug channel: do not send multi-MB images through `recv`.  Report 114, 136 |
 | **WL1283 (MMC5)** | **software surface exhausted (session 37: the 1917-truth minimal host also fails CMD5; the chip is not up — WL_IRQ low)** | **Session 37:** the WL1283 code is archived (`kernel/archive/wl1283/`), the DTS is re-derived from 2.1.0.1917, and the minimal 1917-truth `&mmc5` (image `0x0DC36A11`) probes but returns `attach_sdio no` (report 196); pads `0x0118`, WL_EN `0x0003`, WL_IRQ `0x410B` match QNX and WL_EN is high, but `GPIO2_DATAIN` bit 21 = 0.  Bus, pads, WL_EN/IRQ, PMIC rails, MMC5 CON/HCTL/SYSCTL and the clock manager all match the reference.  QNX enumerates at 24 MHz with CMD5 arg `0x00FFFF00`; Linux's default 400 kHz/CMD52-first also times out.  **Session 35:** `startup-playbook` (never run by our chainloader) is the source of the QNX-only GPIOs — Winchester table at image `0x80122750`; GPIO1 0/4/15/18/28/31 and GPIO2 5/7 are output-low, gpio54 (WL_EN) output-low, gpio53 input/falling (report 192 §4, trap 135).  All eight released to input on the live 1917 are **negative** (trap 136).  `CLK32KG` is base `0x8C` and APP-ON in both (CFG_TRANS identical; CFG_GRP and the CFG_STATE CON/MOD bits differ; trap 135).  **H1** (CMD0 → CMD5 only, no CMD52/CMD8, 24 MHz, arg `0x00FFFF00`, image `0x29784F48`) still times out (`err=-110`, no R4; `HCTL=0x00000b00`, `CAPA=0x04e10080`; trap 137).  The remaining difference is the chip's non-exposed VBAT/TCXO/reset pins or OMAP HSMMC sampling — needs a schematic/board view or logic analyser |
 | **Munin touch (CY8CTMA3)** | **working — calibrated, IRQ wired (session 38)** | I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c` boots the app and maps the 12-bit report through the 1917 `scaling.conf` calib (raw x 172→1108 → 102→922, y 110→658 → 60→540) to 1024×600.  IRQ gpio 35 = GPIO2_3 pad `0x056` = `0x410B`, `EDGE_FALLING`, `irq 110`; the ~330–380/s rate is the chip's report rate.  Power/reset GPIO1_14/GPIO4_8 are not driven.  Report 198, DECISIONS §47 |
-| **WM8994 audio** | **transport works in master mode at 48 kHz; the codec does not decode it (session 45)** | I²C4 `0x1a` (`0x8994`, revision D); the board machine driver makes `0 [WM8994]: PlayBook_WM8994`.  **Session 45 (E5):** the McBSP is the bit/frame provider again (codec AIF1 slave, `R0x302 = 0x0000`) and the codec's **FLL1 locks from our BCLK** (`R0x732 = 0x6020`, `R0x224 = 0x0c83`), so `AIF1CLK` exists from the FLL — **no MCLK1 anywhere in the path**.  The session-41 stall was `CLKSM = 0` (SRG clocked from the undriven CLKS pad); `CLKSM = 1` with `CLKGDV = 32` runs the port at **48 096 frames/s** (`SRGR1 = 0x0f1f`, `SRGR2 = 0x301f`, `PCR0 = 0x0f0f`).  The SRG divides the ABE **interface** clock (49.152 MHz = `ocp_abe_iclk`), not the 12.288 MHz the framework reports.  **Open:** still silent — the app's ±12000 tone is verified in the DMA ring and `XBUFFSTAT` shows the sDMA feeding the transmitter, but the codec decodes nothing.  Candidates: the ball carrying DACDAT (the reference's playback capture leaves `dx` in mux 7 safe_mode and `dr` an input) and the frame format (reference = DSP_A `R0x300 = 0xc018`, ours I2S `0x6010`).  Report 212. |
+| **WM8994 audio** | **WORKING — stereo 440 Hz at 48 kHz (session 46)** | I²C4 `0x1a` (`0x8994`, revision D); the board machine driver makes `0 [WM8994]: PlayBook_WM8994`.  **The codec's AIF1 is on McBSP3** (the oracle's routing log `AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3`, the live McBSP3 `PCR0 = 0x3`, and the PDM pad group `0x106/0x108/0x10a/0x10c` = `0x0109/0x0009/0x0109/0x0109`).  The card is two ASoC links: `40124000.mcbsp + wm8994-aif1` (E5 clocks/codec, `CBC_CFC`) and `40126000.mcbsp + wm8994-aif2` (data, `CBP_CFP`, consumer).  The codec is the AIF1 slave and FLL1 locks from our BCLK (`R0x302 = 0x0000`, `R0x732 = 0x6020`, `R0x200 = 0x0011`), so **no MCLK1 is in the path**; the transport is E5 (`CLKSM = 1`, `CLKGDV = 32`, 48 096 frames/s).  The right channel needed the `omap-mcbsp` channel-layout guard (`XPHASE`): the OSS mono-first `hw_params` had left `XCR2 = 0x0041`; it is `0x8041` now.  **The 440 Hz tone is audible in both ears** (operator); data stream 40 s / 7 684 096 B, clock stream 45 s / 8 650 752 B, DAC1 from AIF1DAC1 (`R0x601/2 = 1`).  Remaining: the speaker path (not exercised; headphones only), retire the `pcm:`/`live N:` diagnostics, optional MCLK1 probe.  Reports 212/213/214, DECISIONS §59. |
 | Userspace (initramfs) | **working, minimal** | `/init` = PID 1, mounts, creates the configfs ACM gadget, forks `/console` in the fallback path.  **No auto-reboot since session 15** — PID 1 reboots only on request (the timer spent a `BOOTCTR_FCTRY` unit per iteration).  **Session 28:** after the gadget and the boot-time top-up, `/init` mounts the region-1 ext4 root **read-write**, bind-mounts /dev//proc//sys, chroots and execs `/sbin/init`; with no `/sbin/init` it falls back to the console.  Report 176, session-28 note |
-| Userspace (region-1 root) | **working — a real BusyBox userland** | 64 MiB ext4 at raw `0x29000000`; BusyBox 1.36.1 + init + 401 applet links + `pbconsole`/`pbrpmb` + `/lib/modules/7.3.3`; boots to `sh -l` on `/dev/ttyGS0`; `insmod`/`modprobe` proven.  Current image: `local/images/rootfs-region1-audio-oss.ext4` (sha256 `968d2f20…`, 27 modules).  The earlier plain userland was image `0xAEDF68D0`. |
+| Userspace (region-1 root) | **working — a real BusyBox userland** | 64 MiB ext4 at raw `0x29000000`; BusyBox 1.36.1 + init + 401 applet links + `pbconsole`/`pbrpmb` + `/lib/modules/7.3.3`; boots to `sh -l` on `/dev/ttyGS0`; `insmod`/`modprobe` proven.  Current image: `local/images/rootfs-region1-audio-oss.ext4` (sha256 `c0719d28…`, 27 modules).  The earlier plain userland was image `0xAEDF68D0`. |
 | Console | **working** | `help ls cat peek poke kick disp bl i2c i2c16 spi fb kmsg grep blk recv sink blkwr qnx6 rootfs write reboot`; `spi tcon` (low-first) and `spi tconbe` (high-first); `blk info/sum/sumb/rd` is read-only FNV-1a64 over `/dev/mmcblk1` (**`blk info` prints size 0 B — `fstat` bug, see KNOWN-ISSUES**), `grep <substr> <path>` scans any-size text (for `clk_summary`); `sink <len>` measures the link, `blkwr <off> <len> [chunk]` is a timed O_DIRECT write with a deterministic pattern (report 136); `qnx6 [off-hex]` mounts hd3 read-only (report 138); `rootfs [off-hex]` mounts the region-1 ext4 root read-only on `/rootfs` (report 140); argument limit 24.  `pb_reg` op set is now `w a:v` / `r a` / `t a` (16 reads, re-arm) / `u a` (16 reads, no re-arm) / `d from:to` (range dump) / `v` (video liveness).  Every hardware access forks with a bounded wait |
 | QNX6 read access (hd3) | **working, read-only** | `CONFIG_QNX6FS_FS=y` + console `qnx6 [off-hex]`: a read-only loop over `/dev/mmcblk1` at raw **`0x49000000`** (superblock `0x49002000`) mounted qnx6 on `/mnt`.  Verified on `0xFC77CD47`; the old `0x48F00000` offset gives `wrong signature (magic)` from the driver.  Report 138 |
 | DSS / DISPC via omapdrm | **working — and the core clock is now right** | `/dev/dri`, `/dev/fb0`, `card0-LVDS-1` connected+enabled, `LINE_STATUS` advancing (37 lines/ms), GFX overlay scanning the painted buffer.  The DSS functional clock, which is the DISPC's **core** clock, was left at 48 MHz by the boot chain while the pixel clock is 50.4 MHz — that was the last display defect.  `dss_probe()` now asks the PER PLL for the reference's rate and gets **96 MHz**.  **Session 18:** the boot-time `pb` bridge-read probes are behind `pb_probe` (default **off**), so a normal boot has **no DSI CIO errors**; the DSS rate-mismatch WARN is gone and the real rate is recorded (report 142).  Report 133 §2/§3 |
@@ -108,7 +88,7 @@ the operator rather than inventing a workaround.
 | Panel identity | **Hitachi (definitive)** | on TabletOS: `GPIO6_DATAIN = 0x00010800` (bit 16 = 1), slog `LCD is Hitachi`.  Report 127 §1 |
 | **Image on the panel** | **WORKING** | With `0x8C146805` (and the same source as `0x068C867F`) the panel shows a clean, stable image: solid white, solid red, and the kernel console as legible text.  The three necessary fixes were the bridge delivery (VC0/HS null packet), the LVDS porches + TCON table at bring-up, and the DISPC core clock. Report 133 |
 | QNX oracle tool | **`tools/qnx-dsiread.c` → `tools/pbdsi`** | Reads any TC358764 register over DSI from a TabletOS user process (generic read request `0x24` on hw VC1, BTA, RX FIFO pop; response is a generic long read, DT `0x1A`).  Read-only.  This is how the reference values in this document were obtained. Report 132 §2 |
-| Kernel patch + config | **7.3.3 (session 44 export)** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **8 109 lines / 54 files**, sha256 `2fc1a865…`, applied to pristine 7.3.3 targets with 0 rejects and **54/54 files byte-identical** (session-44 wrap-up; it picks up the `&l4_abe` ABE-refclk assignment, the E1 clock-role changes in `omap4-winchester.dts` and `playbook-wm8994.c`, and `sound/soc/ti/omap-mcbsp.c`).  Session 39 adds the board machine driver (`sound/soc/ti/playbook-wm8994.c`, Kconfig/Makefile), the `wm8994-core.c` runtime-PM quirk and the board `sound` node/codec clocks; it also restores `drivers/input/touchscreen/{Kconfig,Makefile}`, which the 48-file export had silently omitted (trap 154).  Config: `kernel/winchester-7.3.3.config` (includes `CONFIG_CHARGER_ISL9519=y`, `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`, `CONFIG_KERNEL_XZ=y`, `CONFIG_SND_PCM_OSS=m`, `CONFIG_SND_MIXER_OSS=m`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
+| Kernel patch + config | **7.3.3 (session 46 export)** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **8 440 lines / 54 files**, sha256 `fd2774fb…`, applied to pristine 7.3.3 targets with 0 rejects and **54/54 files byte-identical** (session-46 wrap-up; it picks up the `&l4_abe` ABE-refclk assignment, the E5 clock-role change, the McBSP3 two-link card and the `omap-mcbsp` channel-layout guard).  Session 39 adds the board machine driver (`sound/soc/ti/playbook-wm8994.c`, Kconfig/Makefile), the `wm8994-core.c` runtime-PM quirk and the board `sound` node/codec clocks; it also restores `drivers/input/touchscreen/{Kconfig,Makefile}`, which the 48-file export had silently omitted (trap 154).  Config: `kernel/winchester-7.3.3.config` (includes `CONFIG_CHARGER_ISL9519=y`, `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`, `CONFIG_KERNEL_XZ=y`, `CONFIG_SND_PCM_OSS=m`, `CONFIG_SND_MIXER_OSS=m`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
 | **ISL9519 charger** | **WORKING under Linux (session 31)** | I²C1 `0x48070000`, slave `0x09`; VendorID `0x0049`, DeviceID `0x0003`.  `isl9519.c` (built-in, DTS `charger@9`) sets the four registers in RIM's order with the masked fields and refreshes every 5 s.  Measured **+358 → +397 mA**, 3.775 → 3.794 V, capacity 8 → 9 %, `Charging`; still on at 197 s (watchdog).  Registers read back `0x14=0x0280`, `0x15=0x1070`, `0x3E=0x0D00`, `0x3F=0x0180`.  Report 183 |
 | TWL6030 BCI | **probes after the session-31 fix; NOT the board's charger** | `twl6030_charger` probes with the `simple-battery` profile and sets `CONTROLLER_CTRL1=0x10`, `VOREG=0x21`, `VICHRG=0x08`, `CINLIMIT=0x09`, but the stock OS leaves the whole block at bootloader reset values — it charges through the ISL9519.  The BCI node/modules are inert; `twl6030_usb` reports `ONLINE=1`, VBUS 4.81–4.91 V |
 
@@ -120,7 +100,9 @@ the durable record is the CRC and what it demonstrated, not the file.
 
 | image | base | role |
 |---|---|---|
-| `0x58F85337` | 7.3.3 | **current region 0** (session 45: the committed E5 tree; `#40`) |
+| `0xF8BADFF3` | 7.3.3 | **current region 0** (session 46: McBSP3 two-link card, kernel `#42`) |
+| `0x47ED0450` | 7.3.3 | session-46 experiment: mcbsp1 as the data engine (still stalled; pads input-enabled) |
+| `0x58F85337` | 7.3.3 | previous region 0 (session 45: the committed E5 tree; `#40`) |
 | `0x5A04ACD9` | 7.3.3 | session-45 E5 restore (`#35`) |
 | `0xE5A13DE7`, `0x6AD9E204` | 7.3.3 | session-45 E9 two-link experiments (data port stalls — §14) |
 | `0x92458D00` | 7.3.3 | session-45 E5 + the disabled `&mcbsp1` node (experiment, not on media) |
@@ -167,25 +149,14 @@ and a failed/half-formed write or a flat pack is still a brick risk.
 
 ## Blockers in play
 
-**For the current focus (item 9 step 5 audio), the blocker is now named: the
-codec's data ball.**  `abe_mcbsp1_dx` (pad `0x102`) is where the reference puts
-DACDAT (mux 0, output, static); E5 drives `abe_mcbsp2_dx` (pad `0x0fa`), which
-the codec is not connected to.  The transport, the rate and the codec's clocks
-are all verified: the transport runs at 48 kHz with the codec clocked from our
-own BCLK.  Session 45 (E5, report 212) put the
-McBSP back as the bit/frame provider with the codec as AIF1 slave and the FLL
-referenced to BCLK — **no MCLK1 in the path** — and fixed the session-41 stall
-(`CLKSM = 0` clocked the SRG from the undriven CLKS pad; `CLKSM = 1` uses the
-internal path).  The SRG divides the ABE interface clock (49.152 MHz), so
-`CLKGDV = 32`; the stream then measures 48 096 frames/s.  The application's tone
-is verified in the DMA ring and the sDMA is verified feeding the transmitter
-(`XBUFFSTAT`).  **What remains is the codec's AIF1 data input:** either the ball
-that carries DACDAT (the reference's playback capture leaves `dx` in mux 7
-safe_mode and `dr` an input — so the reference drives neither) or the frame
-format (the reference runs DSP_A, `R0x300 = 0xc018`; we run I2S).  The old
-MCLK1 route is closed for this design but not solved: MCLK1 still does not
-clock (reports 206/208/209), and the pad/board/PMIC probe (trap 165) is still
-the only direct measurement.  Reports 206, 209, 212.
+**The audio blocker is closed (session 46, report 214).**  `pbplay`'s 440 Hz
+tone is audible in both ears at 48 kHz ±1 % on the working image
+(`0xF8BADFF3` + rootfs `c0719d28…`).  The codec's AIF1 is on **McBSP3**; the
+card is two links (`mcbsp2 + wm8994-aif1` clocks, `mcbsp3 + wm8994-aif2`
+data), and the `omap-mcbsp` channel-layout guard fixed the right channel.  The
+ABE is not needed (DECISIONS §58/§59).  Remaining audio niceties: the
+**speaker path** (not exercised — headphones only), retiring the
+`pcm:`/`live N:` diagnostics, and the optional **MCLK1 probe** (trap 165).
 
 **The long-standing WL1283 blocker is unchanged (chip-side, software
 exhausted).**  The 1917-truth minimal `&mmc5` host (report 195) boots and
@@ -210,13 +181,14 @@ GPIO2_3 edge IRQ works (`irq 110`); the power/reset lines are still not driven
 by the driver.  It survived this session's warm boot; only cold boots need the
 GPIO pulse.
 
-**Media state: region 0 = the session-44 image `0xB43F169B`** (kernel `7.3.3`
-with the E1 clock roles, the ABE-refclk fix and the codec-GPIO init); region 1 =
-the audio/OSS rootfs (`3df8056c…`, 27 modules;
-`local/images/rootfs-region1-audio-oss.ext4`).
-The unit is on Linux, not TabletOS.  The way back to TabletOS is
-the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, block `0x825`); the previous
-Linux images `0x36597040`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x0DC36A11`,
+**Media state: region 0 = `0xF8BADFF3`** (kernel `7.3.3` **#42**,
+`0x93993C` B, the McBSP3 two-link card); region 1 = the audio/OSS rootfs
+`c0719d28…` (67,108,864 B, 27 modules;
+`local/images/rootfs-region1-audio-oss.ext4`).  The unit is on Linux, not
+TabletOS.  The way back to TabletOS is the 1917 IFS
+(`local/work/ifs-shim-sealed.ifs`, block `0x825`); the previous Linux images
+`0x58F85337`, `0x47ED0450`, `0x5A04ACD9`, `0x92458D00`, `0x7A5DD941`,
+`0x36597040`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x0DC36A11`,
 `0xE36C679A` and `0x04AF1433` remain.
 NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 (`SAFETY.md` §6).
@@ -227,31 +199,11 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    is done and negative (report 196); the remaining measurements (VBAT / 26 MHz
    TCXO / SLOW_CLK, MMC5 CLK/CMD/DAT0) need a board view or logic analyser.  Do
    not re-open it without the operator.
-2. **The WM8994 audio half of item 9 step 5 — the transport runs; the codec
-   does not decode (report 212).**  E5 is in the tree and on media
-   (`0x7A5DD941`): McBSP bit/frame provider, codec AIF1 slave, FLL1 from BCLK,
-   48 096 frames/s, data verified in the ring.  **Next, in order:**
-   (a) **resolved (E6):** the data ball is `abe_mcbsp1_dx` (`0x102`) —
-   `abe_mcbsp2_dx`, which E5 drives, is not connected to the codec;
-   (b) **the two-engine design is built and it reaches a wall (E9, report 212
-   §14).**  Two links work mechanically: `mcbsp2 + wm8994-aif1` (clocks+codec,
-   E5) and `mcbsp1 + wm8994-aif2` (data, clock consumer; the link must be
-   `CBP_CFP`, and the second PCM must open at the same rate — traps 195/196).
-   But the data port **stalls**: McBSP1 as a consumer sits at `SPCR2 = 0x0235`
-   (`XRDY = 0`, `XEMPTY = 1`) and the write dies after five periods, so **no
-   frame sync reaches McBSP1**.  E7's "word consumed" was an artifact and is
-   withdrawn (trap 197).  The board's clocks are on McBSP2's balls and the data
-   on McBSP1's DX.  **The reference's driver settles it (report 212 §16):** its
-   McBSP is a clock *consumer* (`SRGR2 = FPER | 0x1000`; in slave mode only
-   `XRST`/`RRST` are set, no `GRST`/`FRST`), clocked through the **ABE**
-   (`abe_connect_serial_port … mcbsp_id`), which mainline has no equivalent of
-   (`omap-abe-twl6040.c` is a machine driver only).  **So the remaining work is
-   an ABE bring-up project, not a driver tweak** — see ROADMAP item 9;
-   (c) the **DSP_A build** was tried and is not the fault (E6 note in report
-   212 §4/§10: `R0x300 = 0x6018` matched the reference's format and stayed
-   silent, because the ball was wrong);
-   (d) keep the free-running NCO as a mechanism probe only.  The MCLK1 route
-   (probe on `fref_clk2_out`) remains closed by trap 165.
+2. **The WM8994 audio — DONE (session 46, report 214).**  Stereo 440 Hz at
+   48 kHz on image `0xF8BADFF3` + rootfs `c0719d28…`.  Remaining niceties:
+   (a) the **speaker path** (`SPKMIX` is not routed — headphones only);
+   (b) retire the `pcm:`/`live N:` diagnostics; (c) the optional **MCLK1
+   probe** (trap 165).  The ABE is not needed (DECISIONS §58/§59).
 3. **Touch: DONE (session 38, report 198) but down after a cold boot.**  The
    calibration and the IRQ are in the tree and proven; after a cold boot the
    controller does not boot (`0x65` NAKs) until the power/reset GPIOs
@@ -261,9 +213,9 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    `wlcore@2` child the mainline binding requires (`ti,wl1283`, `reg = <2>`,
    `interrupts` for WL_IRQ, `ref-clock-frequency`/`tcxo-clock-frequency` 26 MHz),
    for the post-enumeration `wl12xx` path — report 195 §3.6, HANDOFF §0b.
-5. **The unit is on Linux `0xB43F169B`** (region 0) + the E1 audio/OSS rootfs
-   (`3df8056c…`, region 1).  To return to TabletOS, flash the 1917 IFS at
-   block `0x825`; the previous Linux images remain.
+5. **The unit is on Linux `0xF8BADFF3`** (region 0, kernel #42) + the audio/OSS
+   rootfs (`c0719d28…`, region 1).  To return to TabletOS, flash the 1917 IFS
+   at block `0x825`; the previous Linux images remain.
 
 ## Workspace location
 

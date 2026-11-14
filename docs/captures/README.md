@@ -52,6 +52,16 @@ Taken to run and close the power-domain/CM hypothesis, then to fix
 | `wm8994-e5-master-srg-2026-11-13.txt` | session 45, both E5 boots (the wrong 12.288 MHz SRG base and the correct 49.152 MHz one), the clock tree, the rate measurements, the codec reads, the PCM-ring and FIFO-status diagnostics, the pad dump, the full register diff against the reference, and E6/E9 (oracle pads during playback; the two-link build and the stalled data port) |
 
 
+## WM8994 E10 — the codec is on McBSP3, and the stereo path works (session 46)
+
+| file | when |
+|---|---|
+| `wm8994-e10-mcbsp3-2026-11-13.txt` | the oracle's routing log (`AIF 0 Downlink: …->MCBSP3`), the full pad range, the McBSP3 register block, the Linux two-link pads/`XCR2 = 0x8041`, the codec registers, and the operator's both-ears verdict |
+
+This is the capture behind report 214.  Note that user-space reads of the
+idle McBSP1/2 register blocks abort (`SIGBUS`); only the active McBSP3 target
+reads (trap 206).
+
 ## Exact duplicates
 
 These pairs are byte-identical; keep one of each when pruning.

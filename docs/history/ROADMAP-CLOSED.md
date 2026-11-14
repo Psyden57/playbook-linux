@@ -676,3 +676,26 @@ re-export the patch.
 **Closes when:** the 7.3.3 tree boots the unit to the region-1 userland with a
 clean panel and working eMMC, a patch exports cleanly against pristine 7.3.3, and
 the 6.15.11 assets are still present and untouched.
+
+---
+
+## WM8994 audio — CLOSED (session 46, report 214)
+
+**Closed:** `pbplay`'s 440 Hz tone is audible in **both ears at 48 kHz ±1 %**
+(operator, headphones), image `0xF8BADFF3` (kernel #42) + rootfs
+`c0719d28…`.
+
+The path, for the record: the WM8994's AIF1 is on **McBSP3** (the oracle's
+`AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3`, the live McBSP3
+registers `PCR0 = 0x3`, and the PDM pad group `0x106/0x108/0x10a/0x10c` =
+`0x0109/0x0009/0x0109/0x0109`).  The card has two ASoC links: `mcbsp2 +
+wm8994-aif1` (E5 clocks/codec, `CBC_CFC`) and `mcbsp3 + wm8994-aif2` (data,
+`CBP_CFP`, consumer).  The right channel was silent until `omap-mcbsp`'s
+`hw_params` guard also compared the channel layout (`XPHASE`): the OSS first
+opens mono at 48 kHz/S16, and the old guard skipped the 2-channel call, so
+`XCR2 = 0x0041`; with the fix it is `0x8041` and both slots play.  Full
+history: reports 199–214 and
+`docs/captures/wm8994-e10-mcbsp3-2026-11-13.txt`.
+
+Still open (not the audio goal): the speaker path (`SPKMIX`), retiring the
+`pcm:`/`live N:` diagnostics, and the optional MCLK1 probe.

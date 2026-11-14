@@ -59,7 +59,7 @@ The guides are in `docs/parked/`.
 | WL1283 / MMC5 | reports 180, 185–197 | **software surface exhausted; report 196 is the minimal 1917-truth negative** |
 | WLAN calibration / NVS | report 197 | QNX `hd5` |
 | Munin touch | reports 193, 194, 198 | bus, protocol, calibration + IRQ |
-| WM8994 audio | reports 199, 200, 201, 203, 204, 205, 206, 209, **212** | **206 is current for the transmit path**: E1 clock roles, the transmit path proven in consumer mode, MCLK1 dead at the pin; 205 = the codec chain solved and driver-driven, the master-mode transmit stall isolated; 203 = the AIF1CLK write rule; 204 = the first live reference codec read (its "MCLK1 never clocks" claim is corrected by 205 §4b).  209 is the fault localisation (power/CM negative; ABE reference clock fixed).  **212 is current for the transport AND the fault**: E5 — McBSP bit/frame provider, `CLKSM`/SRG-clock findings, 48 kHz, data verified in the ring; E6 — the codec's DACDAT is `abe_mcbsp1_dx` (not `abe_mcbsp2_dx`), and the board splits clocks (mcbsp2) from data (mcbsp1). |
+| WM8994 audio | reports 199, 200, 201, 203, 204, 205, 206, 209, 212, 213, **214** | **206 is current for the transmit path**: E1 clock roles, the transmit path proven in consumer mode, MCLK1 dead at the pin; 205 = the codec chain solved and driver-driven, the master-mode transmit stall isolated; 203 = the AIF1CLK write rule; 204 = the first live reference codec read (its "MCLK1 never clocks" claim is corrected by 205 §4b).  209 is the fault localisation (power/CM negative; ABE reference clock fixed).  212 is the transport history (E5 — McBSP bit/frame provider, `CLKSM`/SRG-clock findings, 48 kHz; E6 — the earlier, later-corrected data-ball reading; E9 — the two-link build).  213 is current for the ABE question (the serial port is a firmware data path; the McBSP clocks are mainline's).  **214 is current for the working audio**: the WM8994's AIF1 is on **McBSP3** (the oracle's routing log and live registers), the card is two links (`mcbsp2 + wm8994-aif1` clocks, `mcbsp3 + wm8994-aif2` data), and the `omap-mcbsp` channel-layout guard fixes the right channel; the 440 Hz tone is audible in both ears at 48 kHz. |
 | ISL9519 charger | report 183 | |
 | WDT2 / PMIC | reports 183, 184, 192 | |
 
@@ -83,6 +83,13 @@ The guides are in `docs/parked/`.
 * **90** and **92** carry a dated "superseded" banner at the top.
 * **150/151** code addresses are `0x9000` high; report 173 is the correction.
 * **118 §8.2** and **111 §8 item 4** are corrected inline.
+* **212 §16's "the reference clocks its port through the ABE" is corrected by
+  213**: the port is a codec-master consumer, the ABE serial port is a
+  firmware data path, and the McBSP clocks are CM1_ABE/McBSP hardware.
+* **212 §10's "the codec's DACDAT is `abe_mcbsp1_dx`" is corrected by 214**:
+  it is `abe_mcbsp3_dx` (pad `0x108`); `abe_mcbsp1_dx` is the
+  `AIF 4 → MCBSP1` route.  The working two-link path and the stereo fix are
+  in report 214.
 * The session-13 "partial live image" was withdrawn by report 129 §5.
 * Old patch-size statements (42, 46, 47, 48 files) are historical; the current
-  export is 54 files / 8,109 lines (`kernel/patches/README.md`).
+  export is 54 files / 8,440 lines (`kernel/patches/README.md`).

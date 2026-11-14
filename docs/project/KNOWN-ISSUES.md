@@ -1300,6 +1300,12 @@ report 121 §3/§11/§12.
       clocked `0x0fe`/`0x104` at 48 053 frames/s and the codec's FLL did not
       lock, so BCLK/LRCLK are on the McBSP2 balls only.  (Session 45, report
       212 §10.)
+      **Corrected (session 46, report 214):** the codec's DACDAT is
+      **`abe_mcbsp3_dx`** (pad `0x108`, mode 1); `abe_mcbsp1_dx` is the
+      reference's `AIF 4 → MCBSP1` route.  The E6 capture did not quote the
+      McBSP3/PDM pads (`0x104`/`0x108`/`0x10C`), which are the codec's.  The
+      mcbsp2 clock net does reach McBSP3; the two-engine build works in
+      stereo at 48 kHz.  See trap 204.
 
 193. **Never poke an idle L4_ABE peripheral from the kernel — it aborts and
       takes the unit down.**  A machine-driver experiment that ioremap'd
@@ -1313,16 +1319,27 @@ report 121 §3/§11/§12.
       McBSP only through its driver (i.e. through an ASoC link), which owns the
       runtime PM.  (Session 45.)
 
-194. **McBSP1 and McBSP2 do NOT share the BCLK/LRCLK nets.**  A one-off probe
-      (McBSP1 as a slave with one word in DXR, `XRDY` set 5 ms later) suggested
-      they did; it is **withdrawn** — `XRDY` reads 1 both when a word is consumed
-      and when nothing pending was ever shifted (trap 197), and repeating the
-      experiment through a real stream does not drain: McBSP1 sits at
-      `SPCR2 = 0x0235` while the write fails after five periods.  Combined with
-      E5 (the codec's BCLK is on McBSP2's pin) and E6 (driving McBSP1's clock
-      outputs does not reach the codec), the board has **clocks on McBSP2, data
-      on McBSP1**, and the reference bridges them through the ABE (trap 199).
-      (Session 45, report 212 §12/§14.)
+194. **The E9 stall does not prove McBSP1 and McBSP2 have separate
+       BCLK/LRCLK nets.**  A one-off probe
+       (McBSP1 as a slave with one word in DXR, `XRDY` set 5 ms later) suggested
+       they did; it is **withdrawn** — `XRDY` reads 1 both when a word is consumed
+       and when nothing pending was ever shifted (trap 197), and repeating the
+       experiment through a real stream does not drain: McBSP1 sits at
+       `SPCR2 = 0x0235` while the write fails after five periods.  Combined with
+       E5 (the codec's BCLK is on McBSP2's pin) and E6 (driving McBSP1's clock
+       outputs does not reach the codec), the board has **clocks on McBSP2, data
+       on McBSP1**, and the reference bridges them through the ABE (trap 199).
+       (Session 45, report 212 §12/§14.)
+       **Corrected (session 46, report 213):** the E9 stall does **not** establish
+       separate nets.  The committed `mcbsp1_pins` group leaves `clkx`/`fsx` at
+       `0x0000` — the pad's **input buffer is disabled** — while the reference's
+       live pads are `0x0100`; a clock consumer needs the input enable.  E9's pad
+       values were not recorded and its source was not committed.  Re-test with
+       input-enabled pads before concluding (trap 203).
+       **Resolved (session 46, report 214):** the codec's AIF1 is on **McBSP3**,
+       and the E5 mcbsp2 clock net reaches it (the data link drains, the tone is
+       audible in both ears).  The E9 stall was the wrong engine (`mcbsp1`), not
+       a missing net.  See traps 204/205.
 
 195. **ASoC `dai_fmt` is codec-perspective, and getting it backwards fails in a
       misleading place.**  A link declared `CBC_CFC` makes the *CPU* DAI the
@@ -1362,15 +1379,27 @@ report 121 §3/§11/§12.
       `Documentation/sound/soc/*.rst` and `sound/core/oss/pcm_oss.c` rather than
       recalling how ASoC and OSS behave.  (Session 45, operator.)
 
-199. **The reference's McBSP is a clock *consumer*, and its clocks come through
-      the ABE — not through a pad.**  Decompiled
-      `deva-ctrl-omap4abe-wm8994.so` (report 212 §16): `SRGR2` is written as
-      `FPER | 0x1000` (`FSGM = 1`, `CLKSM = 0`), and in slave mode only
-      `XRST`/`RRST` are set — no `GRST`/`FRST`, so the SRG never runs.  Mainline
-      `omap-mcbsp` can only be a *pad* slave, and McBSP1's pads are not on the
-      codec's clock net (E5/E6), so the reference's data path is not reachable
-      with the plain driver.  Do not spend another session looking for a pad or
-      SRGR permutation that reproduces it.  (Session 45.)
+199. **The reference's McBSP is a clock *consumer* — but its clocks come from
+       the codec, not through the ABE.**  Decompiled
+       `deva-ctrl-omap4abe-wm8994.so` (report 212 §16): `SRGR2` is written as
+       `FPER | 0x1000` (`FSGM = 1`, `CLKSM = 0`), and in slave mode only
+       `XRST`/`RRST` are set — no `GRST`/`FRST`, so the SRG never runs.  Mainline
+       `omap-mcbsp` can only be a *pad* slave, and McBSP1's pads are not on the
+       codec's clock net (E5/E6), so the reference's data path is not reachable
+       with the plain driver.  Do not spend another session looking for a pad or
+       SRGR permutation that reproduces it.  (Session 45.)
+       **Corrected (session 46, report 213):** the consumer half is right; the
+       "through the ABE" reading is wrong.  The reference's codec is the AIF1
+       master (`R0x302 = 0x4000`), all four McBSP clock pads are inputs
+       (`0x0100`) while it plays, the slave path starts no SRG, and
+       `StereoAudioCodecRequestMcbspClk`/`RequestABEClk` are stubs
+       (`mov r0,#1; bx lr`).  The ABE serial port is a firmware *data* path, not
+       a clock (traps 201/202).  The pad/consumer configuration is the remaining
+       question (trap 203).
+       **Resolved (session 46, report 214):** the port is **McBSP3** (the PDM
+       pad group in mode 1); its clocks come from the codec's AIF1 master and
+       its data is `mcbsp3_dx`.  The working Linux path is the legacy McBSP
+       path with mcbsp2 clocks and mcbsp3 data (traps 204/205).
 
 200. **Edit documentation with the native read/edit tools — never `python`,
       `sed`, `awk` or any script.**  Read the whole target document first, then
@@ -1382,9 +1411,65 @@ report 121 §3/§11/§12.
       fine for rewriting prose that was not read in full.  (Session 45,
       operator.)
 
+201. **The ABE serial port is a firmware data path, not a clock source.**
+      The HAL Addendum (SWPU245F) and the shipped HAL are explicit:
+      `abe_connect_serial_port` writes the AE's software port table and an ATC
+      descriptor in ABE memory (`abe_block_copy`), `abe_init_atc`'s
+      serial-port case is a **no-op**, and `abe_load_fw` loads the
+      `abe_firmware_array` that consumes the table.  There is no hardware-only
+      "connect a serial port" path.  The ABE's *clock* hardware is a different
+      thing (PRCM CM1_ABE/DPLL_ABE, which mainline drives).  (Session 46,
+      report 213.)
+
+202. **The reference's `StereoAudioCodecRequestMcbspClk` and
+      `StereoAudioCodecRequestABEClk` are stubs.**  Both are
+      `mov r0, #1; bx lr` in the shipped 1917
+      `deva-ctrl-omap4abe-wm8994.so` (`0x6e94`/`0x6e9c`).  The reference does
+      not ask the ABE for a McBSP clock; its playback port is a slave of the
+      codec (AIF1 master, `R0x302 = 0x4000`), and its slave path starts no
+      SRG.  The functional-clock source is a per-port table field
+      (`mcbsp_poweron_port_int`, VA `0x25608`, writes
+      `CM1_ABE_MCBSPx_CLKCTRL[25:24]`).  (Session 46, report 213.)
+
+203. **A McBSP clock *consumer* needs its `clkx`/`fsx` pads input-enabled
+      (`0x0100`), not `0x0000`.**  `0x0000` is the peripheral-function mux
+      with the pad's input buffer **disabled**; a consumer then sees no clock
+      even when the net is driven.  The committed `mcbsp1_pins` group is
+      `clkx = 0x0000`, `fsx = 0x0000`, while the reference's live values on
+      the same pads are `0x0100`.  E9's pad values were not recorded, so the
+      E9 stall is not evidence about the nets until the build is repeated
+      with `0x0100`.  (Session 46, report 213.)
+
+204. **The WM8994's AIF1 is on McBSP3 (the PDM pad group, mode 1), not
+      McBSP1/2.**  The oracle's routing log is
+      `AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3`; McBSP3 is the
+      only McBSP whose L4_ABE target is active during playback, `PCR0 =
+      0x0003` (consumer), and its pads are `0x106/0x108/0x10a/0x10c` =
+      `0x0109/0x0009/0x0109/0x0109` (mode 1).  `abe_mcbsp1_dx` (pad `0x102`)
+      is the reference's `AIF 4 → MCBSP1` route, and `mcbsp2_dx` is safe
+      mode.  The earlier "DACDAT is `mcbsp1_dx`" reading (E6/trap 192)
+      sampled the wrong pads.  (Session 46, report 214.)
+
+205. **The `omap-mcbsp` `hw_params` early-return guard must compare the
+      channel layout, not only rate/width.**  The OSS layer first opens a
+      stream mono at the final rate/width; the later 2-channel call then
+      matched `active_rate`/`active_width` and returned early, leaving
+      `XPHASE` clear.  The left slot played and the right was silent (`XCR2 =
+      0x0041`; the stereo value is `0x8041`).  Compare
+      `!!(cfg_regs.xcr2 & XPHASE)` with the requested channels (I2S/LEFT_J)
+      as well.  (Session 46, report 214.)
+
+206. **A user-space read of an idle L4_ABE McBSP register aborts (SIGBUS).**
+      `memdump3 49022000`/`49024000` on the oracle dies with `fltno 5` while
+      only the active McBSP3 target (`49026000`) reads.  Same class as
+      traps 193/158: the target is clock-gated.  Read a McBSP's registers
+      only while its driver stream holds the target active; for the codec,
+      use the regmap debugfs (`/sys/kernel/debug/regmap/3-001a/registers`),
+      which is not affected.  (Session 46, report 214.)
+
 ## 3. Corrections to older reports
 
-These twenty-three are preserved deliberately. Each is newer than the text it
+These corrections are preserved deliberately. Each is newer than the text it
 contradicts, and the older reports have been corrected in place where they could
 be.
 
@@ -1601,6 +1686,19 @@ MCLK1 cause (setting it on Linux never unfroze the codec), and reparenting
 without re-applying the rate breaks DPLL_ABE locking (trap 182).  Session 44
 fixed it with parent + rate, and DPLL_ABE locks at 98.304 MHz from SYS_CLK
 (report 209 §7).
+
+**3.27 "The reference clocks its McBSP through the ABE" is wrong; the port is
+a codec-master consumer and the ABE serial port is a firmware data path.**
+Report 212 §16 concluded that the reference's McBSP is "clocked through the
+ABE" because `SRGR2` is `FPER | 0x1000` and slave mode starts no SRG.  The
+consumer half is right; the clock source is not the ABE.  The reference's
+codec is AIF1 master (`R0x302 = 0x4000`), all four McBSP clock pads are
+inputs (`0x0100`) while it plays, AIF2 is a slave (`R0x304 = 0x0040`), and the
+driver's `StereoAudioCodecRequestMcbspClk`/`RequestABEClk` are stubs.  The ABE
+serial port is a firmware *data* path (`abe_connect_serial_port` writes the AE
+port table/ATC descriptor; `abe_init_atc`'s serial case is a no-op), and the
+McBSP's clock hardware is CM1_ABE/McBSP, which mainline drives.  Source:
+report 213, DECISIONS §58, traps 201–203.
 
 **Also corrected elsewhere, for completeness:** `0x1cce0` in `winch_lcdctl` is a
 HAL parameter-block defaults initialiser, not the register programmer — the

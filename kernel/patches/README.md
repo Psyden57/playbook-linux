@@ -3,11 +3,19 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**8 331 lines / 54 files** against pristine
-**linux-7.3.3** (sha256 `82d08fcc…`, session-45 wrap-up).  It is generated from
-the tree (via the session-41 file list — no new sources in sessions 42–44), and
+**8 440 lines / 54 files** against pristine
+**linux-7.3.3** (sha256 `fd2774fb…`, session-46 wrap-up).  It is generated from
+the tree (via the session-41 file list — no new sources in sessions 42–46), and
 it was verified by applying it to pristine 7.3.3 targets and comparing all 54
 files byte-for-byte with `local/kernel-tree` — 0 rejects, 0 mismatches.
+**Session 46** adds the working audio path: the WM8994's AIF1 is on **McBSP3**
+(the oracle's routing log `AIF 0 Downlink: …->MCBSP3` and the live McBSP3
+registers), so the card's second link is `40126000.mcbsp` + `wm8994-aif2`
+with the `mcbsp3_pins` group (the PDM pads in mode 1, the oracle's live
+values), `&mcbsp1` is disabled (its DX is the other route), and
+`omap-mcbsp`'s `hw_params` guard also compares the channel layout
+(`XPHASE`), so the OSS mono-first negotiation cannot leave the right slot
+silent.  Report 214; the tone is audible in both ears at 48 kHz.
 **Session 45** adds E5: the machine driver goes back to `SND_SOC_DAIFMT_CBC_CFC`
 with the CPU DAI as bit/frame provider (`set_sysclk(CLKSM=1)` +
 `set_clkdiv(CLKGDV, 49.152 MHz / BCLK)`, FLL1 referenced from BCLK,

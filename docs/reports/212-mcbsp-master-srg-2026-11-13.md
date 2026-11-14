@@ -460,3 +460,15 @@ output chain matching the reference, and the application's samples reach the
 DMA ring.  The one missing piece is clocking McBSP1 — or, equivalently, carrying
 the data on a pin that McBSP2 clocks.  The board does not offer the latter, and
 mainline offers no ABE path for the former.
+
+**Correction (session 46, report 213).**  The premise that the reference's
+McBSP is "clocked through the ABE" is **wrong**.  The reference's playback port
+is a slave of the **codec** (AIF1 master, `R0x302 = 0x4000`; all four McBSP
+clock pads `0x0100`; no `GRST`/`FRST`), and its
+`StereoAudioCodecRequestMcbspClk`/`RequestABEClk` are stubs.  The ABE serial
+port is a **firmware data path** (`abe_connect_serial_port` writes the AE port
+table/ATC descriptor; `abe_init_atc`'s serial case is a no-op), while the
+McBSP's clocks are CM1_ABE/McBSP hardware that mainline already drives.  E9's
+stall is not evidence that the nets are separate: the committed `mcbsp1_pins`
+group leaves `clkx`/`fsx` at `0x0000` (input buffer disabled), while the
+reference is `0x0100`.  See report 213 and DECISIONS §58.

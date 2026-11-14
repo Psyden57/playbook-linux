@@ -154,7 +154,7 @@
  			      <0xb4010 0x4>;
 --- a/arch/arm/boot/dts/ti/omap/omap4-winchester.dts
 +++ b/arch/arm/boot/dts/ti/omap/omap4-winchester.dts
-@@ -0,0 +1,1357 @@
+@@ -0,0 +1,1386 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * BlackBerry PlayBook (RIM "winchester", OMAP4430 ES2.2 HS).
@@ -1271,20 +1271,35 @@
 +	};
 +
 +	/*
-+	 * The codec's data ball is McBSP1's DX, not McBSP2's.  Live on the
-+	 * reference while it plays: abe_mcbsp1_dx (pad 0x102) = 0x0000 (mux 0,
-+	 * output) and abe_mcbsp1_dr (0x100) = 0x1108 (input, pull-up), while
-+	 * abe_mcbsp2_dx sits in mux 7 (safe_mode).  The BCLK/LRCLK nets fan out
-+	 * to both engines' clock balls -- the reference has mcbsp1_clkx (0x0fe),
-+	 * mcbsp1_fsx (0x104), mcbsp2_clkx (0x0f6) and mcbsp2_fsx (0x0fc) all as
-+	 * inputs while the codec is master.
++	 * McBSP1 is NOT the codec's port: the reference drives abe_mcbsp1_dx
++	 * (pad 0x102) for another path (the driver's AIF4/MCBSP1 route), and
++	 * its clock pads are inputs.  Keep it disabled; the reference's pad
++	 * values are recorded here for completeness.
 +	 */
 +	mcbsp1_pins: mcbsp1-pins {
 +		pinctrl-single,pins = <
-+			OMAP4_IOPAD(0x0fe, 0x0000)	/* abe_mcbsp1_clkx, out */
++			OMAP4_IOPAD(0x0fe, 0x0100)	/* abe_mcbsp1_clkx, in */
 +			OMAP4_IOPAD(0x100, 0x0100)	/* abe_mcbsp1_dr, in */
 +			OMAP4_IOPAD(0x102, 0x0000)	/* abe_mcbsp1_dx, out */
-+			OMAP4_IOPAD(0x104, 0x0000)	/* abe_mcbsp1_fsx, out */
++			OMAP4_IOPAD(0x104, 0x0100)	/* abe_mcbsp1_fsx, in */
++		>;
++	};
++
++	/*
++	 * The WM8994's AIF1 is on **McBSP3** (session 46: the oracle's routing
++	 * log is "AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3", and
++	 * McBSP3 is the only McBSP whose L4_ABE target is active and whose
++	 * registers read while it plays).  The pads are the ABE/PDM group in
++	 * mode 1, with the reference's live values: 0x0109 = mode 1 + input
++	 * enable (clock/frame/data inputs), 0x0009 = mode 1 output (DX).
++	 * McBSP3 is a clock *consumer* of the BCLK/LRCLK net McBSP2 drives.
++	 */
++	mcbsp3_pins: mcbsp3-pins {
++		pinctrl-single,pins = <
++			OMAP4_IOPAD(0x106, 0x0109)	/* abe_mcbsp3_dr, in */
++			OMAP4_IOPAD(0x108, 0x0009)	/* abe_mcbsp3_dx, out */
++			OMAP4_IOPAD(0x10a, 0x0109)	/* abe_mcbsp3_clkx, in */
++			OMAP4_IOPAD(0x10c, 0x0109)	/* abe_mcbsp3_fsx, in */
 +		>;
 +	};
 +
@@ -1480,12 +1495,26 @@
 +	status = "okay";
 +};
 +
-+/* McBSP1 is the codec's DATA port on this board (pad 0x102), see §E6. */
++/*
++ * McBSP1 is not the codec's port; the reference drives its DX for another
++ * path (AIF4/MCBSP1).  Leave it disabled.
++ */
 +&mcbsp1 {
 +	#sound-dai-cells = <0>;
 +	pinctrl-names = "default";
 +	pinctrl-0 = <&mcbsp1_pins>;
 +	status = "disabled";
++};
++
++/*
++ * McBSP3 is the WM8994's AIF1 port (the ABE's MCBSP3).  It is a clock
++ * consumer of the BCLK/LRCLK net McBSP2 drives, transmitting PCM on its DX.
++ */
++&mcbsp3 {
++	#sound-dai-cells = <0>;
++	pinctrl-names = "default";
++	pinctrl-0 = <&mcbsp3_pins>;
++	status = "okay";
 +};
 +
 +/ {
@@ -7811,19 +7840,41 @@
  	}
  }
  
-@@ -972,8 +1034,9 @@
+@@ -972,8 +1034,23 @@
  
  	dma_data->maxburst = pkt_size;
  
 -	if (mcbsp->configured) {
 -		/* McBSP already configured by another stream */
++	format = mcbsp->fmt & SND_SOC_DAIFMT_FORMAT_MASK;
++
++	/*
++	 * The OSS layer opens a stream at its defaults and re-negotiates on
++	 * every SNDCTL_DSP_* ioctl, so the first hw_params can be mono at the
++	 * final rate and width; a later stereo call would then be skipped by a
++	 * rate/width comparison alone.  That leaves XPHASE clear (one word per
++	 * frame): the left channel plays and the right slot is silent.
++	 * Compare the channel layout the register shadow was programmed for as
++	 * well -- XPHASE is what the driver sets for 2-channel I2S/LEFT_J.
++	 */
 +	if (mcbsp->configured && mcbsp->active_rate == params_rate(params) &&
-+	    mcbsp->active_width == params_width(params)) {
++	    mcbsp->active_width == params_width(params) &&
++	    !!(mcbsp->cfg_regs.xcr2 & XPHASE) ==
++	    (channels > 1 && (format == SND_SOC_DAIFMT_I2S ||
++			      format == SND_SOC_DAIFMT_LEFT_J))) {
 +		/* McBSP already configured by another stream, same format */
  		return 0;
  	}
  
-@@ -1050,6 +1113,8 @@
+@@ -981,7 +1058,6 @@
+ 	regs->xcr2	&= ~(RPHASE | XFRLEN2(0x7f) | XWDLEN2(7));
+ 	regs->rcr1	&= ~(RFRLEN1(0x7f) | RWDLEN1(7));
+ 	regs->xcr1	&= ~(XFRLEN1(0x7f) | XWDLEN1(7));
+-	format = mcbsp->fmt & SND_SOC_DAIFMT_FORMAT_MASK;
+ 	wpf = channels;
+ 	if (channels == 2 && (format == SND_SOC_DAIFMT_I2S ||
+ 			      format == SND_SOC_DAIFMT_LEFT_J)) {
+@@ -1050,6 +1126,8 @@
  
  	omap_mcbsp_config(mcbsp, &mcbsp->cfg_regs);
  	mcbsp->wlen = wlen;
@@ -7832,7 +7883,7 @@
  	mcbsp->configured = 1;
  
  	return 0;
-@@ -1385,6 +1450,7 @@
+@@ -1385,6 +1463,7 @@
  	mcbsp->pdata = pdata;
  	mcbsp->dev = &pdev->dev;
  	platform_set_drvdata(pdev, mcbsp);
@@ -7842,7 +7893,7 @@
  	if (ret)
 --- a/sound/soc/ti/playbook-wm8994.c
 +++ b/sound/soc/ti/playbook-wm8994.c
-@@ -0,0 +1,486 @@
+@@ -0,0 +1,544 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * playbook-wm8994.c -- SoC audio for the BlackBerry PlayBook (OMAP4430).
@@ -7866,6 +7917,18 @@
 + * The card is a module so it loads after the USB gadget (trap 149); the
 + * output widgets/routes complete the DAPM path from AIF1 to the headphone and
 + * speaker pins, which the generic simple-card link never did.
++ *
++ * Since session 46 (the corrected E9, report 213) the card has **two links**:
++ * link 1 is McBSP2 + wm8994-aif1 and is the E5 clock/codec link (McBSP2 drives
++ * BCLK/LRCLK, AIF1 is the slave, FLL1 locks from BCLK).  Link 2 is McBSP3 +
++ * wm8994-aif2: McBSP3 is the WM8994's AIF1 port (the oracle's routing log,
++ * "AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3"), a clock *consumer*
++ * of the net McBSP2 drives, and its DX is the codec's AIF1 DACDAT.  The AIF2
++ * codec DAI is only an ASoC stand-in that negotiates S16 -- the physical data
++ * still enters the codec on AIF1, whose mixer already selects AIF1DAC1 -- but
++ * it costs no board wiring and it lets the CPU DAI take the BC_FC (consumer)
++ * branch.  A dummy codec drags the format negotiation to U8 and omap-mcbsp
++ * rejects it (report 212 §14).
 + */
 +
 +#include <linux/clk.h>
@@ -8247,6 +8310,37 @@
 +	.trigger = playbook_wm8994_trigger,
 +};
 +
++/*
++ * Link 2's hw_params.  The CPU DAI (McBSP3) is a clock consumer, so there is
++ * no SRG setup here: it is clocked by the BCLK/LRCLK net McBSP2 drives.  The
++ * codec's AIF2 dividers need aifclk[1], and FLL1 is already locked by link 1,
++ * so point AIF2 at FLL1.  The PCM's rate is kept equal to link 1 by the card's
++ * parameter symmetry (trap 196).
++ */
++static int playbook_wm8994_data_hw_params(struct snd_pcm_substream *substream,
++					  struct snd_pcm_hw_params *params)
++{
++	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
++	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, 0);
++	unsigned int rate = params_rate(params);
++	unsigned int aifclk = rate * PB_AIFCLK_FS;
++	int ret;
++
++	ret = snd_soc_dai_set_sysclk(codec_dai, PB_WM8994_SYSCLK_FLL1,
++				     aifclk, SND_SOC_CLOCK_IN);
++	if (ret < 0 && ret != -ENOTSUPP)
++		return ret;
++
++	dev_info(rtd->dev,
++		 "data link: rate %u Hz, AIF2CLK %u Hz (McBSP3 consumer, data on AIF1 DACDAT)\n",
++		 rate, aifclk);
++	return 0;
++}
++
++static const struct snd_soc_ops playbook_wm8994_data_ops = {
++	.hw_params = playbook_wm8994_data_hw_params,
++};
++
 +static const struct snd_soc_dapm_widget playbook_wm8994_widgets[] = {
 +	SND_SOC_DAPM_HP("Headphone", NULL),
 +	SND_SOC_DAPM_SPK("Speaker", NULL),
@@ -8266,20 +8360,35 @@
 +	DAILINK_COMP_ARRAY(COMP_CODEC("wm8994-codec", "wm8994-aif1")),
 +	DAILINK_COMP_ARRAY(COMP_PLATFORM("40124000.mcbsp")));
 +
-+static struct snd_soc_dai_link playbook_wm8994_dai = {
-+	.name = "WM8994",
-+	.stream_name = "PlayBook WM8994",
-+	.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBC_CFC |
-+		   SND_SOC_DAIFMT_NB_NF,
-+	.ops = &playbook_wm8994_ops,
-+	SND_SOC_DAILINK_REG(playbook),
++SND_SOC_DAILINK_DEFS(playbook_data,
++	DAILINK_COMP_ARRAY(COMP_CPU("40126000.mcbsp")),
++	DAILINK_COMP_ARRAY(COMP_CODEC("wm8994-codec", "wm8994-aif2")),
++	DAILINK_COMP_ARRAY(COMP_PLATFORM("40126000.mcbsp")));
++
++static struct snd_soc_dai_link playbook_wm8994_links[] = {
++	{
++		.name = "WM8994 clocks",
++		.stream_name = "PlayBook WM8994",
++		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBC_CFC |
++			   SND_SOC_DAIFMT_NB_NF,
++		.ops = &playbook_wm8994_ops,
++		SND_SOC_DAILINK_REG(playbook),
++	},
++	{
++		.name = "WM8994 data",
++		.stream_name = "PlayBook WM8994 data",
++		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBP_CFP |
++			   SND_SOC_DAIFMT_NB_NF,
++		.ops = &playbook_wm8994_data_ops,
++		SND_SOC_DAILINK_REG(playbook_data),
++	},
 +};
 +
 +static struct snd_soc_card playbook_wm8994_card = {
 +	.name = "PlayBook WM8994",
 +	.owner = THIS_MODULE,
-+	.dai_link = &playbook_wm8994_dai,
-+	.num_links = 1,
++	.dai_link = playbook_wm8994_links,
++	.num_links = ARRAY_SIZE(playbook_wm8994_links),
 +	.dapm_widgets = playbook_wm8994_widgets,
 +	.num_dapm_widgets = ARRAY_SIZE(playbook_wm8994_widgets),
 +	.dapm_routes = playbook_wm8994_routes,

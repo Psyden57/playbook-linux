@@ -1,0 +1,124 @@
+E10 — the WM8994 is on McBSP3; the two-engine Linux path works, in stereo
+Session 46 (absolute), 2026-11-13
+
+===========================================================================
+1. The oracle (1917 minimal image; qconn 169.254.0.1:9090, root ssh)
+===========================================================================
+
+io-audio:
+  /base/sbin/io-audio -d omap4abe-wm8994 aif=0,secure_capture -o enable_buffering
+Playback:
+  /base/usr/bin/audio_out -i /tmp/long30.wav
+  (Multimedia graph: StreamReader0 -> WAVParser0 -> AudioCard0; operator: audible)
+
+slog routing (the decisive line):
+  ABE|omap4_print_current_routing_path:198: AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3
+  ABE|omap4_print_current_routing_path:214: AIF 0 Uplink: MCBSP3->MM_EXT_IN_PORT->MM_UL2_PORT
+  ABE|omap4_print_current_routing_path:198: AIF 3 Downlink: MCBSP2
+  ABE|omap4_print_current_routing_path:198: AIF 4 Downlink: MCBSP1
+
+Codec (pbi2c rd16, bus 3, 0x1a):
+  R0x732 = 0x6020   FLL1 locked
+  R0x200 = 0x0011   AIF1CLK on, from FLL1
+  R0x302 = 0x4000   AIF1 master (the reference's role)
+  R0x304 = 0x0040   AIF2 slave
+  R0x300 = 0xc018   DSP_A, 16-bit
+
+Pads (memdump3 4a100000 ...), during playback; static before/after:
+  0x4A1000D0 = 0x000f000f   SBB1 group, safe/gpio
+  0x4A1000D4 = 0x000f000f   SBB1 group, safe/gpio
+  0x4A1000D8 = 0x0003000f   SBB1 group, safe/gpio
+  0x4A1000F4 = 0x0100000f   abe_mcbsp2_clkx = 0x0100 input
+  0x4A1000F8 = 0x000f1108   abe_mcbsp2_dr = 0x1108 input; abe_mcbsp2_dx = 0x000f safe
+  0x4A1000FC = 0x01000100   abe_mcbsp2_fsx = 0x0100; abe_mcbsp1_clkx = 0x0100
+  0x4A100100 = 0x00001108   abe_mcbsp1_dr = 0x1108; abe_mcbsp1_dx = 0x0000 output
+  0x4A100104 = 0x01090100   abe_mcbsp1_fsx = 0x0100; abe_mcbsp3_dr = 0x0109 input
+  0x4A100108 = 0x01090009   abe_mcbsp3_dx = 0x0009 output; abe_mcbsp3_clkx = 0x0109 input
+  0x4A10010C = 0x000f0109   abe_mcbsp3_fsx = 0x0109 input; abe_clks = 0x000f
+
+McBSP3 registers (memdump3 49026000 0x60) while playing:
+  0x49026000 = 0x22301610  (DRR)
+  0x49026010 = 0x00000003/0x00000005  SPCR2: XRST, XRDY/XEMPTY; no GRST/FRST
+  0x49026014 = 0x00000001  SPCR1: RRST
+  0x49026028 = 0x0000103f  SRGR2: FPER 0x3f, FSGM=1, CLKSM=0
+  0x4902602c = 0x00000f03  SRGR1
+  0x49026048 = 0x00000003  PCR0: CLKXM/FSXM/CLKRM/FSRM clear -> clock consumer
+  XCR1/XCR2 = 0x140 / 0x1
+
+Memdump3 on McBSP1 (0x49022000) and McBSP2 (0x49024000) while the
+reference plays: SIGBUS (fltno 5, ref 0x...): their L4_ABE targets are
+idle/clock-gated.  Only McBSP3's target is active.
+
+===========================================================================
+2. Linux (our image; region 0 0xF8BADFF3, kernel 7.3.3 #42;
+   region 1 rootfs c0719d28...)
+===========================================================================
+
+Card:
+  00-00: PlayBook WM8994 wm8994-aif1-0 ...      (mcbsp2 + wm8994-aif1, clocks)
+  00-01: PlayBook WM8994 data wm8994-aif2-1 ... (mcbsp3 + wm8994-aif2, data)
+  OSS nodes: /dev/dsp = pcm0, /dev/adsp = pcm1
+
+Pads (pinctrl-single, 4a100040.pinmux):
+  pin 91 4a1000f6 00000000  mcbsp2 clkx out
+  pin 92 4a1000f8 00000100  mcbsp2 dr in
+  pin 93 4a1000fa 00000000  mcbsp2 dx out
+  pin 94 4a1000fc 00000000  mcbsp2 fsx out
+  pin 99 4a100106 00000109  mcbsp3 dr in
+  pin 100 4a100108 00000009 mcbsp3 dx out
+  pin 101 4a10010a 00000109 mcbsp3 clkx in
+  pin 102 4a10010c 00000109 mcbsp3 fsx in
+  (all four mcbsp3 pads claimed by 40126000.mcbsp; the values are the
+   oracle's live values, mode 1 + input enable / mode 1 output)
+
+Clock link (pcm0, /dev/dsp, 45 s silence):
+  pbplay: opened /dev/dsp (S16_LE 2 ch 48000 Hz, 45 s, 0 Hz tone)
+  pbplay: wrote 8650752 bytes, done
+  SRGR1 0x0f1f, SRGR2 0x301f, PCR0 0x0f0f; hw_ptr ~48096/s
+
+Data link (pcm1, /dev/adsp, 40 s 440 Hz):
+  pbplay: opened /dev/adsp (S16_LE 2 ch 48000 Hz, 40 s, 440 Hz tone)
+  pbplay: wrote 7684096 bytes, done
+  omap-mcbsp 40126000.mcbsp: XCR1 0x0040, XCR2 0x8041 (XPHASE = true stereo)
+  live 0: DXR 0x00000000 DRR 0x23301610 XBUFFSTAT 0x0001 RBUFFSTAT 0x0000
+          SPCR2 0x0235 IRQST 0x0712
+  (the old failure was the write dying after 82176 bytes; this stream
+   completed 40 s, i.e. the data port drains)
+
+Codec (regmap debugfs 3-001a/registers):
+  0x0001 = 0x3303  PM1: HPOUT1L/R + SPKOUTL/R on
+  0x0002 = 0x6000  PM2
+  0x0003 = 0x03f0  PM3: both output mixers
+  0x0005 = 0x0303  PM5: DAC1L/R on
+  0x002d = 0x0001  left output mixer DAC on
+  0x002e = 0x0001  right output mixer DAC on
+  0x0060 = 0x00ee  analogue HP path
+  0x0200 = 0x0011  AIF1CLK on, from FLL1
+  0x0300 = 0x6010  AIF1 I2S, 16-bit
+  0x0302 = 0x0000  AIF1 slave
+  0x0304 = 0x0040  AIF2 slave
+  0x0420 = 0x0200  (after the stream stopped; the repair clears it at start)
+  0x0601/0x0602 = 0x0001  AIF1DAC1 -> DAC1 L/R
+  0x0610/0x0611 = 0x01c0  DAC1 volumes 0xc0 + VU
+  0x0732 = 0x6020  FLL1 locked
+  repair: done, FLL1 locked
+
+Verdict (operator, headphones):
+  the 440 Hz tone is loud in BOTH ears.
+
+===========================================================================
+3. The two bugs this run fixed
+===========================================================================
+
+a) The codec's AIF1 is on McBSP3, not McBSP1/2.  The oracle's routing log,
+   the McBSP3 register block (the only active L4_ABE target), and the
+   mcbsp3 pad group (0x106/0x108/0x10a/0x10c, mode 1) settle it.  The
+   earlier "data ball is abe_mcbsp1_dx" reading was the AIF4/MCBSP1
+   route, not the codec.
+
+b) The right channel was silent because the McBSP was programmed mono on
+   the first OSS negotiation (XCR2 0x0041, XPHASE clear) and the later
+   2-channel hw_params returned early: the driver's guard compared rate
+   and width only.  Comparing the channel layout (XPHASE) as well makes
+   the second call reconfigure; XCR2 becomes 0x8041 and the right slot
+   plays.

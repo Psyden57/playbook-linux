@@ -7,3 +7,7 @@
 *.PDF binary
 docs/reports/data/** binary
 docs/captures/*.txt -text
+
+# Generated kernel patches: context lines legitimately start with a diff
+# marker (a space) followed by the source indentation (a tab).
+*.patch -whitespace

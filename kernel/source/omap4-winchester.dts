@@ -1114,20 +1114,35 @@
 	};
 
 	/*
-	 * The codec's data ball is McBSP1's DX, not McBSP2's.  Live on the
-	 * reference while it plays: abe_mcbsp1_dx (pad 0x102) = 0x0000 (mux 0,
-	 * output) and abe_mcbsp1_dr (0x100) = 0x1108 (input, pull-up), while
-	 * abe_mcbsp2_dx sits in mux 7 (safe_mode).  The BCLK/LRCLK nets fan out
-	 * to both engines' clock balls -- the reference has mcbsp1_clkx (0x0fe),
-	 * mcbsp1_fsx (0x104), mcbsp2_clkx (0x0f6) and mcbsp2_fsx (0x0fc) all as
-	 * inputs while the codec is master.
+	 * McBSP1 is NOT the codec's port: the reference drives abe_mcbsp1_dx
+	 * (pad 0x102) for another path (the driver's AIF4/MCBSP1 route), and
+	 * its clock pads are inputs.  Keep it disabled; the reference's pad
+	 * values are recorded here for completeness.
 	 */
 	mcbsp1_pins: mcbsp1-pins {
 		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x0fe, 0x0000)	/* abe_mcbsp1_clkx, out */
+			OMAP4_IOPAD(0x0fe, 0x0100)	/* abe_mcbsp1_clkx, in */
 			OMAP4_IOPAD(0x100, 0x0100)	/* abe_mcbsp1_dr, in */
 			OMAP4_IOPAD(0x102, 0x0000)	/* abe_mcbsp1_dx, out */
-			OMAP4_IOPAD(0x104, 0x0000)	/* abe_mcbsp1_fsx, out */
+			OMAP4_IOPAD(0x104, 0x0100)	/* abe_mcbsp1_fsx, in */
+		>;
+	};
+
+	/*
+	 * The WM8994's AIF1 is on **McBSP3** (session 46: the oracle's routing
+	 * log is "AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3", and
+	 * McBSP3 is the only McBSP whose L4_ABE target is active and whose
+	 * registers read while it plays).  The pads are the ABE/PDM group in
+	 * mode 1, with the reference's live values: 0x0109 = mode 1 + input
+	 * enable (clock/frame/data inputs), 0x0009 = mode 1 output (DX).
+	 * McBSP3 is a clock *consumer* of the BCLK/LRCLK net McBSP2 drives.
+	 */
+	mcbsp3_pins: mcbsp3-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x106, 0x0109)	/* abe_mcbsp3_dr, in */
+			OMAP4_IOPAD(0x108, 0x0009)	/* abe_mcbsp3_dx, out */
+			OMAP4_IOPAD(0x10a, 0x0109)	/* abe_mcbsp3_clkx, in */
+			OMAP4_IOPAD(0x10c, 0x0109)	/* abe_mcbsp3_fsx, in */
 		>;
 	};
 
@@ -1323,12 +1338,26 @@
 	status = "okay";
 };
 
-/* McBSP1 is the codec's DATA port on this board (pad 0x102), see §E6. */
+/*
+ * McBSP1 is not the codec's port; the reference drives its DX for another
+ * path (AIF4/MCBSP1).  Leave it disabled.
+ */
 &mcbsp1 {
 	#sound-dai-cells = <0>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&mcbsp1_pins>;
 	status = "disabled";
+};
+
+/*
+ * McBSP3 is the WM8994's AIF1 port (the ABE's MCBSP3).  It is a clock
+ * consumer of the BCLK/LRCLK net McBSP2 drives, transmitting PCM on its DX.
+ */
+&mcbsp3 {
+	#sound-dai-cells = <0>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&mcbsp3_pins>;
+	status = "okay";
 };
 
 / {

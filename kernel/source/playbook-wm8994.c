@@ -21,6 +21,18 @@
  * The card is a module so it loads after the USB gadget (trap 149); the
  * output widgets/routes complete the DAPM path from AIF1 to the headphone and
  * speaker pins, which the generic simple-card link never did.
+ *
+ * Since session 46 (the corrected E9, report 213) the card has **two links**:
+ * link 1 is McBSP2 + wm8994-aif1 and is the E5 clock/codec link (McBSP2 drives
+ * BCLK/LRCLK, AIF1 is the slave, FLL1 locks from BCLK).  Link 2 is McBSP3 +
+ * wm8994-aif2: McBSP3 is the WM8994's AIF1 port (the oracle's routing log,
+ * "AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3"), a clock *consumer*
+ * of the net McBSP2 drives, and its DX is the codec's AIF1 DACDAT.  The AIF2
+ * codec DAI is only an ASoC stand-in that negotiates S16 -- the physical data
+ * still enters the codec on AIF1, whose mixer already selects AIF1DAC1 -- but
+ * it costs no board wiring and it lets the CPU DAI take the BC_FC (consumer)
+ * branch.  A dummy codec drags the format negotiation to U8 and omap-mcbsp
+ * rejects it (report 212 §14).
  */
 
 #include <linux/clk.h>
@@ -402,6 +414,37 @@ static const struct snd_soc_ops playbook_wm8994_ops = {
 	.trigger = playbook_wm8994_trigger,
 };
 
+/*
+ * Link 2's hw_params.  The CPU DAI (McBSP3) is a clock consumer, so there is
+ * no SRG setup here: it is clocked by the BCLK/LRCLK net McBSP2 drives.  The
+ * codec's AIF2 dividers need aifclk[1], and FLL1 is already locked by link 1,
+ * so point AIF2 at FLL1.  The PCM's rate is kept equal to link 1 by the card's
+ * parameter symmetry (trap 196).
+ */
+static int playbook_wm8994_data_hw_params(struct snd_pcm_substream *substream,
+					  struct snd_pcm_hw_params *params)
+{
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, 0);
+	unsigned int rate = params_rate(params);
+	unsigned int aifclk = rate * PB_AIFCLK_FS;
+	int ret;
+
+	ret = snd_soc_dai_set_sysclk(codec_dai, PB_WM8994_SYSCLK_FLL1,
+				     aifclk, SND_SOC_CLOCK_IN);
+	if (ret < 0 && ret != -ENOTSUPP)
+		return ret;
+
+	dev_info(rtd->dev,
+		 "data link: rate %u Hz, AIF2CLK %u Hz (McBSP3 consumer, data on AIF1 DACDAT)\n",
+		 rate, aifclk);
+	return 0;
+}
+
+static const struct snd_soc_ops playbook_wm8994_data_ops = {
+	.hw_params = playbook_wm8994_data_hw_params,
+};
+
 static const struct snd_soc_dapm_widget playbook_wm8994_widgets[] = {
 	SND_SOC_DAPM_HP("Headphone", NULL),
 	SND_SOC_DAPM_SPK("Speaker", NULL),
@@ -421,20 +464,35 @@ SND_SOC_DAILINK_DEFS(playbook,
 	DAILINK_COMP_ARRAY(COMP_CODEC("wm8994-codec", "wm8994-aif1")),
 	DAILINK_COMP_ARRAY(COMP_PLATFORM("40124000.mcbsp")));
 
-static struct snd_soc_dai_link playbook_wm8994_dai = {
-	.name = "WM8994",
-	.stream_name = "PlayBook WM8994",
-	.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBC_CFC |
-		   SND_SOC_DAIFMT_NB_NF,
-	.ops = &playbook_wm8994_ops,
-	SND_SOC_DAILINK_REG(playbook),
+SND_SOC_DAILINK_DEFS(playbook_data,
+	DAILINK_COMP_ARRAY(COMP_CPU("40126000.mcbsp")),
+	DAILINK_COMP_ARRAY(COMP_CODEC("wm8994-codec", "wm8994-aif2")),
+	DAILINK_COMP_ARRAY(COMP_PLATFORM("40126000.mcbsp")));
+
+static struct snd_soc_dai_link playbook_wm8994_links[] = {
+	{
+		.name = "WM8994 clocks",
+		.stream_name = "PlayBook WM8994",
+		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBC_CFC |
+			   SND_SOC_DAIFMT_NB_NF,
+		.ops = &playbook_wm8994_ops,
+		SND_SOC_DAILINK_REG(playbook),
+	},
+	{
+		.name = "WM8994 data",
+		.stream_name = "PlayBook WM8994 data",
+		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBP_CFP |
+			   SND_SOC_DAIFMT_NB_NF,
+		.ops = &playbook_wm8994_data_ops,
+		SND_SOC_DAILINK_REG(playbook_data),
+	},
 };
 
 static struct snd_soc_card playbook_wm8994_card = {
 	.name = "PlayBook WM8994",
 	.owner = THIS_MODULE,
-	.dai_link = &playbook_wm8994_dai,
-	.num_links = 1,
+	.dai_link = playbook_wm8994_links,
+	.num_links = ARRAY_SIZE(playbook_wm8994_links),
 	.dapm_widgets = playbook_wm8994_widgets,
 	.num_dapm_widgets = ARRAY_SIZE(playbook_wm8994_widgets),
 	.dapm_routes = playbook_wm8994_routes,

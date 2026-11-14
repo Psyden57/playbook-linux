@@ -4,9 +4,9 @@ Open work only.  Closed and parked item history is archived in
 [`docs/history/ROADMAP-CLOSED.md`](../history/ROADMAP-CLOSED.md).  Each open
 item states the evidence that would close it.
 
-Current focus: **item 9** (peripherals), with the AIF1CLK source as the one
-audio experiment.  Item 7 (packaging) is untouched; item 8 (BB10) is parked by
-the operator.
+Current focus: **item 9** (peripherals); the audio goal is closed (report 214),
+with the speaker path as the one remaining audio experiment.  Item 7
+(packaging) is untouched; item 8 (BB10) is parked by the operator.
 
 ## 7. Packaging (postmarketOS-style)
 
@@ -37,7 +37,10 @@ with the operator.
 **Done.**  I²C4 motion sensors (BMA150/HMC5883L/MPU3050), TMP103, BQ27541,
 FAN5702 and CM3217; the Munin touch is calibrated and has its GPIO2_3 edge IRQ
 (report 198); the ISL9519 charger and the 58.6 s WDT2 policy are in the
-known-good image.
+known-good image; **the WM8994 audio plays stereo at 48 kHz** (session 46,
+report 214 — the codec is on McBSP3, the card is two ASoC links, and the ABE
+detour is closed; history in
+[`docs/history/ROADMAP-CLOSED.md`](../history/ROADMAP-CLOSED.md)).
 
 **Open.**
 
@@ -59,50 +62,12 @@ known-good image.
   `audio-ldo` on GPIO4_31 pulsed 100 ms at probe, spk high via the hog, hp
   input.  It does **not** restore MCLK1 (`FLL1 NOT locked`) but it fixes the
   WM8994 probe (-121 without it).
-* **WM8994 audio — the transport works, the codec does not decode (session 45,
-  report 212).**  E5 put the McBSP back as the bit/frame provider with the codec
-  as AIF1 slave and FLL1 referenced to our BCLK: **no MCLK1 in the path**.  The
-  session-41 stall was `CLKSM = 0` (SRG clocked from the undriven CLKS pad);
-  `CLKSM = 1` plus `CLKGDV = 32` runs the port at **48 096 frames/s**, the
-  codec's FLL1 locks, `AIF1CLK` exists, and the application's tone is verified
-  in the DMA ring and at the transmitter (`XBUFFSTAT`).  **Open:** the codec
-  still outputs silence.  **The cause is the data ball (E6, report 212 §10):**
-  on the live reference the codec's DACDAT is `abe_mcbsp1_dx` (pad `0x102`,
-  mux 0, output — a static configuration), while `abe_mcbsp2_dx`, which E5
-  drives, is mux 7 safe mode and not connected to the codec.  DSP_A was tried
-  and is not the fault.  McBSP1 as a *clock master* loses the codec clock, so
-  the board splits the engines: **mcbsp2 = clocks, mcbsp1 = data**.  E9 built the
-  two-engine design (two links, `wm8994-aif2` on the data link) and the data port
-  **stalls**: McBSP1 as a consumer never gets a frame sync (`SPCR2 = 0x0235`), so
-  its clock pins are **not** on McBSP2's nets (E7's positive result is
-  withdrawn, trap 197).
-
-  **The reference settles why (report 212 §16).**  Its driver decompiles to a
-  McBSP that is a clock *consumer*: `SRGR2 = FPER | 0x1000` (`FSGM = 1`,
-  `CLKSM = 0`), and in slave mode only `XRST`/`RRST` are set — no `GRST`/`FRST`,
-  so the SRG never runs.  The port's `mcbsp_id` comes from a per-port field in
-  the driver's table, and the clocks arrive through the **ABE**
-  (`abe_connect_serial_port`), not through a pad.  Mainline has no equivalent:
-  `omap-abe-twl6040.c` is a machine driver only, and there is no ABE firmware
-  loader.
-
-  **Remaining work is an ABE bring-up project**, in this order:
-  1. **Feasibility, static (cheap).**  Read the TRM's ABE chapter for the
-     serial-port clocking: whether an ABE serial port can be clocked and pointed
-     at a McBSP *without* the DSP firmware, or whether the ABE DSP must run.
-     The reference's firmware is available — `abe_firmware_array` is embedded in
-     `local/work/1917/base/lib/libabe.so.1` — and the QNX HAL's call sequence
-     (`abe_initialize`, `abe_init_mem`, `abe_connect_serial_port`,
-     `abe_configure_port`) is the map to follow.
-  2. **Confirm the routing on the live oracle.**  Which `mcbsp_id` the audio
-     port actually binds to, and whether `abe_clks` (a pad) or an internal ABE
-     clock feeds it — read while the reference plays.
-  3. **Only then a driver.**  If the ABE can clock a McBSP, the E9 two-link
-     build becomes the audio path; if it cannot, record the limitation and stop.
-
-  Raw register pokes to McBSP2 are forbidden (trap 193); the MCLK1 route stays
-  closed by trap 165 (no probe); the free-running NCO remains a mechanism probe
-  only.  **Closes when:** a 440 Hz tone from `pbplay` is audible at 48 kHz ±1 %.
+* **WM8994 audio niceties.**  The speaker path was **not exercised** (the
+  working test was on headphones; the codec's speaker controls read routed, so
+  the next experiment is the same tone with the headphones unplugged); retire
+  the `pcm:`/`live N:` diagnostics; the optional MCLK1 probe is trap 165.
+  The closed history is in
+  [`docs/history/ROADMAP-CLOSED.md`](../history/ROADMAP-CLOSED.md).
 * **WL1283.**  Formally stopped by the operator (session 36).  The software
   surface is exhausted and the 1917-truth minimal host still fails CMD5
   (report 196).  Do not re-run traps 116–137.  The WLAN calibration/NVS is
