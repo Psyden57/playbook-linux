@@ -1519,8 +1519,14 @@ report 121 §3/§11/§12.
       **Fix:** run the tree-vs-pristine walk (trap 139's recipe) whenever the
       export is regenerated, even when "no new sources" were added — it is the
       only check that sees a long-standing omission.  Read the export's
-      *file count* as the signal: 55 files now, and the audit trail is
-      `kernel/patches/README.md`.  (Session 48.)
+      *file count* as the signal: 56 files now, and the audit trail is
+      `kernel/patches/README.md`.  **Session-50 addendum:** the walk's own
+      filter must match `Kconfig.*`, not just the exact name `Kconfig` —
+      `b in ('Kconfig','Makefile')` silently drops `arch/arm/Kconfig.debug` (a
+      real modified file since session 49), which is the same class again.  Use
+      `b == 'Makefile' or b.startswith('Kconfig') or rel.endswith(EXT)`, and run
+      `make clean` first or a built tree adds ~34 generated sources.
+      (Session 48; addendum session 50.)
 
 212. **A bare `pbplay` is a playback command, and the volume must stay down for
       the whole test sequence.**  `pbplay` with no arguments opens `/dev/dsp`

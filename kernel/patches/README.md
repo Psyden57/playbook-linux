@@ -332,7 +332,17 @@ does not yet reproduce the device's block-0x43 pair (report 148).  Do not enable
 for history) took the file list from the previous patch's `+++ b/` lines, so
 every file added after an export was silently omitted — that is how
 `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h` and `pbmon-page.h` disappeared from
-the 6.15.11 patch.  The list must come from a tree-vs-pristine walk:
+the 6.15.11 patch.  The list must come from a tree-vs-pristine walk.  **Run
+`make clean` in `local/kernel-tree` first** (session 36 warning): on a built
+tree the walk also returns generated sources (asn1 tables, the dtc/genksyms
+lexers and parsers, the logo/ucs tables, `.tmp_vmlinux*.S`, …) — session 50 saw
+90 entries instead of 56.
+
+**Session-50 correction:** the filter must match `Kconfig.*`, not just the exact
+name `Kconfig`.  `arch/arm/Kconfig.debug` is a real modified file (session 49
+added it) and `b in ('Kconfig','Makefile')` silently drops it — the same
+trap-211 class the walk exists to catch.  Use
+`b == 'Makefile' or b.startswith('Kconfig') or rel.endswith(EXT)`.
 
 ```bash
 cd /home/psyden/SSDdrive/playbook-linux
@@ -349,7 +359,7 @@ NAME_SKIP={'.config','Module.symvers','System.map','vmlinux','vmlinux.o','.versi
 EXT=('.c','.h','.S','.dts','.dtsi','.yaml','.sh','.pl')
 def wanted(rel):
     b=os.path.basename(rel)
-    return (b in ('Kconfig','Makefile') or rel.endswith(EXT)) and \
+    return (b == 'Makefile' or b.startswith('Kconfig') or rel.endswith(EXT)) and \
            b not in NAME_SKIP and rel not in GEN and not rel.endswith('.mod.c')
 out=[]; n=0
 for dp,dn,fn in os.walk(T):

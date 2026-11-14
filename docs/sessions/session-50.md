@@ -64,6 +64,12 @@ were negative, decide the next evidence.
   resolves the dynamic GPIO2 sysfs base, exports `base+23`, drives the pulse,
   and reports the pad/GPIO2/UART registers.  The region-1 image was **not**
   rebuilt; the probe was pushed to `/tmp`.
+* **The tree walk was run and found a recipe defect.**  On the built tree it
+  returned 90 files (56 real sources + 34 generated ones), and — the real find —
+  it **did not see `arch/arm/Kconfig.debug`**, because the recipe's filter
+  matched the exact name `Kconfig`, not `Kconfig.*`.  The tree itself is correct
+  (after excluding the generated files the walk's set is exactly the shipped
+  patch's 56 files); the recipe and trap 211 are fixed.
 
 ## Inferred (reasoning from evidence, not directly measured)
 
