@@ -2001,6 +2001,101 @@ verdict.
 
 ---
 
+## 60. The speaker path is the codec's line outputs, `spk` is active low, and GPIO1_15 must be high (session 47)
+
+**Decision.**  Drive the output stage from the jack, and use the **line
+outputs** for the speakers, not the class-D amplifier:
+
+* Headphones in (`hp` high): `PM1` HPOUT1L/R, the charge pump (`R0x04c`
+  bit 15), `R0x060 = 0xcc`.
+* Jack out: HPOUT1/SPKOUT/charge-pump off, `R0x060 = 0`, `R0x036 = 0`,
+  `R0x039 = 0x01c8`, and the line-out route — `R0x038 = 0x0080`
+  (`LINEOUT_VMID_BUF_ENA`), `PM3 |= 0x3c00` (LINEOUT1P/N + LINEOUT2P/N),
+  `R0x01e` mutes cleared, `R0x034/R0x035 = 1` (MIXOUTL/R → LINEOUT1P/2P),
+  after `R0x02d/R0x02e = 1` (DAC1 → MIXOUT).
+
+The board enables belong to the machine driver, not to a gpio-hog:
+
+* **`spk-gpios = <&gpio2 12 GPIO_ACTIVE_HIGH>`** — the reference's `spk`
+  (hwio signal 0x93, pad 0x068).  It is an **active-low** amplifier enable:
+  low while the speakers play, high at teardown and while idle.  The
+  `disp-en-12-hog` is removed; the line was never a display enable.
+* **`boost-gpios = <&gpio1 15 GPIO_ACTIVE_HIGH>`** — the reference's
+  runtime-only output, the amplifier rail enable the QNX driver asks
+  `powerman` for as **`audio_boost`**; driven high at probe.
+
+**Why.**  With the headphones unplugged the speaker stayed silent after every
+codec register we could match.  The reference's own driver shows the speaker
+branch (`enable_codec_playback_device`, VA `0x2c814`, `enable_codec_line_out`):
+`powman_alive("audio_boost")` → `gpio_set_output(spk, 0)` → the `R0x39`/`R0x38`/
+`PM3`/`R0x1e` sequence above; the teardown mirrors it and raises `spk`.  The
+reference's live codec while the speakers play is `PM1 = 0x0013`,
+`PM3 = 0x3cf0`, `R0x036 = 0`, `R0x038 = 0x80`, `R0x04c = 0x1f25`,
+`R0x060 = 0`.  On the bench, matching only the codec is not enough: `spk` low
+alone is still silent, and with `spk` low **and** GPIO1_15 high both speakers
+play.
+
+**Constraint.**  The `audio_boost` net is not schematic-confirmed; GPIO1_15 is
+the behaviourally confirmed line.  The DPLL/BCLK data path is untouched: the
+two ASoC links, `XCR2 = 0x8041` and FLL1-from-BCLK stay as §59.  A DTS change
+(the hog removal, the new properties) changes the chainloader CRC and needs a
+both-region flash; a driver-only change is region 1 (trap 190).
+
+**Evidence.**  Report **215** and
+`docs/captures/wm8994-speaker-2026-11-13.txt` — the oracle and Linux full
+register dumps during speaker playback, the static RE of
+`enable_codec_line_out`/`disable_codec_line_out`/`codec_gpio_init`, the
+`/sys/kernel/debug/gpio` states (`spk` out lo, `boost` out hi during the
+stream), and the operator's verdict (both speakers at DAC1 volume 96 and 40).
+Traps 207–210, correction 3.28.
+
+**Honest caveat.**  The class-D path (`SPKMIX`, `SPKOUT`) is left in the repair
+for the headphone branch's old shape but is unused; it may be retired with the
+diagnostics.
+
+---
+
+## 61. "Hardware blocked" is a hypothesis: RE the reference driver and run it on the oracle first (session 47)
+
+**Decision (operator, session-47 close).**  Before a board feature is written
+off as needing a probe/scope/schematic, do two things: **static RE of the
+reference's own driver/BSP** (in subagents, file-only) to find every GPIO,
+PMIC/LDO and clock write it performs, and **run that reference driver on the
+minimal 1917 oracle with its own controls** (PPS/powerman, its own mixer or
+networking stack) while reading the same registers and pins on both sides.  The
+WL1283 is reopened under this rule; the diagnostics cleanup stays the first,
+small task of the next session.
+
+**Why.**  The speaker spent several sessions as "board-level, needs a probe":
+the codec registers matched, the `spk`/`hp` lines matched, and the conclusion
+was that the amplifier or its rail needed measuring.  It was a **driver
+problem** with three parts — the speakers are the codec's *line outputs*, `spk`
+is an **active-low** enable asserted only while playing, and GPIO1_15 (the
+`audio_boost` enable) must be high.  None of that was visible in our DT or in
+the codec register file; all of it fell out of (a) decompiling
+`enable_codec_line_out`/`codec_gpio_init` and (b) making the oracle route to
+the speaker with `Headphone Select` = false and capturing its registers.  The
+same class of evidence closed the ABE question (report 213) and the MCLK1
+model (report 208).  Conversely, the WL1283 was closed on a *negative host-side
+test* (report 196) without ever running the reference's WLAN driver on the
+oracle — the asymmetry this decision removes.
+
+**Constraint.**  The oracle is unauthenticated (bench only, never networked,
+trap 173).  Its services are started by hand and `/tmp` is wiped by a reboot.
+Cross-OS reads are compared as *state*, not by poking a device a vendor driver
+owns (DECISIONS §31).  A test still runs in the driver/DTS and is judged on the
+bench, one variable per boot — a poke is never the evidence (trap 209).
+
+**Evidence.**  Session 47: report 215 and capture
+`docs/captures/wm8994-speaker-2026-11-13.txt`; DECISIONS §60; the operator's
+direction at the close ("the same methodology that got us from hardware blocked
+to actually going and solving the problem").  Prior applications: reports
+208/209/213/214.
+
+
+
+---
+
 The repository licence and visibility are decided below; the remaining
 policy questions (publication of the proprietary corpus) stay open and are
 recorded here so nobody assumes a policy exists.

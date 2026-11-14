@@ -1467,6 +1467,47 @@ report 121 §3/§11/§12.
       use the regmap debugfs (`/sys/kernel/debug/regmap/3-001a/registers`),
       which is not affected.  (Session 46, report 214.)
 
+207. **The WM8994 regmap debugfs reads the *cache*, not the silicon, for
+      non-volatile registers.**  `wm8994_volatile_register()` lists only a few
+      addresses; `0x732` (Interrupt Raw Status 2) is **not** one of them, so a
+      read of the FLL1-lock bit returns whatever was cached — including the
+      value the repair cached 50 ms after `trigger(START)`, when the FLL may
+      genuinely not have locked yet.  The repair's own "FLL1 NOT locked" line
+      can therefore be a stale/early read while the audio plays.  A register
+      value read this way is the driver's *intended* state, not proof of
+      silicon; when a hardware fact matters, read it over I²C (oracle
+      `pbi2c rd16`) or judge by ear.  (Session 47.)
+
+208. **Start the clock PCM first, wait, then the data PCM.**  Opening
+      `/dev/adsp` (link 2) before `/dev/dsp` (link 1) has established its rate
+      fails `SNDCTL_DSP_SPEED` with `EINVAL` (rate symmetry), and a data stream
+      whose clock link has already stopped dies with
+      `Input/output error (after ~36 000 bytes)` — the old McBSP stall, now
+      caused by the missing BCLK, not by the transport.  Sequence:
+      `pbplay N 0 /dev/dsp &`, sleep 2–3 s, `pbplay N 440 /dev/adsp &`, then
+      confirm both `/proc/asound/card0/pcm{0,1}p/sub0/status` are `RUNNING`.
+      (Session 47.)
+
+209. **A `devmem` poke to a GPIO data register does not hold.**  Writing
+      `GPIO2_DATAOUT` directly to clear the `spk` bit reads back cleared and
+      then reverts as soon as the gpiolib touches another line in the same
+      bank (it writes the bank's shadow).  Test a board line only by letting
+      the driver own it (`gpiod_set_value`).  A userspace `export` +
+      `direction`/`value` does stick, but the line must not be claimed by a
+      gpio-hog.  (Session 47.)
+
+210. **The speaker path is the codec's line outputs, `spk` is active LOW, and
+      GPIO1_15 is required.**  The WM8994 class-D speaker mixer (`R0x036`) and
+      `SPKOUT` are unused by the reference: it plays with `PM3 = 0x3cf0`
+      (LINEOUT1P/N + LINEOUT2P/N), `R0x01e = 0`, `R0x034/0x035 = 1`,
+      `R0x038 = 0x80`, `R0x04c = 0x1f25`, `R0x060 = 0` and `PM1 = 0x0013`, and
+      it drives **`spk` (GPIO2_12) LOW** for the whole speaker playback
+      (`enable_codec_line_out`, VA `0x2c814`).  `spk` high is the amp-off /
+      teardown state.  GPIO1_15 (the reference's runtime-only output, the
+      `audio_boost` enable) must be **high** as well; with it low the speaker
+      is silent even when the codec and `spk` match.  The `disp-en-12-hog`
+      was a misnomer for this line.  (Session 47, report 215.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it
@@ -1699,6 +1740,16 @@ serial port is a firmware *data* path (`abe_connect_serial_port` writes the AE
 port table/ATC descriptor; `abe_init_atc`'s serial case is a no-op), and the
 McBSP's clock hardware is CM1_ABE/McBSP, which mainline drives.  Source:
 report 213, DECISIONS §58, traps 201–203.
+
+**3.28 The board's speakers are on the codec's line outputs, not the class-D
+"speaker" path.**  The session-46 handoff and STATE described the speaker as
+`SPKMIX`/`R0x036`, and read `SPKL/SPKR DAC1 Switch` = 1 as "routed".  Those
+controls belong to the class-D block, which the reference does not use: while
+it plays through the speakers `R0x036 = 0`, `PM1 = 0x0013` (no `SPKOUT`), and
+the route is `DAC1 -> MIXOUT -> LINEOUT1P/LINEOUT2P` with `PM3 = 0x3cf0`,
+`R0x01e = 0`, `R0x034/0x035 = 1` and `R0x038 = 0x0080`.  The board enables are
+`spk` (GPIO2_12, **active low**) and GPIO1_15 (the `audio_boost` enable,
+**high**).  Source: report 215, trap 210, DECISIONS §60.
 
 **Also corrected elsewhere, for completeness:** `0x1cce0` in `winch_lcdctl` is a
 HAL parameter-block defaults initialiser, not the register programmer — the

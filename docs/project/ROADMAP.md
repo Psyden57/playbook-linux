@@ -4,9 +4,11 @@ Open work only.  Closed and parked item history is archived in
 [`docs/history/ROADMAP-CLOSED.md`](../history/ROADMAP-CLOSED.md).  Each open
 item states the evidence that would close it.
 
-Current focus: **item 9** (peripherals); the audio goal is closed (report 214),
-with the speaker path as the one remaining audio experiment.  Item 7
-(packaging) is untouched; item 8 (BB10) is parked by the operator.
+Current focus: **item 9** (peripherals).  The audio goal is closed (reports 214
+and 215: headphones and both speakers); the next items are the diagnostics
+cleanup and the **reopened WL1283**, with the reference-first method
+(DECISIONS §61).  Item 7 (packaging) is untouched; item 8 (BB10) is parked by
+the operator.
 
 ## 7. Packaging (postmarketOS-style)
 
@@ -37,12 +39,22 @@ with the operator.
 **Done.**  I²C4 motion sensors (BMA150/HMC5883L/MPU3050), TMP103, BQ27541,
 FAN5702 and CM3217; the Munin touch is calibrated and has its GPIO2_3 edge IRQ
 (report 198); the ISL9519 charger and the 58.6 s WDT2 policy are in the
-known-good image; **the WM8994 audio plays stereo at 48 kHz** (session 46,
-report 214 — the codec is on McBSP3, the card is two ASoC links, and the ABE
-detour is closed; history in
+known-good image; **the WM8994 audio plays stereo at 48 kHz on headphones and
+both speakers** (sessions 46/47, reports 214/215 — the codec is on McBSP3, the
+card is two ASoC links, the ABE detour is closed, and the speakers are the
+codec's line outputs with `spk` active-low and GPIO1_15 as the `audio_boost`
+enable; history in
 [`docs/history/ROADMAP-CLOSED.md`](../history/ROADMAP-CLOSED.md)).
 
 **Open.**
+
+* **The WM8994 audio has two follow-ups.**  (a) **Retire the `pcm:`/`live N:`
+  diagnostics** in the machine driver and `omap-mcbsp` and re-verify headphones
+  and speakers (module-only, region-1 flash; then re-export the patch).  (b) The
+  optional **MCLK1 probe** is trap 165 — the working design does not need it.
+  The `audio_boost` net (GPIO1_15) is confirmed by behaviour but not by a
+  schematic.  Closes when the diagnostics are out, the patch is re-exported and
+  the tone is heard on both outputs.
 
 * **The minimal 1917 oracle is built and has been used** (session 43/44, reports
   207/208/209).  A debloated 2.1.0.1917 IFS+RCFS — services reduced to
@@ -59,22 +71,24 @@ detour is closed; history in
   working oracle leaves MCLK1 present (report 209).  **ABE path fixed:**
   `CM_ABE_PLL_REF_CLKSEL` is SYS_CLK with DPLL_ABE locked at 98.304 MHz.  **The
   reference's codec-GPIO init is implemented** (report 211): a boot-on
-  `audio-ldo` on GPIO4_31 pulsed 100 ms at probe, spk high via the hog, hp
-  input.  It does **not** restore MCLK1 (`FLL1 NOT locked`) but it fixes the
-  WM8994 probe (-121 without it).
-* **WM8994 audio niceties.**  The speaker path was **not exercised** (the
-  working test was on headphones; the codec's speaker controls read routed, so
-  the next experiment is the same tone with the headphones unplugged); retire
-  the `pcm:`/`live N:` diagnostics; the optional MCLK1 probe is trap 165.
-  The closed history is in
-  [`docs/history/ROADMAP-CLOSED.md`](../history/ROADMAP-CLOSED.md).
-* **WL1283.**  Formally stopped by the operator (session 36).  The software
-  surface is exhausted and the 1917-truth minimal host still fails CMD5
-  (report 196).  Do not re-run traps 116–137.  The WLAN calibration/NVS is
-  extracted from QNX `hd5` (report 197).  **Audit note (session 44):** trap 185
-  shows Linux gpio numbers are by probe order; any WL1283 experiment that used
-  sysfs/global gpio numbers (not DT/OF phandles) should be re-checked before
-  the software-exhausted claim is treated as final.
+  `audio-ldo` on GPIO4_31 pulsed 100 ms at probe, spk high, hp input.  It does
+  **not** restore MCLK1 (`FLL1 NOT locked`) but it fixes the WM8994 probe (-121
+  without it).  **Session 47** used the oracle again for the speaker:
+  `Headphone Select` = false routes it to the line outputs and the speaker
+  sounds, which is how the missing board lines were found (report 215).
+* **WL1283 — REOPENED (operator, session-47 close).**  The session-36
+  "software surface exhausted" verdict is withdrawn.  The 1917-truth minimal
+  host still fails CMD5 (report 196) with pads/WL_EN/IRQ/rails matching QNX, so
+  the next evidence is the **reference's own driver behaviour**: RE
+  `devnp-ti1283.so`, `devc-seromap-winbt`, `devpm-omap4.so`,
+  `hwio-config-winchester.so` and the powerman preset (subagents, static), then
+  RUN `devnp-ti1283` on the minimal oracle with its own controls and watch the
+  SDIO bring-up, then implement in the driver/DTS — the method that solved the
+  speaker (report 215, DECISIONS §60/§61).  Do not re-run traps 116–137
+  unchanged; an overlapping test must state what differs.  The WLAN
+  calibration/NVS is extracted from QNX `hd5` (report 197) for the
+  post-enumeration `wl12xx` path.  **Closes when** the chip enumerates under
+  Linux (CMD5 + `attach_sdio yes`) and wl12xx probes with the hd5 NVS.
 * **Touch.**  Done; the remaining nicety is driving power/reset
   (GPIO1_14 / GPIO4_8) for cold boots — a warm reset keeps the controller up
   (session 42).

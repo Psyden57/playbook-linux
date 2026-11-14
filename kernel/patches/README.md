@@ -3,11 +3,17 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**8 440 lines / 54 files** against pristine
-**linux-7.3.3** (sha256 `fd2774fb…`, session-46 wrap-up).  It is generated from
-the tree (via the session-41 file list — no new sources in sessions 42–46), and
+**8 584 lines / 54 files** against pristine
+**linux-7.3.3** (sha256 `93a7a8ce…`, session-47 wrap-up).  It is generated from
+the tree (via the session-41 file list — no new sources since), and
 it was verified by applying it to pristine 7.3.3 targets and comparing all 54
 files byte-for-byte with `local/kernel-tree` — 0 rejects, 0 mismatches.
+**Session 47** adds the speaker path: the repair follows the jack and uses the
+codec's **line outputs** for the speakers (PM3 `0x3cf0`, `R0x01e`, `R0x034/035`,
+`R0x038`, `R0x039`, charge pump off), the `spk` line (GPIO2_12, active low) and
+the GPIO1_15 `audio_boost` enable are owned by the machine driver
+(`spk-gpios`/`boost-gpios`), and the `disp-en-12-hog` is removed from the board
+DTS.  Report 215; both speakers play.
 **Session 46** adds the working audio path: the WM8994's AIF1 is on **McBSP3**
 (the oracle's routing log `AIF 0 Downlink: …->MCBSP3` and the live McBSP3
 registers), so the card's second link is `40126000.mcbsp` + `wm8994-aif2`

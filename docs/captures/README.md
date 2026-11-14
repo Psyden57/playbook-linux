@@ -62,6 +62,17 @@ This is the capture behind report 214.  Note that user-space reads of the
 idle McBSP1/2 register blocks abort (`SIGBUS`); only the active McBSP3 target
 reads (trap 206).
 
+## WM8994 speaker path — line outputs, `spk` low, GPIO1_15 high (session 47)
+
+| file | when |
+|---|---|
+| `wm8994-speaker-2026-11-13.txt` | (A) the minimal 1917 oracle with `Headphone Select` = false and `audio_out` playing — the full 1865-register dump that shows the speaker route (`PM3 = 0x3cf0`, `R0x01e = 0`, `R0x034/035 = 1`, `R0x036 = 0`, `R0x038 = 0x80`, `R0x039 = 0x1c8`, `R0x04c = 0x1f25`, `R0x060 = 0`); (B) our Linux image during the same speaker playback (readable registers via the regmap debugfs) |
+
+This is the capture behind report 215.  Read it with the caveat that the regmap
+debugfs side (B) is the driver's cached/intended state, not a silicon read
+(trap 207).  The decisive board facts are the GPIO states recorded in the report
+(`spk` out lo, `boost` out hi while playing).
+
 ## Exact duplicates
 
 These pairs are byte-identical; keep one of each when pruning.

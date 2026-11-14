@@ -1,16 +1,16 @@
-# Handoff — session 46 (absolute)
+# Handoff — session 47 (absolute)
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§7).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — this handoff is for **absolute 46 = Linux-era 40**, updated at its
+`N+6` — this handoff is for **absolute 47 = Linux-era 41**, updated at its
 wrap-up.  See `docs/sessions/NUMBERING.md`.
 
-> **Session-46 result, in one line:** **the ABE question is closed and the
-> audio works** — the WM8994's AIF1 is on **McBSP3** (not McBSP1/2), the card
-> is two ASoC links (`mcbsp2 + wm8994-aif1` clocks, `mcbsp3 + wm8994-aif2`
-> data), and the `omap-mcbsp` channel-layout guard fixed the right channel.
-> `pbplay`'s 440 Hz tone is audible in both ears at 48 kHz ±1 % (operator).
-> Report 214; DECISIONS §59.
+> **Session-47 result, in one line:** **the speaker works too** — the board's
+> speakers hang off the WM8994's **line outputs** (not its class-D amp), the
+> `spk` line (GPIO2_12) is an **active-low** amplifier enable, and GPIO1_15
+> (the reference's `audio_boost` enable) must be **high**.  Headphones and both
+> speakers play the 440 Hz tone at 48 kHz (operator).  Report 215;
+> DECISIONS §60.
 
 ## 0. The job, and where it stands
 
@@ -23,8 +23,8 @@ and the board's own sensors/peripherals working.
 **Working:** the SoC basics (DDR, UART3 console, eMMC on MMC2, WDT2), the USB
 gadget/console, the whole display chain, the 64 MiB ext4 BusyBox root in region
 1, the peripherals (I²C4 motion sensors, TMP103, BQ27541, FAN5702, CM3217,
-ISL9519 charger), the **Munin touch** (calibrated, IRQ wired; §0d), and now the
-**WM8994 audio** (stereo, 48 kHz; §0c).
+ISL9519 charger), the **Munin touch** (calibrated, IRQ wired; §0d), and the
+**WM8994 audio on headphones and speakers** (stereo, 48 kHz; §0c).
 
 **The audio path is the working design (session 46, reports 213/214).**
 
@@ -52,41 +52,76 @@ ISL9519 charger), the **Munin touch** (calibrated, IRQ wired; §0d), and now the
   Comparing `XPHASE` as well gives `0x8041` and both slots play.
 
 **The patch** `kernel/patches/0001-playbook-winchester-7.3.3.patch` is the
-session-46 export (**54 files / 8 440 lines**, sha256 `fd2774fb…`, 0 rejects /
+session-47 export (**54 files / 8 584 lines**, sha256 `93a7a8ce…`, 0 rejects /
 54/54 byte-identical by apply-and-compare).  It carries the McBSP3 two-link
-card, the `XPHASE` guard, the E5 clock roles and the two session-45
-diagnostics.
+card, the `XPHASE` guard, the E5 clock roles, the jack-dependent output stage,
+the line-out speaker route, the `spk`/`boost` GPIOs, the `disp-en-12-hog`
+removal and the two session-45 diagnostics.
 
 ## 0a. The media, and the way back
 
-* **region 0 = the session-46 Linux image** (`boot/chainloader/kernel.img`,
-  CRC **`0xF8BADFF3`**, `0x93993C` bytes; kernel `7.3.3` **#42**, the McBSP3
-  two-link card).
-* **region 1 = the audio/OSS rootfs** `c0719d28…`
-  (`local/images/rootfs-region1-audio-oss.ext4`, 27 modules, `pbplay`/`pbmix`,
-  the stereo-fixed `snd-soc-omap-mcbsp.ko`).
+* **region 0 = the session-47 Linux image** (`boot/chainloader/kernel.img`,
+  CRC **`0xAD85DF0F`**, `0x939D3C` bytes; kernel `7.3.3` **#44**, the speaker
+  path).
+* **region 1 = the audio/OSS rootfs** `0342ab06…`
+  (`local/images/rootfs-region1-audio-oss-linout.ext4`, 27 modules,
+  `pbplay`/`pbmix`, the speaker-path machine driver).
 * The unit is **on our Linux image** (`0fca:8010`, console `pb> `).  `BOOTCTR_FCTRY`
-  read **`0x20`** from the `/init` log (`0x20 >= threshold 0x1e, no write`);
-  the image tops it up at boot.
+  read **`0x2c`** at the last boot (`0x2c >= threshold 0x1e, no write`); the
+  image tops it up at boot.
 * **To boot the ORACLE:** flash `local/work/ifs-shim-sealed.ifs` at block
   `0x825` (the pruned RCFS is still at `0x8D5`/region-0 `0xC00000`), then
   reboot.  It enumerates `0fca:8012`; qconn `169.254.0.1:9090`, root ssh.
+  Note `/tmp` is wiped by the reboot — re-push any wav with `tools/QCL.py put`.
+  **Device-side file left by session 47:** the oracle's persistent io-audio
+  config `/var/etc/system/config/audio/OMAP4 @ 1a.io-ado-cfg` on the UFS has
+  `Headphone Select` = **false**, so `io-audio` starts routed to the speaker
+  (set it back to `true` if a headphone test is wanted).  Nothing was deployed
+  to the Linux root.
 * **To stock TabletOS:** flash `local/work/minimal/wayback.signed`.  **Do not
   restore `local/images/ifs0.sealed.bin`** (2.0.0.4869, trap 84).
 * **To rebuild the oracle:** `python3 tools/build_minimal_qnx.py`.
-* **Saved images:** `local/images/kernel-0xF8BADFF3-mcbsp3-consumer.img` (the
-  working region 0), `local/images/kernel-0x47ED0450-mcbsp1-consumer.img` (the
-  failed mcbsp1 experiment), `local/images/rootfs-region1-audio-oss-stereo.ext4`
-  (`c0719d28…`, working), `…-e9mcbsp3.ext4` (`a726bb49…`, mcbsp3 first),
-  `…-e5.ext4` (`6d92428e…`, the E5 rootfs).
+* **Saved images:** `local/images/kernel-0xAD85DF0F-speaker.img` (the working
+  region 0, session 47), `local/images/kernel-0xF8BADFF3-mcbsp3-consumer.img`
+  (session 46), `local/images/rootfs-region1-audio-oss-linout.ext4`
+  (`0342ab06…`, working), `…-stereo.ext4` (`c0719d28…`, session 46),
+  `…-e9mcbsp3.ext4` (`a726bb49…`), `…-e5.ext4` (`6d92428e…`).
 
-## 0b. Item 9 step 4 (WL1283) — software surface exhausted
+## 0b. Item 9 step 4 (WL1283) — REOPENED by the operator at the session-47 close
 
-Unchanged and **formally stopped by the operator** (session 36).  The 1917-truth
-minimal `&mmc5` host probes but `attach_sdio no` (report 196).  Do not re-run
-traps 116–137.
+The **software surface is not exhausted after all**: it was closed on session 36
+when the 1917-truth minimal `&mmc5` host still returned `attach_sdio no`
+(report 196).  The speaker work (session 47) showed what "hardware blocked"
+actually needed: **static RE of the reference driver/BSP plus the oracle's own
+controls**, and the speaker fell out as a driver problem (report 215,
+DECISIONS §60/§61).  The operator's direction for the next session is to apply
+the same method to the WL1283.
 
-## 0c. Item 9 step 5 — audio works; the next experiment is the speaker
+**Method, in the order that worked:**
+
+1. **RE the reference stack, not our DT.**  `local/work/1917/base/lib/dll/
+   devnp-ti1283.so`, `devc-seromap-winbt`, `devpm-omap4.so`,
+   `hwio-config-winchester.so`, and the powerman preset (`activity/wifi_driver`,
+   `air_needs_wifi`, `wlan_needs_DMA`) — find every GPIO, PMIC/LDO and clock
+   write the driver actually performs (the speaker's `spk`/`audio_boost` were
+   only visible this way).  Put this in **subagents** (static, file-only,
+   trap 109).
+2. **Run the reference's own driver on the oracle with its own controls.**  The
+   minimal 1917 image starts `net`; start `devnp-ti1283` (and `io-pkt` if it is
+   not up), give the PPS/powerman services it expects, and watch the SDIO
+   bring-up live — the exact analogue of starting `io-audio` for the speaker.
+   `pidin mem`/`pidin irq` name the controller and the chip IRQ; `sloginfo`
+   shows the driver's own decisions.
+3. **Diff the two, then implement in the driver/DTS** — not with pokes
+   (trap 209), and one variable per boot.
+
+Do **not** re-run traps 116–137 unchanged; an overlapping test must state what
+differs (report 196 ended with the pads/WL_EN/IRQ/rails matching, so the next
+evidence has to come from the reference's *driver behaviour*, not another
+SoC-side register sweep).  WL1283 stays item 9; the diagnostics cleanup below
+is still the first, small task.
+
+## 0c. Item 9 step 5 — the WM8994 audio works on headphones and speakers
 
 ### What is proven (do not re-derive)
 
@@ -104,49 +139,28 @@ traps 116–137.
   `0x060 = 0x00ee`, DAC1 volumes 0xc0.
 * **The right channel** is the `XPHASE` guard (trap 205); do not remove it.
 
-### The one next experiment — the speaker path
+### The speaker path — done (session 47, report 215)
 
-The operator's listening test was on **headphones**.  The speaker path
-(`SPKMIX`) was never exercised.  The codec's speaker **controls** read routed
-(`SPKL/SPKR DAC1 Switch` [1], `SPKL/SPKR Output Switch` [1],
-`Speaker Switch` [1 1], `Speaker Volume` [57 57], `Speaker Mode` Class D,
-`PM1` `SPKOUTL/R_ENA` set), so the likely gate is **board-level**: the `spk`
-line (GPIO2_12/gpmc_a20, signal `0x93`) or the `hp` jack detect (the codec's
-HP path is on; the speaker may be muted while headphones are plugged).
+The speaker was silent for three reasons and all three are now in the tree:
 
-**These speaker-path steps are the plan; none has been run yet.**
+* **The speakers are on the codec's line outputs, not its class-D amplifier.**
+  The reference plays with `PM1 = 0x0013`, `PM3 = 0x3cf0` (LINEOUT1P/N +
+  LINEOUT2P/N), `R0x01e = 0`, `R0x034/0x035 = 1`, `R0x036 = 0`,
+  `R0x038 = 0x0080` (`LINEOUT_VMID_BUF_ENA`), `R0x039 = 0x01c8`,
+  `R0x04c = 0x1f25` (charge pump off), `R0x060 = 0`: DAC1 → MIXOUT → LINEOUT.
+  The machine driver's repair now follows the jack: headphones → HPOUT1 +
+  charge pump; jack out → the line-out block above.
+* **`spk` (GPIO2_12) is an active-low amplifier enable.**  The reference leaves
+  it high (amp off) and drives it **low** for the whole speaker playback,
+  raising it in the teardown.  The `disp-en-12-hog` is gone; the driver owns it
+  (`spk-gpios`) and sets it low for the speaker route, high on `trigger(STOP)`.
+* **GPIO1_15 must be high.**  It is the reference's runtime-only board output
+  and the `audio_boost` enable the QNX driver asks `powerman` for.  The driver
+  owns it as `boost-gpios`, driven high at probe.
 
-**Exact inputs and steps:**
-
-1. **Unplug the headphones.**  This is the first variable.
-2. On Linux (`0xF8BADFF3` + `c0719d28…`), run the working pair:
-   `pbplay 45 0 /dev/dsp &` then `pbplay 40 440 /dev/adsp &`.
-3. Read, while it plays:
-   * the raw codec registers `0x0001`, `0x0003`, `0x0022`, `0x0023`,
-     `0x0026`, `0x0027` (`/sys/kernel/debug/regmap/3-001a/registers`);
-   * `pbmix list "SPK"`, `pbmix list "Speaker"`;
-   * the board GPIOs (`/sys/kernel/debug/gpio`): the `spk` and `hp` lines,
-     and `pinctrl` pads `0x068`/`0x070`/`0x120`.
-4. If it is silent, boot the oracle (`ifs-shim-sealed.ifs` at `0x825`), leave
-   the headphones **unplugged**, start `io-audio` and
-   `audio_out -i /tmp/long30.wav`, and read the same codec registers
-   (`pbi2c rd16 3 0x1a …`) and the `spk`/`hp` GPIOs.  Diff the two.
-5. Judge by ear and by the same register diff.  One variable per boot; leave
-   the audio path otherwise untouched.
-
-**What each result means:**
-
-* **The speaker sounds on Linux with the headphones unplugged.**  The path is
-  already fine; the earlier "headphones only" was the jack.  Record it and
-  close the speaker nicety.
-* **Linux silent, oracle sounds.**  A codec/board difference.  Diff the
-  speaker registers (`R0x22`/`R0x23` = SPKMIXL/R, `R0x24`/`R0x25` = SPKLVOL/
-  SPKRVOL, `R0x01`/`R0x03` PM1/PM3) and the `spk`/`hp` GPIOs; implement the
-  missing route in the machine driver's repair (or the rcS) — a module-only
-  change, region-1 flash.
-* **Both silent with the headphones unplugged.**  The speaker amplifier/rail
-  or the jack switch is the limit; record it and stop (a board-level probe is
-  the next evidence, not another register guess).
+**Verified:** `repair: jack out (speaker)`, codec registers as above, `spk` out
+`lo`, `boost` out `hi`; both speakers play the 440 Hz tone (operator) at DAC1
+volume 96 and 40.  Nothing in the two-link data path changed.
 
 ### Driver facts you need before touching it
 
@@ -158,15 +172,19 @@ HP path is on; the speaker may be muted while headphones are plugged).
 * `omap-mcbsp`, `snd-soc-wm8994` and the machine driver are **modules**: a
   change to them does **not** change the chainloader CRC and needs a
   **region-1-only** flash (trap 190).  Copy the rebuilt `.ko` into
-  `local/work/modules-7.3.3/` first (trap 163).
-* The `pcm:` ring readback (machine driver) and the `live N:` FIFO dump
-  (`omap-mcbsp`) are still in the tree and the patch; retire them after the
-  speaker work.
+  `local/work/modules-7.3.3/` first (trap 163).  A DTS change (like the `spk`
+  hog removal) changes the image and needs **both** regions.
+* **Never test a GPIO by a `devmem` poke:** the gpiolib shadow re-asserts the
+  bank's data register on any other operation, so the pin reverts mid-stream
+  (trap 209).  Let the driver own the line.
+* **A listening test must state what is playing** (trap 191) and the two links
+  must both be RUNNING: start the clock link first, wait, then the data link,
+  or the second PCM fails rate symmetry and the first can stall at ~36 KB.
 * **The ABE HAL Addendum is local:** `hardware/abe-hal-addendum.txt` (PDF
   gitignored).  The TRM is `hardware/swpu231ap.pdf.txt`; the WM8994 is
-  `hardware/WM8994.PDF` — Table 106/“AIF1 Control (1)”, the speaker mixer
-  registers R34/R35 (SPKMIXL/R) and the output PGA R38/R39
-  (SPKLVOL/SPKRVOL).
+  `hardware/WM8994.PDF` — Table 106/“AIF1 Control (1)”, the line-output
+  registers R30 (0x1e), R52/R53 (0x34/0x35) and the anti-pop R56/R57
+  (0x38/0x39).
 
 ## 0d. Touch — done, and it survives a warm reboot; cold boots need the pulse
 
@@ -236,8 +254,8 @@ ZIMAGE=$K/arch/arm/boot/zImage DTB=$K/arch/arm/boot/dts/ti/omap/omap4-winchester
 ```bash
 python3 tools/build_rootfs.py --size-mb 64 \
     --modules local/work/modules-7.3.3 --krel 7.3.3 \
-    --out local/images/rootfs-region1-audio-oss.ext4
-python3 tools/bbusb.py flash --component local/images/rootfs-region1-audio-oss.ext4 \
+    --out local/images/rootfs-region1-audio-oss-linout.ext4
+python3 tools/bbusb.py flash --component local/images/rootfs-region1-audio-oss-linout.ext4 \
     --dest-block 0x2915 --from-bootrom --password 0000 --apply &
 tools/pbcon.py 'reboot -f'
 ```
@@ -249,8 +267,8 @@ Both regions (DTS or kernel change) use the `both.lst` recipe in
 the old patch's file list (the `+++ b/` lines; `diff -u --label a/<path>
 --label b/<path>`, `/dev/null` for new files), then **apply it to a staged
 copy of the pristine files and compare all 54** to `local/kernel-tree` —
-54/54 byte-identical is the acceptance test.  The session-46 export is
-54 files / 8,440 lines, sha256 `fd2774fb…`.
+54/54 byte-identical is the acceptance test.  The session-47 export is
+54 files / 8,584 lines, sha256 `93a7a8ce…`.
 
 ## 3. Bench
 
@@ -334,53 +352,54 @@ copy of the pristine files and compare all 54** to `local/kernel-tree` —
 ## 7. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 47 (absolute; Linux-era 41)
+PlayBook (OMAP4430 "winchester") — session 48 (absolute; Linux-era 42)
 
 Workspace: this repository — a git checkout.  The earlier work tree
 $HOME/rea-work is READ-ONLY.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 9, KNOWN-ISSUES.md (traps 14-206, especially 187-206,
-and §3), DEVELOPMENT.md §3/3a/4/7a, DECISIONS.md (44-59), docs/reports/INDEX.md,
-reports 212, 213 and 214, and sessions/session-46.md.
+file), ROADMAP.md item 9, KNOWN-ISSUES.md (traps 14-210, especially 187-210,
+and §3), DEVELOPMENT.md §3/3a/4/7a, DECISIONS.md (44-61), docs/reports/INDEX.md,
+reports 213, 214 and 215, and sessions/session-47.md.
 
-WHERE IT STANDS: AUDIO WORKS.  `pbplay`'s 440 Hz tone is audible in BOTH ears
-at 48 kHz +/-1% (operator, headphones).  The WM8994's AIF1 is on McBSP3, not
-McBSP1/2 (the oracle's routing log "AIF 0 Downlink:
-MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3"; the live McBSP3 PCR0=0x3 and the PDM pads
-0x106/0x108/0x10a/0x10c = 0x0109/0x0009/0x0109/0x0109).  The card is two ASoC
-links: mcbsp2 + wm8994-aif1 (E5 clocks/codec, CBC_CFC) and mcbsp3 +
-wm8994-aif2 (data, CBP_CFP, consumer).  The right channel needed the
-omap-mcbsp channel-layout guard (XPHASE); XCR2 is 0x8041.  The ABE is NOT
-needed (DECISIONS §58/§59).  The patch is 54 files / 8 440 lines, sha256
-fd2774fb..., verified 0 rejects / 54/54.
+WHERE IT STANDS: AUDIO IS COMPLETE — headphones AND both speakers play
+`pbplay`'s 440 Hz tone at 48 kHz +/-1% (operator).  The two-link data path is
+session 46's: the WM8994's AIF1 is on McBSP3 (the oracle's routing log
+"AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3"), the card is
+mcbsp2 + wm8994-aif1 (clocks, CBC_CFC) and mcbsp3 + wm8994-aif2 (data, CBP_CFP);
+the codec is the AIF1 slave, FLL1 locks from our BCLK; the omap-mcbsp
+channel-layout guard keeps XCR2 = 0x8041; the ABE is NOT needed (DECISIONS
+§58/§59).  THE SPEAKER (session 47, report 215) needed three things, all now in
+the tree: the speakers are on the codec's LINE OUTPUTS, not the class-D amp
+(PM3 = 0x3cf0, R0x01e = 0, R0x034/R0x035 = 1, R0x036 = 0, R0x038 = 0x80,
+R0x04c = 0x1f25, R0x060 = 0); `spk` (GPIO2_12) is an ACTIVE-LOW amplifier
+enable (low while playing, high on trigger(STOP)); and GPIO1_15 (the
+reference's `audio_boost` enable) must be HIGH.  The repair follows the jack:
+headphones in -> HPOUT1 + charge pump; out -> the line-out route + spk low.
+The patch is 54 files / 8 584 lines, sha256 93a7a8ce..., verified 0 rejects /
+54/54.
 
-THE ONE NEXT EXPERIMENT: the SPEAKER PATH.  The listening test so far was on
-headphones; SPKMIX was never exercised.  The codec's speaker controls already
-read routed (SPKL/SPKR DAC1 Switch=1, SPKL/SPKR Output Switch=1, Speaker
-Switch=1, Speaker Volume=57, Speaker Mode=Class D, PM1 SPKOUTL/R_ENA set), so
-the likely gate is board-level: the spk line (GPIO2_12/gpmc_a20, signal 0x93)
-or the hp jack detect.  STEPS (one variable): unplug the headphones; run
-`pbplay 45 0 /dev/dsp &` then `pbplay 40 440 /dev/adsp &`; read the raw codec
-registers 0x0001/0x0003/0x0022/0x0023/0x0024/0x0025 from
-/sys/kernel/debug/regmap/3-001a/registers, `pbmix list "SPK"`, and
-/sys/kernel/debug/gpio (spk/hp).  If silent, boot the oracle (IFS at 0x825),
-leave the headphones unplugged, io-audio + audio_out, and read the same
-registers/GPIOs; diff.  IF the speaker sounds on Linux with the headphones
-unplugged: done.  IF Linux is silent and the oracle sounds: a codec/board
-register or the spk/hp gate — implement it in the machine driver/repair
-(module-only, region-1 flash).  IF both are silent: the speaker amp/rail or the
-jack switch is the limit; record and stop.  Do not change the working two-link
-audio path in the same boot.
+THE ONE NEXT EXPERIMENT: retire the session-45 diagnostics and re-verify the
+audio.  Remove the machine driver's `pcm:` DMA-ring readback
+(playbook_wm8994_repair) and the omap-mcbsp eight-sample `live N:` dump
+(omap_mcbsp_steady_dump), rebuild only the modules (trap 190: a module-only
+change keeps the chainloader CRC), copy the .ko into local/work/modules-7.3.3/
+(trap 163), rebuild the region-1 rootfs and flash region 1 only.  Then re-run
+the pair and confirm: `repair: jack out (speaker)` / `jack in (headphone)`,
+"done, FLL1 locked", the data stream writes its full byte count,
+/proc/asound/card0/pcm1p/sub0/status RUNNING, and — BY EAR — headphones and
+speakers.  Re-export the patch afterwards (it shrinks).  KEEP LISTENING TESTS
+QUIET: lower `pbmix set "DAC1 Volume" 40` first and restore 96 afterwards; the
+earlier full-volume tone was loud enough to bother the neighbours.
 
-PHYSICAL STATE: REGION 0 HOLDS OUR LINUX IMAGE 0xF8BADFF3 (0x93993C, kernel
-7.3.3 #42, the McBSP3 two-link card).  REGION 1 holds the audio/OSS rootfs
-c0719d28... (67,108,864 B, 27 modules, the stereo-fixed omap-mcbsp).  The unit
-is on LINUX (0fca:8010, console `pb> `); BOOTCTR_FCTRY read 0x20 at this boot
-(the /init log says `0x20 >= threshold 0x1e, no write`).  To boot the ORACLE:
-flash local/work/ifs-shim-sealed.ifs at 0x825 (the pruned RCFS is still at
-0x8D5).  To stock TabletOS: flash local/work/minimal/wayback.signed.  Do NOT
-restore local/images/ifs0.sealed.bin (2.0.0.4869, trap 84).
+PHYSICAL STATE: REGION 0 HOLDS OUR LINUX IMAGE 0xAD85DF0F (0x939D3C, kernel
+7.3.3 #44, the speaker path).  REGION 1 holds the audio/OSS rootfs 0342ab06...
+(67,108,864 B, 27 modules).  The unit is on LINUX (0fca:8010, console `pb> `);
+BOOTCTR_FCTRY read 0x2c at the last boot (`0x2c >= threshold 0x1e, no write`).
+To boot the ORACLE: flash local/work/ifs-shim-sealed.ifs at 0x825 (the pruned
+RCFS is still at 0x8D5).  /tmp is wiped by a reboot — re-push wavs with
+QCL.py put.  To stock TabletOS: flash local/work/minimal/wayback.signed.  Do
+NOT restore local/images/ifs0.sealed.bin (2.0.0.4869, trap 84).
 
 BENCH: the unit is on OUR LINUX IMAGE (0fca:8010, console `pb> `).  qconn/ssh
 are available only when the oracle is booted (flash
@@ -402,21 +421,25 @@ off): bench only, never on a network (trap 173).  After every reboot, check
 `pidin arg` and the services.  WM8994 register work: i2ctransfer arguments are
 DECIMAL (trap 166); bus 4, addr 0x1a; a frozen codec drops raw writes too
 (trap 167 — thaw with R0x200=0, re-enable AIF1CLK last).  On the oracle use
-`pbi2c wr16r` (trap 176); on Linux use the regmap debugfs (read-only).  A
-LISTENING TEST MUST STATE WHAT IS PLAYING: check
-/proc/asound/card0/pcm0p/sub0/status and the pbplay line — `pbplay N 0` is
-silence (trap 191).
+`pbi2c rd16/wr16` (writes can fail while io-audio owns the codec: stop it
+first); on Linux use the regmap debugfs (READ-ONLY and cached — a value there
+is not proof of silicon; trap 207).  A LISTENING TEST MUST STATE WHAT IS
+PLAYING: both PCMs RUNNING, /proc/asound/card0/pcm1p/sub0/status and the pbplay
+line — `pbplay N 0` is silence (trap 191).  Start the clock link first and the
+data link a few seconds later, or the second PCM fails rate symmetry and the
+first can stall at ~36 KB (trap 208).
 
 STATIC RE: the REA MCP server exposes Ghidra 12.1.4 (open_binary,
 binary_overview, analyze_function, procedure_pseudo_code, search_strings,
 xrefs, read_bytes); raw ARM import format=raw-binary, architecture=arm,
 entry_point=0x80100000.  Reconcile with ntoarmv7-readelf/objdump (Ghidra may add
 +0x10000 on an ELF).  QNX device tools build -static, and /tmp is wiped by a
-reboot.  USE THE REFERENCE FIRST.  The WM8994 Rev 4.6 datasheet is LOCAL:
-hardware/WM8994.PDF (gitignored) — Table 106 = AIF1 clocking codes, "AIF1
-Control (1)" = the format, the Speaker Mixer Control = R34/R35.  The TI TRM is
-hardware/swpu231ap.pdf.txt.  The ABE/HAL Addendum is LOCAL:
-hardware/abe-hal-addendum.txt (SWPU245F).
+reboot.  USE THE REFERENCE FIRST, and put static RE in subagents (file-only,
+trap 109).  The WM8994 Rev 4.6 datasheet is LOCAL: hardware/WM8994.PDF
+(gitignored) — Table 106 = AIF1 clocking codes, "AIF1 Control (1)" = the format,
+R30 = line outputs (0x1e), R52/R53 = line mixers (0x34/0x35), R56/R57 =
+anti-pop (0x38/0x39).  The TI TRM is hardware/swpu231ap.pdf.txt.  The ABE/HAL
+Addendum is LOCAL: hardware/abe-hal-addendum.txt (SWPU245F).
 
 SAFETY: read SAFETY.md first.  One variable per boot.  Flash region 0 only when
 only it changed; both regions in one bootrom session only when both changed;
@@ -424,11 +447,18 @@ a MODULE-only change keeps the CRC and needs a region-1-only flash (trap 190).
 The UFS top-up keeps BOOTCTR_FCTRY at 0x32; the hard hazards (0 / >0x32 / failed
 write / flat pack) remain.  Operator's call when to stop and to wrap up.
 
-NEXT after the speaker experiment, in order: (a) retire the `pcm:`/`live N:`
-diagnostics and re-verify the audio; (b) the MCLK1 probe (trap 165) is
-optional — the working design does not need it; (c) touch cold-boot power/reset
-(GPIO1_14/GPIO4_8); (d) the wl128x-nvs.bin path (hd5).  WL1283 remains stopped
-by the operator.
+NEXT after retiring the diagnostics: **the WL1283, REOPENED by the operator at
+the session-47 close** (HANDOFF §0b).  Use the method that solved the speaker:
+static RE of the reference stack in subagents (devnp-ti1283.so,
+devc-seromap-winbt, devpm-omap4.so, hwio-config-winchester.so, the powerman
+preset), then RUN the reference driver on the minimal oracle with its own
+controls (start `devnp-ti1283` under `io-pkt`/powerman as `io-audio` was started
+for audio), then diff and implement in the driver/DTS — never by pokes, one
+variable per boot.  Do not re-run traps 116–137 unchanged.  Lower priority:
+(a) the MCLK1 probe (trap 165) is optional — the working design does not need
+it; (b) touch cold-boot power/reset (GPIO1_14/GPIO4_8); (c) identify the
+GPIO1_15 `audio_boost` net if a schematic appears; (d) the wl128x-nvs.bin path
+from the hd5 calibration for the post-enumeration wl12xx bring-up.
 
 UPDATE THE DOCS as you go and commit: STATE.md, HANDOFF.md, ROADMAP.md,
 KNOWN-ISSUES.md, DECISIONS.md and the session note — and move replaced or

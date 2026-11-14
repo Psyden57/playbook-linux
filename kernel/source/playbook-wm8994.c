@@ -80,6 +80,12 @@
 #define PB_WM8994_AIF1_DAC2_FILTERS_1	0x422
 #define PB_WM8994_DAC1_LEFT_MIXER	0x601
 #define PB_WM8994_DAC1_RIGHT_MIXER	0x602
+#define PB_WM8994_LINE_OUTPUTS_VOLUME	0x01e
+#define PB_WM8994_LINE_MIXER_1		0x034
+#define PB_WM8994_LINE_MIXER_2		0x035
+#define PB_WM8994_SPEAKER_MIXER		0x036
+#define PB_WM8994_ANTIPOP_1		0x038
+#define PB_WM8994_ANTIPOP_2		0x039
 
 /*
  * Enable bits (datasheet Rev 4.6, "Power Management").
@@ -97,6 +103,12 @@
 #define PB_PM3_MIXOUTR_ENA		0x0010
 #define PB_PM3_MIXOUTLVOL_ENA		0x0080
 #define PB_PM3_MIXOUTRVOL_ENA		0x0040
+#define PB_PM3_LINEOUT1N_ENA		0x2000
+#define PB_PM3_LINEOUT1P_ENA		0x1000
+#define PB_PM3_LINEOUT2N_ENA		0x0800
+#define PB_PM3_LINEOUT2P_ENA		0x0400
+#define PB_PM3_SPKRVOL_ENA		0x0200
+#define PB_PM3_SPKLVOL_ENA		0x0100
 #define PB_PM5_DAC1L_ENA		0x0002
 #define PB_PM5_DAC1R_ENA		0x0001
 #define PB_AIF1CLK_ENA			0x0001
@@ -110,6 +122,16 @@
 
 /* DAC1L/R -> MIXOUTL/R un-mute (R0x02D/R0x02E bit 0). */
 #define PB_DAC_TO_MIXOUT		0x0001
+
+/*
+ * Line outputs: LINEOUT1N/P and LINEOUT2N/P mutes (R0x01E bits 6:5/2:1) and
+ * MIXOUTL -> LINEOUT1P / MIXOUTR -> LINEOUT2P (R0x034/R0x035 bit 0).
+ */
+#define PB_LINEOUT_MUTES		0x0066
+#define PB_MIXOUT_TO_LINEOUT		0x0001
+
+/* LINEOUT_VMID_BUF_ENA (R0x038 bit 7): the line outputs' reference buffer. */
+#define PB_LINEOUT_VMID_BUF_ENA		0x0080
 
 /* AIF1DAC1L/R -> DAC1L/R (R0x601/R0x602 bit 0, AIF1 timeslot 0). */
 #define PB_AIF1DAC1_TO_DAC1		0x0001
@@ -134,6 +156,8 @@ struct playbook_wm8994_priv {
 	struct delayed_work repair;
 	struct regulator *ldo;
 	struct gpio_desc *hp;
+	struct gpio_desc *spk;
+	struct gpio_desc *boost;
 	struct snd_pcm_substream *substream;
 };
 
@@ -192,6 +216,38 @@ static void playbook_wm8994_board_enables(struct device *dev,
 	if (priv->hp)
 		dev_info(dev, "audio hp detect on gpio %d (input)\n",
 			 desc_to_gpio(priv->hp));
+
+	/*
+	 * Speaker amplifier enable: the reference's `spk` (hwio signal 0x93,
+	 * pad 0x068, GPIO2_12).  Active LOW -- codec_gpio_init sets it high
+	 * (amp off) and enable_codec_line_out drives it low for the whole time
+	 * the speakers play (report 216).  Own it here, idle high.
+	 */
+	priv->spk = devm_gpiod_get_optional(dev, "spk", GPIOD_OUT_HIGH);
+	if (IS_ERR(priv->spk)) {
+		dev_warn(dev, "spk gpio unavailable: %ld\n", PTR_ERR(priv->spk));
+		priv->spk = NULL;
+	}
+	if (priv->spk)
+		dev_info(dev, "speaker amp enable on gpio %d (active low)\n",
+			 desc_to_gpio(priv->spk));
+
+	/*
+	 * Audio boost enable (GPIO1_15).  The reference's startup table leaves
+	 * it low and the running OS raises it while audio is up; without it the
+	 * speaker stays silent even with the amp enable asserted and the codec
+	 * routed (measured, session 47).  It is the amplifier rail/enable the
+	 * QNX audio driver asks powerman for ("audio_boost").
+	 */
+	priv->boost = devm_gpiod_get_optional(dev, "boost", GPIOD_OUT_HIGH);
+	if (IS_ERR(priv->boost)) {
+		dev_warn(dev, "boost gpio unavailable: %ld\n",
+			 PTR_ERR(priv->boost));
+		priv->boost = NULL;
+	}
+	if (priv->boost)
+		dev_info(dev, "audio boost enable on gpio %d (high)\n",
+			 desc_to_gpio(priv->boost));
 }
 
 static int playbook_wm8994_hw_params(struct snd_pcm_substream *substream,
@@ -283,6 +339,7 @@ static void playbook_wm8994_repair(struct work_struct *work)
 	struct playbook_wm8994_priv *priv =
 		container_of(work, struct playbook_wm8994_priv, repair.work);
 	struct snd_soc_component *codec = priv->codec;
+	bool jack;
 
 	/*
 	 * Force the regmap cache to be re-read before writing.
@@ -343,23 +400,93 @@ static void playbook_wm8994_repair(struct work_struct *work)
 				      PB_PM3_MIXOUTL_ENA | PB_PM3_MIXOUTR_ENA |
 				      PB_PM3_MIXOUTLVOL_ENA |
 				      PB_PM3_MIXOUTRVOL_ENA);
-	snd_soc_component_update_bits(codec, PB_WM8994_PM1,
-				      PB_PM1_HPOUT1L_ENA | PB_PM1_HPOUT1R_ENA |
-				      PB_PM1_SPKOUTL_ENA | PB_PM1_SPKOUTR_ENA,
-				      PB_PM1_HPOUT1L_ENA | PB_PM1_HPOUT1R_ENA |
-				      PB_PM1_SPKOUTL_ENA | PB_PM1_SPKOUTR_ENA);
+	/*
+	 * The output stage follows the jack, like the reference's accessory
+	 * detect does: headphones in -> HPOUT1 + charge pump only; jack out ->
+	 * the line outputs (the board's speakers), with HPOUT1, the class-D
+	 * speaker amp, the speaker mixer and the charge pump all off.  Measured
+	 * on the reference in session 47: jack out reads PM1 = 0x0013,
+	 * PM3 = 0x3cf0, R0x036 = 0, R0x060 = 0, R0x04c = 0x1f25.
+	 */
+	jack = priv->hp ? gpiod_get_value_cansleep(priv->hp) : 1;
+	dev_info(codec->dev, "repair: jack %s\n",
+		 jack ? "in (headphone)" : "out (speaker)");
 
-	/* Charge pump powers the headphone amplifier. */
-	snd_soc_component_update_bits(codec, PB_WM8994_CHARGE_PUMP_1,
-				      PB_CP_ENA, PB_CP_ENA);
+	if (jack) {
+		if (priv->spk)
+			gpiod_set_value_cansleep(priv->spk, 1);
+		snd_soc_component_update_bits(codec, PB_WM8994_PM1,
+					      PB_PM1_HPOUT1L_ENA |
+					      PB_PM1_HPOUT1R_ENA,
+					      PB_PM1_HPOUT1L_ENA |
+					      PB_PM1_HPOUT1R_ENA);
+		/* Charge pump powers the headphone amplifier. */
+		snd_soc_component_update_bits(codec, PB_WM8994_CHARGE_PUMP_1,
+					      PB_CP_ENA, PB_CP_ENA);
+		snd_soc_component_update_bits(codec, PB_WM8994_ANALOGUE_HP_0,
+					      0x00cc, 0x00cc);
+	} else {
+		/* Assert the speaker amp enable before the codec is routed. */
+		if (priv->spk)
+			gpiod_set_value_cansleep(priv->spk, 0);
+		snd_soc_component_update_bits(codec, PB_WM8994_PM1,
+					      PB_PM1_HPOUT1L_ENA |
+					      PB_PM1_HPOUT1R_ENA |
+					      PB_PM1_SPKOUTL_ENA |
+					      PB_PM1_SPKOUTR_ENA, 0);
+		snd_soc_component_update_bits(codec, PB_WM8994_CHARGE_PUMP_1,
+					      PB_CP_ENA, 0);
+		snd_soc_component_update_bits(codec, PB_WM8994_PM3,
+					      PB_PM3_SPKLVOL_ENA |
+					      PB_PM3_SPKRVOL_ENA, 0);
+		snd_soc_component_write(codec, PB_WM8994_ANALOGUE_HP_0, 0x0000);
+		snd_soc_component_write(codec, PB_WM8994_SPEAKER_MIXER, 0x0000);
+		snd_soc_component_write(codec, PB_WM8994_ANTIPOP_2, 0x01c8);
+	}
 
 	/* DAC -> output mixer, and the output stage connect. */
 	snd_soc_component_update_bits(codec, PB_WM8994_OUTPUT_MIXER_1,
 				      PB_DAC_TO_MIXOUT, PB_DAC_TO_MIXOUT);
 	snd_soc_component_update_bits(codec, PB_WM8994_OUTPUT_MIXER_2,
 				      PB_DAC_TO_MIXOUT, PB_DAC_TO_MIXOUT);
-	snd_soc_component_update_bits(codec, PB_WM8994_ANALOGUE_HP_0,
-				      0x00cc, 0x00cc);
+
+	if (!jack) {
+		/*
+		 * The board's speakers hang off the codec's **line outputs**, not
+		 * its class-D speaker amplifier.  Measured on the reference in
+		 * session 47: with the jack out it plays through LINEOUT1P (left)
+		 * and LINEOUT2P (right) -- DAC1 -> MIXOUT (R0x02d/0x02e) ->
+		 * LINEOUT (R0x034/0x035 bit 0), PM3 = 0x3cf0 (all four LINEOUT
+		 * enables) and R0x01e = 0x0000 (all four line-output mutes
+		 * cleared).  The speaker mixer (R0x036) and SPKMIX are zero on the
+		 * reference, and its PM1 has no HPOUT1/SPKOUT bits.
+		 *
+		 * The line outputs also need their reference buffer: the
+		 * reference reads R0x038 = 0x0080 (LINEOUT_VMID_BUF_ENA) while it
+		 * plays through the speakers, and we left that bit clear.
+		 */
+		snd_soc_component_update_bits(codec, PB_WM8994_ANTIPOP_1,
+					      PB_LINEOUT_VMID_BUF_ENA,
+					      PB_LINEOUT_VMID_BUF_ENA);
+		snd_soc_component_update_bits(codec, PB_WM8994_PM3,
+					      PB_PM3_LINEOUT1N_ENA |
+					      PB_PM3_LINEOUT1P_ENA |
+					      PB_PM3_LINEOUT2N_ENA |
+					      PB_PM3_LINEOUT2P_ENA,
+					      PB_PM3_LINEOUT1N_ENA |
+					      PB_PM3_LINEOUT1P_ENA |
+					      PB_PM3_LINEOUT2N_ENA |
+					      PB_PM3_LINEOUT2P_ENA);
+		snd_soc_component_update_bits(codec,
+					      PB_WM8994_LINE_OUTPUTS_VOLUME,
+					      PB_LINEOUT_MUTES, 0);
+		snd_soc_component_update_bits(codec, PB_WM8994_LINE_MIXER_1,
+					      PB_MIXOUT_TO_LINEOUT,
+					      PB_MIXOUT_TO_LINEOUT);
+		snd_soc_component_update_bits(codec, PB_WM8994_LINE_MIXER_2,
+					      PB_MIXOUT_TO_LINEOUT,
+					      PB_MIXOUT_TO_LINEOUT);
+	}
 
 	/* Word length, AIF1->DAC routing, and the DAC soft un-mute. */
 	snd_soc_component_update_bits(codec, PB_WM8994_AIF1_CONTROL_1,
@@ -403,6 +530,9 @@ static int playbook_wm8994_trigger(struct snd_pcm_substream *substream, int cmd)
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 		cancel_delayed_work_sync(&priv->repair);
+		/* The reference de-asserts the speaker amp at teardown. */
+		if (priv->spk)
+			gpiod_set_value_cansleep(priv->spk, 1);
 		break;
 	}
 

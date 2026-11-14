@@ -59,7 +59,7 @@ The guides are in `docs/parked/`.
 | WL1283 / MMC5 | reports 180, 185–197 | **software surface exhausted; report 196 is the minimal 1917-truth negative** |
 | WLAN calibration / NVS | report 197 | QNX `hd5` |
 | Munin touch | reports 193, 194, 198 | bus, protocol, calibration + IRQ |
-| WM8994 audio | reports 199, 200, 201, 203, 204, 205, 206, 209, 212, 213, **214** | **206 is current for the transmit path**: E1 clock roles, the transmit path proven in consumer mode, MCLK1 dead at the pin; 205 = the codec chain solved and driver-driven, the master-mode transmit stall isolated; 203 = the AIF1CLK write rule; 204 = the first live reference codec read (its "MCLK1 never clocks" claim is corrected by 205 §4b).  209 is the fault localisation (power/CM negative; ABE reference clock fixed).  212 is the transport history (E5 — McBSP bit/frame provider, `CLKSM`/SRG-clock findings, 48 kHz; E6 — the earlier, later-corrected data-ball reading; E9 — the two-link build).  213 is current for the ABE question (the serial port is a firmware data path; the McBSP clocks are mainline's).  **214 is current for the working audio**: the WM8994's AIF1 is on **McBSP3** (the oracle's routing log and live registers), the card is two links (`mcbsp2 + wm8994-aif1` clocks, `mcbsp3 + wm8994-aif2` data), and the `omap-mcbsp` channel-layout guard fixes the right channel; the 440 Hz tone is audible in both ears at 48 kHz. |
+| WM8994 audio | reports 199, 200, 201, 203, 204, 205, 206, 209, 212, 213, **214**, **215** | **214 is current for the data path**: the AIF1 is on McBSP3, the card is two links (`mcbsp2 + wm8994-aif1` clocks, `mcbsp3 + wm8994-aif2` data), the `omap-mcbsp` channel-layout guard fixes the right channel, and the 440 Hz tone is audible in both ears at 48 kHz.  **215 is current for the speaker**: the board's speakers are on the codec's **line outputs** (PM3 `0x3cf0`, `R0x01e`, `R0x034/035`, `R0x038`), `spk` (GPIO2_12) is an **active-low** amplifier enable, and GPIO1_15 (the `audio_boost` enable) must be high; both speakers play.  206 = the transmit path (E1 clock roles, MCLK1 dead at the pin); 205 = the codec chain and driver-driven repair; 203 = the AIF1CLK write rule; 204 = the first live reference codec read; 209 = the power/CM negative and the ABE reference clock; 212 = the transport history (E5/E6/E9); 213 = the ABE question (a firmware data path). |
 | ISL9519 charger | report 183 | |
 | WDT2 / PMIC | reports 183, 184, 192 | |
 
@@ -92,4 +92,4 @@ The guides are in `docs/parked/`.
   in report 214.
 * The session-13 "partial live image" was withdrawn by report 129 §5.
 * Old patch-size statements (42, 46, 47, 48 files) are historical; the current
-  export is 54 files / 8,440 lines (`kernel/patches/README.md`).
+  export is 54 files / 8,584 lines (`kernel/patches/README.md`).

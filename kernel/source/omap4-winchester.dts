@@ -972,12 +972,12 @@
 		output-high;
 		line-name = "disp-en-9";
 	};
-	disp-en-12-hog {
-		gpio-hog;
-		gpios = <12 GPIO_ACTIVE_HIGH>;
-		output-high;
-		line-name = "disp-en-12";
-	};
+	/*
+	 * GPIO2_12 is NOT a display enable: the reference's board table and
+	 * audio driver call it `spk` (hwio signal 0x93, pad 0x068 low half) and
+	 * drive it LOW to enable the speaker amplifier while it plays.  The
+	 * machine driver owns it through `spk-gpios` (session 47).
+	 */
 	disp-en-13-hog {
 		gpio-hog;
 		gpios = <13 GPIO_ACTIVE_HIGH>;
@@ -1377,10 +1377,24 @@
 		/*
 		 * Board audio enables, from the reference's codec_gpio_init
 		 * (report 210 §3): pulse the "ldo" line low for 100 ms and
-		 * leave it high; hp is an input.  The spk line is already held
-		 * high by the gpio2 hog.
+		 * leave it high; hp is an input; spk is the speaker amplifier
+		 * enable, driven by the machine driver (active low).
 		 */
 		ldo-supply = <&audio_ldo>;
 		hp-gpios = <&gpio2 17 GPIO_ACTIVE_HIGH>;
+		/*
+		 * The speaker amplifier enable (the reference's `spk`, hwio
+		 * signal 0x93 / pad 0x068 / GPIO2_12).  Active LOW: the driver
+		 * drives it high while idle and low while the speakers play.
+		 */
+		spk-gpios = <&gpio2 12 GPIO_ACTIVE_HIGH>;
+		/*
+		 * The audio "boost" enable (GPIO1_15, the reference's QNX-only
+		 * output; the startup table leaves it low and the running OS
+		 * raises it).  The speaker stays silent without it, so it is the
+		 * amplifier rail/enable the QNX audio stack asks powerman for
+		 * ("audio_boost").  Confirmed on the bench in session 47.
+		 */
+		boost-gpios = <&gpio1 15 GPIO_ACTIVE_HIGH>;
 	};
 };
