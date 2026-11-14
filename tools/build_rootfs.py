@@ -295,6 +295,11 @@ def main():
             subprocess.run(['depmod', '-b', stage, krel], check=False,
                            capture_output=True)
 
+        # Firmware tree (mainline linux-firmware blobs are not in the repo).
+        nfw = install_firmware(stage, args.firmware)
+        if nfw:
+            print('firmware : %d file(s) in /lib/firmware' % nfw)
+
         # Stable timestamps so builds differ only in the superblock.
         for dirpath, dirnames, filenames in os.walk(stage):
             for name in dirnames + filenames + ['.']:

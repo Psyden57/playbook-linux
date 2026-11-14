@@ -3,10 +3,12 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**8 583 lines / 56 files** against pristine (session-49 export)
-**linux-7.3.3** (sha256 `455b45d8…`, session-49 wrap-up).  It was verified by
-applying it to pristine 7.3.3 targets and comparing all 55 files byte-for-byte
-with `local/kernel-tree` — 0 rejects, 55/55 identical.
+**8 658 lines / 57 files** against pristine (session-50 export)
+**linux-7.3.3** (sha256 `e7cf9628…`, session-50).  It was verified by
+applying it to pristine 7.3.3 targets and comparing all 57 files byte-for-byte
+with `local/kernel-tree` — 0 rejects, 57/57 identical.  Session 50 adds
+`drivers/clk/clk-twl.c` (the CLK32KG enable) and the board-DTS WL1283 changes
+(the `ti,wl1283` child, `cap-power-off-card`, the WL_EN pwrseq).
 **Session 48 retires the session-45 diagnostics** (the machine driver's `pcm:`
 DMA-ring readback and `omap-mcbsp`'s eight-sample `live N:` dump, with the
 `steady_dump` work item and the `substream` member they needed), and **adds the

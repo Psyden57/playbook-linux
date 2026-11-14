@@ -92,35 +92,30 @@ terminal (trap 216).
   without it).  **Session 47** used the oracle again for the speaker:
   `Headphone Select` = false routes it to the line outputs and the speaker
   sounds, which is how the missing board lines were found (report 215).
-* **WL1283 — the host program, the timing and the BT lead are all excluded; the
-  next evidence is a live reference capture (session 50, reports 228/229).**
-  Session 49 measured five independent surfaces negative: the reference's MMCHS5
-  program (replayed), its WL_EN power-on ordering (replayed), the readable board
-  state of stock TabletOS at `ti0`-up, the whole boot path's writes, and the one
-  clock-domain difference; and the reference still brings the chip up live on
-  the oracle (`Send commands sequence: 0, 5, 3, 7`, firmware
-  `Rev 7.1.4.10.77`, `ti0` RUNNING).  Session 49 also showed the old "silence"
-  instrument was wrong (`WL_IRQ` is not a liveness signal; `STAT` was never
-  decoded; the bus was never read at command time).  **Session 50 closed the two
-  tests that were left:**
-  (a) **BT is not a liveness oracle.**  With `BT_EN` (gpio 55 = `GPIO2_23`)
-  really driven low → 50 ms → high — pad `0x00030003`, `DATAOUT` bit 23 0→1,
-  UART2 pads `0x4118`/`0x0000` and `LSR = 0x60` verified — the chip answers no
-  `HCI_Reset` on `/dev/ttyS1`.  Because the reference's *BT* half was never
-  shown live, this does **not** clear the power/TCXO class (report 228).
-  (b) **The card is not timing-limited.**  Opening `mmc_rescan`'s ladder
-  (`OMAP_MMC_MIN_CLOCK` 400000 → 100000) tried 400/300/200/100 kHz; every
-  frequency ended in `CTO` only (`STAT=0x00018000`, `RSP0=0`).  At 100 kHz the
-  `CTO` window is 640 µs, so "slower than 160 µs" is dead (report 229).
-  **Next, in order:** (i) a **live capture of the reference's MMCHS5 register
-  block** at the moment `ti0` comes up — report 218 lists that block as one of
-  the two never-captured classes; (ii) the **QNX-in-Linux harness** to execute
-  the reference's exact sequence; (iii) only then any board/clock line, and the
-  `CLK32KG` address must come from a register map (correction 3.31 — `0x8C` is
-  VAUX3 and `0x60` is VCORE3, not the 32 kHz).  **Do not** re-run the
-  readable-register diff, the replays, the boot-path RE, the domain test, the BT
-  probe or the clock sweep.  **Closes when** the chip enumerates under Linux
-  (CMD5 + `attach_sdio yes`) and wl12xx probes with the `hd5` NVS.
+* **WL1283 — the chip enumerates and wlcore boots the firmware; the `wlan0`
+  interface is not stable yet (session 50, reports 230/231).**  The blocker was the TWL6030
+  `CLK32KG` 32.768 kHz SLOW_CLK: physical `0xBC`–`0xBE` (module-relative `0x8C`
+  + the PM_RECEIVER base `0x30`), OFF under Linux (`07/01/00`) and ON under the
+  reference (`07/05/55`).  Enabling it makes the card enumerate; the permanent
+  fix is `CONFIG_CLK_TWL=y` + `clk32kg` enabled in `clk-twl`'s probe.  The
+  mainline `wlcore`/`wl12xx`/`mac80211`/`cfg80211` stack + `wl128x-fw-5-sr.bin`
+  then boots firmware (`Rev 7.3.10.0.142`) with the `ti,wl1283` child
+  (`reg = <2>`), `cap-power-off-card`, and an `mmc-pwrseq-simple` that pulses
+  `WL_EN` on every power cycle (`omap_hsmmc` has no `card_hw_reset`).  The five
+  negative host-state surfaces and the two session-50 negatives (the BT probe
+  and the 400/300/200/100 kHz sweep) are history now; the earlier address
+  claims (`0x8C` = VAUX3, `0x60` = VCORE3) are corrected in KNOWN-ISSUES 3.31.
+  **Remaining (the WLAN is NOT usable yet):** (i) the WL_IRQ status read times
+  out (`-110`) after firmware boot and wlcore recovery-loops — investigate the
+  firmware/chip revision match (`wl128x-fw-4-sr.bin` vs the 5-sr), the SDIO
+  block size/byte-mode, and the ELP/status path (report 231 §6);
+  (ii) the **per-unit NVS from the `hd5` calibration** (report 197) — the MAC is
+  already the assigned `14:74:11:8f:9c:c3` patched into the generic NVS, but the
+  radio calibration is the default; (iii) a **userspace supplicant**
+  (`iw`/`wpa_supplicant`) and `regulatory.db`; (iv) a **Linux BT bring-up**
+  (`BT_EN` + UART2) — the BT core is silent even with `BT_EN` driven (report
+  228).  **Do not** re-run the session-49/50 negatives, and do **not** use
+  `IRQ_TYPE_LEVEL_LOW` for WL_IRQ (trap 238).
 * **Touch.**  Done; the remaining nicety is driving power/reset
   (GPIO1_14 / GPIO4_8) for cold boots — a warm reset keeps the controller up
   (session 42).

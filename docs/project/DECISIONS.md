@@ -2289,6 +2289,79 @@ reverted image `0x17C2E119` (#59); traps 234/235; correction 3.31.
 
 ---
 
+## 66. The WL1283's 32 kHz is the TWL6030 `CLK32KG` at physical `0xBC`, and it must be enabled before the MMC5 probe (session 50)
+
+**Decision.**  Model the WL1283's 32.768 kHz `SLOW_CLK` as the TWL6030
+`CLK32KG` resource (physical `0xBC`/`0xBD`/`0xBE`, module-relative
+`0x8C`/`0x8D`/`0x8E`), and **enable it at boot**.  The implementation is
+`CONFIG_CLK_TWL=y` plus a `clk_prepare_enable("clk32kg")` in `clk-twl`'s probe;
+it runs at ~1.9 s, before `omap_hsmmc`'s MMC5 probe at ~3.0 s.  Do **not**
+describe the resource as physical `0x8C` (that is VAUX3) or as `0x60` (that is
+VCORE3's state).
+
+**Why.**  This is the root cause of the dead card, measured causally: a fresh
+boot has `0xBC..0xBE = 07/01/00` (state OFF) and `mmc4: Failed to initialize a
+non-removable card`; writing the state (`0xBE = 0xE1`, exactly what `clk-twl`'s
+prepare computes, or the reference's `0xBD/0xBE = 0x05/0x55`) makes the card
+answer — `mmc4: new high speed SDIO card at address 0001`, `0x0097:0x4076`, two
+functions.  The reference boot leaves the resource ON (`07/05/55`); Linux left
+it OFF because `clk-twl` was a module nothing loaded.  The address was
+misidentified for several sessions because two address spaces were conflated
+(`twl_i2c` adds the PM_RECEIVER base `0x30`), and the one measured difference
+(report 192 §7's `0xBC`–`0xBE`) was dismissed as "not `CLK32KG`".
+
+**Constraint.**  The clock framework has no "always on" flag that *prepares* a
+clock, so the enable is deliberately in the provider's probe; it must precede
+MMC5, which is why the driver is built in.  The MFD cell has no `of_node`, so
+`of_clk_add_hw_provider(NULL, …)` is a no-op (safe).  One variable per boot;
+the state was proved on a fresh boot, not by a rescan of an already-initialized
+card (a rescan does not cold-reset the chip).  The post-enumeration work
+(wlcore/wl12xx modules + mainline `wl128x-fw-5-sr.bin`/`wl128x-nvs.bin`, the
+per-unit NVS from `hd5`) is separate.
+
+**Evidence.**  Report **230** and capture
+`docs/captures/wl1283-enumerate-2026-11-14.txt`; image **`0x69CDAC94`**
+(kernel #60) with `CLK32KG = 07/01/55` and the SDIO card at boot; trap 236;
+corrections 3.30/3.31.
+
+---
+
+## 67. The WL1283 WLAN is brought up by the mainline wlcore stack plus three board properties (session 50)
+
+**Decision.**  Use the upstream `wlcore`/`wl12xx`/`mac80211`/`cfg80211` stack
+for the WL1283, with three board-specific DTS pieces and one boot-script rule:
+a `ti,wl1283` child under `&mmc5` (`reg = <2>` = SDIO WLAN function, WL_IRQ
+gpio 53 / GPIO2_21 edge-falling, 26 MHz ref/TCXO), `cap-power-off-card` on the
+host, an `mmc-pwrseq-simple` that owns `WL_EN` (gpio 54 = GPIO2_22, low → 50 ms
+→ high → 120 ms), and `rcS` loading `cfg80211 mac80211 wlcore wl12xx
+wlcore_sdio` in that order.  Firmware is the mainline `wl128x-fw-5-sr.bin` +
+`wl128x-nvs.bin`.
+
+**Why.**  This is the complete bring-up, measured step by step: without the
+child node `wlcore_probe_of()` returns `-ENODEV` silently; without
+`cap-power-off-card` the card's runtime PM is disabled and
+`pm_runtime_resume_and_get(&card->dev)` returns `-EACCES`; and without a real
+power cycle every firmware boot after the first times out (`sdio write failed
+(-110)`) because `omap_hsmmc` has no `card_hw_reset` and a permanent WL_EN hog
+never cycles the chip.  With all three, `wlcore: firmware booted (Rev
+7.3.10.0.142)` and `wlan0` appears — **but the interface is not stable**: the
+WL_IRQ status read times out (`-110`) and wlcore recovery-loops (report 231
+§6).  The bring-up is real; the WLAN is not yet usable.
+
+**Constraint.**  The pwrseq replaces the `wl1283-en-hog`; the two cannot own
+the same line.  `vwl1283` (VIO) stays `regulator-always-on`; the pwrseq gates
+the core.  The region-1 rootfs is the carrier for the modules and firmware;
+`build_rootfs.py --firmware` now actually installs the tree.  The assigned MAC
+`14:74:11:8f:9c:c3` is patched into the generic NVS; the radio calibration is
+still generic, and the interface additionally recovery-loops on a WL_IRQ status
+read timeout (report 231 §6).
+
+**Evidence.**  Report **231** and capture
+`docs/captures/wl1283-wlan-up-2026-11-14.txt`; image **`0x9712A086`**
+(kernel #60) + `local/images/rootfs-region1-wl1283.ext4`; trap 237.
+
+---
+
 The repository licence and visibility are decided below; the remaining
 policy questions (publication of the proprietary corpus) stay open and are
 recorded here so nobody assumes a policy exists.

@@ -5,9 +5,9 @@ boots it to the region-1 BusyBox userland with a clean panel and working eMMC,
 and the exported patch reproduces the tree from pristine 7.3.3.
 
 * Base: **upstream 7.3.3** (not the pmOS package, which is still `!armhf`).
-* Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **56 files /
-  8 583 lines**, sha256 `455b45d8…`, verified 0 rejects / 56/56
-  byte-identical against pristine 7.3.3 targets (session 48 wrap-up).  It
+* Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **57 files /
+  8 658 lines**, sha256 `e7cf9628…`, verified 0 rejects / 57/57
+  byte-identical against pristine 7.3.3 targets (session 50).  It
   carries the E5 clock roles (`CBC_CFC`, CPU `CLKSM = 1`/`CLKGDV = 32`, FLL1
   from BCLK, `mcbsp2_pins` `clkx`/`fsx` as outputs), the working audio card
   (`mcbsp3_pins` on the PDM pads, `&mcbsp1` disabled, the second

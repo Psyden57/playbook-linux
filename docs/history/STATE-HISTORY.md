@@ -1339,3 +1339,88 @@ reference-first rule (DECISIONS §61).  Patch 54 files / 8,584 lines, sha256
 `93a7a8ce…` — but that export was **missing `sound/soc/ti/omap-mcbsp-priv.h`**
 and was therefore not buildable from pristine: see trap 211 and
 `docs/sessions/session-48.md`.
+
+## 2026-11-14 — session 48 snapshot (RNDIS/dropbear and the audio re-verification)
+
+Moved from `project/STATE.md` at the session-50 wrap-up.  Current state is in
+`project/STATE.md`; this is the superseded snapshot.
+
+**The unit has an ssh shell over USB.**  The gadget now carries an **RNDIS**
+network function alongside the CDC-ACM console, `usb0` comes up at
+`169.254.0.1/16` from the region-1 `rcS`, and **dropbear** (key-only, static
+ARM, 968 KB stripped) listens there: `tools/pbssh.sh 'cmd'` runs a command and
+`tools/pbssh.sh` with no arguments gives an interactive `root@playbook:~#`.
+Measured **2.3 MB/s** host→device, against the ACM
+link's 134 KB/s that drops bytes under load (trap 51) — this is the difference
+between a debug channel and a usable one.  The ACM console is unchanged and
+still bound, so it remains the fallback.  DECISIONS §62.
+
+* **RNDIS, not CDC-ECM**, because Windows has an in-box RNDIS driver and no
+  in-box ECM class driver, and because **the reference firmware itself
+  presents RNDIS** (`0fca:8012`, "RIM Network Device") — the path this
+  project's TabletOS bench has used since session 20.
+* **The host side needed one change**: the composite gadget's network
+  interface is `enp8s0f3u1i2`, not the `enp8s0f3u1` the `pb-rndis`
+  NetworkManager profile was pinned to; rebinding it (`nmcli connection modify
+  pb-rndis connection.interface-name enp8s0f3u1i2`) brought the link up with
+  the address it already had.
+* **`tools/pbssh.sh` now serves both OSes.**  `PB_LINK=usb` (the default when
+  nothing answers on the door's qconn 9090) omits the legacy
+  algorithm options that the 2014 QNX sshd needs and dropbear does not.
+  `PB_LINK=door` keeps the old behaviour.
+
+**Also this session: the audio diagnostics were retired** — the machine
+driver's `pcm:` DMA-ring readback and `omap-mcbsp`'s `live N:` dump are out of
+the tree — and **the kernel patch gained a file every export since session 41
+had missed**: `sound/soc/ti/omap-mcbsp-priv.h` declares the
+`active_rate`/`active_width` fields `omap-mcbsp.c` reads, so the patch could
+not compile from pristine.  The export is **56 files / 8 583 lines**, sha256
+`455b45d8…`, verified 0 rejects / 56/56 byte-identical (session-49 export, trap
+211).
+
+**Re-verified after both changes (operator, DAC1 volume 40, tones a few
+seconds each):**
+
+* **Speakers** — `repair: jack out (speaker)` → `done, FLL1 locked`; both PCMs
+  `RUNNING`; `XCR2 = 0x8041`; `spk` out **lo** and `boost` out **hi** during
+  the stream, `spk` back **hi** after; the data link wrote its full byte count.
+* **Headphones** (jack in) — `repair: jack in (headphone)` → `done, FLL1 locked`;
+  both PCMs `RUNNING`; **`spk` stays high** (amp off), the correct state for
+  the headphone route; the data link wrote its full 770 048 bytes; the
+  operator heard the tone **in both ears**.
+* **The audio path is unchanged** — session 46's two ASoC links (`mcbsp2 +
+  wm8994-aif1` clocks, `mcbsp3 + wm8994-aif2` data), the codec as the AIF1
+  slave with FLL1 locked from our BCLK, the `omap-mcbsp` channel-layout guard
+  keeping `XCR2 = 0x8041`, and no ABE (DECISIONS §58/§59).  The speaker route
+  is session 47's (line outputs, `spk` active low, GPIO1_15 high).
+
+**Bench (session 48, measured).** Unit on our Linux image **`0x12C8C320`**
+(region 0, `0x939D24` B, kernel `7.3.3` **#45** — the RNDIS/dropbear
+initramfs); region 1 = rootfs **`a4e76b18…`** (67,108,864 B, 27 modules,
+dropbear + host keys + `authorized_keys`).  `0fca:8010`, console `pb> ` on
+`ttyACM0`, and **ssh on `169.254.0.1` over `enp8s0f3u1i2`**.  `BOOTCTR_FCTRY`
+read **0x28** at the last boot (`0x28 >= threshold 0x1e, no write`).  The oracle is
+not on media; flash `local/work/ifs-shim-sealed.ifs` at `0x825` to boot it.  To
+stock TabletOS, flash **two components**: `local/work/ifs-shim-sealed.ifs` at
+block `0x825` and `local/work/rcfs-1917.rcfs` at `0x8D5` — `wayback.signed`
+will not boot this armed unit (its IFS is `os_type` 4 and its RCFS has no root
+hook; trap 226).
+
+**The magic-`pkexec` rule still holds.**  A flash re-enumerates the ACM gadget
+and the tty comes back `root:uucp 0660`; `tools/99-playbook-cdc-acm.rules`
+makes it `0666` automatically, and `pkexec chmod 666 /dev/ttyACM0` remains the
+documented manual path — wait for the operator rather than inventing a
+workaround.
+
+* **The kernel patch was re-exported (session 49)**: **56 files / 8 583 lines**,
+  sha256 `455b45d8…`, 0 rejects / 56/56 byte-identical.  It adds the report-220
+  board-DTS GPIO1 pad fix and `arch/arm/Kconfig.debug`, which the tree walk
+  showed had been missing from **every** export since session 30 (trap 211 class:
+  a byte-compare cannot see a file absent from both sides).
+* **`DXR`/`DRR` are not readable data registers on this silicon** — they return
+  constants (`0` / `0xc8318118`) regardless of traffic.  Report 205 §5l's
+  "`DXR = 0` means empty" is withdrawn; `XBUFFSTAT` is the register that
+  answers the question.
+* **No boot regressions:** codec revision D, McBSP2/McBSP3, the two-link sound
+  card, the touch, the display, the ACM gadget and the charger all come up on
+  the final image.

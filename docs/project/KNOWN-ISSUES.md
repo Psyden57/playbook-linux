@@ -1519,7 +1519,7 @@ report 121 §3/§11/§12.
       **Fix:** run the tree-vs-pristine walk (trap 139's recipe) whenever the
       export is regenerated, even when "no new sources" were added — it is the
       only check that sees a long-standing omission.  Read the export's
-      *file count* as the signal: 56 files now, and the audit trail is
+      *file count* as the signal: 57 files now, and the audit trail is
       `kernel/patches/README.md`.  **Session-50 addendum:** the walk's own
       filter must match `Kconfig.*`, not just the exact name `Kconfig` —
       `b in ('Kconfig','Makefile')` silently drops `arch/arm/Kconfig.debug` (a
@@ -1786,6 +1786,49 @@ report 121 §3/§11/§12.
       400 kHz, so only 400 kHz is ever tried.  Set `f_min` to 100000 to make it
       try all four.  (At 100 kHz with MMC5's 48 MHz `fclk`, `CLKD = 480` and
       `CTO` = 64 card clocks = **640 µs**.)  (Session 50, report 229.)
+
+236. **The WL1283's `SLOW_CLK` is the TWL6030 `CLK32KG` resource at physical
+      `0xBC`–`0xBE`, and Linux boots it OFF — which is the whole "dead card".**
+      `twl_i2c_read/write_u8(TWL_MODULE_PM_RECEIVER, reg)` adds the
+      `PM_RECEIVER` base `0x30`, so `clk-twl`'s module-relative `0x8C` (the
+      FreeBSD "`0xBC`" claim) is physical `0xBE` for the state.  Read it with
+      `i2ctransfer -f -y 0 w1@0x48 0xbc r3` (the `-f` bypasses the twl driver's
+      `EBUSY`).  Boot state `07/01/00` = OFF and `mmc4: Failed to initialize`;
+      write `0xBE = 0xE1` (or the reference's `0xBD/0xBE = 0x05/0x55`) and the
+      card enumerates (`0x0097:0x4076`, two functions).  The permanent fix is
+      `CONFIG_CLK_TWL=y` plus a `clk_prepare_enable` of `clk32kg` in
+      `clk-twl`'s probe (it runs at ~1.9 s, before MMC5 at ~3.0 s).  Do not use
+      physical `0x8C` (VAUX3) or `0x60` (VCORE3) for this resource.
+      (Session 50, report 230.)
+
+237. **wlcore on `omap_hsmmc` needs three separate things beyond the kernel
+      modules.**  (a) The SDIO function 2 needs a DT child
+      (`compatible = "ti,wl1283"`, `reg = <2>`, `interrupts` = WL_IRQ gpio 53 /
+      GPIO2_21, edge-falling); without an `of_node` `wlcore_probe_of()` returns
+      `-ENODEV` **silently**.  (b) The host must set `cap-power-off-card` or
+      `mmc_attach_sdio()` does not enable card runtime PM and
+      `pm_runtime_resume_and_get(&card->dev)` returns `-EACCES`
+      (`wl12xx_sdio_power_on: failed to get_sync(-13)`).  (c) Every firmware
+      boot needs a cold power cycle: `wl12xx_sdio_power_on()` asks for one via
+      `mmc_hw_reset()`, which is **`-EOPNOTSUPP` on `omap_hsmmc`** (no
+      `card_hw_reset`) and is ignored, and a permanent WL_EN gpio-hog means the
+      chip is never cycled — so the first boot works and later ones time out
+      (`sdio write failed (-110)`).  Use an `mmc-pwrseq-simple` that owns WL_EN
+      (gpio 54 = GPIO2_22) with `reset-gpios = <&gpio2 22 GPIO_ACTIVE_LOW>`,
+      `reset-delay-us = <50000>`, `post-power-on-delay-ms = <120>` — the
+      reference's own low → 50 ms → high → 120 ms.  Also load the module stack
+      in order (`cfg80211 mac80211 wlcore wl12xx wlcore_sdio`): the recorded
+      dependency of `wlcore_sdio` is incomplete.  (Session 50, report 231.)
+
+238. **Do not use `IRQ_TYPE_LEVEL_LOW` for `WL_IRQ` (GPIO2_21): it storms at
+      boot and wedges the unit.**  The line idles **LOW** before firmware
+      (`GPIO2_DATAIN` bit 21 = 0), so a level-low IRQ fires continuously from
+      `request_irq()` onward; the threaded handler's SDIO status read cannot
+      complete and the CPU is saturated — ssh and the ACM console both stop.
+      `IRQ_TYPE_EDGE_FALLING` is the type the reference's hwio detect uses and
+      the only one that boots cleanly.  Recovery: a power-cycle (operator) puts
+      the unit in the bootrom (`0fca:0001`); flash the known-good region-0 image
+      from there.  (Session 50, report 231 §6.)
 
 ## 3. Corrections to older reports
 
@@ -2055,20 +2098,22 @@ verified** — the local read of `0x60` (`0x55`, i.e. fully on) is the first
 candidate but its identity is not nailed down.  Do not cite `0x8C` as `CLK32KG`.
 (Session 49, reports 219 §4.2, 221/226.)
 
-**3.31 Neither `0x8C` nor `0x60` is `CLK32KG` — and the 32 kHz has still never
-been read.**  §3.30 above proposed `0x60` as the next candidate.  It is
-**VCORE3's `CFG_STATE`**: the QNX regulator resmgr's own table (report 221 §1.2)
-gives `vcore3` base `0x5E`, so its group/transition/state are
-`0x5E`/`0x5F`/`0x60`.  The live read `0x5E/0x5F/0x60 = 07/05/55` is therefore
-VDD3 (group 2, APP 1, state ON), not a clock.  And `0x8C`/`0x8E` is **VAUX3**
-(the same table; `drivers/clk/clk-twl.c`'s `0x8C` is a **TWL6032-only** table).
-So **both** addresses the docs have cited for `CLK32KG` are wrong.  The TWL6030
-datasheet (local `hardware/twl6030.pdf`, `SWCS045C`) calls `CLK32KG` a
-software-controlled clock resource that is **on from the startup sequence**
-(Table 11 and the `TWL6030B107` figure, quoted in report 192 §7), and neither
-OS writes it in any path we have decoded; but its register-address table is not
-in the PDF's extractable text.  **Do not claim the 32 kHz was read or is on**
-until the address is taken from a register map.  (Session 50, report 229 §4.)
+**3.31 `CLK32KG` is physical `0xBC` (module-relative `0x8C`), and it was OFF —
+which is why the WL1283 never enumerated.**  §3.30 above and the earlier text
+mixed two address spaces.  `twl_i2c_read/write_u8(TWL_MODULE_PM_RECEIVER, reg)`
+adds the `PM_RECEIVER` base **`0x30`**, so a module-relative `reg` lands at
+physical `0x30 + reg`.  `drivers/clk/clk-twl.c` registers `clk32kg` at
+module-relative `0x8C` (GRP/TRANS/STATE `0x8C`/`0x8D`/`0x8E`), i.e. **physical
+`0xBC`/`0xBD`/`0xBE`**, and its probe uses that table for the TWL6030 too.
+Physical `0x8C` is VAUX3 (`twl6030-regulator.c` offset `0x5C` + `0x30`) — that
+is what report 192 read as "CLK32KG", so its dismissal of the FreeBSD `0xBC`
+claim was backwards.  §3.30's "module index 48" (= `0x60`) is VCORE3's state,
+not a clock.  **The measured state:** Linux boots `0xBC..0xBE = 07/01/00`
+(OFF) and the reference runs `07/05/55` (ON).  Enabling it
+(`0xBE = 0xE1`, `clk-twl`'s prepare value) makes the WL1283 enumerate;
+`CONFIG_CLK_TWL=y` + an enable in `clk-twl`'s probe is the permanent fix.
+(Session 50, report 230; supersedes the session-50 text that called `0x60` the
+candidate.)
 
 **Also corrected elsewhere, for completeness:** `0x1cce0` in `winch_lcdctl` is a
 HAL parameter-block defaults initialiser, not the register programmer — the

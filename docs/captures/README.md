@@ -84,6 +84,16 @@ Read them with report 229's caveat: the `PBC: mmc4 try …` lines come from a
 pre-existing trace, `PBX: … CMD…`/`PBIRQ`/`PBCMD` from the archived 66-line
 instrumentation, and the experiment was reverted afterwards.
 
+## WL1283 bring-up (reports 230/231)
+
+| file | what |
+|---|---|
+| `wl1283-enumerate-2026-11-14.txt` | the card enumerating after `CLK32KG` is enabled: `CLK32KG = 07/01/55`, `mmc4: new high speed SDIO card`, `0x0097:0x4076`, two functions (image `0x69CDAC94`) |
+| `wl1283-wlan-up-2026-11-14.txt` | the full WLAN bring-up: `wlcore: loaded`, `firmware booted (Rev 7.3.10.0.142)`, `wlan0` link/ether, the modules (image `0x9712A086`) — **and the `sdio read failed (-110)` / hardware-recovery loop** (report 231 §6) |
+
+The raw capture is `dmesg`; the `PBR:`/`PBSIO:`/`PBC:` lines are the project's
+own driver-binding/bus traces.
+
 ## Exact duplicates
 
 These pairs are byte-identical; keep one of each when pruning.

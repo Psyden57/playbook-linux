@@ -1,16 +1,17 @@
-# Session 50 (absolute) — both of session 49's open tests run and negative: the card is not slow, and BT is not a liveness oracle
+# Session 50 (absolute) — the WL1283 enumerates (CLK32KG was OFF); the WLAN is not yet stable, and session 49's two tests are negative
 
 > Numbering: absolute `50` (the project's chronological scheme — see
 > `NUMBERING.md`).  Linux-era **session 44** in the reports' scheme
 > (`absolute = Linux-era + 6`).
 
 Date / span: 2026-11-14.
-Unit state at the end: **our Linux image `0x17C2E119`** on region 0
-(`0x9398B4` B, kernel `7.3.3` **#59** — the session-49 tree rebuilt after both
-experiments were reverted), region 1 = the ssh rootfs **`a4e76b18…`**
-(unchanged, 67,108,864 B, 27 modules).  `0fca:8010`, console `pb> `, **ssh on
-`169.254.0.1`**; battery `Full`, 4.156 V.  No NVRAM/MCT/RPMB write.  No restore
-needed.
+Unit state at the end: **our Linux image `0x9712A086`** on region 0
+(`0x939A74` B, kernel `7.3.3` **#60** — the `CLK32KG` fix plus the wl1283 DT
+child, `cap-power-off-card` and the pwrseq), region 1 = the wireless rootfs
+**`88084b78…`** (67,108,864 B, 34 modules incl. `wlcore`/`wl12xx`, the `wl128x`
+firmware, the assigned MAC patched into the NVS).  `0fca:8010`, console `pb> `,
+**ssh on `169.254.0.1`**; `wlan0` present (firmware boots) but **not stable**.
+Battery `Full`, 4.156 V.  No NVRAM/MCT/RPMB write.  No restore needed.
 
 ## Goal of this session
 
@@ -70,7 +71,8 @@ were negative, decide the next evidence.
   (`scripts/dtc/dtc-lexer.lex.c`) and **dropping the real
   `arch/arm/Kconfig.debug`** — because the recipe's filter matched the exact
   name `Kconfig`, not `Kconfig.*`.  The tree itself is correct: with those two
-  corrected the set is exactly the shipped patch's 56 files.  The recipe and
+  corrected the set is exactly the shipped patch's 56 files (57 after the
+  WL1283 changes; see the continuation).  The recipe and
   trap 211 are fixed.
 
 ## Inferred (reasoning from evidence, not directly measured)
@@ -84,12 +86,15 @@ were negative, decide the next evidence.
   reference's *BT* half was only ever decoded statically (report 216), and the
   32 kHz has never been read.  The handoff's decision table ("silence →
   power/TCXO/reset, SDIO controller exonerated") is too strong.
-* **What remains is a live reference observation.**  The host program, the
-  WL_EN ordering, the whole readable board state, the boot path, the clock
-  domains, the BT half and the identification timing are all excluded.  The
-  reference's **MMCHS5 register block at `ti0`-up** is the one host-side surface
-  never captured (report 218 names it), and the QNX-in-Linux harness is the way
-  to execute the reference's exact sequence.
+* **The enumeration blocker was a clock, not the host program or timing.**
+  Certain: the measured TWL difference `0xBC`–`0xBE` (QNX `07/05/55`, Linux
+  `07/01/00`) is `CLK32KG` at physical `0xBC`, and writing `0xBE = 0xE1` on a
+  fresh boot enumerates the card.  The session's earlier "the next evidence is a
+  live MMCHS5 capture" plan was overtaken by this.
+* **The `-110` recovery is not a calibration symptom.**  Strong: the unpatched
+  generic NVS and the MAC-patched one loop identically, and the failure is a
+  CMD53 status read timing out in the IRQ thread.  The cause is in the
+  firmware/chip match, the SDIO block size/byte-mode, or the ELP/status path.
 
 ## Dead ends and wrong assumptions (valuable — do not skip)
 
@@ -107,17 +112,37 @@ were negative, decide the next evidence.
 * **"The identification clock was tested at 24 MHz already."**  H1 (session 35)
   did test 24 MHz init and was negative; session 50 covers the slow side.  Both
   directions are now exhausted.
+* **"The WL1283 works" (the session's own first result).**  Premature: the card
+  enumerates and firmware boots, but the WL_IRQ status read times out (`-110`)
+  and wlcore recovery-loops; `wlan0` comes up and goes down.  Corrected in
+  report 231 §6 and in this note.
+* **"`IRQ_TYPE_LEVEL_LOW` is the right type for an active-low level IRQ."**
+  Semantically true, but WL_IRQ idles LOW before firmware, so the level IRQ
+  storms from `request_irq()` and saturates the CPU; ssh and the console both
+  died and the unit had to be power-cycled and reflashed from the bootrom.
+  Keep `EDGE_FALLING`.  (Trap 238.)
+* **"The reference INI's `STRFRefClock = 2` (38.4 MHz) must be the DT ref
+  clock."**  Tested at 38.4 MHz: firmware still boots and still loops
+  identically; reverted to 26 MHz.  The clock is not the cause of the `-110`.
+* **"A long MMC host autosuspend delay stops the `-110`."**  Tested: no change
+  (the host stayed active and the status read still timed out).
 
 ## Unknown / open questions
 
-* **What does the reference's MMCHS5 block read at the moment `ti0` comes up?**
-  Never captured.  This is the next measurement.
+* **Why does the WL_IRQ status read time out (`-110`) after firmware boot?**
+  Candidates: the mainline firmware/chip revision match (`wl128x-fw-5-sr.bin`
+  vs this WL1283C; try `wl128x-fw-4-sr.bin`), the SDIO block size / byte-mode
+  after the firmware boot, or the ELP/status-read path.  Settle it by trying the
+  4-sr firmware and by capturing the failing CMD53's address/length
+  (`wlcore_sdio dump=1`) and comparing it with the reference's own post-firmware
+  SDIO traffic.
 * **Does the reference's BT half answer HCI on this unit?**  Never shown.  If it
   does, the Linux BT path has a real bug; if it does not, BT is not an oracle.
-* **Where is `CLK32KG` on the TWL6030?**  Needs a register map (the local
-  datasheet's table is not in the text) or a probe.
-* **The chip-side pins** (VBAT, 26 MHz TCXO, SLOW_CLK, RESET_N) — unmeasurable
-  on this bench (trap 165).
+* **The chip-side pins** (VBAT, the 26/38.4 MHz TCXO, SLOW_CLK, RESET_N) —
+  unmeasurable on this bench (trap 165).  The 38.4 MHz test was negative for the
+  `-110`, but it does not prove the board's clock is 26 MHz.
+* **Resolved this session:** `CLK32KG` is physical `0xBC`–`0xBE` (module-relative
+  `0x8C`); the MMCHS5 live capture is no longer needed for enumeration.
 
 ## Superseded / uncertain
 
@@ -128,31 +153,91 @@ were negative, decide the next evidence.
   half is shown live.
 * **KNOWN-ISSUES §3.30's `0x60` candidate for `CLK32KG`** — superseded by
   correction 3.31 (it is VCORE3).
+* **"`CLK32KG` has still never been read / is not the blocker."**  Superseded by
+  report 230: it is physical `0xBC`, Linux booted it OFF, and enabling it makes
+  the card enumerate.  The earlier claim rested on reading physical `0x8C`
+  (VAUX3).
+* **"The WL1283 WLAN works."**  Superseded by report 231 §6: it enumerates and
+  firmware boots, but the interface recovery-loops on a status read timeout.
+
+## Continuation — the WL1283 enumerates; the WLAN is not yet stable (reports 230/231)
+
+The operator kept the session open, so the next lead was followed: the one
+measured TWL difference report 192 §7 had recorded and dismissed — `0xBC`–`0xBE`
+(QNX `07/05/55`, Linux `07/01/00`).
+
+* **It is `CLK32KG`, and the earlier address work was wrong.**  `twl_i2c`
+  adds the `PM_RECEIVER` base `0x30`, so `clk-twl`'s **module-relative `0x8C`**
+  (it registers `clk32kg` there for `twl6030-clk` too) is **physical
+  `0xBC`**, and physical `0x8C` is VAUX3.  So `0xBC` was the FreeBSD `CLK32KG`
+  claim and report 192 dismissed it by conflating the address spaces.
+* **Causal, on a fresh boot:** `0xBC..0xBE = 07/01/00` and
+  `mmc4: Failed to initialize a non-removable card`; write `0xBE = 0xE1` (what
+  `clk-twl`'s prepare computes) → `mmc4: new high speed SDIO card at address
+  0001`, `0x0097:0x4076`, two functions.  `0xBD/0xBE = 05/55` (the reference's
+  own value) works too.
+* **Permanent fix:** `CONFIG_CLK_TWL=y` and `clk_prepare_enable("clk32kg")` in
+  `clk-twl`'s probe (~1.9 s, before MMC5 at ~3.0 s).  Verified across a reboot.
+* **WLAN:** the mainline `wlcore`/`wl12xx`/`mac80211`/`cfg80211` stack + the
+  mainline `wl128x` firmware (stripped modules and firmware added to the region-1
+  rootfs; `rcS` loads them in order, because `wlcore_sdio`'s recorded dependency
+  is incomplete).  Three DTS pieces were needed, each a measured failure: the
+  `ti,wl1283` child (`reg = <2>`) for `-ENODEV`-free probe, `cap-power-off-card`
+  for the `-EACCES` (`get_sync(-13)`), and an `mmc-pwrseq-simple` pulsing
+  `WL_EN` for the second-and-later firmware boots (`sdio write failed (-110)` —
+  `omap_hsmmc` has no `card_hw_reset`).  Result: `wlcore: firmware booted (Rev
+  7.3.10.0.142)`, `wlan0` appears with MAC `14:74:11:8f:9c:c3` (the assigned
+  address; the MAC bytes were patched into the generic NVS).  **Not yet
+  usable:** the WL_IRQ status read then times out (`-110`) and wlcore
+  recovery-loops (`pc: 0x0, hint_sts: 0x20`, `Runtime PM usage count underflow`)
+  — report 231 §6.
+* **A `LEVEL_LOW` IRQ wedges the unit.**  WL_IRQ idles low before firmware, so
+  the level IRQ storms at boot; ssh and the console both died.  Recovered with
+  an operator power-cycle (the unit came up in the bootrom) + a region-0 flash of
+  the known-good image `0x9712A086`.  Keep `EDGE_FALLING` (trap 238).
+* **`tools/build_rootfs.py --firmware` was parsed but never called** — fixed.
+* **Remaining:** the `-110` status-read cause (firmware/chip match, block size,
+  ELP); then the `hd5` **calibration** NVS (the MAC is already the assigned
+  `14:74:11:8f:9c:c3`), a supplicant + `regulatory.db`, and the Linux BT bring-up.
+
+The kernel patch was re-exported for the new `clk-twl.c` and the DTS changes:
+**57 files / 8 658 lines**, sha256 `e7cf9628…`, 0 rejects / 57/57.  The tree
+walk also confirmed the fixed `Kconfig.*` filter (it now sees
+`arch/arm/Kconfig.debug`).
 
 ## Bench state inherited by session 51
 
 | item | value |
 |---|---|
-| region 0 | **`0x17C2E119`**, `0x9398B4` B, kernel `7.3.3` **#59** — the session-49 tree rebuilt after both experiments were reverted |
-| region 1 | **`a4e76b18…`**, 67,108,864 B, 27 modules — unchanged (its `/bin/pbhci` is the session-29 build) |
-| OS running | **our Linux image** (`0fca:8010`); console `pb> `, ssh on `169.254.0.1` |
+| region 0 | **`0x9712A086`**, `0x939A74` B, kernel `7.3.3` **#60** — the CLK32KG fix + the wl1283 DT child, `cap-power-off-card` and the pwrseq (EDGE_FALLING, 26 MHz) |
+| region 1 | **`88084b78edc1c60d5b04d890374c98acf791ad19088e69e4e97b8db126f1d1ce`**, 67,108,864 B, 34 modules (incl. `wlcore`/`wl12xx`) + `wl128x` firmware (`local/images/rootfs-region1-wl1283.ext4`) |
+| OS running | **our Linux image** (`0fca:8010`); console `pb> `, ssh on `169.254.0.1`; SDIO `mmc4:0001:1/2` + `wlan0` (MAC `14:74:11:8f:9c:c3`) present, firmware boots — **the interface is not stable** (`-110` recovery loop when brought up) |
 | battery | `Full`, 4.156 V |
+| `BOOTCTR_FCTRY` | **not read this session** — `/dev/rpmb` exists only on TabletOS; our `/init` runs `pbrpmb topup 0x1E` at every boot.  Last reading `0x29` (session 49).  Health check only, per `SAFETY.md` §2 |
 | device-side files | oracle's `hd3`: `/var/ti1283/{firmware.bin,tiwlan.ini}` (session 49); Linux side: none |
 | region-0 RCFS | the full 1917 RCFS (trap 227); the pruned oracle pair is `local/work/minimal/setB.signed` |
 | way back to TabletOS | `ifs-shim-sealed.ifs` at `0x825` **+** `rcfs-1917.rcfs` at `0x8D5` (NOT `wayback.signed`, trap 226) |
-| no restore needed | the unit is left on our Linux image |
+| recovery this session | a `LEVEL_LOW` IRQ storm wedged the unit; an operator power-cycle left it in the bootrom and `0x9712A086` was reflashed.  **No restore is required** — the unit is left on our Linux image |
 
 ## Artefacts produced
 
-* **Reports** `docs/reports/`: **228** (the BT-core liveness probe),
-  **229** (the slow identification clock, and the `CLK32KG` address
-  correction).
-* **Captures** `docs/captures/`: `wl1283-bt-probe-2026-11-14.txt`,
-  `wl1283-slow-clock-2026-11-14.txt`.
-* **Tool (source)**: `rootfs/hci.c` — `BT_EN` pulse + UART self-check; binary
-  pushed to `/tmp/pbhci`.  The region-1 image was not rebuilt.
-* **Images flashed**: `0x91E22899` (#58, the experiment) and `0x17C2E119`
-  (#59, the reverted tree).  Unit left on `0x17C2E119`.
-* **Docs**: traps 234/235, correction 3.31, DECISIONS §65, `STATE.md`,
-  `HANDOFF.md`, `ROADMAP.md` item 9, `reports/INDEX.md`, `captures/README.md`,
-  `sessions/NUMBERING.md`, this note.
+* **Reports** `docs/reports/`: **228** (BT probe), **229** (slow identification
+  clock + the `CLK32KG` address correction), **230** (the `CLK32KG` root cause),
+  **231** (the WLAN bring-up).
+* **Captures** `docs/captures/`: `wl1283-bt-probe-…`, `wl1283-slow-clock-…`,
+  `wl1283-enumerate-…`, `wl1283-wlan-up-2026-11-14.txt`.
+* **Kernel**: `drivers/clk/clk-twl.c` (enable `clk32kg`), `CONFIG_CLK_TWL=y`,
+  the board DTS (wl1283 child, `cap-power-off-card`, pwrseq, hog removed);
+  patch **57 files / 8 658 lines**, sha256 `e7cf9628…`.
+* **Userspace**: `tools/build_rootfs.py` (`--firmware` now installed),
+  `rootfs/etc/init.d/rcS` (wireless load order),
+  `local/images/rootfs-region1-wl1283.ext4`, `local/work/firmware/`.
+* **Tool (source)**: `rootfs/hci.c` — `BT_EN` pulse + UART self-check.
+* **Images flashed**: `0x91E22899` (#58), `0x17C2E119` (#59), `0x69CDAC94`,
+  `0x53F7F97B`, `0xF64A680D`, `0xD4990AE5` (38.4 MHz, negative), `0x1DB13604`
+  (`LEVEL_LOW`, wedged — recovered), and **`0x9712A086`** (#60, the one left on
+  media).
+* **Docs**: traps 234–238, corrections 3.30/3.31, DECISIONS §65–§67,
+  `STATE.md`, `HANDOFF.md`, `ROADMAP.md` item 9, `reports/INDEX.md`,
+  `captures/README.md`, `kernel/patches/README.md`, `sessions/NUMBERING.md`,
+  this note.

@@ -54,6 +54,21 @@
 		regulator-always-on;
 	};
 
+	/*
+	 * WL_EN (gpio 54 = GPIO2_22) as an MMC power sequence: the reference
+	 * drives it low -> 50 ms -> high -> 120 ms before it touches the chip,
+	 * and wlcore needs the same cold power cycle for *every* firmware
+	 * boot (omap_hsmmc has no card_hw_reset, so its "brute force HW
+	 * reset" is a no-op).  GPIO_ACTIVE_LOW makes the pwrseq's "reset
+	 * asserted" the physical LOW = EN off.  VIO (vwl1283) stays on.
+	 */
+	wl1283_pwrseq: wl1283-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		reset-gpios = <&gpio2 22 GPIO_ACTIVE_LOW>;
+		reset-delay-us = <50000>;
+		post-power-on-delay-ms = <120>;
+	};
+
 	chosen {
 		/* No stdout-path: it makes the 8250 driver register ttyS2 as a
 		 * second console.  That console writes to the (dead) UART3 THR
@@ -611,12 +626,38 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdmmc5_pins>;
 	vmmc-supply = <&vwl1283>;
+	mmc-pwrseq = <&wl1283_pwrseq>;
 	bus-width = <4>;
 	non-removable;
 	ti,non-removable;
 	no-sd;
 	no-mmc;
 	max-frequency = <24000000>;
+	/*
+	 * Runtime PM for the card/functions is only enabled when the host
+	 * advertises MMC_CAP_POWER_OFF_CARD; wl12xx_sdio_power_on() calls
+	 * pm_runtime_resume_and_get(&card->dev) and otherwise gets -EACCES.
+	 */
+	cap-power-off-card;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	/*
+	 * The WLAN is SDIO function 2 (function 1 is the BT half).  The
+	 * wlcore_sdio driver matches this node by `reg` (the function
+	 * number) and needs the interrupt and the clock frequencies; without
+	 * the node it returns -ENODEV before it can load firmware.
+	 * WL_IRQ = gpio 53 = GPIO2_21 (pad 0x4A100078 bits 31:16), falling,
+	 * the reference's own detect setting.
+	 */
+	wl1283: wlan@2 {
+		compatible = "ti,wl1283";
+		reg = <2>;
+		interrupt-parent = <&gpio2>;
+		interrupts = <21 IRQ_TYPE_EDGE_FALLING>;
+		ref-clock-frequency = <26000000>;
+		tcxo-clock-frequency = <26000000>;
+	};
 };
 
 /*
@@ -1028,16 +1069,11 @@
 	};
 
 	/*
-	 * WL1283 enable, gpio_54 = GPIO2_22 (pad gpmc_nwp 0x07c).  The reference
-	 * raises it and waits 120 ms before touching the chip; hold it high so
-	 * the MMC5 probe sees the 1917 state.
+	 * WL1283 enable, gpio_54 = GPIO2_22 (pad gpmc_nwp 0x07c).  It is
+	 * driven by the wl1283-pwrseq power sequence (above), not a hog: the
+	 * pwrseq must own the line to power-cycle the chip for every wlcore
+	 * firmware boot.
 	 */
-	wl1283-en-hog {
-		gpio-hog;
-		gpios = <22 GPIO_ACTIVE_HIGH>;
-		output-high;
-		line-name = "wl1283-enable";
-	};
 
 };
 
