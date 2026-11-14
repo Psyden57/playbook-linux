@@ -1315,3 +1315,15 @@ codec-master slave; the ABE bring-up was cancelled (report 213, DECISIONS
 **McBSP3** and the two-link design works in stereo: image `0xF8BADFF3`
 (kernel #42), rootfs `c0719d28…`; report 214 and
 `docs/sessions/session-46.md` are current.
+
+## Session 46 final snapshot (superseded by the session-47 speaker path)
+
+Region 0 `0xF8BADFF3` (kernel `7.3.3` #42, `0x93993C` B; the McBSP3 two-link
+card), region 1 `c0719d28…` (27 modules).  Audio was working **on headphones
+only**: the WM8994's AIF1 on McBSP3, the card two ASoC links (`mcbsp2 +
+wm8994-aif1` clocks, `mcbsp3 + wm8994-aif2` data), the `XPHASE` guard fixing
+the right channel, `XCR2 = 0x8041`, the ABE not needed.  The speaker path was
+the one open experiment (the codec's speaker controls read routed; the guess
+was a board-level `spk`/`hp` gate).  Patch 54 files / 8,440 lines, sha256
+`fd2774fb…`.  That guess was wrong in detail — see report 215, DECISIONS §60,
+`docs/sessions/session-47.md`.
