@@ -73,6 +73,17 @@ debugfs side (B) is the driver's cached/intended state, not a silicon read
 (trap 207).  The decisive board facts are the GPIO states recorded in the report
 (`spk` out lo, `boost` out hi while playing).
 
+## WL1283 session-50 probes (reports 228/229)
+
+| file | what |
+|---|---|
+| `wl1283-bt-probe-2026-11-14.txt` | the BT-core liveness probe on Linux `0xBAFD9B3B`: baseline (no `BT_EN`) and three pulses, with the pad/GPIO2/UART2 evidence (`pad 0x4A10007C = 0x00030003`, `DATAOUT` bit 23 0→1, `LSR = 0x60`) — silent |
+| `wl1283-slow-clock-2026-11-14.txt` | full `dmesg` of image `0x91E22899` (kernel #58): the identification ladder at 400/300/200/100 kHz and the decoded `CTO`-only `STAT` at 100 kHz |
+
+Read them with report 229's caveat: the `PBC: mmc4 try …` lines come from a
+pre-existing trace, `PBX: … CMD…`/`PBIRQ`/`PBCMD` from the archived 66-line
+instrumentation, and the experiment was reverted afterwards.
+
 ## Exact duplicates
 
 These pairs are byte-identical; keep one of each when pruning.

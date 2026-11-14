@@ -2253,6 +2253,42 @@ traps 231/232/233.
 
 ---
 
+## 65. Neither "the card is slow" nor "BT silence means unpowered" is a live hypothesis (session 50)
+
+**Decision.**  Stop treating the identification **timing** and the **BT core**
+as open explanations for the dead SDIO card.  The card answers at none of
+400/300/200/100 kHz with `CTO` only, so it is not "slower than the 160 µs
+window" (at 100 kHz the window is 640 µs); and the BT core answers no
+`HCI_Reset` even with `BT_EN` genuinely driven, so BT cannot be used as a
+die-liveness oracle.  The next evidence must be a **live capture of the
+reference's MMCHS5 block** at `ti0`-up (and any still-unread board/clock state),
+or the QNX-in-Linux harness — not another timing sweep and not the BT half.
+
+**Why.**  (a) The slow-clock test is decisive in the negative: `mmc_rescan`'s
+ladder tried all four frequencies and each ended `attach_sdio no` with
+`STAT = 0x00018000` (`CTO` only, `RSP0 = 0`); a WL1283 does not need more than
+640 µs to answer `CMD5`.  (b) The oracle already proves the chip runs under the
+reference (report 217), so a silent BT core under Linux cannot mean "the die is
+unpowered" — it means either the chip is not powered *by our boot* or BT needs
+more than `BT_EN`.  The reference's BT half was only ever decoded statically
+(report 216), and the one named chip-side requirement, the 32.768 kHz SLOW_CLK,
+has **still never been read** — both addresses the docs cited are other
+resources (`0x8C` = VAUX3, `0x60` = VCORE3's state; correction 3.31).  Without
+a positive reference BT capture, BT silence is not evidence about power.
+
+**Constraint.**  One variable per boot, and prove the revert.  `f_min` is not
+the initial clock — it opens the rescan ladder (trap 235) — and the BT pulse
+must be verified at the pad (`0x07C` mux 3, `DATAOUT` bit 23) before a silence
+is recorded (trap 234).  Do not cite `0x8C` or `0x60` as `CLK32KG`.  The
+instrumentation is the archived 66-line patch, re-applied, never reinvented.
+
+**Evidence.**  Reports **228** (BT probe) and **229** (slow identification
+clock); captures `docs/captures/wl1283-bt-probe-2026-11-14.txt` and
+`wl1283-slow-clock-2026-11-14.txt`; experiment image `0x91E22899` (#58) and the
+reverted image `0x17C2E119` (#59); traps 234/235; correction 3.31.
+
+---
+
 The repository licence and visibility are decided below; the remaining
 policy questions (publication of the proprietary corpus) stay open and are
 recorded here so nobody assumes a policy exists.

@@ -1,0 +1,150 @@
+# Session 50 (absolute) — both of session 49's open tests run and negative: the card is not slow, and BT is not a liveness oracle
+
+> Numbering: absolute `50` (the project's chronological scheme — see
+> `NUMBERING.md`).  Linux-era **session 44** in the reports' scheme
+> (`absolute = Linux-era + 6`).
+
+Date / span: 2026-11-14.
+Unit state at the end: **our Linux image `0x17C2E119`** on region 0
+(`0x9398B4` B, kernel `7.3.3` **#59** — the session-49 tree rebuilt after both
+experiments were reverted), region 1 = the ssh rootfs **`a4e76b18…`**
+(unchanged, 67,108,864 B, 27 modules).  `0fca:8010`, console `pb> `, **ssh on
+`169.254.0.1`**; battery `Full`, 4.156 V.  No NVRAM/MCT/RPMB write.  No restore
+needed.
+
+## Goal of this session
+
+Run the two experiments session 49 left, in its order: (a) the **BT-core
+liveness probe with `BT_EN` really driven**, and (b) **a slower identification
+clock** to separate "no card" from "card slower than 160 µs".  Then, if both
+were negative, decide the next evidence.
+
+## Confirmed (measured, read in a file, or seen on the bench)
+
+* **The BT core answers no `HCI_Reset` even with `BT_EN` driven.**  `BT_EN` =
+  gpio 55 = `GPIO2_23` (pad `0x4A10007C` bits 31:16), driven low → 50 ms →
+  high through sysfs.  Verified: pad `0x00030003` (both halves mux 3 — **our
+  image already muxes it**, no DTS change needed), `GPIO2_OE = 0xCE2ECDFF`
+  (bit 23 output), `GPIO2_DATAOUT` bit 23 **0 → 1**.  The UART path was verified
+  too: `uart2_rx` pad `0x4118` has `INPUT_EN`, `uart2_tx` `0x0000`, and after
+  the write `UART2 LSR = 0x60` (THRE = TEMT = 1) — the 4 bytes left the UART.
+  No reply in 2 s on three pulses.  [report 228; capture
+  `docs/captures/wl1283-bt-probe-2026-11-14.txt`]
+* **The baseline reproduces session 29.**  `--no-pulse` is silent too, so the
+  tool and environment are the same in both cases; session 29's result is
+  **superseded**, not "invalid" — it never drove `BT_EN`.
+* **The card answers at none of 400/300/200/100 kHz.**  `OMAP_MMC_MIN_CLOCK`
+  400000 → 100000 opens `mmc_rescan`'s ladder; the log shows all four
+  `PBC: mmc4 try …` lines.  Every attempt: `attach_sdio no`, and at 100 kHz
+  `STAT = 0x00018000` decodes as **`CTO` only** (`CCRC = CEB = CIE = 0`),
+  `RSP0 = 0`, `PSTATE = 0x01f40001` (`CLEV = 1`).  `SYSCTL = 0x000e7807` gives
+  `CEN = ICE = 1`, `CLKD = 480` = 48 MHz/480 = **100 kHz**; `HCTL = 0xb00`
+  (`SDBP = 1`, `SDVS = 5`); `CON = 0x600`.  `CMD0` is `err = 0` throughout.
+  [report 229; capture `docs/captures/wl1283-slow-clock-2026-11-14.txt`]
+* **`f_min` does not set the initial clock.**  `mmc_start_host()` sets
+  `f_init = max(min(400000, f_max), f_min)`, so the power-up stays 400 kHz;
+  `f_min` controls the `{400k,300k,200k,100k}` retry ladder (it stops at
+  `freqs[i] <= f_min`).  This is why the shipped `f_min = 400000` means only
+  400 kHz is ever tried.  [trap 235]
+* **The 32 kHz still has never been read.**  `0x8C`/`0x8E` is **VAUX3**
+  (`clk-twl.c`'s `0x8C` table is TWL6032-only) and `0x60` is **VCORE3's
+  `CFG_STATE`** (`vcore3` base `0x5E` in the QNX regulator table), so the live
+  `0x5E/0x5F/0x60 = 07/05/55` is VDD3, not a clock.  The TWL6030 datasheet
+  (`hardware/twl6030.pdf`, `SWCS045C`) calls `CLK32KG` a software resource that
+  is on from the startup sequence, but its register-address table is not in the
+  extractable text.  [KNOWN-ISSUES 3.31]
+* **Both experiments were reverted and proven.**  `omap_hsmmc.c` and `core.c`
+  were regenerated from pristine 7.3.3 with
+  `kernel/patches/0001-playbook-winchester-7.3.3.patch` applied
+  (`git apply --include=…`) and are **byte-identical** to the tree (`cmp`);
+  the DTS is byte-identical to `kernel/source/`.  The reverted tree was rebuilt
+  and flashed as `0x17C2E119` (#59), which boots and is back to a single
+  400 kHz attempt.
+* **`rootfs/hci.c` gained the `BT_EN` pulse and the UART self-check.**  It
+  resolves the dynamic GPIO2 sysfs base, exports `base+23`, drives the pulse,
+  and reports the pad/GPIO2/UART registers.  The region-1 image was **not**
+  rebuilt; the probe was pushed to `/tmp`.
+
+## Inferred (reasoning from evidence, not directly measured)
+
+* **The card is not timing-limited.**  Certain: the ladder tried four clocks
+  including 100 kHz (640 µs) and every attempt is `CTO` only.  A WL1283 does
+  not take >640 µs to answer `CMD5`.
+* **The BT probe is not a liveness oracle.**  Strong: the enable and the UART
+  path are verified, and the chip is silent.  But it does **not** prove the die
+  is unpowered — the oracle proves the chip runs under the reference, the
+  reference's *BT* half was only ever decoded statically (report 216), and the
+  32 kHz has never been read.  The handoff's decision table ("silence →
+  power/TCXO/reset, SDIO controller exonerated") is too strong.
+* **What remains is a live reference observation.**  The host program, the
+  WL_EN ordering, the whole readable board state, the boot path, the clock
+  domains, the BT half and the identification timing are all excluded.  The
+  reference's **MMCHS5 register block at `ti0`-up** is the one host-side surface
+  never captured (report 218 names it), and the QNX-in-Linux harness is the way
+  to execute the reference's exact sequence.
+
+## Dead ends and wrong assumptions (valuable — do not skip)
+
+* **"Silence with `BT_EN` high means the die is unpowered."**  It does not: the
+  reference's BT half was never shown live, and the WLAN proves the chip's power
+  and TCXO are good when the reference boot has run.  (Trap 234.)
+* **"Lowering `f_min` identifies the card at 100 kHz."**  No: `f_init` stays
+  400 kHz; only the retry ladder changes, and the card is first tried at
+  400 kHz.  (Trap 235.)
+* **"`0x60` is the `CLK32KG` candidate."**  It is VCORE3's `CFG_STATE`; `0x8C`
+  is VAUX3.  Both earlier candidate addresses were wrong.  (Correction 3.31.)
+* **"`debugfs` is mounted."**  Our `rcS` does not mount it; the regmap files
+  only exist after `mount -t debugfs debugfs /sys/kernel/debug`.  (The session
+  found this when re-reading the TWL after the reboot.)
+* **"The identification clock was tested at 24 MHz already."**  H1 (session 35)
+  did test 24 MHz init and was negative; session 50 covers the slow side.  Both
+  directions are now exhausted.
+
+## Unknown / open questions
+
+* **What does the reference's MMCHS5 block read at the moment `ti0` comes up?**
+  Never captured.  This is the next measurement.
+* **Does the reference's BT half answer HCI on this unit?**  Never shown.  If it
+  does, the Linux BT path has a real bug; if it does not, BT is not an oracle.
+* **Where is `CLK32KG` on the TWL6030?**  Needs a register map (the local
+  datasheet's table is not in the text) or a probe.
+* **The chip-side pins** (VBAT, 26 MHz TCXO, SLOW_CLK, RESET_N) — unmeasurable
+  on this bench (trap 165).
+
+## Superseded / uncertain
+
+* **Session 29's `HCI_Reset` probe** — superseded by report 228 (it ran without
+  `BT_EN`).
+* **The handoff's BT decision table** — the "silence kills the power class"
+  branch is not supported; keep the power class open until the reference BT
+  half is shown live.
+* **KNOWN-ISSUES §3.30's `0x60` candidate for `CLK32KG`** — superseded by
+  correction 3.31 (it is VCORE3).
+
+## Bench state inherited by session 51
+
+| item | value |
+|---|---|
+| region 0 | **`0x17C2E119`**, `0x9398B4` B, kernel `7.3.3` **#59** — the session-49 tree rebuilt after both experiments were reverted |
+| region 1 | **`a4e76b18…`**, 67,108,864 B, 27 modules — unchanged (its `/bin/pbhci` is the session-29 build) |
+| OS running | **our Linux image** (`0fca:8010`); console `pb> `, ssh on `169.254.0.1` |
+| battery | `Full`, 4.156 V |
+| device-side files | oracle's `hd3`: `/var/ti1283/{firmware.bin,tiwlan.ini}` (session 49); Linux side: none |
+| region-0 RCFS | the full 1917 RCFS (trap 227); the pruned oracle pair is `local/work/minimal/setB.signed` |
+| way back to TabletOS | `ifs-shim-sealed.ifs` at `0x825` **+** `rcfs-1917.rcfs` at `0x8D5` (NOT `wayback.signed`, trap 226) |
+| no restore needed | the unit is left on our Linux image |
+
+## Artefacts produced
+
+* **Reports** `docs/reports/`: **228** (the BT-core liveness probe),
+  **229** (the slow identification clock, and the `CLK32KG` address
+  correction).
+* **Captures** `docs/captures/`: `wl1283-bt-probe-2026-11-14.txt`,
+  `wl1283-slow-clock-2026-11-14.txt`.
+* **Tool (source)**: `rootfs/hci.c` — `BT_EN` pulse + UART self-check; binary
+  pushed to `/tmp/pbhci`.  The region-1 image was not rebuilt.
+* **Images flashed**: `0x91E22899` (#58, the experiment) and `0x17C2E119`
+  (#59, the reverted tree).  Unit left on `0x17C2E119`.
+* **Docs**: traps 234/235, correction 3.31, DECISIONS §65, `STATE.md`,
+  `HANDOFF.md`, `ROADMAP.md` item 9, `reports/INDEX.md`, `captures/README.md`,
+  `sessions/NUMBERING.md`, this note.

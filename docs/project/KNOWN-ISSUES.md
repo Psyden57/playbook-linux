@@ -1754,6 +1754,33 @@ report 121 §3/§11/§12.
       its command path never relies on a host response.  Port `CON` with `OD`
       only.  (Session 49, report 227 §3a.)
 
+234. **The BT half is not a die-liveness oracle yet: `BT_EN` driven is
+      necessary but not sufficient.**  With `BT_EN` (gpio 55 = `GPIO2_23`, pad
+      `0x4A10007C` bits 31:16) really driven low → 50 ms → high — pad
+      `0x00030003` (mux 3), `GPIO2_DATAOUT` bit 23 `0`→`1`, verified through
+      sysfs — and the UART2 path verified (`uart2_rx` pad `0x4118` has
+      `INPUT_EN`, `uart2_tx` `0x0000`, `UART2 LSR = 0x60` = THRE/TEMT, i.e. the
+      command left the UART), the chip still answers no `HCI_Reset`
+      (`01 03 0c 00`) at 115200 in 2 s, on three pulses.  Session 29's probe is
+      therefore **superseded**, not just "invalid" (it never drove `BT_EN`).
+      **But silence does not prove the die is unpowered:** the oracle's live
+      WLAN bring-up proves the chip runs under the reference (report 217), and
+      the reference's *BT* half was only ever decoded statically (report 216).
+      Do not use BT silence to exonerate the SDIO controller; settle it by
+      running `devc-seromap-winbt` + `btp-btmgr` on the oracle first.
+      (Session 50, report 228.)
+
+235. **Lowering `f_min` does not lower the initial clock — it opens the rescan
+      ladder.**  `mmc_start_host()` sets
+      `host->f_init = max(min(400000, f_max), f_min)`, so the power-up clock
+      stays 400 kHz whenever `f_min ≤ 400000`; what `f_min` really controls is
+      `mmc_rescan()`'s `{400000, 300000, 200000, 100000}` ladder, which is
+      clamped to `max(freq, f_min)` and **stops at `if (freqs[i] <= f_min)
+      break;`** — with the shipped `f_min = 400000` every entry clamps to
+      400 kHz, so only 400 kHz is ever tried.  Set `f_min` to 100000 to make it
+      try all four.  (At 100 kHz with MMC5's 48 MHz `fclk`, `CLKD = 480` and
+      `CTO` = 64 card clocks = **640 µs**.)  (Session 50, report 229.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it
@@ -2021,6 +2048,21 @@ was about **VAUX3**, and the 32 kHz to the WL1283 has **never actually been
 verified** — the local read of `0x60` (`0x55`, i.e. fully on) is the first
 candidate but its identity is not nailed down.  Do not cite `0x8C` as `CLK32KG`.
 (Session 49, reports 219 §4.2, 221/226.)
+
+**3.31 Neither `0x8C` nor `0x60` is `CLK32KG` — and the 32 kHz has still never
+been read.**  §3.30 above proposed `0x60` as the next candidate.  It is
+**VCORE3's `CFG_STATE`**: the QNX regulator resmgr's own table (report 221 §1.2)
+gives `vcore3` base `0x5E`, so its group/transition/state are
+`0x5E`/`0x5F`/`0x60`.  The live read `0x5E/0x5F/0x60 = 07/05/55` is therefore
+VDD3 (group 2, APP 1, state ON), not a clock.  And `0x8C`/`0x8E` is **VAUX3**
+(the same table; `drivers/clk/clk-twl.c`'s `0x8C` is a **TWL6032-only** table).
+So **both** addresses the docs have cited for `CLK32KG` are wrong.  The TWL6030
+datasheet (local `hardware/twl6030.pdf`, `SWCS045C`) calls `CLK32KG` a
+software-controlled clock resource that is **on from the startup sequence**
+(Table 11 and the `TWL6030B107` figure, quoted in report 192 §7), and neither
+OS writes it in any path we have decoded; but its register-address table is not
+in the PDF's extractable text.  **Do not claim the 32 kHz was read or is on**
+until the address is taken from a register map.  (Session 50, report 229 §4.)
 
 **Also corrected elsewhere, for completeness:** `0x1cce0` in `winch_lcdctl` is a
 HAL parameter-block defaults initialiser, not the register programmer — the

@@ -1,0 +1,71 @@
+# WL1283 BT-core liveness probe — run on image 0xBAFD9B3B (kernel #57)
+
+Captured 2026-11-14, session 50.  Unit on our Linux image, ssh over USB
+(`tools/pbssh.sh`).  The tool is `pbhci` from `rootfs/hci.c`, pushed to
+`/tmp/pbhci` (the region-1 image still carries the session-29 build).
+
+`BT_EN` = gpio 55 = GPIO2_23, pad `0x4A10007C` bits 31:16.  The Linux GPIO2
+controller's sysfs base is dynamic (512 on this boot), resolved from
+`/sys/class/gpio/gpiochip*/device` → `48055000.gpio`.
+
+## Baseline — no BT_EN pulse (reproduces session 29)
+
+```
+pbhci: /dev/ttyS1 at 115200 8N1, sent HCI_Reset (01 03 0c 00)
+pbhci: nothing back in 2 s
+pbhci: silent after 2 attempt(s)
+rc=2
+```
+
+## With BT_EN driven low → 50 ms → high (three attempts)
+
+```
+pbhci: --- attempt 1/3 ---
+pbhci: pad 0x4a10007c = 0x00030003 (BT_EN mux 3), GPIO2_OE=0xce2ecdff DATAOUT=0x31413200 DATAIN=0x01000010
+pbhci: BT_EN (gpio 535) low, 50 ms
+pbhci: BT_EN high, 100 ms settle
+pbhci: after pulse GPIO2_OE=0xce2ecdff DATAOUT=0x31c13200 DATAIN=0x01000010
+pbhci: /dev/ttyS1 at 115200 8N1, sent HCI_Reset (01 03 0c 00)
+pbhci: UART2 LSR=0x60 (THRE=1 TEMT=1 DR=0), pads rx=0x00004118 tx=0x00030000
+pbhci: nothing back in 2 s
+pbhci: --- attempt 2/3 ---
+pbhci: pad 0x4a10007c = 0x00030003 (BT_EN mux 3), GPIO2_OE=0xce2ecdff DATAOUT=0x31c13200 DATAIN=0x01000010
+pbhci: BT_EN (gpio 535) low, 50 ms
+pbhci: BT_EN high, 100 ms settle
+pbhci: after pulse GPIO2_OE=0xce2ecdff DATAOUT=0x31c13200 DATAIN=0x01000010
+pbhci: /dev/ttyS1 at 115200 8N1, sent HCI_Reset (01 03 0c 00)
+pbhci: UART2 LSR=0x60 (THRE=1 TEMT=1 DR=0), pads rx=0x00004118 tx=0x00030000
+pbhci: nothing back in 2 s
+pbhci: --- attempt 3/3 ---
+pbhci: pad 0x4a10007c = 0x00030003 (BT_EN mux 3), GPIO2_OE=0xce2ecdff DATAOUT=0x31c13200 DATAIN=0x01000010
+pbhci: BT_EN (gpio 535) low, 50 ms
+pbhci: BT_EN high, 100 ms settle
+pbhci: after pulse GPIO2_OE=0xce2ecdff DATAOUT=0x31c13200 DATAIN=0x01000010
+pbhci: /dev/ttyS1 at 115200 8N1, sent HCI_Reset (01 03 0c 00)
+pbhci: UART2 LSR=0x60 (THRE=1 TEMT=1 DR=0), pads rx=0x00004118 tx=0x00030000
+pbhci: nothing back in 2 s
+pbhci: silent after 4 attempt(s)
+rc=2
+--- leave BT_EN low
+base=512
+0
+```
+
+(`silent after 4 attempt(s)` was an off-by-one in the first build; it is three
+attempts.  Fixed in the source after the run.)
+
+## Decode
+
+| item | value | meaning |
+|---|---|---|
+| pad `0x4A10007C` | `0x00030003` | both halves mux 3; **BT_EN (bits 31:16) was already GPIO**, no DTS change needed |
+| `GPIO2_OE` | `0xCE2ECDFF` | bit 23 = 0 → output |
+| `GPIO2_DATAOUT` before | `0x31413200` | bit 23 = 0 → BT_EN low |
+| `GPIO2_DATAOUT` after | `0x31C13200` | bit 23 = 1 → **BT_EN high** |
+| `GPIO2_DATAIN` | `0x01000010` | no WL_IRQ / BT activity |
+| pad `0x4A10011C` (uart2_rx) | `0x00004118` | mux 0, `INPUT_EN` (bit 8) set, pull-up |
+| pad `0x4A10011E` (uart2_tx) | `0x00030000` | mux 0 output |
+| UART2 `LSR` after write | `0x60` | THRE = 1, TEMT = 1, DR = 0 → **the 4-byte command left the UART** |
+
+So on the Linux side the enable is real, the transmitter emptied, and the
+receiver's input buffer is enabled — and the chip still sends nothing back.

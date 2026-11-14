@@ -1,15 +1,15 @@
 # Session numbering
 
-The project spans **forty-nine sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **fifty sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-49`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-50`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
-* **Linux-era** ("session 1…43") — used inside the reports and handoffs, because
+* **Linux-era** ("session 1…44") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
   started.  **Linux session N = absolute session N + 6.**
 
@@ -61,6 +61,7 @@ So:
 | **47** | **41** | **The speakers work too: the board's speakers are the WM8994's line outputs, `spk` is an active-low amp enable, and GPIO1_15 (`audio_boost`) must be high** (report 215).  The oracle with `Headphone Select` = false plays through LINEOUT1P/2P (`PM3 = 0x3cf0`, `R0x01e = 0`, `R0x034/035 = 1`, `R0x038 = 0x80`, `R0x04c = 0x1f25`, `R0x060 = 0`); the driver now follows the jack, owns `spk-gpios`/`boost-gpios`, and the `disp-en-12-hog` is gone.  The data path is unchanged.  Image `0xAD85DF0F` (#44), rootfs `0342ab06…`; patch 54 files / 8 584 lines (`93a7a8ce…`).  Traps 207–210; DECISIONS §60 |
 | **48** | **42** | **The session-45 audio diagnostics are retired and the audio re-verified; the patch gains a file every export had missed** (report 215's follow-up, trap 211/212).  The machine driver's `pcm:` ring readback and `omap-mcbsp`'s `live N:` dump come out (with the `steady_dump` work item); the modules are rebuilt, region 1 regenerated (`af5a0a20…`) and flashed **on its own** because a module-only change keeps the CRC (trap 190) — region 0 stays `0xAD85DF0F` (#44).  Both outputs re-verified at DAC1 volume 40.  The re-export is **55 files / 8 500 lines** (`f5856a8b…`): it also adds `sound/soc/ti/omap-mcbsp-priv.h`, which every export since session 41 had omitted although `omap-mcbsp.c` reads its fields, so the patch had not been buildable from pristine.  Traps 211/212 |
 | **49** | **43** | **The WL1283 reopened: the reference driver brought up live on the oracle, then its whole host program replayed on Linux — both negative for the card** (reports 216/217).  The BT half's enable is `BT_EN` = gpio 55 = `GPIO2_23`, driven by `btp-btmgr` and held **low** while the WLAN works, so it is not the WLAN's blocker (report 216, new `docs/reference/qnx-hwio/gpio-table-winchester.csv`).  The reference's own `wifi.sh` path — firmware staged in `/var/ti1283`, `mount -Tio-pkt -o nvram,firmdir=…`, then `ifconfig ti0 up` — enumerates the chip on this unit (**`Send commands sequence: 0, 5, 3, 7`**, firmware `Rev 7.1.4.10.77`, `ti0` **RUNNING**, `GPIO2_DATAIN` bit 21 = 1).  The same unit under Linux is register-identical apart from that one bit and stays silent; replaying the reference's MMCHS5 program (`SYSCONFIG`, `SRA`, `CAPA|VS18`, `IE`, `CON = 0x85`, early DTW) and its WL_EN power-on order changed nothing (both experiments reverted; the tree is byte-identical to pristine + the patch again).  Region 0 `0x71A79419` (#50); patch unchanged, **55 files / 8 500 lines** (`f5856a8b…`).  Traps 219–225; DECISIONS §63 |
+| **50** | **44** | **Both of session-49's open tests are run and negative: the BT core does not answer HCI with `BT_EN` driven, and the card answers at none of 400/300/200/100 kHz** (reports 228/229).  The BT probe now drives `BT_EN` (gpio 55 = `GPIO2_23`) low→50 ms→high through sysfs, verifies the pad (`0x00030003`), the pulse (`GPIO2_DATAOUT` bit 23 0→1), the UART2 pads (`0x4118`/`0x0000`) and `LSR = 0x60` (command transmitted) — and the chip still sends nothing.  Because the reference's *BT* half was never demonstrated live, this does not kill the power/TCXO class; it only shows BT is not a liveness oracle yet.  The identification ladder was opened up (`OMAP_MMC_MIN_CLOCK` 400000 → 100000, so `mmc_rescan` tries 400/300/200/100 kHz): every frequency ends in `CTO` only (`STAT=0x00018000`, `RSP0=0`, `PSTATE` `CLEV=1`), so the card is **not** "slower than 160 µs" (100 kHz gives 640 µs).  Both experiments reverted and proven: the two driver files are byte-identical to pristine + patch, the DTS to `kernel/source`.  Also corrected: `0x60` is VCORE3's `CFG_STATE`, not `CLK32KG` (as `0x8C` is VAUX3), so the 32 kHz has still never been read.  Region 0 `0x17C2E119` (#59, the reverted tree).  Traps 234/235; DECISIONS §64 |
 
 ## Anchors (evidence for the mapping)
 
