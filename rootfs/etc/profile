@@ -1,8 +1,4 @@
 # /etc/profile -- login profile for the region-1 root.
-#
-# The prompt is deliberately "pb> ": tools/pbcon.py synchronises on that
-# marker, so the same host driver works whether the unit is in the bring-up
-# console or in this shell.
 
 PATH=/sbin:/bin:/usr/sbin:/usr/bin
 export PATH
@@ -10,7 +6,28 @@ export PATH
 HOME=/root
 export HOME
 
-PS1='pb> '
+# The prompt MUST stay "pb> " on the serial console: tools/pbcon.py
+# synchronises on that exact marker, and a prompt it does not recognise makes
+# the console look dead (measured, session 48 -- an attempt to give ssh a
+# normal prompt broke pbcon.py instead).
+#
+# Over ssh the prompt may differ, but the only reliable discriminator here is
+# the login tty's name, not $TERM: the console getty sets TERM=vt102 too, so a
+# TERM test misfires.  /dev/ttyGS0 is the console; anything else is a network
+# session.
+case "$(tty 2>/dev/null)" in
+/dev/ttyGS0)
+	PS1='pb> '
+	# The banner explains the bring-up console's commands to someone looking
+	# at the serial line; it is noise for a network login.
+	[ -f /etc/motd ] && cat /etc/motd
+	;;
+"")
+	# No tty (non-interactive ssh exec): prompt is irrelevant.
+	PS1='pb> '
+	;;
+*)
+	PS1='\u@\h:\w\$ '
+	;;
+esac
 export PS1
-
-[ -f /etc/motd ] && cat /etc/motd

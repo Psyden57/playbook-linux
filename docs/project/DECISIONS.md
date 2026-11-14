@@ -1990,8 +1990,8 @@ stand-in (the physical data is AIF1's DACDAT); a dummy codec drags the format
 to U8.  The second PCM must open at the card's rate (trap 196).  The speaker
 path was not exercised (headphones only); its controls read routed, so the
 next experiment is the same tone without headphones.  The `pcm:` and `live N:`
-diagnostics remain in the tree to be retired.  MCLK1 is still dead; this
-design does not need it.
+diagnostics were retired in session 48, and the speaker still plays.  MCLK1 is
+still dead; this design does not need it.
 
 **Evidence.**  Report **214** and
 `docs/captures/wm8994-e10-mcbsp3-2026-11-13.txt`: the oracle slog/pads/McBSP3
@@ -2063,8 +2063,8 @@ reference's own driver/BSP** (in subagents, file-only) to find every GPIO,
 PMIC/LDO and clock write it performs, and **run that reference driver on the
 minimal 1917 oracle with its own controls** (PPS/powerman, its own mixer or
 networking stack) while reading the same registers and pins on both sides.  The
-WL1283 is reopened under this rule; the diagnostics cleanup stays the first,
-small task of the next session.
+WL1283 is reopened under this rule; the small diagnostics cleanup that came
+first was done in session 48.
 
 **Why.**  The speaker spent several sessions as "board-level, needs a probe":
 the codec registers matched, the `spk`/`hp` lines matched, and the conclusion
@@ -2091,6 +2091,64 @@ bench, one variable per boot — a poke is never the evidence (trap 209).
 direction at the close ("the same methodology that got us from hardware blocked
 to actually going and solving the problem").  Prior applications: reports
 208/209/213/214.
+
+---
+
+## 62. The bench link is RNDIS + dropbear, not the ACM console (session 48)
+
+**Decision (operator).**  The gadget carries an **RNDIS** network function in
+the same configuration as the CDC-ACM console, `usb0` comes up at
+**`169.254.0.1/16`** from the region-1 `rcS`, and **dropbear** serves ssh there
+(key-only, root, listening on that address alone).  The ACM console stays
+bound: it is the recovery path and the only channel when the network stack is
+what broke.  `tools/pbssh.sh` serves both, with `PB_LINK=usb|door`.
+
+**Why RNDIS and not CDC-ECM.**  Windows has an in-box RNDIS driver and **no**
+in-box CDC-ECM class driver — an ECM device appears under "Other devices" with
+no driver — while the reference firmware itself presents RNDIS
+(`0fca:8012`, "RIM Network Device"), which is the link this project's TabletOS
+bench has used since session 20 through the host's `pb-rndis` profile.  RNDIS
+is also in-box on Linux (`rndis_host`) and macOS, so one function covers every
+host the bench is likely to meet.
+
+**Why dropbear and not OpenSSH.**  Fit, not preference.  Dropbear is a single
+static ARM binary of ~970 KB with no libcrypto, no PAM, no shadow suite and no
+privilege-separation helper; OpenSSH's sshd is several times that and assumes
+all three, none of which exists on this BusyBox root.  The operator's framing
+settled the trade-off: this is a bench tool, and the userland it will be
+replaced by (postmarketOS/Nura, once the WL1283 works) brings its own ssh.
+
+**Why the host keys are generated on the host.**  The board's SoC RNG sits
+behind the secure firewall, so the CRNG never seeds itself and `/dev/urandom`
+is predictable until the console credits entropy (trap 87).  A host key
+generated on the device would be weak; the keys are made with `dropbearkey` on
+the bench host and shipped in the image, and they are gitignored like the rest
+of `local/`.
+
+**Constraint.**  Key-only: password, PAM and shadow are compiled out, because
+there is no `crypt()`, no `/etc/shadow` and no reason for either on a
+single-cable link.  The unit is **not** firewalled and the address is
+link-local, so this is bench-only in the same sense as the QNX oracle
+(trap 173) — never put the unit on a network with it.  Port 22 on
+`169.254.0.1` now means *two different servers* depending on which OS is
+booted, which is why `pbssh.sh` decides by probing the door's qconn 9090 rather
+than by looking at the interface: on TabletOS the door arrives over the very
+same RNDIS link.
+
+**Evidence.**  Session 48 bench: `0fca:8010` with four interfaces (ACM + RNDIS)
+and a host net device `enp8s0f3u1i2`; `usb0` `169.254.0.1/16`; dropbear
+listening on `169.254.0.1:22`; `ssh` gives `uid=0(root)`; **2.3 MB/s** for an
+8 MiB push, against the ACM link's 134 KB/s that drops bytes (trap 51);
+`uname -r` = `7.3.3` #45.  DECISIONS §62, traps 214/215.
+
+**Known limitation (corrected).**  Command-only and interactive sessions both
+work.  An earlier note in this session recorded interactive sessions as broken;
+that was wrong — it was the **agent's own shell having no tty**
+(`/proc/self/fd/0 -> /dev/null`), so its `ssh` requested no pty and the remote
+shell exited immediately.  The operator's terminal gives a full
+`root@playbook:~#` with history and completion, and `script -qec "ssh …"
+/dev/null` reproduces it from this side.  Trap 216 makes this a rule: check the
+harness before recording a defect.
 
 
 

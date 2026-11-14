@@ -1508,6 +1508,106 @@ report 121 §3/§11/§12.
       is silent even when the codec and `spk` match.  The `disp-en-12-hog`
       was a misnomer for this line.  (Session 47, report 215.)
 
+211. **A patch export driven from the previous patch's file list cannot find a
+      file no earlier export ever listed — and a byte-compare will not either.**
+      Session 48 found that `sound/soc/ti/omap-mcbsp-priv.h` was modified in the
+      tree yet absent from *every* export since session 41: the patch added
+      `active_rate`/`active_width` **uses** in `omap-mcbsp.c` while the header
+      that declares them was never included, so the patch could not compile
+      from pristine.  Both of the existing checks passed (0 rejects, 54/54
+      byte-identical) because a missing file is simply absent from both sides.
+      **Fix:** run the tree-vs-pristine walk (trap 139's recipe) whenever the
+      export is regenerated, even when "no new sources" were added — it is the
+      only check that sees a long-standing omission.  Read the export's
+      *file count* as the signal: 55 files now, and the audit trail is
+      `kernel/patches/README.md`.  (Session 48.)
+
+212. **A bare `pbplay` is a playback command, and the volume must stay down for
+      the whole test sequence.**  `pbplay` with no arguments opens `/dev/dsp`
+      and plays a **2 s 440 Hz tone** at the current DAC1 volume — probing its
+      usage is a listening test.  Session 48 played three tones the operator
+      heard, two of them at full volume, because the volume was restored to 96
+      after the first run and then two more captures were taken.  The correct
+      order is: **lower `pbmix set "DAC1 Volume" 40` once at the start, run
+      every test, restore to 96 once at the very end.**  (Operator, session 48.)
+
+213. **`build_rootfs.py --out <path>` overwrites that path, and the image files
+      are the only copy.**  Session 48 passed `--out` the same
+      `local/images/rootfs-region1-audio-oss-linout.ext4` that held the
+      session-47 known-good image, so `0342ab06…` was destroyed by the rebuild
+      (no other local copy existed; region 1 still held it on media until the
+      flash).  The saved rootfs image **is** the durable record of a working
+      userland, so build to a **new** path (`…-<purpose>.ext4`) and retire or
+      replace the old file deliberately.  Save the new image under a name that
+      says what it demonstrated, and keep the sha256 in `STATE.md`.
+      (Session 48.)
+
+214. **A composite USB gadget's network interface is not the plain link name,
+      so a NetworkManager profile pinned to the old name silently stays down.**
+      With ACM + RNDIS in one configuration the host's net device is
+      `enp8s0f3u1i2`, not `enp8s0f3u1` (the `i2` is the interface index within
+      the composite device).  The session-20 `pb-rndis` profile named
+      `enp8s0f3u1` and therefore never bound: the link came up, `usb0` on the
+      unit came up, and nothing was reachable.  Rebind it
+      (`nmcli connection modify pb-rndis connection.interface-name
+      enp8s0f3u1i2`) rather than re-adding the address by hand.  Check with
+      `ip -br link` on the host that the *net* interface, not the ACM one,
+      carries the expected MAC (`02:1a:11:00:00:02` as configured).
+      (Session 48.)
+
+215. **Two ssh servers answer on `169.254.0.1:22` depending on which OS is
+      booted, and they need different client options.**  The QNX door on
+      TabletOS is a 2014 sshd that only speaks `ssh-rsa`/`dh-group1`/`cbc`;
+      dropbear on our Linux image negotiates modern algorithms.  Offering the
+      legacy options to dropbear does work (verified), but it is needless
+      weakening, and a client configured only for the door will appear to
+      "fail" if the unit happens to be on our image with a different key.
+      Decide by **probing the door's qconn 9090**, not by looking at the
+      interface — on TabletOS the door arrives over the same RNDIS link, so the
+      interface cannot distinguish them.  `tools/pbssh.sh` does this and takes
+      `PB_LINK=usb|door`.  (Session 48.)
+
+216. **An agent's shell has no tty, so `ssh` "interactive" tests are invalid —
+      and so is any conclusion drawn from them.**  A session that appears to
+      "authenticate and then close with no output" is usually an `ssh` whose
+      **stdin is not a terminal** (`/proc/self/fd/0 -> /dev/null`): ssh has no
+      local tty to put in raw mode, so it requests no pty and the remote shell
+      exits at once.  Measured (session 48): the same command from the
+      operator's terminal gives a working prompt with history and completion,
+      while the agent's invocation produced nothing; wrapping it in a real pty
+      (`script -qec "ssh …" /dev/null`) reproduced the operator's result
+      exactly, for both a bare `ssh` and `ssh -tt 'cmd'`.
+      **Rule:** before reporting anything about interactive behaviour — ssh, a
+      pty, a full-screen program, line editing — check
+      `ls -l /proc/self/fd/0` first, and use `script -qec` (or `ssh -tt` plus
+      stdin from a pty) to test it.  Do not record a defect until the harness
+      is known to be capable of the behaviour.  (Session 48; operator.)
+
+217. **A `TERM`-based prompt or banner test misfires: the console getty sets
+      `TERM=vt102` too.**  `/etc/profile` must keep `PS1='pb> '` on
+      `/dev/ttyGS0` because `tools/pbcon.py` synchronises on that exact marker,
+      and an attempt to distinguish "console vs ssh" by testing `$TERM` handed
+      the console a `root@playbook:/#` prompt, which made `pbcon.py` report
+      "the shell is still running a command" — the console looked dead while
+      it was perfectly alive.  Discriminate on the tty name
+      (`$(tty)` == `/dev/ttyGS0`), not on `$TERM`.  Recovering it without
+      `pbcon.py` needs `tools/pbraw.py <secs> <hexbytes>`, e.g.
+      `pbraw.py 6 "$(printf 'export PS1="pb> "\n' | xxd -p | tr -d '\n')"`.
+      (Session 48.)
+
+218. **`mount -t devpts devpts /dev/pts` with no options makes every pty
+      unusable.**  The default mount is `mode=600,ptmxmode=000`, so
+      `/dev/pts/ptmx` lands as `c---------` and no slave can be opened; a pty
+      session then has a terminal it cannot use.  The working form is
+      `mount -t devpts -o gid=5,mode=620,ptmxmode=0666 devpts /dev/pts`
+      (rcS, session 48).  This was found while chasing what turned out to be a
+      harness artefact (trap 216) but it is a genuine defect on its own — it
+      would have broken any pty client, including the dropbear session once
+      that was actually exercised.  Verified on the device: with the options,
+      `/dev/pts/ptmx` is `crw-rw-rw-` and a full
+      `fork`+`setsid`+`TIOCSCTTY`+`dup2`+`exec` child works with the parent
+      reading the master.  (Session 48.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

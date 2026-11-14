@@ -19,9 +19,26 @@
 # Usage:  tools/pbssh.sh 'echo OK'
 #         PB_USER=devuser tools/pbssh.sh 'uname -a'
 #         tools/pbssh.sh 'dd if=/dev/rpmb/BOOTCTR_FCTRY bs=4 count=1 2>/dev/null' | xxd -p
+#         PB_LINK=usb tools/pbssh.sh 'uname -a'      # dropbear on our Linux image
 #
-# Requires the door: tools/door-hold.sh running, and TabletOS up (the door
-# takes 1-2 min to come back after a TabletOS boot).
+# TWO different ssh servers share the address 169.254.0.1, and their
+# capabilities differ, so the legacy options are only offered when they are
+# needed:
+#
+#   PB_LINK=door (default) -- the QNX door on TabletOS.  A 2014 sshd that only
+#       speaks the old algorithms, so the ssh-rsa/dh-group1/cbc options below
+#       are required.
+#   PB_LINK=usb -- de-dropbear on our Linux image, reached over the RNDIS link
+#       (session 48).  It negotiates modern algorithms and prefers ed25519, so
+#       passing the legacy options would only weaken it.  It is also the only
+#       path that exists when the unit runs our image at all -- there is no
+#       door there (trap 88).
+#
+# `usb` is the default when *nothing answers on the door's qconn port* -- the
+# door exists on TabletOS and our image has none (trap 88).  Probing the
+# service is right where probing the interface is not: the door on TabletOS is
+# reached over the very same RNDIS link, so the interface alone cannot tell the
+# two apart.  PB_LINK overrides.
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 1
 KEY=${PB_KEY:-$ROOT/local/secrets/rsa}
 PB_HOST=${PB_HOST:-169.254.0.1}
@@ -32,6 +49,24 @@ PB_USER=${PB_USER:-root}
     echo "pbssh: put the device key there or set PB_KEY" >&2
     exit 1
 }
+
+if [ -z "$PB_LINK" ]; then
+    if timeout 3 sh -c "exec 3<>/dev/tcp/$PB_HOST/9090" 2>/dev/null; then
+        PB_LINK=door
+    else
+        PB_LINK=usb
+    fi
+fi
+
+if [ "$PB_LINK" = usb ]; then
+    exec ssh -i "$KEY" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o IdentitiesOnly=yes \
+        -o LogLevel=ERROR \
+        -o ConnectTimeout=8 \
+        "$PB_USER@$PB_HOST" "$@"
+fi
 
 exec ssh -i "$KEY" \
     -o StrictHostKeyChecking=no \

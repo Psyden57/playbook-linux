@@ -118,6 +118,53 @@ def install_busybox(stage, busybox, links):
     return made, len(lines)
 
 
+def install_ssh(stage, dropbear, hostkeys, pubkey):
+    """Install dropbear and its keys: /usr/sbin, /etc/dropbear, /root/.ssh.
+
+    The server binary, the host keys and the authorised key are all built or
+    generated **on the bench host** and are gitignored -- the board has no
+    usable entropy source (the SoC RNG is behind the secure firewall, trap 87),
+    so a host key generated on the device would be weak, and the public key is
+    the operator's.
+
+    Returns (installed_server, n_hostkeys, have_authkey) so the build log says
+    what actually landed (trap 163: a forgotten copy is silent).
+    """
+    server = False
+    if dropbear and os.path.isfile(dropbear):
+        dst = stage + '/usr/sbin/dropbear'
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(dropbear, dst)
+        os.chmod(dst, 0o755)
+        server = True
+
+    nkeys = 0
+    if hostkeys and os.path.isdir(hostkeys):
+        d = stage + '/etc/dropbear'
+        os.makedirs(d, 0o700, exist_ok=True)
+        for fn in sorted(os.listdir(hostkeys)):
+            # Only the private key files: dropbear loads those, and the .pub
+            # files are derived text.
+            if not fn.startswith('dropbear_') or fn.endswith('.pub'):
+                continue
+            src = os.path.join(hostkeys, fn)
+            shutil.copy2(src, d + '/' + fn)
+            os.chmod(d + '/' + fn, 0o600)
+            nkeys += 1
+
+    have_key = False
+    if pubkey and os.path.isfile(pubkey):
+        d = stage + '/root/.ssh'
+        # StrictModes: dropbear refuses a world-writable home or key file.
+        os.makedirs(d, 0o700, exist_ok=True)
+        os.chmod(stage + '/root', 0o700)
+        shutil.copy2(pubkey, d + '/authorized_keys')
+        os.chmod(d + '/authorized_keys', 0o600)
+        have_key = True
+
+    return server, nkeys, have_key
+
+
 def install_modules(stage, modules_dir, krel):
     base = '%s/lib/modules/%s' % (stage, krel)
     os.makedirs(base + '/kernel', exist_ok=True)
@@ -170,6 +217,16 @@ def main():
     ap.add_argument('--firmware', default=None,
                     help='directory copied to /lib/firmware (layout preserved)')
     ap.add_argument('--krel', default=None)
+    ap.add_argument('--dropbear', default=ROOT + '/local/work/dropbear/dropbear',
+                    help='static ARM dropbear server (default: '
+                         'local/work/dropbear/dropbear)')
+    ap.add_argument('--hostkeys', default=ROOT + '/local/work/ssh',
+                    help='directory holding dropbear_*_host_key (default: '
+                         'local/work/ssh)')
+    ap.add_argument('--authorized-key',
+                    default=ROOT + '/local/secrets/rsa.pub',
+                    help='public key installed as /root/.ssh/authorized_keys '
+                         '(default: local/secrets/rsa.pub)')
     ap.add_argument('--keep-stage', action='store_true')
     args = ap.parse_args()
 
@@ -209,7 +266,8 @@ def main():
 
         # Init scripts and profile.
         for rel in ('etc/inittab', 'etc/init.d/rcS', 'etc/profile', 'etc/motd',
-                    'etc/pbroot-version'):
+                    'etc/pbroot-version', 'etc/passwd', 'etc/group',
+                    'etc/shells'):
             src = SRC + '/' + rel
             if os.path.exists(src):
                 os.makedirs(os.path.dirname(stage + '/' + rel), exist_ok=True)
@@ -226,6 +284,10 @@ def main():
             build_static(cc, SRC + '/pbmix.c', stage + '/bin/pbmix')
         if os.path.exists(SRC + '/hci.c'):
             build_static(cc, SRC + '/hci.c', stage + '/bin/pbhci')
+
+        # ssh over the USB network link: dropbear + host keys + authorised key.
+        have_srv, nkeys, have_key = install_ssh(
+            stage, args.dropbear, args.hostkeys, args.authorized_key)
 
         # Modules and their dependency map.
         modbase, nmods = install_modules(stage, args.modules, krel)
@@ -262,6 +324,9 @@ def main():
         print('busybox  : %s (%d/%d applet links)'
               % (os.path.relpath(busybox, ROOT), nlinks, ntotal))
         print('modules  : %d in /lib/modules/%s' % (nmods, krel))
+        print('ssh      : dropbear %s, %d host key(s), authorized_keys %s'
+              % ('installed' if have_srv else 'ABSENT', nkeys,
+                 'set' if have_key else 'ABSENT'))
         print('dest     : raw 0x%X -> loader block 0x%X (region 1 + %d MiB)'
               % (DEST_RAW, DEST_RAW // BS + RAW_SHIFT,
                  (DEST_RAW - 0x28000000) // (1 << 20)))

@@ -1,15 +1,15 @@
 # Session numbering
 
-The project spans **forty-seven sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **forty-eight sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-47`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-48`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
-* **Linux-era** ("session 1…41") — used inside the reports and handoffs, because
+* **Linux-era** ("session 1…42") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
   started.  **Linux session N = absolute session N + 6.**
 
@@ -59,6 +59,7 @@ So:
 | **45** | **39** | **E5/E6/E9: the McBSP is the bit/frame provider again; the codec's data ball is `abe_mcbsp1_dx`; the two-engine build stalls** (report 212).  `CLKSM = 1` + `CLKGDV = 32` (the SRG divides the 49.152 MHz ABE interface clock) runs the transport at **48 096 frames/s**; the codec is AIF1 slave with FLL1 locked from BCLK, and the ±12000 tone is verified in the DMA ring.  E6 (live oracle) puts the DACDAT ball on `abe_mcbsp1_dx` (pad `0x102`) and `abe_mcbsp2_dx` in safe mode — **corrected by 214: the codec is on `abe_mcbsp3_dx`**; DSP_A is not the fault.  E9's two links work mechanically but the data port stalls (`SPCR2 = 0x0235`); the reference's slave path starts no SRG.  Image `0x58F85337` (#40), rootfs `6d92428e…`; patch 54 files / 8 331 lines (`82d08fcc…`).  Traps 187–200 |
 | **46** | **40** | **Audio works: the WM8994 is on McBSP3; the two-engine Linux path plays 440 Hz in both ears at 48 kHz** (reports 213/214).  The ABE question is closed first (the serial port is a firmware data path; the McBSP clocks are mainline's; DECISIONS §58).  The oracle's routing log and live McBSP3 registers put the codec's AIF1 on McBSP3 (PDM pads mode 1); the card is `mcbsp2 + wm8994-aif1` (clocks) plus `mcbsp3 + wm8994-aif2` (data).  The right channel needed the `omap-mcbsp` channel-layout guard (`XPHASE`), so `XCR2` is `0x8041`.  Image `0xF8BADFF3` (#42), rootfs `c0719d28…`; patch 54 files / 8 440 lines (`fd2774fb…`).  Traps 201–206; DECISIONS §58/§59 |
 | **47** | **41** | **The speakers work too: the board's speakers are the WM8994's line outputs, `spk` is an active-low amp enable, and GPIO1_15 (`audio_boost`) must be high** (report 215).  The oracle with `Headphone Select` = false plays through LINEOUT1P/2P (`PM3 = 0x3cf0`, `R0x01e = 0`, `R0x034/035 = 1`, `R0x038 = 0x80`, `R0x04c = 0x1f25`, `R0x060 = 0`); the driver now follows the jack, owns `spk-gpios`/`boost-gpios`, and the `disp-en-12-hog` is gone.  The data path is unchanged.  Image `0xAD85DF0F` (#44), rootfs `0342ab06…`; patch 54 files / 8 584 lines (`93a7a8ce…`).  Traps 207–210; DECISIONS §60 |
+| **48** | **42** | **The session-45 audio diagnostics are retired and the audio re-verified; the patch gains a file every export had missed** (report 215's follow-up, trap 211/212).  The machine driver's `pcm:` ring readback and `omap-mcbsp`'s `live N:` dump come out (with the `steady_dump` work item); the modules are rebuilt, region 1 regenerated (`af5a0a20…`) and flashed **on its own** because a module-only change keeps the CRC (trap 190) — region 0 stays `0xAD85DF0F` (#44).  Both outputs re-verified at DAC1 volume 40.  The re-export is **55 files / 8 500 lines** (`f5856a8b…`): it also adds `sound/soc/ti/omap-mcbsp-priv.h`, which every export since session 41 had omitted although `omap-mcbsp.c` reads its fields, so the patch had not been buildable from pristine.  Traps 211/212 |
 
 ## Anchors (evidence for the mapping)
 
@@ -103,7 +104,7 @@ and each session knows its own position:
 Reports `10`…`102` are the pre-Linux phase's output (boot media, monitor
 security, IRAM tables, the ROM API, `hd0`, NVRAM records `0x2801`, RPMB, the CRC
 recipe, the loader audit, the pre-OS IFS reflash).
-`103`…`213` are the Linux-era sessions (and continuing).
+`103`…`215` are the Linux-era sessions (and continuing).
 
 ## Why the two schemes are kept
 

@@ -1,0 +1,12 @@
+# Build support for the region-1 root's ssh key (session 48).
+#
+# The key itself is NOT tracked: it lives in local/secrets/rsa.pub, the same
+# key the QNX door uses, and tools/build_rootfs.py copies it to
+# /root/.ssh/authorized_keys with the permissions dropbear's StrictModes
+# requires (0700 directory, 0600 file).  Putting a tracked copy here would
+# put a public key in the public snapshot for no benefit.
+#
+# The host keys are likewise untracked: they are generated on the bench host
+# with dropbearkey (the board has no usable entropy source -- KNOWN-ISSUES
+# trap 87, the SoC RNG is behind the secure firewall) and installed by the
+# builder into /etc/dropbear/.

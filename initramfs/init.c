@@ -265,11 +265,42 @@ static void gadget_setup(void)
 	wr("/config/usb_gadget/g1/strings/0x409/serialnumber", "123456");
 	wr("/config/usb_gadget/g1/strings/0x409/manufacturer", "Research In Motion");
 	wr("/config/usb_gadget/g1/strings/0x409/product", "PlayBook (Linux bring-up)");
-	wr("/config/usb_gadget/g1/configs/c.1/strings/0x409/configuration", "acm");
+	wr("/config/usb_gadget/g1/configs/c.1/strings/0x409/configuration",
+	   "acm+rndis");
 
+	/*
+	 * Two functions in one configuration: the CDC-ACM console (unchanged --
+	 * /dev/ttyGS0, and the host's /dev/ttyACM0) and an RNDIS network
+	 * interface (the host's usb0), so the unit can be driven over ssh
+	 * instead of a serial line.
+	 *
+	 * RNDIS, not CDC-ECM: Windows has an in-box RNDIS driver but no
+	 * in-box ECM class driver, and the reference firmware itself presents
+	 * RNDIS (0fca:8012, "RIM Network Device") -- the same thing this
+	 * project's TabletOS bench has used since session 20 through the
+	 * host's `pb-rndis` profile.  RNDIS also works in-box on Linux
+	 * (rndis_host) and macOS.
+	 *
+	 * The ACM function stays.  If the network function ever misbehaves,
+	 * the console is still the console: this change cannot cost the unit
+	 * its only interactive channel.
+	 */
 	mkdir("/config/usb_gadget/g1/functions/acm.usb0", 0777);
 	symlink("/config/usb_gadget/g1/functions/acm.usb0",
 		"/config/usb_gadget/g1/configs/c.1/acm.usb0");
+	mkdir("/config/usb_gadget/g1/functions/rndis.usb0", 0777);
+
+	/*
+	 * Host-side identity of the RNDIS link, so a host that has seen the
+	 * reference gets the same picture: the CDC Ethernet descriptor's
+	 * host MAC must be a valid, non-multicast unicast address.
+	 */
+	wr("/config/usb_gadget/g1/functions/rndis.usb0/dev_addr",
+	   "02:1a:11:00:00:01");
+	wr("/config/usb_gadget/g1/functions/rndis.usb0/host_addr",
+	   "02:1a:11:00:00:02");
+	symlink("/config/usb_gadget/g1/functions/rndis.usb0",
+		"/config/usb_gadget/g1/configs/c.1/rndis.usb0");
 
 	/* first (only) UDC */
 	d = opendir("/sys/class/udc");

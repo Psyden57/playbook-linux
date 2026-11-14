@@ -158,7 +158,6 @@ struct playbook_wm8994_priv {
 	struct gpio_desc *hp;
 	struct gpio_desc *spk;
 	struct gpio_desc *boost;
-	struct snd_pcm_substream *substream;
 };
 
 /*
@@ -354,36 +353,6 @@ static void playbook_wm8994_repair(struct work_struct *work)
 	regcache_mark_dirty(codec->regmap);
 	regcache_sync(codec->regmap);
 
-	/*
-	 * Session-45 diagnostic: is the application's audio actually in the
-	 * ALSA ring the sDMA copies from?  The transport reaches the shifter
-	 * (XBUFFSTAT toggles) and the codec is clocked, yet nothing is audible,
-	 * so the two live candidates are "the ring holds silence" and "the
-	 * codec ignores our framing".  DXR cannot be read back on this silicon
-	 * (it returns a constant), so read the ring itself.
-	 */
-	if (priv->substream && priv->substream->runtime) {
-		struct snd_pcm_runtime *rt = priv->substream->runtime;
-
-		if (rt->dma_area && rt->dma_bytes >= 8) {
-			s16 *s = (s16 *)rt->dma_area;
-			unsigned int n = rt->dma_bytes / 4; /* frames (stereo s16) */
-
-			dev_info(codec->dev,
-				 "pcm: rate %u fmt %d width %u area %u B first %d %d %d %d | at hw_ptr %u: %d %d %d %d\n",
-				 rt->rate, rt->format, rt->sample_bits,
-				 rt->dma_bytes, s[0], s[1], s[2], s[3],
-				 rt->status ? rt->status->hw_ptr % n : 0,
-				 s[(rt->status ? rt->status->hw_ptr % n : 0) * 2],
-				 s[(rt->status ? rt->status->hw_ptr % n : 0) * 2 + 1],
-				 s[(rt->status ? (rt->status->hw_ptr + 1) % n : 0) * 2],
-				 s[(rt->status ? (rt->status->hw_ptr + 1) % n : 0) * 2 + 1]);
-		} else {
-			dev_info(codec->dev, "pcm: no dma_area (bytes %u)\n",
-				 rt->dma_bytes);
-		}
-	}
-
 	/* FLL1 must be locked before the rest lands. */
 	if (!(snd_soc_component_read(codec, 0x732) & 0x0020))
 		dev_warn(codec->dev, "repair: FLL1 still unlocked\n");
@@ -524,7 +493,6 @@ static int playbook_wm8994_trigger(struct snd_pcm_substream *substream, int cmd)
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
 		priv->codec = codec_dai->component;
-		priv->substream = substream;
 		schedule_delayed_work(&priv->repair, msecs_to_jiffies(50));
 		break;
 	case SNDRV_PCM_TRIGGER_STOP:

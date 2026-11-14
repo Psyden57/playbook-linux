@@ -13,7 +13,11 @@ mount -t proc    proc    /proc 2>/dev/null
 mount -t sysfs   sysfs   /sys  2>/dev/null
 mount -t devtmpfs devtmpfs /dev 2>/dev/null
 mkdir -p /dev/pts /dev/shm
-mount -t devpts  devpts  /dev/pts 2>/dev/null
+# gid=5,mode=620 with ptmxmode=0666 is what makes pty allocation work: without
+# the options devpts mounts as mode=600/ptmxmode=000, /dev/pts/ptmx is
+# c--------- and no slave can be opened -- an ssh session then gets a pty it
+# cannot use and the shell never runs its command (measured, session 48).
+mount -t devpts -o gid=5,mode=620,ptmxmode=0666 devpts /dev/pts 2>/dev/null
 mount -t tmpfs   tmpfs   /tmp  2>/dev/null
 mount -t tmpfs   tmpfs   /run  2>/dev/null
 
@@ -60,6 +64,32 @@ pbmix on "SPKL DAC1 Switch"             2>/dev/null
 pbmix on "SPKR DAC1 Switch"             2>/dev/null
 pbmix on "SPKL Output Switch"           2>/dev/null
 pbmix on "SPKR Output Switch"           2>/dev/null
+
+# The USB network interface (session 48).  The initramfs created the gadget
+# with RNDIS alongside the ACM console, so usb0 appears here.  This is the
+# ssh path: the ACM console is a serial line with no flow control that drops
+# bytes under load (trap 51), while usb0 is a real Ethernet link.
+#
+# Addressing follows the reference's convention (.1 = the unit, .2 = the
+# host), so the host's existing pb-rndis profile and tools/pbssh.sh work
+# unchanged.  A /16, not a /24: 169.254/16 is the link-local block, and the
+# host's own address sits inside it.
+if [ -e /sys/class/net/usb0 ]; then
+	ip link set usb0 up
+	ip addr add 169.254.0.1/16 dev usb0 2>/dev/null
+	echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null
+fi
+
+# Dropbear: key-only ssh on the USB link (session 48).  It listens on
+# 169.254.0.1 only, so it cannot be reached from any other interface even if
+# one is configured later.  Host keys are generated on the bench host and
+# shipped in the image -- this board has no usable entropy source (trap 87),
+# so a key generated here would be weak.
+if [ -x /usr/sbin/dropbear ] && [ -e /sys/class/net/usb0 ]; then
+	mkdir -p /etc/dropbear
+	/usr/sbin/dropbear -p 169.254.0.1:22 -r /etc/dropbear/dropbear_ed25519_host_key \
+		-r /etc/dropbear/dropbear_rsa_host_key 2>/dev/null
+fi
 
 # One line in the kernel log, so the boot is visible from kmsg even when the
 # console is not attached.

@@ -11,7 +11,7 @@ for facts. Neither shares code with the other.
 | USB tool | `tools/bbusb.py` | one CFP-style entry point: the protocol module plus `info` / `flash` / `reset-osregion` / `boot-mode` / `reset-loader` and offline `pack` / `unpack` / `split` / `parse` |
 | offline tests | `tools/tests/test_offline.py` | stubbed-device checks for the USB tools; no USB, no unit |
 | kernel source changes | `kernel/patches/0001-playbook-winchester-7.3.3.patch`, `kernel/winchester-7.3.3.config` | the complete delta vs pristine 7.3.3 + the board `.config`; the 6.15.11 patch/tree stay as the reference |
-| board DTS + patched drivers | `kernel/source/` (`omap4-winchester.dts`, `tc358764.c`, `dsi.c`, `omap4bc.S`) | board description and the three display patches |
+| board DTS + patched drivers | `kernel/source/` (`omap4-winchester.dts`, `tc358764.c`, `dsi.c`, `omap4bc.S`, the audio and touch drivers) | copies of the files we rewrote, kept identical to `local/kernel-tree`; the *patch* is the deliverable, this is the readable mirror |
 | PID 1 | `initramfs/init.c` | mounts, creates the USB gadget, runs the boot top-up, then mounts the region-1 root rw, chroots and execs `/sbin/init`; falls back to the console; no reboot timer since session 15 |
 | console | `initramfs/console.c` | the REPL on `/dev/ttyGS0`, and the only way to touch hardware by hand |
 | host capture/drive tools | `tools/` (`pbcon.py`, `pb_ring.py`, `pb_events.py`, `pbssh.sh`, `door-hold.sh`, `pbi2c`, `QCL.py`, `force_reset_loader.py`) | console driver, DRAM capture, QNX access/door, I²C oracle, loader reset |

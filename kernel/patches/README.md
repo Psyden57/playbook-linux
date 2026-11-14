@@ -3,11 +3,20 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**8 584 lines / 54 files** against pristine
-**linux-7.3.3** (sha256 `93a7a8ce…`, session-47 wrap-up).  It is generated from
-the tree (via the session-41 file list — no new sources since), and
-it was verified by applying it to pristine 7.3.3 targets and comparing all 54
-files byte-for-byte with `local/kernel-tree` — 0 rejects, 0 mismatches.
+**8 500 lines / 55 files** against pristine
+**linux-7.3.3** (sha256 `f5856a8b…`, session-48 wrap-up).  It was verified by
+applying it to pristine 7.3.3 targets and comparing all 55 files byte-for-byte
+with `local/kernel-tree` — 0 rejects, 55/55 identical.
+**Session 48 retires the session-45 diagnostics** (the machine driver's `pcm:`
+DMA-ring readback and `omap-mcbsp`'s eight-sample `live N:` dump, with the
+`steady_dump` work item and the `substream` member they needed), and **adds the
+one file every export since session 41 had silently omitted**:
+`sound/soc/ti/omap-mcbsp-priv.h`.  That omission was a real defect — the patch
+added `active_rate`/`active_width` *uses* in `omap-mcbsp.c` while leaving the
+fields undeclared, so a build from this patch alone could not compile.  Found
+by a full tree walk (the 89 other diffs it reports are the documented build
+artifacts, trap 139).  Session 48 is module-only, so the region-0 image and its
+CRC `0xAD85DF0F` are unchanged; region 1 was rebuilt and flashed.
 **Session 47** adds the speaker path: the repair follows the jack and uses the
 codec's **line outputs** for the speakers (PM3 `0x3cf0`, `R0x01e`, `R0x034/035`,
 `R0x038`, `R0x039`, charge pump off), the `spk` line (GPIO2_12, active low) and
@@ -26,9 +35,9 @@ silent.  Report 214; the tone is audible in both ears at 48 kHz.
 with the CPU DAI as bit/frame provider (`set_sysclk(CLKSM=1)` +
 `set_clkdiv(CLKGDV, 49.152 MHz / BCLK)`, FLL1 referenced from BCLK,
 `PB_MCBSP_FCLK_HZ = 49152000`), the board DTS `mcbsp2_pins` `clkx`/`fsx` are
-outputs again, and two diagnostics are in the tree (the machine driver's `pcm:`
-DMA-ring readback and `omap-mcbsp`'s eight-sample `live N:` FIFO dump) — retire
-them when the audio path is fixed.  Report 212 §10–11.  The DTS also carries the (disabled) `&mcbsp1` node and the `mcbsp1_pins` group — the codec's DATA ball is `abe_mcbsp1_dx` — as the groundwork for the two-engine design.
+outputs again, and two diagnostics were added (the machine driver's `pcm:`
+DMA-ring readback and `omap-mcbsp`'s eight-sample `live N:` FIFO dump) — retired
+in session 48.  Report 212 §10–11.  The DTS also carries the (disabled) `&mcbsp1` node and the `mcbsp1_pins` group — the codec's DATA ball is `abe_mcbsp1_dx` — as the groundwork for the two-engine design.
 **Session 44 (later)** adds the reference codec-GPIO init: the boot-on
 `audio-ldo` regulator on GPIO4_31, `ldo-supply`/`hp-gpios` on the sound node,
 and `playbook_wm8994_board_enables()` in the machine driver (report 211).
@@ -45,7 +54,10 @@ uses `CBP_CFP` with FLL1 from MCLK1 and no CPU-side SRG calls.
 re-program fix, the `configured` guard, the info-level register dump and the
 steady-state dump), the AUXCLK1 `assigned-clock-rates` in the board DTS and the
 machine driver's deferred-repair chain (PM3, charge pump, DAC routing,
-`regcache_mark_dirty`).  **Session 39** adds the board
+`regcache_mark_dirty`).  That session also changed
+`sound/soc/ti/omap-mcbsp-priv.h` (the `active_rate`/`active_width` fields the
+guard reads) **and did not add it to the patch**; session 48 found it with a
+tree walk and the export is now 55 files.  **Session 39** adds the board
 machine driver (`sound/soc/ti/playbook-wm8994.c` + Kconfig/Makefile), the
 `wm8994-core.c` runtime-PM board quirk and the board `sound` node/codec clocks,
 and it restores `drivers/input/touchscreen/{Kconfig,Makefile}`, which the
@@ -386,6 +398,16 @@ cp /tmp/new.patch kernel/patches/0001-playbook-winchester-7.3.3.patch
 wc -l kernel/patches/0001-playbook-winchester-7.3.3.patch
 ```
 
+**Session 48's export is 8 500 lines / 55 files** (sha256 `f5856a8b…`),
+verified 0 rejects / 55/55 byte-identical.  It used the session-47 patch's
+54-file list **plus `sound/soc/ti/omap-mcbsp-priv.h`**, which a full tree walk
+identified as the only genuine source omission among 90 reported diffs (the
+other 89 are the build artifacts listed in the warning below).  **The lesson
+generalises trap 106:** driving an export from the previous patch's file list
+cannot see a file the *earlier* export missed, so a walk is still needed to find
+what has been missing all along — and the byte-compare cannot catch it either,
+because a missing file is simply absent from both sides.  Check the build, or
+walk.
 **Session 42's export is 8 095 lines / 54 files** (sha256 `55035aac…`),
 verified 0 rejects / 54/54 byte-identical; it was driven from the session-41
 file list (no new sources — only `omap4-winchester.dts` and

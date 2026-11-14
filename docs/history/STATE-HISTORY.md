@@ -1327,3 +1327,15 @@ the one open experiment (the codec's speaker controls read routed; the guess
 was a board-level `spk`/`hp` gate).  Patch 54 files / 8,440 lines, sha256
 `fd2774fb…`.  That guess was wrong in detail — see report 215, DECISIONS §60,
 `docs/sessions/session-47.md`.
+
+## Session 47 final snapshot (superseded by the session-48 work)
+
+Region 0 `0xAD85DF0F` (kernel `7.3.3` #44, `0x939D3C` B — the speaker path:
+line outputs, `spk`/`boost` GPIOs, `disp-en-12-hog` removed), region 1
+`0342ab06…` (27 modules).  **Audio was complete on headphones AND speakers**,
+and the session-45 `pcm:`/`live N:` diagnostics were still in the tree; retiring
+them was the next, small task.  The WL1283 was reopened under the
+reference-first rule (DECISIONS §61).  Patch 54 files / 8,584 lines, sha256
+`93a7a8ce…` — but that export was **missing `sound/soc/ti/omap-mcbsp-priv.h`**
+and was therefore not buildable from pristine: see trap 211 and
+`docs/sessions/session-48.md`.

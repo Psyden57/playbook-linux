@@ -35,50 +35,6 @@ enum {
 	OMAP_MCBSP_WORD_32,
 };
 
-static void omap_mcbsp_steady_dump(struct work_struct *work)
-{
-	struct omap_mcbsp *mcbsp =
-		container_of(work, struct omap_mcbsp, steady_dump);
-	int i;
-
-	/* Let the sDMA run for a while so DXR carries live samples. */
-	msleep(500);
-	dev_info(mcbsp->dev, "**** McBSP%d steady-state regs ****\n", mcbsp->id);
-	/*
-	 * Read DXR/DRR, not DXR1/DRR1.  On OMAP4 the data registers are a
-	 * single 32-bit word at offset 0x8 (TRM 23.5.4.8: "limited to 32-bit
-	 * accesses"); the DXR1/DRR1 enum values are the OMAP1/OMAP2420 16-bit
-	 * layout and read back 0 on this silicon regardless of traffic.
-	 */
-	dev_info(mcbsp->dev, "DXR:   0x%08x\n", MCBSP_READ(mcbsp, DXR));
-	dev_info(mcbsp->dev, "DRR:   0x%08x\n", MCBSP_READ(mcbsp, DRR));
-	dev_info(mcbsp->dev, "SPCR2: 0x%04x\n", MCBSP_READ(mcbsp, SPCR2));
-	dev_info(mcbsp->dev, "SRGR1: 0x%04x\n", MCBSP_READ(mcbsp, SRGR1));
-	dev_info(mcbsp->dev, "SRGR2: 0x%04x\n", MCBSP_READ(mcbsp, SRGR2));
-	dev_info(mcbsp->dev, "PCR0:  0x%04x\n", MCBSP_READ(mcbsp, PCR0));
-	dev_info(mcbsp->dev, "XCR1:  0x%04x\n", MCBSP_READ(mcbsp, XCR1));
-	dev_info(mcbsp->dev, "XCR2:  0x%04x\n", MCBSP_READ(mcbsp, XCR2));
-	dev_info(mcbsp->dev, "******************************\n");
-
-	/*
-	 * A single sample of DXR cannot distinguish "the sDMA is feeding the
-	 * port" from "the port is being written zeros": a square wave has long
-	 * runs and one read can land on anything, while a stalled port reads 0
-	 * every time.  XBUFFSTAT is the transmit FIFO level, so sample the pair
-	 * repeatedly instead.  (Session 45: DXR read 0 twice in a row with a
-	 * +/-12000 square wave playing, which is what prompted this.)
-	 */
-	for (i = 0; i < 8; i++) {
-		msleep(20);
-		dev_info(mcbsp->dev,
-			 "live %d: DXR 0x%08x DRR 0x%08x XBUFFSTAT 0x%04x "
-			 "RBUFFSTAT 0x%04x SPCR2 0x%04x IRQST 0x%04x\n",
-			 i, MCBSP_READ(mcbsp, DXR), MCBSP_READ(mcbsp, DRR),
-			 MCBSP_READ(mcbsp, XBUFFSTAT), MCBSP_READ(mcbsp, RBUFFSTAT),
-			 MCBSP_READ(mcbsp, SPCR2), MCBSP_READ(mcbsp, IRQST));
-	}
-}
-
 static void omap_mcbsp_dump_reg(struct omap_mcbsp *mcbsp)
 {
 	/*
@@ -514,16 +470,6 @@ static void omap_mcbsp_start(struct omap_mcbsp *mcbsp, int stream)
 
 	/* Dump McBSP Regs */
 	omap_mcbsp_dump_reg(mcbsp);
-
-	/*
-	 * The dump above runs the instant the port is enabled, i.e. before the
-	 * sDMA has loaded the transmit registers, so DXR reads 0 there by
-	 * construction.  Dump again from a work item once the stream is in
-	 * steady state -- that is the only way to see whether real samples are
-	 * reaching the transmitter from userspace on this kernel (the L4_ABE
-	 * target aborts user-mode reads, trap 158).
-	 */
-	schedule_work(&mcbsp->steady_dump);
 }
 
 static void omap_mcbsp_stop(struct omap_mcbsp *mcbsp, int stream)
@@ -1463,7 +1409,6 @@ static int asoc_mcbsp_probe(struct platform_device *pdev)
 	mcbsp->pdata = pdata;
 	mcbsp->dev = &pdev->dev;
 	platform_set_drvdata(pdev, mcbsp);
-	INIT_WORK(&mcbsp->steady_dump, omap_mcbsp_steady_dump);
 
 	ret = omap_mcbsp_init(pdev);
 	if (ret)

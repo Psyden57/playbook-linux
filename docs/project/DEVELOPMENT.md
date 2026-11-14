@@ -40,6 +40,56 @@ path.
 
 ## 2. Access to the reference OS (QNX / TabletOS)
 
+**First, the link: our Linux image serves ssh over USB.**  Since session 48 the
+gadget carries an RNDIS function, so with the unit on **our** image there is a
+host net interface, `usb0` is `169.254.0.1/16` on the unit, and dropbear
+listens there:
+
+```bash
+tools/pbssh.sh 'uname -a'          # auto-detects: usb when qconn is not answering
+tools/pbssh.sh 'cat /proc/asound/cards'
+PB_LINK=usb tools/pbssh.sh 'dmesg | tail -30'
+```
+
+**Prefer it to the console** for anything substantial: measured **2.3 MB/s**
+versus the ACM link's 134 KB/s that drops bytes when the host blasts (trap 51).
+The console stays valuable for recovery and when the network stack is what
+broke.
+
+The host needs its NetworkManager profile bound to the *net* interface, which
+for a composite device is not the plain link name:
+
+```bash
+# On the HOST (full iproute2): find the net interface by its MAC.
+ip -br link | grep -i '02:1a:11:00:00:02'     # e.g. enp8s0f3u1i2
+nmcli connection modify pb-rndis connection.interface-name enp8s0f3u1i2
+nmcli connection up pb-rndis                  # 169.254.0.2/16
+```
+
+(On the **device** the BusyBox `ip` has no `-br`; use `ip addr show dev usb0`.)
+
+The key is `local/secrets/rsa` (the same one the door uses); the server accepts
+key auth only, root, port 22.  **Two different ssh servers answer on the same
+address** depending on which OS is booted — trap 215; `PB_LINK=door` selects the
+QNX door's legacy algorithms explicitly.
+
+**Testing interactive behaviour from an agent shell needs a pty.**  An agent's
+own stdin is not a terminal, so `ssh` from one requests no pty and the remote
+shell exits immediately — indistinguishable from a broken server (trap 216).
+Wrap it:
+
+```bash
+ls -l /proc/self/fd/0            # -> /dev/null means "not a tty"
+script -qec "ssh -i local/secrets/rsa -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null root@169.254.0.1" /dev/null
+```
+
+That gives a real `root@playbook:~#` with history and completion, and it is how
+the interactive path was verified (session 48).  The same caveat applies to any
+full-screen or line-editing program on the unit.
+
+Then, for the QNX door on TabletOS:
+
 ```bash
 # after a HOST reboot the door supervisor is gone — start it first
 pgrep -af door-hold || nohup tools/door-hold.sh >/dev/null 2>&1 &
@@ -197,6 +247,51 @@ python3 tools/build_rootfs.py --size-mb 64 \
   --modules local/work/modules-7.3.3 --krel 7.3.3
 ```
 
+**The ssh server (session 48).**  The builder installs `--dropbear` (default
+`local/work/dropbear/dropbear`), `--hostkeys` (default `local/work/ssh`,
+holding `dropbear_*_host_key`) and `--authorized-key` (default
+`local/secrets/rsa.pub`) when they exist, and prints what landed.  BusyBox has
+no sshd, so dropbear is built once, on the host:
+
+```bash
+cd local/work/src
+curl -sSLO https://matt.ucc.asn.au/dropbear/releases/dropbear-2026.94.tar.bz2
+tar xjf dropbear-2026.94.tar.bz2 && cp -a dropbear-2026.94 dropbear-arm
+cd dropbear-arm
+# Key-only: no crypt()/PAM/shadow on this root, and no client forwarding.
+cat > localoptions.h <<'EOF'
+#define DROPBEAR_SVR_PASSWORD_AUTH 0
+#define DROPBEAR_SVR_PAM_AUTH 0
+#define DROPBEAR_SVR_PUBKEY_AUTH 1
+#define DROPBEAR_CLI_PASSWORD_AUTH 0
+#define DROPBEAR_CLI_INTERACT_AUTH 0
+#define DROPBEAR_SVR_AGENTFWD 0
+#define DROPBEAR_CLI_AGENTFWD 0
+EOF
+. ../../../tools/env.sh
+CC=arm-linux-gcc AR=arm-linux-ar RANLIB=arm-linux-ranlib \
+CFLAGS="-Os -ffunction-sections -fdata-sections" \
+LDFLAGS="-Wl,--gc-sections" \
+./configure --host=arm-linux --enable-static --disable-zlib --disable-pam \
+    --disable-shadow --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx \
+    --disable-lastlog --disable-harden
+make -j12 dropbear
+arm-linux-strip -s dropbear -o ../../dropbear/dropbear     # ~968 KB
+
+# Host keys: generate them HERE, not on the board (the SoC RNG is firewalled,
+# trap 87, so a key made on the device would be weak).  dropbearkey must run
+# natively, so build it in a plain copy BEFORE the cross-configure above --
+# that is why there are two source trees:
+#   cp -a dropbear-2026.94 dropbear-native && cd dropbear-native
+#   ./configure --disable-zlib --disable-pam && make dropbearkey
+mkdir -p ../../ssh && cd ../../ssh
+../../src/dropbear-native/dropbearkey -t ed25519 -f dropbear_ed25519_host_key
+../../src/dropbear-native/dropbearkey -t rsa -s 2048 -f dropbear_rsa_host_key
+```
+
+`--disable-zlib` needs no compression setting on the client side; dropbear and
+OpenSSH both work with `none`.  All of `local/work/` is gitignored.
+
 What it installs: `/bin/busybox` + 401 applet links, `/sbin/init` ->
 BusyBox init, `/etc/inittab` (a `sysinit` rcS and `ttyGS0::respawn:/bin/sh -l`),
 `/etc/init.d/rcS` (mounts proc/sys/dev, tmpfs /tmp//run, hostname, `depmod -a`),
@@ -344,6 +439,15 @@ result read, one read-back, never a loop (report 175).  Its outcome is one
 console); the earlier modes are `>= threshold, no write` and `PASS`.  Because a
 factory boot spends one unit, a normal boot at `0x32` lands at `0x31` and does
 **not** write.
+
+**Listening tests: quiet, short, and one volume change per session (operator,
+session 48).**  The tone is loud enough to carry through a room.  Lower it
+first (`pbmix set "DAC1 Volume" 40`), keep each tone to a few seconds, run
+**every** test in that low-volume window, and restore `96` **once** at the very
+end — restoring between runs is what put two session-48 captures at full
+volume.  Note also that **a bare `pbplay` is a playback command**: with no
+arguments it opens `/dev/dsp` and plays a 2 s 440 Hz tone, so asking it for
+usage is itself a listening test (trap 212).
 
 Everything that touches hardware runs forked with a bounded wait, so a gated
 target's L4 abort is a SIGBUS in the worker, not a dead console (trap 14). Near a

@@ -5,10 +5,11 @@ Open work only.  Closed and parked item history is archived in
 item states the evidence that would close it.
 
 Current focus: **item 9** (peripherals).  The audio goal is closed (reports 214
-and 215: headphones and both speakers); the next items are the diagnostics
-cleanup and the **reopened WL1283**, with the reference-first method
-(DECISIONS §61).  Item 7 (packaging) is untouched; item 8 (BB10) is parked by
-the operator.
+and 215: headphones and both speakers), its session-45 diagnostics are retired
+and the outputs re-verified (session 48), and the bench now has **ssh over USB**
+(RNDIS + dropbear, 2.3 MB/s), so the next work is the **reopened WL1283**, with
+the reference-first method (DECISIONS §61).  Item 7 (packaging) is untouched;
+item 8 (BB10) is parked by the operator.
 
 ## 7. Packaging (postmarketOS-style)
 
@@ -44,17 +45,32 @@ both speakers** (sessions 46/47, reports 214/215 — the codec is on McBSP3, the
 card is two ASoC links, the ABE detour is closed, and the speakers are the
 codec's line outputs with `spk` active-low and GPIO1_15 as the `audio_boost`
 enable; history in
-[`docs/history/ROADMAP-CLOSED.md`](../history/ROADMAP-CLOSED.md)).
+[`docs/history/ROADMAP-CLOSED.md`](../history/ROADMAP-CLOSED.md)).  Session 48
+finished the audio: the `pcm:`/`live N:` diagnostics are out of the machine
+driver and `omap-mcbsp`, the modules were rebuilt, region 1 was flashed on its
+own (the region-0 CRC is unchanged — trap 190), and both outputs were
+re-verified at DAC1 volume 40 (speakers: `jack out`, `spk` low, `boost` high;
+headphones: `jack in`, `spk` high; both PCMs `RUNNING` and the full byte count
+written).  The re-export is **55 files / 8 500 lines** and repairs a patch
+defect as well — `sound/soc/ti/omap-mcbsp-priv.h` had been missing from every
+export since session 41 (trap 211).
+
+**Bench access — done (session 48).**  The ACM console is a debug channel at
+best: 134 KB/s and it drops bytes under load (trap 51).  The gadget now carries
+an **RNDIS** function beside ACM, the unit serves **dropbear** on `usb0`
+(`169.254.0.1:22`, key-only), and `tools/pbssh.sh` reaches it at a measured
+**2.3 MB/s** — commands *and* interactive sessions, with the console staying
+bound as the recovery path.  RNDIS rather than CDC-ECM (Windows in-box support,
+and it is what the reference presents); dropbear rather than OpenSSH (fit on this
+BusyBox root).  An agent's shell has no tty, so it cannot exercise an
+interactive session itself — test those under `script -qec` or from a real
+terminal (trap 216).
 
 **Open.**
 
-* **The WM8994 audio has two follow-ups.**  (a) **Retire the `pcm:`/`live N:`
-  diagnostics** in the machine driver and `omap-mcbsp` and re-verify headphones
-  and speakers (module-only, region-1 flash; then re-export the patch).  (b) The
-  optional **MCLK1 probe** is trap 165 — the working design does not need it.
-  The `audio_boost` net (GPIO1_15) is confirmed by behaviour but not by a
-  schematic.  Closes when the diagnostics are out, the patch is re-exported and
-  the tone is heard on both outputs.
+* **The WM8994 audio has nothing required left**, only two optional items: the
+  **MCLK1 probe** (trap 165 — the working design does not need it) and
+  identifying the GPIO1_15 `audio_boost` net if a schematic appears.
 
 * **The minimal 1917 oracle is built and has been used** (session 43/44, reports
   207/208/209).  A debloated 2.1.0.1917 IFS+RCFS — services reduced to
