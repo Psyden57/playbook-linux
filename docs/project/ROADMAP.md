@@ -92,19 +92,29 @@ terminal (trap 216).
   without it).  **Session 47** used the oracle again for the speaker:
   `Headphone Select` = false routes it to the line outputs and the speaker
   sounds, which is how the missing board lines were found (report 215).
-* **WL1283 — REOPENED (operator, session-47 close).**  The session-36
-  "software surface exhausted" verdict is withdrawn.  The 1917-truth minimal
-  host still fails CMD5 (report 196) with pads/WL_EN/IRQ/rails matching QNX, so
-  the next evidence is the **reference's own driver behaviour**: RE
-  `devnp-ti1283.so`, `devc-seromap-winbt`, `devpm-omap4.so`,
-  `hwio-config-winchester.so` and the powerman preset (subagents, static), then
-  RUN `devnp-ti1283` on the minimal oracle with its own controls and watch the
-  SDIO bring-up, then implement in the driver/DTS — the method that solved the
-  speaker (report 215, DECISIONS §60/§61).  Do not re-run traps 116–137
-  unchanged; an overlapping test must state what differs.  The WLAN
-  calibration/NVS is extracted from QNX `hd5` (report 197) for the
-  post-enumeration `wl12xx` path.  **Closes when** the chip enumerates under
-  Linux (CMD5 + `attach_sdio yes`) and wl12xx probes with the hd5 NVS.
+* **WL1283 — the host side is excluded and the measurement is now sound; next is
+  the BT liveness probe and a slower identification clock (session 49, reports
+  216–227).**  Five independent surfaces are measured and negative: the
+  reference's MMCHS5 program (replayed), its WL_EN power-on ordering (replayed),
+  the readable board state of stock TabletOS at `ti0`-up, the whole boot path's
+  writes, and the one clock-domain difference.  The reference itself brings the
+  chip up live on the oracle (`Send commands sequence: 0, 5, 3, 7`, firmware
+  `Rev 7.1.4.10.77`, `ti0` RUNNING).  **What changed this session:** the way
+  "silence" had been measured since session 33 was invalid — `WL_IRQ` is not a
+  liveness signal (the reference reads 0 too before its driver runs), `STAT` was
+  never decoded, and the bus state was never read at command time.  Corrected
+  (report 227), the card genuinely does not drive the line — `CTO` only, on a bus
+  that is powered and clocked at 400 kHz / 1.8 V — but `CTO` is a 64-clock window
+  (160 µs) that cannot separate "no card" from "card slower than that".  **Next,
+  in order:** (a) the **BT-core HCI probe with `BT_EN` driven** (gpio 55 =
+  `GPIO2_23`, low → 50 ms → high, then `01 03 0c 00` on `/dev/ttyS1`) — session
+  29's probe ran without it and is invalid; a reply proves the die is powered;
+  (b) **a slower identification clock** (100 kHz gives a 640 µs window) to settle
+  the window doubt; (c) the **QNX-in-Linux harness**.  **Do not** re-run the
+  readable-register diff, the replays, the boot-path RE or the domain test.
+  **Closes when** the chip enumerates under Linux (CMD5 + `attach_sdio yes`) and
+  wl12xx probes with the `hd5` NVS.  BT itself stays separate: its enable is
+  `BT_EN` (report 216), low while the WLAN works.
 * **Touch.**  Done; the remaining nicety is driving power/reset
   (GPIO1_14 / GPIO4_8) for cold boots — a warm reset keeps the controller up
   (session 42).

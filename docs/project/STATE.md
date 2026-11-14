@@ -1,6 +1,80 @@
 # Current state
 
-## Current state — 2026-11-14 (session 48)
+## Current state — 2026-11-14 (session 49)
+
+**The WL1283 blocker is measured from both sides, the host program is excluded,
+and the "silent card" measurement itself was found to be invalid and fixed.**
+Session 49 did what DECISIONS §61 prescribes: it booted the minimal 1917 oracle,
+loaded the reference's **own** WLAN driver exactly as `/base/scripts/wifi.sh`
+does, and watched it **bring the chip up live**; replayed the reference's entire
+MMCHS5 program and its WL_EN power-on ordering on Linux (both negative); compared
+stock TabletOS at `ti0`-up against our boot (negative); ran a full RE of the
+boot path (negative); tested the one clock-domain difference it found
+(negative); and then, on the operator's challenge, found that the way "silence"
+had been measured since session 33 was wrong.  Corrected, the measurement is a
+stronger negative — see the last bullet of this list.
+
+* **The measurement was flawed and is now correct.**  `WL_IRQ` (GPIO2_21) is
+  **not** a liveness signal — the oracle's own chip reads `0x08000018`
+  (bit 21 = 0) *before* its driver runs and only `0x08200018` after firmware, so
+  every "the chip is not up" claim compared our pre-driver state with the
+  reference's post-firmware state.  With `PBX`/`PBIRQ` restored (archived at
+  `kernel/archive/wl1283/measurement-instrumentation-2026-11-14.patch`) the real
+  reading is: at the instant of `CMD52`/`CMD5` the bus is correct
+  (`SYSCTL=000e1e07` → `CEN=1`, `ICE=1`, `CLKD=120` = 400 kHz;
+  `HCTL=00000b00` → `SDBP=1`, `SDVS=5` = 1.8 V; `CON=00000600`), `STAT=00018000`
+  decodes as **`CTO` only** (`CCRC=CEB=CIE=0`, `RSP0=0`, `PSTATE` `CLEV=1`), and
+  `CMD0` succeeds.  `CON=0x85` must **not** be copied: its `HR` bit makes the core
+  generate a response *instead of* the command and hangs the rescan (trap 233).
+  Report 227.
+
+* **The reference works on this unit, live** (not a recollection):
+  `sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7` → firmware download
+  → `Firmware running` / `Firmware Version: Rev 7.1.4.10.77` → `ti0`
+  **UP,RUNNING**, MAC `14:74:11:8f:9c:c3`, and on the pins WL_EN high **and
+  WL_IRQ high** (`GPIO2_DATAIN = 0x08200018`, bit 21 = 1).
+* **The reference's load path, which the earlier plan had wrong**: stage
+  `firmware.bin` in `/var/ti1283` (the minimal image's `/base` has no firmware
+  directory), then `mount -Tio-pkt -o nvram,firmdir=/var/ti1283/
+  /lib/dll/devnp-ti1283.so` and **`ifconfig ti0 up`**.  `-o nvram` is what
+  supplies the NVS (468 bytes from NVRAM); no `nvs_map.bin` exists anywhere in
+  the image.  The driver loads the **firmware before** it touches the bus, so a
+  missing file looks exactly like a card that will not enumerate.
+* **Our Linux image on the same unit is register-identical apart from one bit**:
+  `GPIO2_OE = 0xCE2ECDFF`, `DATAOUT = 0x31413200` (WL_EN high), pads
+  `0x07C = 0x00030003`, `0x148/0x14C/0x150 = 0x01180118` — and
+  `GPIO2_DATAIN = 0x01000010`, i.e. **WL_IRQ never goes high**, so the chip is
+  not up.  Replaying the reference's controller program (`ti,playbook-ref-init`:
+  `SYSCONFIG`, `SOFTRESET`, `SRA`, `CAPA|VS18`, `SDBP`, `IE = 0x317f0137`,
+  `CON = 0x85`, early DTW) and the reference's EN ordering (driver-owned EN,
+  low → 20 ms → high → 120 ms, after the controller is up) both left it
+  silent.  **Both experiments were reverted**; the tree is byte-identical to
+  pristine + the shipped patch again, per file.
+* **The BT half has its own enable, and it is not the WLAN's**: `BT_EN` =
+  **gpio 55 = GPIO2_23** (pad `0x4A10007C` bits 31:16), driven low → 50 ms →
+  high by `btp-btmgr`, and it is held **low while the WLAN works**.  So it
+  explains the silent `HCI_Reset` and nothing about the SDIO card (report 216,
+  new `docs/reference/qnx-hwio/gpio-table-winchester.csv`).
+* **What is left** is a board line the reference's *boot* asserts and its WLAN
+  driver does not, or the chip-side pins (VBAT/TCXO/SLOW_CLK, unmeasurable,
+  trap 165).  The next evidence is a **stock-TabletOS** capture at the moment
+  `ti0` comes up, diffed against our Linux boot — the oracle cannot stand in
+  for it (it needed the firmware and NVS supplied by hand).
+
+**Also this session, from the bench:** leaving MMCHS5 in the reference's
+command-phase state **wedges `reboot -f`** (trap 224; `sysrq b` recovers), and
+`slay -f io-pkt-v6-hc` on the oracle kills the stack that carries `rndis0`
+(trap 221 — it cost a power cycle).
+
+**Bench (session 49, measured).** Unit on our Linux image **`0xBAFD9B3B`**
+(region 0, `0x93A384` B, kernel `7.3.3` **#57**, the session-48 tree plus
+report 220's GPIO1 pad fix); region 1 = rootfs **`a4e76b18…`** (unchanged).
+`0fca:8010`, console `pb> `, **ssh on `169.254.0.1`**.  `BOOTCTR_FCTRY` read
+`0x29` at the last boot (`>= threshold 0x1e, no write`).
+The oracle is not on media; its `hd3` now carries `/var/ti1283/{firmware.bin,
+tiwlan.ini}` (report 217 §2.3 — delete for a clean oracle).
+
+## Previous state — 2026-11-14 (session 48)
 
 **The unit has an ssh shell over USB.**  The gadget now carries an **RNDIS**
 network function alongside the CDC-ACM console, `usb0` comes up at
@@ -31,8 +105,9 @@ driver's `pcm:` DMA-ring readback and `omap-mcbsp`'s `live N:` dump are out of
 the tree — and **the kernel patch gained a file every export since session 41
 had missed**: `sound/soc/ti/omap-mcbsp-priv.h` declares the
 `active_rate`/`active_width` fields `omap-mcbsp.c` reads, so the patch could
-not compile from pristine.  The export is **55 files / 8 500 lines**, sha256
-`f5856a8b…`, verified 0 rejects / 55/55 byte-identical (trap 211).
+not compile from pristine.  The export is **56 files / 8 583 lines**, sha256
+`455b45d8…`, verified 0 rejects / 56/56 byte-identical (session-49 export, tra
+211).
 
 **Re-verified after both changes (operator, DAC1 volume 40, tones a few
 seconds each):**
@@ -57,7 +132,10 @@ dropbear + host keys + `authorized_keys`).  `0fca:8010`, console `pb> ` on
 `ttyACM0`, and **ssh on `169.254.0.1` over `enp8s0f3u1i2`**.  `BOOTCTR_FCTRY`
 read **0x28** at the last boot (`0x28 >= threshold 0x1e, no write`).  The oracle is
 not on media; flash `local/work/ifs-shim-sealed.ifs` at `0x825` to boot it.  To
-stock TabletOS, flash `local/work/minimal/wayback.signed`.
+stock TabletOS, flash **two components**: `local/work/ifs-shim-sealed.ifs` at
+block `0x825` and `local/work/rcfs-1917.rcfs` at `0x8D5` — `wayback.signed`
+will not boot this armed unit (its IFS is `os_type` 4 and its RCFS has no root
+hook; trap 226).
 
 **The magic-`pkexec` rule still holds.**  A flash re-enumerates the ACM gadget
 and the tty comes back `root:uucp 0660`; `tools/99-playbook-cdc-acm.rules`
@@ -65,8 +143,11 @@ makes it `0666` automatically, and `pkexec chmod 666 /dev/ttyACM0` remains the
 documented manual path — wait for the operator rather than inventing a
 workaround.
 
-* **The kernel patch was re-exported**: 55 files / **8 500 lines**, sha256
-  `f5856a8b…`, 0 rejects / 55/55 byte-identical (session-48 export).
+* **The kernel patch was re-exported (session 49)**: **56 files / 8 583 lines**,
+  sha256 `455b45d8…`, 0 rejects / 56/56 byte-identical.  It adds the report-220
+  board-DTS GPIO1 pad fix and `arch/arm/Kconfig.debug`, which the tree walk
+  showed had been missing from **every** export since session 30 (trap 211 class:
+  a byte-compare cannot see a file absent from both sides).
 * **`DXR`/`DRR` are not readable data registers on this silicon** — they return
   constants (`0` / `0xc8318118`) regardless of traffic.  Report 205 §5l's
   "`DXR = 0` means empty" is withdrawn; `XBUFFSTAT` is the register that
@@ -85,7 +166,8 @@ workaround.
 | WDT2 | **working — 58.6 s window, 10 s pet (session 31)** | The loader arms `WLDR = 0xFFFC1800` (7.8125 s); the kernel reprograms it to the reference's `0xFFE2B400` (58.6 s) at the late initcall via `WSPR` (`0xAAAA`→`0x5555` stop, write `WLDR`, `0xBBBB`→`0x4444` start), **polling `WWPS`** after each write, and pets every 10 s (`TGR` read→invert→write); fallback 2 s if the readback fails.  Verified on `0xE36C679A` by `WCRR` reload timing (~10 s) and uptime >275 s.  The expected dmesg line is missing on 7.3.3 (printk anomaly).  Report 109 §8.1 + correction; trap 115; decision §38 |
 | eMMC (MMC2) | **reads proven; writes healthy — but writers must use large blocks** | `mmcblk1` = MCGAFA 59.4 GiB, `boot0`/`boot1`/`rpmb`; needs the `vemmc` fixed supply for `ocr_avail` (report 109 §9).  Session 16 read a freshly flashed 11 152 064-byte image back **byte-exactly** and matched a pre-flash TabletOS capture (report 134); the MMC2 functional clock is 96 MHz.  Session 17 measured the write path (report 136): the driver has no request-size limit — an O_DIRECT write gives **256 KiB `CMD25`s, 5.5–7.0 MB/s** (4 KiB chunks: 0.93 MB/s), one `CMD13` per request (normal `mmc_blk_card_busy`).  The old 17–32 KB/s was `recv`'s tiny buffered writes plus 4–7 unthrottled `printk`s per request to **fbcon**.  Use ≥64 KiB (ideally 256 KiB–1 MiB) writes with the MMC trace off.  **Session 18: region 1 now holds a bootable Linux root** (32 MiB ext4 at raw `0x29000000`), written through the pre-OS `0xF7` loop (2055 frames) and read back byte-exactly (QNX `dd` and Linux `blk sumb`); it mounts read-only via a loop and its `/init` runs (report 140). |
 | USB device + gadget | **working, but not a bulk transport** | enumerates `0fca:8010`, CDC-ACM, product string "PlayBook (Linux bring-up)"; `/dev/ttyACM0` ↔ `/dev/ttyGS0`; High Speed (480 Mbps), 512-byte bulk packets.  **Drains at only ~134 KB/s and drops bytes when the host blasts** (report 136 §3.3), so it is a control/debug channel: do not send multi-MB images through `recv`.  Report 114, 136 |
-| **WL1283 (MMC5)** | **REOPENED (operator, session 47 close); the "software surface exhausted" verdict is withdrawn** | **Session 47:** the speaker was solved by RE of the reference driver plus running it on the oracle with its own controls, so the WL1283 gets the same treatment (HANDOFF §0b, DECISIONS §61).  **Session 37:** the WL1283 code is archived (`kernel/archive/wl1283/`), the DTS is re-derived from 2.1.0.1917, and the minimal 1917-truth `&mmc5` (image `0x0DC36A11`) probes but returns `attach_sdio no` (report 196); pads `0x0118`, WL_EN `0x0003`, WL_IRQ `0x410B` match QNX and WL_EN is high, but `GPIO2_DATAIN` bit 21 = 0.  Bus, pads, WL_EN/IRQ, PMIC rails, MMC5 CON/HCTL/SYSCTL and the clock manager all match the reference.  QNX enumerates at 24 MHz with CMD5 arg `0x00FFFF00`; Linux's default 400 kHz/CMD52-first also times out.  **Session 35:** `startup-playbook` (never run by our chainloader) is the source of the QNX-only GPIOs — Winchester table at image `0x80122750`; GPIO1 0/4/15/18/28/31 and GPIO2 5/7 are output-low, gpio54 (WL_EN) output-low, gpio53 input/falling (report 192 §4, trap 135).  All eight released to input on the live 1917 are **negative** (trap 136).  `CLK32KG` is base `0x8C` and APP-ON in both (CFG_TRANS identical; CFG_GRP and the CFG_STATE CON/MOD bits differ; trap 135).  **H1** (CMD0 → CMD5 only, no CMD52/CMD8, 24 MHz, arg `0x00FFFF00`, image `0x29784F48`) still times out (`err=-110`, no R4; `HCTL=0x00000b00`, `CAPA=0x04e10080`; trap 137).  The remaining difference is the chip's non-exposed VBAT/TCXO/reset pins or OMAP HSMMC sampling — needs a schematic/board view or logic analyser |
+| **WL1283 (MMC5)** | **blocked, but now measured from both sides — the host program is not the cause** | **Session 49 (reports 216/217):** the reference driver, loaded as `wifi.sh` does (`-o nvram`, firmware staged in `/var/ti1283`, then `ifconfig ti0 up`), **enumerates and runs the chip live on the oracle** (`Send commands sequence: 0, 5, 3, 7`, firmware `Rev 7.1.4.10.77`, `ti0` RUNNING with MAC `14:74:11:8f:9c:c3`, `GPIO2_DATAIN` bit 21 = 1).  The same unit under our Linux image is register-identical apart from that bit (WL_EN high, pads `0x0118`/`0x0003`, `OE = 0xCE2ECDFF`) and the chip stays down.  Replaying the reference's whole MMCHS5 program and its driver-owned WL_EN power-on order changed nothing.  The BT half's enable is `BT_EN` = gpio 55 = `GPIO2_23`, driven by `btp-btmgr` and **low** while the WLAN works (report 216), so it is unrelated.  Earlier: session 37's 1917-truth `&mmc5` (`0x0DC36A11`) probes but returns `attach_sdio no` (report 196); pads/WL_EN/IRQ/rails/CM all matched QNX; H1 (QNX's CMD0→CMD5 sequence at 24 MHz, `0x29784F48`) negative.  **Closes when** the chip enumerates under Linux and `wl12xx` probes with the `hd5` NVS.  Remaining: a board line the reference's *boot* asserts (stock-TabletOS capture at `ti0`-up time) or the chip-side pins (trap 165) |
+| **GPIO1 pads / board lines** | **fixed (session 49): three pads were driving GPMC alternate functions** | `0x4A100050` (`gpmc_ad0/1`) and `0x4A100074` (`gpmc_ncs0/1`) were left at mode 0, so pad logic drove GPMC bus lines on a board with no GPMC device while gpiolib could not touch them (trap 228); `0x4A31E058` (GPIO1_31) was unmuxed with its input buffer off.  The DTS now sets mode 3 + pull-down and hogs GPIO1 0/18/28/31 low, so `GPIO1_OE = 0x6FFB1FBA` against the reference's `0x6FFB1FAA` (the missing bit 4 is pad `0x058`'s low half = GPIO2_4, owned by `bridge_pins`, trap 229) and `GPIO1_DATAOUT` is identical.  Image `0x0114FFD3`.  **Not** the WL1283 blocker (card still silent).  Report 220 |
 | **Munin touch (CY8CTMA3)** | **working — calibrated, IRQ wired (session 38)** | I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c` boots the app and maps the 12-bit report through the 1917 `scaling.conf` calib (raw x 172→1108 → 102→922, y 110→658 → 60→540) to 1024×600.  IRQ gpio 35 = GPIO2_3 pad `0x056` = `0x410B`, `EDGE_FALLING`, `irq 110`; the ~330–380/s rate is the chip's report rate.  Power/reset GPIO1_14/GPIO4_8 are not driven.  Report 198, DECISIONS §47 |
 | **WM8994 audio** | **WORKING — stereo 440 Hz on headphones AND speakers at 48 kHz; diagnostics retired and re-verified (session 48)** | I²C4 `0x1a` (`0x8994`, revision D); the board machine driver makes `0 [WM8994]: PlayBook_WM8994`.  **Data path (session 46):** the codec's AIF1 is on McBSP3 (the oracle's routing log `AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3`, the live `PCR0 = 0x3`, the PDM pads `0x106/0x108/0x10a/0x10c` = `0x0109/0x0009/0x0109/0x0109`); the card is two ASoC links (`40124000.mcbsp + wm8994-aif1` clocks, `CBC_CFC`; `40126000.mcbsp + wm8994-aif2` data, `CBP_CFP`); the codec is the AIF1 slave, FLL1 locks from our BCLK (`R0x302 = 0x0000`, `R0x732 = 0x6020`, `R0x200 = 0x0011`), no MCLK1; the `omap-mcbsp` channel-layout guard keeps `XCR2 = 0x8041`.  **Speaker (session 47, report 215):** the speakers are on the codec's **line outputs**, so the output stage follows the jack: headphones → HPOUT1 + charge pump (`R0x060 = 0xcc`); jack out → LINEOUT1P/2P (PM3 `0x3cf0`, `R0x01e = 0`, `R0x034/0x035 = 1`, `R0x036 = 0`, `R0x038 = 0x80`, `R0x04c = 0x1f25`, `R0x060 = 0`) with **`spk` (GPIO2_12) driven low** and **GPIO1_15 (the `audio_boost` enable) high**.  **Session 48** removed the `pcm:` ring readback and the `live N:` FIFO dump and re-verified both outputs at DAC1 volume 40: `jack out (speaker)` / `jack in (headphone)`, "done, FLL1 locked", both PCMs `RUNNING`, the full byte count written, `spk` low during the speaker route and high on the headphone route, `boost` high.  Reports 214/215, DECISIONS §59/§60. |
 | Userspace (initramfs) | **working, minimal** | `/init` = PID 1, mounts, creates the configfs gadget (**ACM console + RNDIS**, session 48), forks `/console` in the fallback path.  **No auto-reboot since session 15** — PID 1 reboots only on request (the timer spent a `BOOTCTR_FCTRY` unit per iteration).  **Session 28:** after the gadget and the boot-time top-up, `/init` mounts the region-1 ext4 root **read-write**, bind-mounts /dev//proc//sys, chroots and execs `/sbin/init`; with no `/sbin/init` it falls back to the console.  Report 176, session-28 note |
@@ -102,7 +184,7 @@ workaround.
 | Panel identity | **Hitachi (definitive)** | on TabletOS: `GPIO6_DATAIN = 0x00010800` (bit 16 = 1), slog `LCD is Hitachi`.  Report 127 §1 |
 | **Image on the panel** | **WORKING** | With `0x8C146805` (and the same source as `0x068C867F`) the panel shows a clean, stable image: solid white, solid red, and the kernel console as legible text.  The three necessary fixes were the bridge delivery (VC0/HS null packet), the LVDS porches + TCON table at bring-up, and the DISPC core clock. Report 133 |
 | QNX oracle tool | **`tools/qnx-dsiread.c` → `tools/pbdsi`** | Reads any TC358764 register over DSI from a TabletOS user process (generic read request `0x24` on hw VC1, BTA, RX FIFO pop; response is a generic long read, DT `0x1A`).  Read-only.  This is how the reference values in this document were obtained. Report 132 §2 |
-| Kernel patch + config | **7.3.3 (session 48 export)** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **8 500 lines / 55 files**, sha256 `f5856a8b…`, applied to pristine 7.3.3 targets with 0 rejects and **55/55 files byte-identical**.  Session 48 retires the two diagnostic blocks and adds `sound/soc/ti/omap-mcbsp-priv.h`, which every export since session 41 had omitted although `omap-mcbsp.c` reads the fields it declares (trap 211 — the patch could not compile from pristine until now).  Session 47 added the speaker path (line-output route, `spk`/`boost` GPIOs, the `disp-en-12-hog` removal); session 46 the `&l4_abe` ABE-refclk assignment, the E5 clock-role change, the McBSP3 two-link card and the `omap-mcbsp` channel-layout guard; session 39 the board machine driver (`sound/soc/ti/playbook-wm8994.c`, Kconfig/Makefile), the `wm8994-core.c` runtime-PM quirk and the board `sound` node/codec clocks, and it restored `drivers/input/touchscreen/{Kconfig,Makefile}`, which the 48-file export had silently omitted (trap 154).  Config: `kernel/winchester-7.3.3.config` (includes `CONFIG_CHARGER_ISL9519=y`, `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`, `CONFIG_KERNEL_XZ=y`, `CONFIG_SND_PCM_OSS=m`, `CONFIG_SND_MIXER_OSS=m`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
+| Kernel patch + config | **7.3.3 (session 49 export)** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **8 583 lines / 56 files**, sha256 `455b45d8…`, applied to pristine 7.3.3 targets with 0 rejects and **56/56 files byte-identical**.  Session 49 adds the report-220 board-DTS GPIO1 pad fix and `arch/arm/Kconfig.debug` (missing from every export since session 30 — the tree walk found it, trap 211 class).  Session 48 retires the two diagnostic blocks and adds `sound/soc/ti/omap-mcbsp-priv.h`, which every export since session 41 had omitted although `omap-mcbsp.c` reads the fields it declares (trap 211 — the patch could not compile from pristine until now).  Session 47 added the speaker path (line-output route, `spk`/`boost` GPIOs, the `disp-en-12-hog` removal); session 46 the `&l4_abe` ABE-refclk assignment, the E5 clock-role change, the McBSP3 two-link card and the `omap-mcbsp` channel-layout guard; session 39 the board machine driver (`sound/soc/ti/playbook-wm8994.c`, Kconfig/Makefile), the `wm8994-core.c` runtime-PM quirk and the board `sound` node/codec clocks, and it restored `drivers/input/touchscreen/{Kconfig,Makefile}`, which the 48-file export had silently omitted (trap 154).  Config: `kernel/winchester-7.3.3.config` (includes `CONFIG_CHARGER_ISL9519=y`, `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`, `CONFIG_KERNEL_XZ=y`, `CONFIG_SND_PCM_OSS=m`, `CONFIG_SND_MIXER_OSS=m`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
 | **ISL9519 charger** | **WORKING under Linux (session 31)** | I²C1 `0x48070000`, slave `0x09`; VendorID `0x0049`, DeviceID `0x0003`.  `isl9519.c` (built-in, DTS `charger@9`) sets the four registers in RIM's order with the masked fields and refreshes every 5 s.  Measured **+358 → +397 mA**, 3.775 → 3.794 V, capacity 8 → 9 %, `Charging`; still on at 197 s (watchdog).  Registers read back `0x14=0x0280`, `0x15=0x1070`, `0x3E=0x0D00`, `0x3F=0x0180`.  Report 183 |
 | TWL6030 BCI | **probes after the session-31 fix; NOT the board's charger** | `twl6030_charger` probes with the `simple-battery` profile and sets `CONTROLLER_CTRL1=0x10`, `VOREG=0x21`, `VICHRG=0x08`, `CINLIMIT=0x09`, but the stock OS leaves the whole block at bootloader reset values — it charges through the ISL9519.  The BCI node/modules are inert; `twl6030_usb` reports `ONLINE=1`, VBUS 4.81–4.91 V |
 
@@ -114,7 +196,10 @@ the durable record is the CRC and what it demonstrated, not the file.
 
 | image | base | role |
 |---|---|---|
-| `0x12C8C320` | 7.3.3 | **current region 0** (session 48: the RNDIS + dropbear initramfs; kernel `#45`) |
+| `0xBAFD9B3B` | 7.3.3 | **current region 0** (session 49: the session-48 tree + report 220's GPIO1 pad fix; kernel `#57`) |
+| `0x0114FFD3` | 7.3.3 | session-49 experiment (the GPIO1 pad fix, kernel `#51`) |
+| `0x71A79419` | 7.3.3 | session-49 intermediate (the session-48 tree rebuilt after the WL1283 experiments were reverted; kernel `#50`) |
+| `0x12C8C320` | 7.3.3 | previous region 0 (session 48: the RNDIS + dropbear initramfs; kernel `#45`) |
 | `0xAD85DF0F` | 7.3.3 | previous region 0 (session 47: the speaker path — line outputs, `spk`/`boost` GPIOs, `disp-en-12-hog` removed; kernel `#44`) |
 | `0xF8BADFF3` | 7.3.3 | previous region 0 (session 46: McBSP3 two-link card, kernel `#42`) |
 | `0xE5E2AEAF` | 7.3.3 | session-47 intermediate (jack-aware speaker state; `spk` still a hog) |
@@ -146,14 +231,14 @@ Do not boot `0x5E40C5C1` or `0xB9A1BC4F` (two lanes), or `0x3B04298E`
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **the session-48 Linux image `0x12C8C320`** (`0x939D24`, kernel `7.3.3` #45, the RNDIS/dropbear initramfs; `boot/chainloader/kernel.img`), region 0.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier Linux images (region 0 only, block `0x825`): `0xAD85DF0F` (session 47), `0xF8BADFF3` (session 46), `0x36597040` (session 42), `0xB43F169B` (session 44), `0xB8830701` (session 41), `0xF97CD9C7` (session 39), `0x3B2ECFED` (session 38), `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A` (`local/images/kernel-0xE36C679A-wdt58s.img`, 0x91A748, sha256 `bdbaf5fc…`), and the touch `0x04AF1433` |
-| region-0 RCFS (`/base`) | **still the 1917 RCFS at region-0 offset 0xC00000** — outside the 7.3.3 test image (which ends at 0x939D24) and not touched this session; not readable as `/base` without the 1917 IFS |
+| region-0 IFS on media | **the session-49 Linux image `0xBAFD9B3B`** (`0x93A384`, kernel `7.3.3` #57, the session-48 tree + the report-220 GPIO1 pad fix; `boot/chainloader/kernel.img`), region 0.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier Linux images (region 0 only, block `0x825`): `0x12C8C320` (session 48), `0xAD85DF0F` (session 47), `0xF8BADFF3` (session 46), `0x36597040` (session 42), `0xB43F169B` (session 44), `0xB8830701` (session 41), `0xF97CD9C7` (session 39), `0x3B2ECFED` (session 38), `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A` (`local/images/kernel-0xE36C679A-wdt58s.img`, 0x91A748, sha256 `bdbaf5fc…`), and the touch `0x04AF1433` |
+| region-0 RCFS (`/base`) | **now the full 1917 RCFS at `0xC00000`** (`local/work/rcfs-1917.rcfs`, the modified one with the `/accounts/devuser/startup.sh` hook, sha256 `c4ab6e34…`): session 49 wrote it to recover root on a stock-TabletOS boot, and it sits **outside** the 7.3.3 test image (which ends at `0x93A1DC`).  The pruned oracle RCFS is no longer on media — re-flash `local/work/minimal/setB.signed` for the minimal oracle (trap 227).  Not readable as `/base` without the 1917 IFS |
 | UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
 | `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it last ran during the session-35 S3/S2 TabletOS bench and topped `BOOTCTR_FCTRY` back to `0x32` |
 | `BOOTCTR_FCTRY` | **self-replenishing** — the Linux `/init` tops it up at ≤`0x1e` and a TabletOS boot writes `0x32`; read it as a health check (`SAFETY.md` §2) |
 | region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`a4e76b18…`** (`local/images/rootfs-region1-rndis-ssh.ext4`), **27 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus `snd-pcm-oss`, `snd-mixer-oss`, `snd-soc-playbook-wm8994`), `pbplay`, `pbmix` and **dropbear**; the initramfs mounts it **read-write** and chroots into it.  Earlier images: `…-audio-oss-linout.ext4` (`af5a0a20…`, session 48) and `0342ab06…` (session 47).  The modules in any of them can be checked by extracting them with `debugfs` (trap 163) |
-| TabletOS / OS | **NOT running** — the unit is on our Linux image `0x12C8C320` (`0fca:8010`, console `pb> `, **ssh on `169.254.0.1`**).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
-| device-side files | **persistent on the UFS**: `/accounts/devuser/bin/{memdump3,memw32,pbi2c}`, the cleaned `/accounts/devuser/startup.sh`, and our `.ssh/authorized_keys` (root ssh).  Re-push QNX `/tmp` tools only after a TabletOS restore |
+| TabletOS / OS | **NOT running** — the unit is on our Linux image `0xBAFD9B3B` (`0fca:8010`, console `pb> `, **ssh on `169.254.0.1`**).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
+| device-side files | **persistent on the UFS**: `/accounts/devuser/startup.sh` and our `.ssh/authorized_keys` (root ssh); **session 49 added `/var/ti1283/{firmware.bin,tiwlan.ini}`** on `hd3` — the reference WLAN's own staging directory (report 217 §2.3; delete it for a clean oracle).  `memdump3`/`memw32`/`pbi2c` are **not** on the UFS: push them to `/tmp` after every reboot (trap 177) |
 
 The factory boot budget is **self-maintaining in bench use**: every successful
 factory/CRC boot spends one unit, and the booted OS puts it back — our Linux
@@ -169,7 +254,7 @@ and a failed/half-formed write or a flat pack is still a brick risk.
 **The audio blocker is closed, speakers included, and the diagnostics are
 retired (sessions 47/48, reports 214/215).**
 `pbplay`'s 440 Hz tone is audible in both ears on headphones and in both
-speakers at 48 kHz ±1 % on the working image (`0x12C8C320` + rootfs
+speakers at 48 kHz ±1 % on the working image (`0xBAFD9B3B` + rootfs
 `a4e76b18…`), re-verified after the cleanup at DAC1 volume 40.  The data path
 is session 46's (AIF1 on **McBSP3**; two links `mcbsp2 + wm8994-aif1` clocks,
 `mcbsp3 + wm8994-aif2` data; the `omap-mcbsp` channel-layout guard fixed the
@@ -179,18 +264,27 @@ enable) **high** — all three in the driver/DTS.  **Remaining audio items: none
 required** — the optional **MCLK1 probe** (trap 165) stays optional, and the
 `audio_boost` net is behaviourally confirmed but not schematic-confirmed.
 
-**The long-standing WL1283 blocker is REOPENED (operator, session-47 close).**
-The session-36 "software surface exhausted" claim is withdrawn: it rested on the
-1917-truth minimal `&mmc5` host returning `attach_sdio no` (report 196) with the
-pads, WL_EN and IRQ matching QNX.  The speaker work showed the missing step was
-**static RE of the reference driver + running that driver on the oracle with
-its own controls**, not another SoC-side sweep (report 215, DECISIONS §60/§61).
-The next session re-does the WL1283 that way: RE `devnp-ti1283.so`,
-`devc-seromap-winbt`, `devpm-omap4.so`, `hwio-config-winchester.so` and the
-powerman preset in subagents; start the reference driver on the minimal oracle
-(`net` is already up) and watch the SDIO/CMD5 bring-up live; then implement in
-the driver/DTS.  Do not re-run traps 116–137 unchanged; an overlapping test must
-state what differs.
+**The WL1283 is blocked somewhere the bench can still reach, and until report
+227 it was measured with an invalid instrument (session 49).**  The reference's
+own driver, loaded the way `/base/scripts/wifi.sh` loads it, **enumerates and runs
+the chip on this unit, live** (`Send commands sequence: 0, 5, 3, 7` → firmware →
+`ti0` RUNNING).  Under Linux every readable precondition matches, and five
+independent surfaces are negative: the reference's MMCHS5 program (replayed), its
+WL_EN power-on order (replayed), the readable board state of stock TabletOS at
+`ti0`-up (report 218), the whole boot path's writes (reports 221–226), and the
+one clock-domain difference (report 225).  **The measurement of "silence" was
+itself wrong**: `WL_IRQ` is not a liveness signal (the reference reads 0 too
+before its driver runs), `STAT` was never decoded, and the bus state was never
+read at command time.  Corrected (report 227), the card genuinely does not drive
+the line — `CTO` only, on a bus that is powered and clocked at 400 kHz / 1.8 V —
+but `CTO` is a 64-clock window (160 µs), which cannot separate "no card" from
+"card slower than 160 µs".  So the two open hypotheses are (a) the chip's digital
+core is not running at all, and (b) it is running but slower than the window;
+the BT-core HCI probe and a slower identification clock settle them respectively
+(see "What is next" 1a/1b).  The chip-side pins (VBAT/TCXO/SLOW_CLK) remain
+unmeasurable (trap 165).
+The BT half's enable (`BT_EN` = gpio 55) is separate and is held low while the
+WLAN works (report 216).
 
 **Found this session: the per-unit WLAN calibration is in the QNX `hd5`
 partition** (report 197) — a TI WL128x radio-parameters INI + a binary blob, and
@@ -204,9 +298,8 @@ GPIO2_3 edge IRQ works (`irq 110`); the power/reset lines are still not driven
 by the driver.  It survived this session's warm boot; only cold boots need the
 GPIO pulse.
 
-**Media state: region 0 = `0x12C8C320`** (kernel `7.3.3` **#45**,
-`0x939D24` B, the RNDIS/dropbear initramfs — a region-0 change this session,
-so the CRC moved); region 1 = the ssh rootfs
+**Media state: region 0 = `0xBAFD9B3B`** (kernel `7.3.3` **#57**,
+`0x93A384` B, the session-48 tree plus the GPIO1 pad fix of report 220); region 1 = the ssh rootfs
 `a4e76b18…` (67,108,864 B, 27 modules;
 `local/images/rootfs-region1-rndis-ssh.ext4`).  The unit is on Linux,
 not TabletOS.  The way back to TabletOS is the 1917 IFS
@@ -220,19 +313,34 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 ## What is next
 
-1. **WL1283 — REOPENED (operator, session-47 close); this is the next work.**
-   The diagnostics cleanup that preceded it is **done** (session 48), so apply
-   the speaker's method: RE the reference stack in subagents
-   (`devnp-ti1283.so`, `devc-seromap-winbt`, `devpm-omap4.so`,
-   `hwio-config-winchester.so`, the powerman preset), run `devnp-ti1283` on the
-   minimal oracle with its own controls and watch the bring-up, then implement
-   in the driver/DTS.  The session-36 "software exhausted" verdict is
-   withdrawn; report 196's matching pads/WL_EN/IRQ means the next evidence must
-   be the reference's driver behaviour, not another register sweep (HANDOFF
-   §0b).  Do not re-run traps 116–137 unchanged.
+1. **WL1283 — the host side is excluded and the measurement is now sound; the
+   next two tests are the BT liveness probe and a slower identification clock
+   (session 49, reports 216–227).**  The driver's own writes, the WL_EN ordering,
+   the whole readable board state (stock TabletOS at `ti0`-up vs our boot), the
+   entire boot path's writes and the one clock-domain difference are all measured
+   and negative.  What is *not* known is whether the chip's digital core runs at
+   all, because until report 227 "silent" was inferred from a board GPIO
+   (`WL_IRQ`, which the reference also reads 0 before its driver runs) rather than
+   from a decoded response.  **Next, in order:**
+   (a) **the BT-core HCI probe done properly** — drive `BT_EN` (gpio 55 =
+   `GPIO2_23`) low → 50 ms → high, then `HCI_Reset` (`01 03 0c 00`) on
+   `/dev/ttyS1` (UART2 `0x4806c000`, irq 103, pads muxed).  Session 29's probe ran
+   **without** `BT_EN` and is invalid.  A reply proves the die is powered and its
+   digital core runs → the fault is SDIO-path-specific; silence puts it in
+   power/TCXO/reset.
+   (b) **a slower identification clock** — `CTO` is a fixed **64 card clocks**, so
+   100 kHz gives 640 µs instead of 400 kHz's 160 µs (`f_min` is
+   `OMAP_MMC_MIN_CLOCK` in `omap_hsmmc.c`).  This settles the one doubt report
+   227 §2 records: "no card" versus "card slower than 160 µs".
+   (c) then the **QNX-in-Linux harness** (run `devnp-ti1283.so`'s bring-up under a
+   shim so its exact sequence executes) — now more valuable than before, because
+   `CON=0x85` showed the reconciliation can be subtly wrong.
+   **Do not** re-run readable-register diffs, the two replays, the boot-path RE or
+   the domain test.  The post-enumeration work (`wl128x-nvs.bin` from the `hd5`
+   calibration, the `wlcore@2` child) is ready for whenever the card answers.
 2. **The WM8994 audio — DONE and the diagnostics retired (sessions 47/48,
    reports 214/215).**  Stereo 440 Hz at 48 kHz on headphones and speakers,
-   re-verified at DAC1 volume 40 after the cleanup; image `0x12C8C320` +
+   re-verified at DAC1 volume 40 after the cleanup; image `0xBAFD9B3B` +
    rootfs `a4e76b18…`.  The only items left are optional: the **MCLK1 probe**
    (trap 165) and identifying what the GPIO1_15 `audio_boost` enable supplies if
    a schematic appears.  The ABE is not needed (DECISIONS §58/§59).
@@ -245,7 +353,7 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    `wlcore@2` child the mainline binding requires (`ti,wl1283`, `reg = <2>`,
    `interrupts` for WL_IRQ, `ref-clock-frequency`/`tcxo-clock-frequency` 26 MHz),
    for the post-enumeration `wl12xx` path — report 195 §3.6, HANDOFF §0b.
-5. **The unit is on Linux `0x12C8C320`** (region 0, kernel #45) + the ssh rootfs
+5. **The unit is on Linux `0xBAFD9B3B`** (region 0, kernel #57) + the ssh rootfs
    (`a4e76b18…`, region 1), reachable over **ssh on `169.254.0.1`** as well as
    the ACM console.  To return to TabletOS, flash the
    1917 IFS at block `0x825`; the previous Linux images remain.

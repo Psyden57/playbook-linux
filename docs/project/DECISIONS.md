@@ -2154,6 +2154,105 @@ harness before recording a defect.
 
 ---
 
+## 63. The WL1283 is not host-program bound: the reference runs the chip on this unit, and its program replayed on Linux changes nothing (session 49)
+
+**Decision.**  Stop treating the SDIO bring-up as a host-controller problem.
+The MMCHS5 program the 1917 driver uses has been replayed in `omap_hsmmc` and
+is negative; so is the reference's power-on ordering.  The next evidence must
+come from the reference's **boot** (what a full TabletOS asserts before
+`wifi.sh` runs), not from its WLAN driver, and the probe for it is a
+**stock-TabletOS capture at the moment `ti0` comes up**, diffed against our
+Linux boot.  Do not re-run the two replays; an overlapping test must state what
+differs.
+
+**Why.**  DECISIONS §61 mandated running the reference driver on the oracle
+with its own controls.  Session 49 did that and it worked: `devnp-ti1283.so`,
+loaded exactly as `/base/scripts/wifi.sh` loads it (`-o nvram`, firmware staged
+in `/var/ti1283`, then `ifconfig ti0 up`), logs `sdioAdapt_ConnectBus: Send
+commands sequence: 0, 5, 3, 7`, downloads its firmware (`Firmware Version: Rev
+7.1.4.10.77`) and leaves `ti0` **UP,RUNNING** with the assigned MAC
+`14:74:11:8f:9c:c3` — with WL_EN (`GPIO2_DATAOUT` bit 22) **and** WL_IRQ
+(`GPIO2_DATAIN` bit 21) high.  On the same unit under our Linux image every
+readable precondition is identical apart from that one bit, so the chip and its
+rails are fine and the difference is elsewhere.  Replaying the reference's
+MMCHS5 program (`SYSCONFIG = (v & ~0x331d) | 0x320d`, `SOFTRESET`, `SRA`,
+`HCTL |= SDVS18`, `CAPA |= VS18`, `SDBP`, `ISE = 0`, `IE = 0x317f0137`,
+`STAT = ~0`, `CON = 0x85`, early DTW) leaves the card silent, and so does
+driving WL_EN from the host (`low → 20 ms → high → 120 ms`, after the
+controller is up) instead of a boot-time hog.  The register half could not have
+mattered: TRM Table 24-75 marks `CON` `OD`/`HR`/`CDP` "only for MMC cards", so
+they are inert for SDIO.
+
+**Constraint.**  The oracle is **not** a substitute for the stock OS here: it is
+the minimal image, its `/base` has no `/lib/firmware/ti1283`, it needed the
+firmware staged by hand and `-o nvram` for the NVS, and it only reaches the bus
+after `ifconfig ti0 up` (no wifi service runs).  So its "the reference works"
+result is real but says nothing about what a full boot asserts.  One variable
+per boot; the driver/DTS only (a poke is never the evidence, trap 209).  The
+kernel patch must stay byte-reproducible: both experiments were reverted and
+the tree re-verified against pristine + the shipped patch, file by file.
+
+**Evidence.**  Reports **216** (the BT half: `BT_EN` = gpio 55 = `GPIO2_23`,
+driven by `btp-btmgr`, held low while the WLAN works) and **217** (the oracle
+bring-up and both replays); capture
+`docs/captures/wlan-oracle-up-2026-11-14.txt`; `PBREF: reference MMCHS program
+applied (CON=0x685 HCTL=0xb02 SYSCTL=0xe1e07 CAPA=0x04e10080)` on image
+`0x04473A45`; the BT/`gpio_config` table in
+`docs/reference/qnx-hwio/gpio-table-winchester.csv`.  Traps 219–227.
+
+**Addendum (same session) — the stock-OS comparison was run and is negative.**
+Stock TabletOS was booted with `ti0` up (its own wifi service, MAC
+`14:74:11:8f:9c:c3`, `inet 192.168.0.212`) and its readable state captured
+(1 136 words: CORE/WKUP pads, GPIO1/2, `CM_PER`/`CM2`/`PRM`, TWL `0x80`–`0xB5`)
+and diffed against our Linux boot.  136 of 1 120 common words differ and **none
+of the WLAN-relevant ones**: the pads, WL_EN/WL_IRQ, `PRM 0x4A307564` and every
+rail either match or are states the reference itself runs the chip with, and the
+reference's extra GPIO1/GPIO2 outputs are all driven low — the level our inputs
+read.  So the readable board state is excluded as well, and the remaining
+classes are the unreadable MMCHS5 block and the chip-side pins.  Report 218.
+
+---
+
+---
+
+## 64. A hardware fact is measured with the device's own decoded status, never with a board GPIO (session 49)
+
+**Decision.**  When a device's state has to be established on the bench, use the
+**device's own decoded status** — the controller's `STAT`/`PSTATE`, a response
+register, a decoded error bit — and read the **bus state at the instant of the
+transaction**.  A board GPIO is not evidence of a device's state unless the
+device is the thing driving it and that has been proven separately.  When a test
+result is negative, check first that the instrument could have produced a
+positive.
+
+**Why.**  The WL1283 was called "silent" for sixteen sessions on the strength of
+`GPIO2_DATAIN` bit 21 (`WL_IRQ`).  It is not a liveness signal: the **reference's
+own chip reads 0** (`0x08000018`) until its driver has powered it and downloaded
+firmware, and only then `0x08200018`.  So every comparison between sessions 33
+and 48 compared our *pre-driver* state with the reference's *post-firmware*
+state.  Two further gaps: the per-command traces had been archived in session 37,
+so "silent" rested on the errno `-110` (which collapses `CTO` with `DTO`), and
+the bus state was only ever read *after* a failed probe, i.e. already torn down.
+Restored and corrected, the measurement is a *stronger* negative — `CTO` only, on
+a bus that is powered and clocked at 400 kHz / 1.8 V, with `CMD0` succeeding —
+and it also produced the session's most useful new information: `CTO` is a
+fixed **64-card-clock** window, so at 400 kHz a card slower than 160 µs is
+indistinguishable from an absent one.  That is a testable difference, and it was
+invisible under the old instrument.
+
+**Constraint.**  The decoded-status instrument costs a driver patch; keep it in
+the archive (`kernel/archive/wl1283/measurement-instrumentation-2026-11-14.patch`)
+and re-apply it rather than re-inventing it.  A board GPIO may still be used as
+*corroboration* once the device's own status is understood (as `WL_EN` is), and
+`GPIO2_DATAIN` bit 21 remains a valid observation **after** firmware is known to
+be running.
+
+**Evidence.**  Reports **227** (the three flaws and the corrected measurement),
+**216** (`BT_EN`), and the oracle's pre-driver capture in report 217 §2.1;
+traps 231/232/233.
+
+---
+
 The repository licence and visibility are decided below; the remaining
 policy questions (publication of the proprietary corpus) stay open and are
 recorded here so nobody assumes a policy exists.

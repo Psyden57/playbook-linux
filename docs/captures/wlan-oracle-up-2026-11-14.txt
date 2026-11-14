@@ -1,0 +1,942 @@
+Time             Sev Major Minor Args
+Jan 01 00:00:00    2     2     0 trustzone resmgr initialized.
+Jan 01 00:00:00    2     2     0 trustzone resmgr registered the name correctly
+Jan 01 00:00:00    2     2     0 trustzone resmgr dropping root.
+Jan 01 00:00:00    2     2     0 trustzone resmgr is a now a deamon
+Jan 01 00:00:00    2     2     0 trustzone resmgr ready to receive messages.
+Jan 01 00:00:00    5     6     0 random: Using entropy from specified library as entropy source
+Jan 01 00:00:00    5     6     0 random: Opening lib entropy.so
+Jan 01 00:00:00    5     6     0 random: Lib entropy.so open successfully
+Jan 01 00:00:00    5     6     0 random: Magic cookie verified.
+Jan 01 00:00:00    5     6     0 entropy_source_init: entropy consumer set.
+Jan 01 00:00:00    5     6     0 entropy_source_start: thread started successfully (priority = 10, interval = 86400000, n_bytes = 256)
+Jan 01 00:00:00    5     6     0 random: added 256 bytes of entropy to /dev/random.
+Jan 01 00:00:00    5     6     0 random: All ready, registering path names
+Jan 01 00:00:00    5     6     0 random: Daemonizing the process
+Jan 01 00:00:00    2    19   1800 devb-mmcsd-winchester 1.00A (Mar 24 2012 01:29:06)
+Jan 01 00:00:00    2     5     0 libcam.so (Mar 24 2012 01:28:26) bver 6060103
+Jan 01 00:00:00    6 12000     1 (M)Bootreason: Running in monitor mode
+Jan 01 00:00:00    5 12000     1 (M)Bootreason: Power on condition previously cleared
+Jan 01 00:00:00    6 12000     1 (M)Bootreason: batt_level = 4042mV & min_level = 3328mV
+Jan 01 00:00:00    5 12000     1 (M)Bootreason: Display default splash screen
+Jan 01 00:00:00    5 12000     1 (M)Bootreason: Releasing system
+Jan 01 00:00:00    5 12000     1 (M)Bootreason: Display default splash screen
+Jan 01 00:00:00    1    99     0 argv [displayctl] [displayctl]
+Jan 01 00:00:00    1    99     0 LOG displayctl
+Jan 01 00:00:00    1    99     0 argv [displayctl] [displayctl]
+Jan 01 00:00:00    2    19   1800 mmc_partition_config: enh_size 134217728
+Jan 01 00:00:00    1    99     0 LOG displayctl
+Jan 01 00:00:00    2     5   100 cam-disk.so (Mar 24 2012 01:28:30)
+Jan 01 00:00:00    4     4     0 vfs-hooks: Initialization: Hooks v2, DLL v0, nfuncs:10
+Jan 01 00:00:00    5    19   1800 RPMB : resolving new shared buffer location 0xbfa93000!
+Jan 01 00:00:00    5    19   1800 RPMB : new virt buffer location: 0x2803c000!
+Jan 01 00:00:01    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 2050 not found in hash table
+Jan 01 00:00:01    5 10000   101 nvram_resmgr_INFO [NvInit] :: Cached value of NV_OSSTORE_NVR_CONDITIONAL_WRITE_NUM is 0x0
+Jan 01 00:00:02    6 10000   101 nvram_resmgr [NvGetRecordCount] :: GetRecordCount found 27 records
+Jan 01 00:00:02    3 10000   101 nvram_resmgr_WARNING [hwal_init] :: already initialized
+Jan 01 00:00:02    5 10000   101 nvram_resmgr_INFO [get_actual_boot_region] :: OS region using: (0)!
+Jan 01 00:00:02    5 10000   101 nvram_resmgr_INFO [get_os_type_omap] :: ifs ostype is: 0x6
+Jan 01 00:00:02    5 10000   101 nvram_resmgr_INFO [VerifyRequiredNvRecords] :: Insecure device: testing NVRAM signature
+Jan 01 00:00:02    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 2026 not found in hash table
+Jan 01 00:00:02    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 201d not found in hash table
+Jan 01 00:00:02    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 2010 not found in hash table
+Jan 01 00:00:02    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 3000 not found in hash table
+Jan 01 00:00:02    5 10000   101 nvram_resmgr_INFO [IsNvRecordSigned] :: Nvram record hash signature verified successfully.
+Jan 01 00:00:02    5 10000   101 nvram_resmgr_INFO [VerifyRequiredNvRecords] :: NVRAM signature verifications complete.
+Jan 01 00:00:02    6 10000   101 nvram_resmgr [get_guid_mid] :: calculate GUID from MFG_SERIAL
+Jan 01 00:00:02    6 10000   101 nvram_resmgr [read_manufacturing_data] :: manufacturing data successfully read from boot part 2.
+Jan 01 00:00:02    6 10000   101 nvram_resmgr [populate_swc_records] :: Version 2 of NV_OSSTORE_MAC_ADDR record found.
+Jan 01 00:00:02    6 10000   101 nvram_resmgr [populate_swc_v2_macs] :: found WLAN mac address
+Jan 01 00:00:02    6 10000   101 nvram_resmgr [populate_swc_v2_macs] :: found BT mac address
+Jan 01 00:00:02    5 10000   101 nvram_resmgr_INFO [parse_bootrom_metrics] :: Found bootrom metrics version 6.24
+Jan 01 00:00:02    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 205a not found in hash table
+Jan 01 00:00:02    6 10000   101 nvram_resmgr [read_bootrom_metrics_omap] :: using cached bootrom metrics
+Jan 01 00:00:02    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 205a not found in hash table
+Jan 01 00:00:02    5 10000   101 nvram_resmgr_INFO [main] :: Starting nvram resource manager.
+Jan 01 00:00:04    4 10000     0 fsec-sys: Skipping keyval encryption, rollback enabled
+Jan 01 00:00:04    4 10000     0 fsec-sys: No fs keyvals to migrate
+Jan 01 00:00:04    2 10000     0 fsec-sys: Keyval migration completed
+Jan 01 00:00:04    5 10000     0 fsec-sys: Initialization complete (0)
+Jan 01 00:00:05    4    29     0 pps: NOTICE: PPS initializing
+Jan 01 00:00:05    4    29     0 pps: NOTICE: PPS attaching
+Jan 01 00:00:06    4    29     0 pps: NOTICE: PPS starting
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [sigusrHandler] :: writing /tmp/tiwlan_quanta.ini and creating PPS objects
+Jan 01 00:00:08    5 10000   101 nvram_resmgr_INFO [radioregion_pps_write_attributes_unsupported] :: Radio region PPS object not supported on this platform.
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [DeviceInfoPPSWriteAttribute] :: found a 32 bit pin.
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [DeviceInfoPPSWriteAttribute] :: found a 32 bit pin.
+Jan 01 00:00:08    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 205a not found in hash table
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_bootrom_metrics_omap] :: using cached bootrom metrics
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_bootrom_metrics_omap] :: using cached bootrom metrics
+Jan 01 00:00:08    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 205a not found in hash table
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_manufacturing_data] :: using cached manufacturing data
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_manufacturing_data] :: using cached manufacturing data
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_bootrom_metrics_omap] :: using cached bootrom metrics
+Jan 01 00:00:08    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 205a not found in hash table
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_bootrom_metrics_omap] :: using cached bootrom metrics
+Jan 01 00:00:08    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 205a not found in hash table
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_bootrom_metrics_omap] :: using cached bootrom metrics
+Jan 01 00:00:08    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 205a not found in hash table
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_manufacturing_data] :: using cached manufacturing data
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_manufacturing_data] :: using cached manufacturing data
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [get_guid_mid] :: calculate GUID from MFG_SERIAL
+Jan 01 00:00:08    3 10000   101 nvram_resmgr_WARNING [readRecord] :: Checksum cannot be performed on incomplete record reads having a record length of (80)
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [DeviceInfoPPSWriteAttribute] :: found a 32 bit pin.
+Jan 01 00:00:08    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 3000 not found in hash table
+Jan 01 00:00:08    3 10000   101 nvram_resmgr_WARNING [imei_get_string] :: IMEI not found or invalid size. Using unassigned IMEI string for PPS object.
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_bootrom_metrics_omap] :: using cached bootrom metrics
+Jan 01 00:00:08    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 205a not found in hash table
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_bootrom_metrics_omap] :: using cached bootrom metrics
+Jan 01 00:00:08    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 205a not found in hash table
+Jan 01 00:00:08    3 10000   101 nvram_resmgr_WARNING [hwv_read_entries] :: HWV is external to bootrom metrics.
+Jan 01 00:00:08    5 10000   101 nvram_resmgr_INFO [hwv_read_entries] :: HWV entries found: 7
+Jan 01 00:00:08    3 10000   101 nvram_resmgr_WARNING [NvGetRecordCopy] :: Record 205a not found in hash table
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_bootrom_metrics_omap] :: using cached bootrom metrics
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_bootrom_metrics_omap] :: using cached bootrom metrics
+Jan 01 00:00:08    6 10000   101 nvram_resmgr [read_bootrom_metrics_omap] :: using cached bootrom metrics
+Jan 01 00:00:08    5    14     0 tcpip starting
+Jan 01 00:00:08    5    14     0 tcpip: option rgroup_allowed: allowing root-group access
+Jan 01 00:00:08    3    14     0 Unable to attach to pci server: No such file or directory
+Jan 01 00:00:08    5    14     0 tcpip: TIMER_TOLERANCE set to 500ms
+Jan 01 00:00:08    5    14     0 initializing IPsec... done
+Jan 01 00:00:08    5    14     0 IPsec: Initialized Security Association Processing.
+Jan 01 00:00:09    3    10     1 TIWLAN: driver entry
+
+Jan 01 00:00:09    3    10     1 "nvram" option set
+Jan 01 00:00:09    5    14     0 ti0EN 54, INT 53
+Jan 01 00:00:09    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:00:09    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:00:09    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:00:09    3    10     1 ******* Driver Created *******
+Jan 01 00:00:09    3    10     1 wl1283_attach: call wlanDrvIf_LoadFiles
+Jan 01 00:00:09    3    10     1 Couldn't open file: /var/ti1283//firmware.bin: 2
+Jan 01 00:00:09    2    14     0 wl1283_entry(): dev_attach() failed
+
+Jan 01 00:00:09    2    14     0 Unable to init /lib/dll/devnp-ti1283.so: No such device
+
+Jan 01 00:00:19    5    22     4 Processing config file '/base/etc/system/config/winchester.pm'.
+Jan 01 00:00:19    3    22     2 /pps/system/power/dev//devb-mmcsd.1: no matching predicates - using local control
+Jan 01 00:00:19    3    22     2 /pps/system/power/dev/driver/iva_opp.1: no matching predicates - using local control
+Jan 01 00:00:19    3    22     2 /pps/system/power/dev/driver/phy_power.1: no matching predicates - using local control
+Jan 01 00:00:20    3    22     2 /pps/system/power/dev/driver/usb_phy.1: no matching predicates - using local control
+Jan 01 00:00:20    5    12     0 Starting RimUsb driver. May 17 2012 13:35:55
+Jan 01 00:00:20    5    12     0 Verbosity set to 2
+Jan 01 00:00:22    5    12     0 Starting RimUsb driver. May 17 2012 13:35:55
+Jan 01 00:00:22    5    12     0 RimUsbCmd: Starting in command line mode
+Jan 01 00:00:22    5    12     0 RimUsb: Found rim_usb
+Jan 01 00:00:22    5    12     0 RimUsbCmd: Command line complete
+Jan 01 00:00:22    3    12     0 musb_endpoint_enable: epnum = 0x4 has no more dma channels to use... using PIO 
+Jan 01 00:00:22    3    12     0 musb_endpoint_enable: epnum = 0x4 has no more dma channels to use... using PIO 
+Jan 01 00:00:22    5    12     0 NV Password Record Version: 2.0, Size: 112
+Jan 01 00:01:09    5    14     0 tcpip starting
+Jan 01 00:01:09    3    14     0 Unable to attach to pci server: No such file or directory
+Jan 01 00:01:09    3    14     0 Using pseudo random generator.  See "random" option
+Jan 01 00:01:09    5    14     0 initializing IPsec... done
+Jan 01 00:01:09    5    14     0 IPsec: Initialized Security Association Processing.
+Jan 01 00:01:09    2    14     0 Unable to load lsm-tiwlan.so: Library cannot be found
+
+Jan 01 00:01:09    3    10     1 TIWLAN: driver entry
+
+Jan 01 00:01:09    5    14     0 ti0EN 54, INT 53
+Jan 01 00:01:09    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:01:09    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:01:09    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:01:09    3    10     1 ******* Driver Created *******
+Jan 01 00:01:09    3    10     1 wl1283_attach: call wlanDrvIf_LoadFiles
+Jan 01 00:01:09    3    10     1 Couldn't open file: /dos/firmware.bin: 2
+Jan 01 00:01:09    2    14     0 wl1283_entry(): dev_attach() failed
+
+Jan 01 00:01:09    2    14     0 Unable to init devnp-ti1283.so: No such device
+
+Jan 01 00:01:53    5    14     0 tcpip starting
+Jan 01 00:01:53    3    14     0 Unable to attach to pci server: No such file or directory
+Jan 01 00:01:53    3    14     0 Using pseudo random generator.  See "random" option
+Jan 01 00:01:53    5    14     0 initializing IPsec... done
+Jan 01 00:01:53    5    14     0 IPsec: Initialized Security Association Processing.
+Jan 01 00:01:53    2    14     0 Unable to load lsm-tiwl2.so: Library cannot be found
+
+Jan 01 00:01:53    2    14     0 Unable to load devn-ti1283,firmdir=/var/ti1283.so: Library cannot be found
+
+Jan 01 00:02:19    2    12     0 is_usbport_pps_obj_valid : invalid pps attributes in /pps/services/power/usbconnector... expecting UsbConnector IdPin Vbus to be there
+Jan 01 00:02:19    2    12     0 usbmgr_start_detection: platform_start_port_listener() failed to start
+Jan 01 00:02:36    5    14     0 tcpip starting
+Jan 01 00:02:36    3    14     0 Unable to attach to pci server: No such file or directory
+Jan 01 00:02:36    3    14     0 Using pseudo random generator.  See "random" option
+Jan 01 00:02:36    5    14     0 initializing IPsec... done
+Jan 01 00:02:36    5    14     0 IPsec: Initialized Security Association Processing.
+Jan 01 00:02:41    5    14     0 tcpip starting
+Jan 01 00:02:41    3    14     0 Unable to attach to pci server: No such file or directory
+Jan 01 00:02:41    3    14     0 Using pseudo random generator.  See "random" option
+Jan 01 00:02:41    5    14     0 initializing IPsec... done
+Jan 01 00:02:41    5    14     0 IPsec: Initialized Security Association Processing.
+Jan 01 00:03:29    5    14     0 tcpip starting
+Jan 01 00:03:29    3    14     0 Unable to attach to pci server: No such file or directory
+Jan 01 00:03:29    3    14     0 Using pseudo random generator.  See "random" option
+Jan 01 00:03:29    5    14     0 initializing IPsec... done
+Jan 01 00:03:29    5    14     0 IPsec: Initialized Security Association Processing.
+Jan 01 00:03:29    2    14     0 Unable to load lsm-tiwl2.so: Library cannot be found
+
+Jan 01 00:03:29    3    10     1 TIWLAN: driver entry
+
+Jan 01 00:03:29    5    14     0 ti0EN 54, INT 53
+Jan 01 00:03:29    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:03:29    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:03:29    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:03:29    3    10     1 ******* Driver Created *******
+Jan 01 00:03:29    3    10     1 wl1283_attach: call wlanDrvIf_LoadFiles
+Jan 01 00:03:29    3    10     1 firmware.bin file size = 275256
+Jan 01 00:03:29    3    10     1 Couldn't open file: /var/ti1283/nvs_map.bin: 2
+Jan 01 00:03:29    2    14     0 wl1283_entry(): dev_attach() failed
+
+Jan 01 00:03:29    2    14     0 Unable to init devnp-ti1283.so: No such device
+
+Jan 01 00:04:38    5    14     0 tcpip starting
+Jan 01 00:04:38    3    14     0 Unable to attach to pci server: No such file or directory
+Jan 01 00:04:38    3    14     0 Using pseudo random generator.  See "random" option
+Jan 01 00:04:38    5    14     0 initializing IPsec... done
+Jan 01 00:04:38    5    14     0 IPsec: Initialized Security Association Processing.
+Jan 01 00:04:38    2    14     0 Unable to load lsm-tiwl2.so: Library cannot be found
+
+Jan 01 00:04:38    3    10     1 TIWLAN: driver entry
+
+Jan 01 00:04:38    5    14     0 ti0EN 54, INT 53
+Jan 01 00:04:38    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:04:38    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:04:38    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:04:38    3    10     1 ******* Driver Created *******
+Jan 01 00:04:38    3    10     1 wl1283_attach: call wlanDrvIf_LoadFiles
+Jan 01 00:04:38    3    10     1 firmware.bin file size = 275256
+Jan 01 00:04:38    3    10     1 nvs_map.bin file size = 44405
+Jan 01 00:04:38    3    10     1 tiwlan.ini file size = 20058
+Jan 01 00:04:38    3    10     1 ******* Driver Created *******
+Jan 01 00:06:09    3    10     1 wlanDrvIf_init
+
+Jan 01 00:06:09    3    10     1 wlanDrvIf_Start
+
+Jan 01 00:06:09    3    10     1 wlanDrvIf_Start: ************* OPEN THE DRIVER *********************
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.012: SIOCIWFIRSTPRIV:cmd=0x811A20, flags=2
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.111: pInitParams->RoamingScanning_2_4G_enable 0 
+
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOn++
+Jan 01 00:06:09    3    10     1 sdioProbe
+
+Jan 01 00:06:09    3    10     1 sdiodrv_task received SDIO_PROBE pulse
+
+Jan 01 00:06:09    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:06:09    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:06:09    3    10     1 sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7
+
+Jan 01 00:06:09    3    10     1 
+After SD_IO_GO_IDLE_STATE, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+After VDD_VOLTAGE_WINDOW, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+ After SD_IO_SEND_RELATIVE_ADDR, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+ BENZY: uLong=4294967295 
+
+Jan 01 00:06:09    3    10     1 
+After SD_IO_SELECT_CARD, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, iStatus=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, after CCCR_IO_ENABLE iStatus=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, after FN0_FBR2_REG_108 iStatus=0 
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.235: TxnQueue                , WARNING:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.235: txnQ_Run(): Called while func 2 state is 2!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.235: Working on a 1283 PG 2.0 board.
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.256: Starting to process NVS...
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.256: NVS found, EEPROM Image addr=0x380020, EEPROM Len=0x0xad75
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.256: TwIf                    , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.256: twIf_SendTransaction: Unaligned HwAddr! HwAddr=0x2cfffe, Params=0x49
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.256: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.256: drvMain_SmEvent():  Multiple pending events (3), State = 3, Event = 11
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.256: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.256: drvMain_Sm: eEvent=11 at state=3, status=1
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.256: context                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.256: context_DisableClient() Client  already disabled!!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.256: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.256: drvMain_SmEvent():  Multiple pending events (3), State = 12, Event = 10
+
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:06:09    3    10     1 sdioProbe
+
+Jan 01 00:06:09    3    10     1 sdiodrv_task received SDIO_PROBE pulse
+
+Jan 01 00:06:09    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:06:09    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.300: healthMonitor           , CONSOLE:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.300: ***** recovery trigger: failureEvent =2 *****, ts=369300
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.300: ***** recovery trigger: HW_AWAKE_FAILURE *****, ts=369300
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.300: DrvMain                 , CONSOLE:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.300: .....drvMain_Recovery, ts=369300
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.300: .....drvMain_Recovery, ts=369300
+
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOn++
+Jan 01 00:06:09    3    10     1 sdioProbe
+
+Jan 01 00:06:09    3    10     1 sdiodrv_task received SDIO_PROBE pulse
+
+Jan 01 00:06:09    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:06:09    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:06:09    3    10     1 sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7
+
+Jan 01 00:06:09    3    10     1 
+After SD_IO_GO_IDLE_STATE, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+After VDD_VOLTAGE_WINDOW, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+ After SD_IO_SEND_RELATIVE_ADDR, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+ BENZY: uLong=4294967295 
+
+Jan 01 00:06:09    3    10     1 
+After SD_IO_SELECT_CARD, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, iStatus=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, after CCCR_IO_ENABLE iStatus=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, after FN0_FBR2_REG_108 iStatus=0 
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.434: TxnQueue                , WARNING:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.434: txnQ_Run(): Called while func 2 state is 2!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.434: Working on a 1283 PG 2.0 board.
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.454: Starting to process NVS...
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.454: NVS found, EEPROM Image addr=0x380020, EEPROM Len=0x0xad75
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.454: TwIf                    , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.454: twIf_SendTransaction: Unaligned HwAddr! HwAddr=0x2cfffe, Params=0x49
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.454: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.454: drvMain_SmEvent():  Multiple pending events (3), State = 3, Event = 11
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.454: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.454: drvMain_Sm: eEvent=11 at state=3, status=1
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.454: context                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.454: context_DisableClient() Client  already disabled!!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.454: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.454: drvMain_SmEvent():  Multiple pending events (3), State = 12, Event = 10
+
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.466: context                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.466: context_DisableClient() Client  already disabled!!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.466: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.466: drvMain_SmEvent():  Multiple pending events (3), State = 10, Event = 10
+
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOn++
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.598: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.598: drvMain_SmEvent():  Multiple pending events (3), State = 2, Event = 2
+
+Jan 01 00:06:09    3    10     1 sdioProbe
+
+Jan 01 00:06:09    3    10     1 sdiodrv_task received SDIO_PROBE pulse
+
+Jan 01 00:06:09    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:06:09    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:06:09    3    10     1 sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7
+
+Jan 01 00:06:09    3    10     1 
+After SD_IO_GO_IDLE_STATE, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+After VDD_VOLTAGE_WINDOW, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+ After SD_IO_SEND_RELATIVE_ADDR, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+ BENZY: uLong=4294967295 
+
+Jan 01 00:06:09    3    10     1 
+After SD_IO_SELECT_CARD, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, iStatus=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, after CCCR_IO_ENABLE iStatus=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, after FN0_FBR2_REG_108 iStatus=0 
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.600: TxnQueue                , WARNING:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.600: txnQ_Run(): Called while func 2 state is 2!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.600: Working on a 1283 PG 2.0 board.
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: Starting to process NVS...
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: NVS found, EEPROM Image addr=0x380020, EEPROM Len=0x0xad75
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: TwIf                    , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: twIf_SendTransaction: Unaligned HwAddr! HwAddr=0x2cfffe, Params=0x49
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: drvMain_SmEvent():  Multiple pending events (3), State = 3, Event = 11
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: drvMain_SmEvent():  Multiple pending events (4), State = 3, Event = 11
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: drvMain_Sm: eEvent=11 at state=3, status=1
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: context                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: context_DisableClient() Client  already disabled!!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.620: drvMain_SmEvent():  Multiple pending events (4), State = 12, Event = 10
+
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.631: context                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.631: context_DisableClient() Client  already disabled!!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.631: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.631: drvMain_SmEvent():  Multiple pending events (4), State = 10, Event = 10
+
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOn++
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.763: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.763: drvMain_SmEvent():  Multiple pending events (4), State = 2, Event = 2
+
+Jan 01 00:06:09    3    10     1 sdioProbe
+
+Jan 01 00:06:09    3    10     1 sdiodrv_task received SDIO_PROBE pulse
+
+Jan 01 00:06:09    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:06:09    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:06:09    3    10     1 sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7
+
+Jan 01 00:06:09    3    10     1 
+After SD_IO_GO_IDLE_STATE, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+After VDD_VOLTAGE_WINDOW, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+ After SD_IO_SEND_RELATIVE_ADDR, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+ BENZY: uLong=4294967295 
+
+Jan 01 00:06:09    3    10     1 
+After SD_IO_SELECT_CARD, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, iStatus=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, after CCCR_IO_ENABLE iStatus=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, after FN0_FBR2_REG_108 iStatus=0 
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.765: TxnQueue                , WARNING:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.765: txnQ_Run(): Called while func 2 state is 2!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.765: Working on a 1283 PG 2.0 board.
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: Starting to process NVS...
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: NVS found, EEPROM Image addr=0x380020, EEPROM Len=0x0xad75
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: TwIf                    , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: twIf_SendTransaction: Unaligned HwAddr! HwAddr=0x2cfffe, Params=0x49
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: drvMain_SmEvent():  Multiple pending events (4), State = 3, Event = 11
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: drvMain_SmEvent():  Multiple pending events (5), State = 3, Event = 11
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: drvMain_Sm: eEvent=11 at state=3, status=1
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: context                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: context_DisableClient() Client  already disabled!!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.785: drvMain_SmEvent():  Multiple pending events (5), State = 12, Event = 10
+
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.797: context                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.797: context_DisableClient() Client  already disabled!!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.797: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.797: drvMain_SmEvent():  Multiple pending events (5), State = 10, Event = 10
+
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOn++
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.929: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.929: drvMain_SmEvent():  Multiple pending events (5), State = 2, Event = 2
+
+Jan 01 00:06:09    3    10     1 sdioProbe
+
+Jan 01 00:06:09    3    10     1 sdiodrv_task received SDIO_PROBE pulse
+
+Jan 01 00:06:09    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:06:09    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:06:09    3    10     1 sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7
+
+Jan 01 00:06:09    3    10     1 
+After SD_IO_GO_IDLE_STATE, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+After VDD_VOLTAGE_WINDOW, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+ After SD_IO_SEND_RELATIVE_ADDR, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 
+ BENZY: uLong=4294967295 
+
+Jan 01 00:06:09    3    10     1 
+After SD_IO_SELECT_CARD, RSP10=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, iStatus=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, after CCCR_IO_ENABLE iStatus=0 
+
+Jan 01 00:06:09    3    10     1 Skip  w 0xC8, after FN0_FBR2_REG_108 iStatus=0 
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.931: TxnQueue                , WARNING:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.931: txnQ_Run(): Called while func 2 state is 2!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.931: Working on a 1283 PG 2.0 board.
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: Starting to process NVS...
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: NVS found, EEPROM Image addr=0x380020, EEPROM Len=0x0xad75
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: TwIf                    , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: twIf_SendTransaction: Unaligned HwAddr! HwAddr=0x2cfffe, Params=0x49
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: drvMain_SmEvent():  Multiple pending events (5), State = 3, Event = 11
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: drvMain_SmEvent():  Multiple pending events (6), State = 3, Event = 11
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: drvMain_Sm: eEvent=11 at state=3, status=1
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: context                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: context_DisableClient() Client  already disabled!!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.951: drvMain_SmEvent():  Multiple pending events (6), State = 12, Event = 10
+
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.963: context                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.963: context_DisableClient() Client  already disabled!!
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.963: DrvMain                 , ERROR:
+
+Jan 01 00:06:09    3    10     1 TIWLDRV:0000369.963: drvMain_SmEvent():  Multiple pending events (6), State = 10, Event = 10
+
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:06:09    3    10     1 hPlatform_DevicePowerOn++
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.095: DrvMain                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.095: drvMain_SmEvent():  Multiple pending events (6), State = 2, Event = 2
+
+Jan 01 00:06:10    3    10     1 sdioProbe
+
+Jan 01 00:06:10    3    10     1 sdiodrv_task received SDIO_PROBE pulse
+
+Jan 01 00:06:10    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:06:10    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:06:10    3    10     1 sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7
+
+Jan 01 00:06:10    3    10     1 
+After SD_IO_GO_IDLE_STATE, RSP10=0 
+
+Jan 01 00:06:10    3    10     1 
+After VDD_VOLTAGE_WINDOW, RSP10=0 
+
+Jan 01 00:06:10    3    10     1 
+ After SD_IO_SEND_RELATIVE_ADDR, RSP10=0 
+
+Jan 01 00:06:10    3    10     1 
+ BENZY: uLong=4294967295 
+
+Jan 01 00:06:10    3    10     1 
+After SD_IO_SELECT_CARD, RSP10=0 
+
+Jan 01 00:06:10    3    10     1 Skip  w 0xC8, iStatus=0 
+
+Jan 01 00:06:10    3    10     1 Skip  w 0xC8, after CCCR_IO_ENABLE iStatus=0 
+
+Jan 01 00:06:10    3    10     1 Skip  w 0xC8, after FN0_FBR2_REG_108 iStatus=0 
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.097: TxnQueue                , WARNING:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.097: txnQ_Run(): Called while func 2 state is 2!
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.097: Working on a 1283 PG 2.0 board.
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: Starting to process NVS...
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: NVS found, EEPROM Image addr=0x380020, EEPROM Len=0x0xad75
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: TwIf                    , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: twIf_SendTransaction: Unaligned HwAddr! HwAddr=0x2cfffe, Params=0x49
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: DrvMain                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: drvMain_SmEvent():  Multiple pending events (6), State = 3, Event = 11
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: DrvMain                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: drvMain_SmEvent():  Multiple pending events (7), State = 3, Event = 11
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: DrvMain                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: drvMain_Sm: eEvent=11 at state=3, status=1
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: context                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: context_DisableClient() Client  already disabled!!
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: DrvMain                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.117: drvMain_SmEvent():  Multiple pending events (7), State = 12, Event = 10
+
+Jan 01 00:06:10    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.129: context                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.129: context_DisableClient() Client  already disabled!!
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.129: DrvMain                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.129: drvMain_SmEvent():  Multiple pending events (7), State = 10, Event = 10
+
+Jan 01 00:06:10    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:06:10    3    10     1 hPlatform_DevicePowerOn++
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.261: DrvMain                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.261: drvMain_SmEvent():  Multiple pending events (7), State = 2, Event = 2
+
+Jan 01 00:06:10    3    10     1 sdioProbe
+
+Jan 01 00:06:10    3    10     1 sdiodrv_task received SDIO_PROBE pulse
+
+Jan 01 00:06:10    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:06:10    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:06:10    3    10     1 sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7
+
+Jan 01 00:06:10    3    10     1 
+After SD_IO_GO_IDLE_STATE, RSP10=0 
+
+Jan 01 00:06:10    3    10     1 
+After VDD_VOLTAGE_WINDOW, RSP10=0 
+
+Jan 01 00:06:10    3    10     1 
+ After SD_IO_SEND_RELATIVE_ADDR, RSP10=0 
+
+Jan 01 00:06:10    3    10     1 
+ BENZY: uLong=4294967295 
+
+Jan 01 00:06:10    3    10     1 
+After SD_IO_SELECT_CARD, RSP10=0 
+
+Jan 01 00:06:10    3    10     1 Skip  w 0xC8, iStatus=0 
+
+Jan 01 00:06:10    3    10     1 Skip  w 0xC8, after CCCR_IO_ENABLE iStatus=0 
+
+Jan 01 00:06:10    3    10     1 Skip  w 0xC8, after FN0_FBR2_REG_108 iStatus=0 
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.263: TxnQueue                , WARNING:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.263: txnQ_Run(): Called while func 2 state is 2!
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.263: Working on a 1283 PG 2.0 board.
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: Starting to process NVS...
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: NVS found, EEPROM Image addr=0x380020, EEPROM Len=0x0xad75
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: TwIf                    , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: twIf_SendTransaction: Unaligned HwAddr! HwAddr=0x2cfffe, Params=0x49
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: DrvMain                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: drvMain_SmEvent():  Multiple pending events (7), State = 3, Event = 11
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: DrvMain                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: drvMain_SmEvent():  Multiple pending events (8), State = 3, Event = 11
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: DrvMain                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: drvMain_Sm: eEvent=11 at state=3, status=1
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: context                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: context_DisableClient() Client  already disabled!!
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: DrvMain                 , ERROR:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.283: drvMain_SmEvent():  Multiple pending events (8), State = 12, Event = 10
+
+Jan 01 00:06:10    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:06:10    3    10     1 sdioProbe
+
+Jan 01 00:06:10    3    10     1 sdiodrv_task received SDIO_PROBE pulse
+
+Jan 01 00:06:10    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:06:10    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.296: healthMonitor           , WARNING:
+
+Jan 01 00:06:10    3    10     1 TIWLDRV:0000370.296: : recovery process is already handling , new trigger is 
+
+Jan 01 00:08:16    3    10     1 wlanDrvIf_Stop
+
+Jan 01 00:08:18    5    14     0 tcpip starting
+Jan 01 00:08:18    3    14     0 Unable to attach to pci server: No such file or directory
+Jan 01 00:08:18    3    14     0 Using pseudo random generator.  See "random" option
+Jan 01 00:08:18    5    14     0 initializing IPsec... done
+Jan 01 00:08:18    5    14     0 IPsec: Initialized Security Association Processing.
+Jan 01 00:08:22    3    10     1 TIWLAN: driver entry
+
+Jan 01 00:08:22    3    10     1 "nvram" option set
+Jan 01 00:08:22    5    14     0 ti0EN 54, INT 53
+Jan 01 00:08:22    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:08:22    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:08:22    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:08:22    3    10     1 ******* Driver Created *******
+Jan 01 00:08:22    3    10     1 wl1283_attach: call wlanDrvIf_LoadFiles
+Jan 01 00:08:22    3    10     1 firmware.bin file size = 275256
+Jan 01 00:08:22    3    10     1 NVRAM devctl success, read 468 bytes
+
+Jan 01 00:08:22    3    10     1 NVRAM worked!
+Jan 01 00:08:22    3    10     1 tiwlan.ini file size = 20058
+Jan 01 00:08:22    3    10     1 ******* Driver Created *******
+Jan 01 00:09:20    3    10     1 TIWLAN: driver entry
+
+Jan 01 00:09:20    3    10     1 "nvram" option set
+Jan 01 00:09:20    5    14     0 rndis0ti0EN 54, INT 53
+Jan 01 00:09:20    3    10     1 hPlatform_DevicePowerOff++
+Jan 01 00:09:20    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:09:20    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:09:20    3    10     1 ******* Driver Created *******
+Jan 01 00:09:20    3    10     1 wl1283_attach: call wlanDrvIf_LoadFiles
+Jan 01 00:09:20    3    10     1 firmware.bin file size = 275256
+Jan 01 00:09:20    3    10     1 NVRAM devctl success, read 468 bytes
+
+Jan 01 00:09:20    3    10     1 NVRAM worked!
+Jan 01 00:09:20    3    10     1 tiwlan.ini file size = 20058
+Jan 01 00:09:20    3    10     1 ******* Driver Created *******
+Jan 01 00:09:30    3    10     1 wlanDrvIf_init
+
+Jan 01 00:09:30    3    10     1 wlanDrvIf_Start
+
+Jan 01 00:09:30    3    10     1 wlanDrvIf_Start: ************* OPEN THE DRIVER *********************
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.475: SIOCIWFIRSTPRIV:cmd=0x811A20, flags=2
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.598: pInitParams->RoamingScanning_2_4G_enable 0 
+
+Jan 01 00:09:30    3    10     1 hPlatform_DevicePowerOn++
+Jan 01 00:09:30    3    10     1 sdioProbe
+
+Jan 01 00:09:30    3    10     1 sdiodrv_task received SDIO_PROBE pulse
+
+Jan 01 00:09:30    3    10     1 TIWLAN SDIO probe WAS CALLED: initializing mmc device
+
+Jan 01 00:09:30    3    10     1 SDIO clock Configuration is now set to 24Mhz
+
+Jan 01 00:09:30    3    10     1 sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7
+
+Jan 01 00:09:30    3    10     1 
+After SD_IO_GO_IDLE_STATE, RSP10=0 
+
+Jan 01 00:09:30    3    10     1 
+After VDD_VOLTAGE_WINDOW, RSP10=0 
+
+Jan 01 00:09:30    3    10     1 
+ After SD_IO_SEND_RELATIVE_ADDR, RSP10=0 
+
+Jan 01 00:09:30    3    10     1 
+ BENZY: uLong=4294967295 
+
+Jan 01 00:09:30    3    10     1 
+After SD_IO_SELECT_CARD, RSP10=0 
+
+Jan 01 00:09:30    3    10     1 Skip  w 0xC8, iStatus=0 
+
+Jan 01 00:09:30    3    10     1 Skip  w 0xC8, after CCCR_IO_ENABLE iStatus=0 
+
+Jan 01 00:09:30    3    10     1 Skip  w 0xC8, after FN0_FBR2_REG_108 iStatus=0 
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.721: TxnQueue                , WARNING:
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.721: txnQ_Run(): Called while func 2 state is 2!
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.721: Working on a 1283 PG 2.0 board.
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.737: Starting to process NVS...
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.737: NVS found, EEPROM Image addr=0x2ce710, EEPROM Len=0x0x1d4
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.737: Starting to download firmware...
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.757: Starting to download firmware...
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.762: Starting to download firmware...
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.762: Starting to download firmware...
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.764: Starting to download firmware...
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.766: Starting to download firmware...
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.766: Finished downloading firmware.
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.766: Firmware running.
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.780: WARNING!!!: Ini file and Driver Version don't match: ini=0
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.780: 
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.780: --------------------------------------------------------------------
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.780: Driver Version  : MCP-WiLink_Driver_2.5.4.13.20
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.780: Firmware Version: Rev 7.1.4.10.77
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.780: Station ID      : 14-74-11-8F-9C-C3
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.780: --------------------------------------------------------------------
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.780: 
+
+Jan 01 00:09:30    3    10     1 wlanDrvIf_init
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.781: CmdBldCmdIE             , WARNING:
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.781: cmdBld_CmdIeConfigureTemplateFrame: Frame size (=340) of CmdType (=2) is bigger than MAX_TEMPLATES_SIZE(=252) !!!
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.781: CmdBldCmdIE             , WARNING:
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.781: cmdBld_CmdIeConfigureTemplateFrame: Frame size (=340) of CmdType (=3) is bigger than MAX_TEMPLATES_SIZE(=252) !!!
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.782: CmdBldCmdIE             , WARNING:
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.782: cmdBld_CmdIeConfigureTemplateFrame: Frame size (=258) of CmdType (=4) is bigger than MAX_TEMPLATES_SIZE(=252) !!!
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.782: CmdBldCmdIE             , WARNING:
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.782: cmdBld_CmdIeConfigureTemplateFrame: Frame size (=258) of CmdType (=1) is bigger than MAX_TEMPLATES_SIZE(=252) !!!
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.783: cmdBld_CfgIeGenFwCmd: bytes 00..07 = 00, 00, 00, 00, 00, 00, 00, 00
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.783: cmdBld_CfgIeGenFwCmd: bytes 08..15 = 00, 00, 00, 00, 00, 00, 00, 00
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.784: cmdBld_CfgIeHostIfCfgBitmap: Value = 0x9
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.791: CmdMBox                 , WARNING:
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.791: cmdMbox_SendCommand(): Command length isn't 32bit aligned! CmdId=2
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.791: Interrogate TX/RX parameters
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.791: pwrState                , WARNING:
+
+Jan 01 00:09:30    3    10     1 TIWLDRV:0000570.791: 7816298cF: unexpected event 6
+

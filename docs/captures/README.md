@@ -109,6 +109,9 @@ pair only when a report needs a before/after comparison.
 | `playbook-live-spare-2026-10-26-clean-*` | the clean-kernel boot captures, ring buffers and per-experiment event logs (reports 103–109) |
 | `playbook-live-spare-2026-10-27-*` | live QNX display/register captures (reports 118, 121) |
 | `twl6030-{linux,qnx}-2026-11-08.txt` | the both-OS TWL comparison (report 192) |
+| `wlan-oracle-up-2026-11-14.txt` | the oracle's whole-session slog, including the reference's live WLAN bring-up (`sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7` → firmware `Rev 7.1.4.10.77`); report 217 |
+| `wlan-qnx-state-2026-11-14.txt` | stock TabletOS with `ti0` RUNNING: CORE/WKUP pads, GPIO1/2, `CM_PER`/`CM2`/`PRM`, TWL `0x80`–`0xB5`; report 218 |
+| `wlan-linux-state-2026-11-14.txt` | the same ranges on our Linux boot, for the report-218 diff; report 225 reads its `CM2` domain modes |
 
 `docs/reports/data/` is indexed by the reports that produced it; the report
 INDEX (`docs/reports/INDEX.md`) says which report is current for a topic.

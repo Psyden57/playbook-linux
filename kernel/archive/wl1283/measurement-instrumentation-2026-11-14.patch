@@ -1,0 +1,66 @@
+--- /tmp/ref/drivers/mmc/core/core.c	2026-11-14 17:45:36.341370299 -0300
++++ local/kernel-tree/drivers/mmc/core/core.c	2026-11-14 17:34:51.728624007 -0300
+@@ -23,6 +23,7 @@
+ #include <linux/fault-inject.h>
+ #include <linux/random.h>
+ #include <linux/slab.h>
++#include <linux/string.h>
+ #include <linux/of.h>
+ 
+ #include <linux/pb_event.h>
+@@ -645,6 +646,10 @@
+ 
+ 	mmc_wait_for_req(host, &mrq);
+ 
++	if (host->parent && strstr(dev_name(host->parent), "480d5000"))
++		pr_info("PBCMD: mmc4 op=%u arg=%08x flags=%08x err=%d resp0=%08x\n",
++			cmd->opcode, cmd->arg, cmd->flags, cmd->error,
++			cmd->resp[0]);
+ 	return cmd->error;
+ }
+ 
+--- /tmp/ref/drivers/mmc/host/omap_hsmmc.c	2026-11-14 17:45:36.339925797 -0300
++++ local/kernel-tree/drivers/mmc/host/omap_hsmmc.c	2026-11-14 17:39:11.417430465 -0300
+@@ -867,6 +867,18 @@
+ 
+ 	host->req_in_progress = 1;
+ 
++	if (host->dev && strstr(dev_name(host->dev), "480d5000"))
++		pr_info("PBX: mmc4 CMD%d arg=%08x reg=%08x SYSCTL=%08x CEN=%d ICE=%d CLKD=%u HCTL=%08x SDBP=%d SDVS=%u CON=%08x\n",
++			cmd->opcode, cmd->arg, cmdreg,
++			OMAP_HSMMC_READ(host->base, SYSCTL),
++			!!(OMAP_HSMMC_READ(host->base, SYSCTL) & CEN),
++			!!(OMAP_HSMMC_READ(host->base, SYSCTL) & ICE),
++			(OMAP_HSMMC_READ(host->base, SYSCTL) & CLKD_MASK) >> 6,
++			OMAP_HSMMC_READ(host->base, HCTL),
++			!!(OMAP_HSMMC_READ(host->base, HCTL) & SDBP),
++			(OMAP_HSMMC_READ(host->base, HCTL) & SDVS_MASK) >> 9,
++			OMAP_HSMMC_READ(host->base, CON));
++
+ 	OMAP_HSMMC_WRITE(host->base, ARG, cmd->arg);
+ 	OMAP_HSMMC_WRITE(host->base, CMD, cmdreg);
+ }
+@@ -1087,6 +1099,23 @@
+ 	dev_vdbg(mmc_dev(host->mmc), "IRQ Status is %x\n", status);
+ 
+ 	if (status & ERR_EN) {
++		/*
++		 * WL1283 measurement (report 227): the *decoded* error, not the
++		 * errno.  ETIMEDOUT can mean either "no response on the line"
++		 * (CTO) or "the data path timed out" (DTO), and EILSEQ covers
++		 * CRC / end-bit / index failures — all of which reach the MMC
++		 * core as one errno.  Only these bits say which.
++		 */
++		if (host->dev && strstr(dev_name(host->dev), "480d5000"))
++			pr_info("PBIRQ: mmc4 status=%08x CTO=%d CCRC=%d CEB=%d CIE=%d DTO=%d DCRC=%d DEB=%d BADA=%d PSTATE=%08x RSP0=%08x CMD=%08x\n",
++				status,
++				!!(status & CTO_EN), !!(status & CCRC_EN),
++				!!(status & CEB_EN), !!(status & CIE_EN),
++				!!(status & DTO_EN), !!(status & DCRC_EN),
++				!!(status & DEB_EN), !!(status & BADA_EN),
++				OMAP_HSMMC_READ(host->base, PSTATE),
++				OMAP_HSMMC_READ(host->base, RSP10),
++				OMAP_HSMMC_READ(host->base, CMD));
+ 		omap_hsmmc_dbg_report_irq(host, status);
+ 
+ 		if (status & (CTO_EN | CCRC_EN | CEB_EN))

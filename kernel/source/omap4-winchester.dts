@@ -714,6 +714,18 @@
 			0x014 0x000F0003	/* fref_clk0_out / fref_clk3_req */
 		>;
 	};
+
+	/*
+	 * pad 0x4A31E058 low half = gpio_wk31 (GPIO1_31).  The reference
+	 * holds it as a GPIO output driven low (report 218); we left it at
+	 * the reset value, so the line was undriven and its input buffer off,
+	 * i.e. unreadable and uncontrolled (trap 134).  Report 220.
+	 */
+	gpio1_wk31_pins: gpio1-wk31-pins {
+		pinctrl-single,pins = <
+			0x018 0x010B0003	/* gpio_wk31 (0x4A31E058): mux 3, pull down */
+		>;
+	};
 };
 
 /* Give the TWL's MSECURE pad setting a consumer on a device that always probes. */
@@ -1170,6 +1182,18 @@
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x190, 0x0003)	/* gpio_2  (GPIO1_2)  */
 			OMAP4_IOPAD(0x1b4, 0x0003)	/* gpio_14 (GPIO1_14) */
+			/*
+			 * The reference drives these three low as GPIO (reports
+			 * 218/220): our board left them at mode 0, so gpiolib
+			 * could not drive them at all (trap 21) and each pad
+			 * drove its alternate function — 0x050 mode 0 is
+			 * gpmc_ad0..ad1 and 0x074 mode 0 is gpmc_ncs0/1, i.e.
+			 * GPMC bus lines, on a board with no GPMC device.  0x058
+			 * is the same story but its low half is GPIO2_4, owned by
+			 * bridge_pins (trap 229), and 0x088 is already mux 3.
+			 */
+			OMAP4_IOPAD(0x050, 0x0103)	/* gpmc_ad0/1  = gpio_32/33 */
+			OMAP4_IOPAD(0x074, 0x0103)	/* gpmc_ncs0/1 = gpio_50/51 */
 		>;
 	};
 
@@ -1183,8 +1207,38 @@
 
 &gpio1 {
 	pinctrl-names = "default";
-	pinctrl-0 = <&gpio1_en_pins>;
+	pinctrl-0 = <&gpio1_en_pins &gpio1_wk31_pins>;
 
+	/*
+	 * GPIO1_0/4/18/28/31: the reference drives these five low and holds
+	 * them (report 218's live capture, report 220).  We left them
+	 * unclaimed, so three of them stayed in mode 0 with their GPMC
+	 * alternate function driving the pad.  Claim them as outputs-low.
+	 */
+	gpio1-ref-low-0 {
+		gpio-hog;
+		gpios = <0 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "gpio1-0";
+	};
+	gpio1-ref-low-18 {
+		gpio-hog;
+		gpios = <18 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "gpio1-18";
+	};
+	gpio1-ref-low-28 {
+		gpio-hog;
+		gpios = <28 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "gpio1-28";
+	};
+	gpio1-ref-low-31 {
+		gpio-hog;
+		gpios = <31 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "gpio1-31";
+	};
 	gpio1-en-2-hog {
 		gpio-hog;
 		gpios = <2 GPIO_ACTIVE_HIGH>;

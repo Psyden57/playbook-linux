@@ -3,8 +3,8 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**8 500 lines / 55 files** against pristine
-**linux-7.3.3** (sha256 `f5856a8b…`, session-48 wrap-up).  It was verified by
+**8 583 lines / 56 files** against pristine (session-49 export)
+**linux-7.3.3** (sha256 `455b45d8…`, session-49 wrap-up).  It was verified by
 applying it to pristine 7.3.3 targets and comparing all 55 files byte-for-byte
 with `local/kernel-tree` — 0 rejects, 55/55 identical.
 **Session 48 retires the session-45 diagnostics** (the machine driver's `pcm:`
@@ -398,7 +398,11 @@ cp /tmp/new.patch kernel/patches/0001-playbook-winchester-7.3.3.patch
 wc -l kernel/patches/0001-playbook-winchester-7.3.3.patch
 ```
 
-**Session 48's export is 8 500 lines / 55 files** (sha256 `f5856a8b…`),
+**Session 48's export was 8 500 lines / 55 files** (sha256 `f5856a8b…`); the
+**session-49** export is **8 583 lines / 56 files** (sha256 `455b45d8…`) and adds
+the report-220 board-DTS GPIO1 pad fix plus `arch/arm/Kconfig.debug`, which the
+tree walk showed had been missing from every export since session 30.  Session
+48's export,
 verified 0 rejects / 55/55 byte-identical.  It used the session-47 patch's
 54-file list **plus `sound/soc/ti/omap-mcbsp-priv.h`**, which a full tree walk
 identified as the only genuine source omission among 90 reported diffs (the

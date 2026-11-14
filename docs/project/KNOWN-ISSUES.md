@@ -1608,6 +1608,152 @@ report 121 §3/§11/§12.
       `fork`+`setsid`+`TIOCSCTTY`+`dup2`+`exec` child works with the parent
       reading the master.  (Session 48.)
 
+219. **The BT half of the WL1283 has its own enable, and it is `gpio 55` =
+      `GPIO2_23` (`BT_EN`, pad `0x4A10007C` bits 31:16), not WL_EN.**  The QNX
+      driver names it only as hwio signal `0x5D`; the pin is driven low → 50 ms
+      → high by **`btp-btmgr`** (`UART_Init` → `UART_BTPower`), not by
+      `devc-seromap-winbt`, via devctl `0x80040501`.  The driver's other GPIO is
+      `GPIO4_28`, the serial "force RTS" line.  **BT_EN is held LOW while the
+      WLAN works** (`GPIO2_DATAOUT` bit 23 = 0), so it is not required for the
+      WLAN core — but a Linux `HCI_Reset` can never be answered until it is
+      driven: pad `0x07C` bits 31:16 must be mux 3 and the line pulsed.  Our
+      DTS only muxes the low half (WL_EN).  (Session 49, report 216.)
+
+220. **The reference loads the WLAN firmware *before* it touches the bus, and
+      its NVS comes from NVRAM, not a file.**  `/base/scripts/wifi.sh` is
+      `mount -Tio-pkt -o nvram,firmdir=/var/ti1283/ /lib/dll/devnp-ti1283.so`
+      after copying `/lib/firmware/ti1283` to `/var/ti1283` and renaming the
+      per-unit INI.  Without `-o nvram` the driver demands
+      `firmdir/nvs_map.bin` and fails (`dev_attach() failed` → `No such
+      device`); **no `nvs_map.bin` exists in the 1917 `/base` or the stock
+      RCFS** — with `nvram` it reads 468 bytes from NVRAM instead.  The slog
+      order is `LoadFiles` → `ConnectBus`, so a missing firmware file looks
+      exactly like "the card does not enumerate" when nothing was ever sent.
+      The interface then stays down with MAC `ff:ff:ff:ff:ff:ff` until
+      `ifconfig ti0 up`.  (Session 49, report 217.)
+
+221. **`slay -f io-pkt-v6-hc` kills the stack that carries `rndis0`.**  On the
+      oracle the WLAN driver must be loaded into (or beside) an io-pkt, and a
+      stray second instance is tempting to kill by name — but `slay` matches
+      the *executable*, so the main `-ptcpip` stack dies with it and the door,
+      qconn and ssh all go with it.  There is then no software path back: the
+      OS is up and the USB device still enumerates (`0fca:8012`), but nothing
+      answers, and only a power cycle recovers.  Kill strays **by pid**
+      (`pidin arg`, then `kill <pid>`); trap 172 restated.  (Session 49.)
+
+222. **io-pkt's `-d` takes its driver options whitespace-separated, and a
+      mis-typed `-d` silently looks for the wrong library.**  The usage text is
+      `-d driver [driver_options]` with options "separated by commas without
+      whitespace"; in practice `-d ti1283 firmdir=/var/ti1283` works while
+      `-d ti1283,firmdir=/var/ti1283` makes io-pkt try to load
+      `devn-ti1283,firmdir=/var/ti1283.so` (`Library cannot be found`).  A
+      full path in `-d` fails the same way.  Also: `-i1` gives a second,
+      isolated stack (`mount -Tio-pkt1`) which is the safe place to put a
+      driver being experimented on.  (Session 49.)
+
+223. **`SRA` (software reset for all) clears `CEN`/`ICE`, so a reset performed
+      after the clock setup leaves the controller with no card clock.**  The
+      1917 reference resets MMCHS5 *first* and programs the clock afterwards;
+      copying its register program into `omap_hsmmc` at the wrong point gave
+      `SYSCTL = 0x00000000` and a probe that timed out with no clock at all.
+      Order matters: reset → `CLKD`/`ICE`/`ICS`/`CEN` → `CON`.  (Session 49,
+      report 217.)
+
+224. **An MMCHS5 left in the reference's command-phase state wedges `reboot
+      -f`.**  On both experiment images (`0xE1B40EB4`, `0x04473A45`) `reboot
+      -f` blocked with two `reboot` processes stuck while the kernel kept
+      serving ssh, the console shell hung behind the stuck one, and the
+      flasher never saw a bootrom.  The clean image reboots normally, so it is
+      the controller state.  Recovery: **`echo b > /proc/sysrq-trigger`** —
+      `sysrq` jumps straight to the reboot and skips the wedged shutdown path.
+      Check `/proc/sys/kernel/sysrq` is `1` first.  (Session 49.)
+
+225. **Reading the wrong register block of a GPIO bank produces a confident
+      wrong conclusion.**  `0x48055000 + 0x00..0x3C` is `REVISION` and the
+      `IRQSTATUS` set/clear registers; `OE`/`DATAIN`/`DATAOUT` are at `+0x134`/
+      `+0x138`/`+0x13C` and `SETDATAOUT`/`CLEARDATAOUT` at `+0x194`/`+0x190`.
+      A dump of the low block on the oracle (all zeros) was read as "GPIO2 is
+      at reset and `startup-playbook` never ran", which is false — the pads were
+      already `0x0118`/`0x0003`/`0x410B`.  Read a bank from `+0x130`.  Related:
+      `memw32 <addr> <val> <mask>` wants `val` **already masked** (trap 209's
+      tool); passing `410B` with mask `FFFF0000` writes zero.  (Session 49.)
+
+226. **`local/work/minimal/wayback.signed` does not boot this armed unit — it is
+      the vendor pair, not ours.**  Its IFS is the stock
+      `PlayBook_2.1.0.1917.4.ifs` (`os_type` **4**), and an armed unit boots on
+      the factory/CRC path, which requires `os_type == 6` (SAFETY §3, trap 68):
+      the unit halts with the red error blink.  Its RCFS is the vendor one too,
+      whose `/base/scripts/startup.sh` has **no** `/accounts/devuser/startup.sh`
+      hook, so even a boot that succeeds has no door and no root ssh.  **The way
+      back to TabletOS is two component flashes**:
+      `local/work/ifs-shim-sealed.ifs` at block `0x825` **and**
+      `local/work/rcfs-1917.rcfs` at block `0x8D5` — the sealed `os_type` 6 shim
+      IFS and the modified RCFS `back-1917.signed` uses.  (Session 49; report
+      218 §1.)
+
+227. **The region-0 RCFS slot now holds the full 1917 RCFS, not the pruned
+      oracle one.**  Session 49 wrote `local/work/rcfs-1917.rcfs` (500 MiB, runs
+      `0x8D5`–`0x2814`) to recover the root hook, so `/base` on media is the
+      full base and the minimal oracle's pruned RCFS is gone from it.
+      `local/work/minimal/setB.signed` is still the pruned pair (shim IFS at
+      `0x825` + pruned RCFS at `0x8D5`) — re-flash that to get the minimal
+      oracle back.  (Session 49; report 218 §5.)
+
+228. **A GPIO that is "the right line" can still be undriven: check the pad mux,
+      not just the number.**  `0x4A100050` and `0x4A100074` were left at mode 0,
+      so the pads `gpmc_ad0`/`gpmc_ad1` and `gpmc_ncs0`/`gpmc_ncs1` were
+      actively driven by pad logic on a board with **no GPMC device**, while
+      gpiolib could not drive them at all (trap 21).  No earlier GPIO
+      comparison found it because those compared `OE`/`DATAOUT` of the lines
+      they knew about, never the pads of *unclaimed* lines.  This is trap 185's
+      class in its pad form; the five lines are the reference's GPIO1
+      0/4/18/28/31, all driven low.  Fixed in the board DTS (mode 3 + pull-down
+      + `output-low` hogs).  (Session 49; report 220.)
+
+229. **A pinctrl group cannot re-mux a pad another group owns.**  Two groups
+      naming the same pad are refused at probe
+      (`pin PIN36 already requested by 48055000.gpio` → `could not request pin
+      … from group gpio1-en-pins`), and the whole group is dropped, not just the
+      entry.  `0x4A100058`'s low half is `gpio_36` = **GPIO2_4**, which
+      `bridge_pins` already claims, so the reference's GPIO1_4-low state cannot
+      be reproduced without moving that ownership deliberately.  Read the
+      overlaps before writing a group; the failure is at boot, in `dmesg`, not
+      at build time.  (Session 49; report 220.)
+
+230. **`pinctrl-single` offsets in `&omap4_pmx_wkup` are relative to
+      `0x4A31E040`, and that block is only `0x38` long.**  A pad written as
+      `0x058` there is rejected (`mux offset out of range: 0x58 (0x38)`); pad
+      `0x4A31E058` is offset **`0x18`**.  `&omap4_pmx_core` is the block where
+      the same pad really is `0x058`.  (Session 49; report 220.)
+
+231. **`WL_IRQ` (GPIO2_21) is not a "chip alive" signal — the reference reads 0
+      too.**  The oracle's **pre-driver** state is `GPIO2_DATAIN = 0x08000018`
+      (bit 21 = 0) and it only becomes `0x08200018` after the driver has powered
+      the chip and downloaded firmware.  Every comparison since session 33 used
+      "bit 21 = 0" as "the chip is not up", i.e. it compared our *pre-driver*
+      state against the reference's *post-firmware* state.  A liveness claim
+      needs a decoded card response, not a board GPIO.  (Session 49, report 227.)
+
+232. **`MMCHS_STAT` bit 16 is `CTO`; bit 15 is the `ERRI` umbrella.**  `CTO` is
+      "no response within **64 clock cycles**" — 160 us at 400 kHz — so a raw
+      `status=0x18000` means "Command Timeout, grouped", not two errors, and it
+      cannot distinguish "no card" from "card slower than 160 us".  Decode
+      `STAT` in the driver; the errno collapses `CTO` and `DTO` into `-110`.
+      The bus state to prove the bus was powered and clocked is `CEN`/`ICE`/
+      `CLKD`/`SDBP`/`SDVS`/`CON` read in `start_command()`, **not** the same
+      registers after a failed probe (which show the torn-down state).
+      (Session 49, report 227.)
+
+233. **`CON = 0x85` must not be copied from the reference: `HR` (bit 2) makes the
+      core generate a response instead of sending the command, and it then hangs
+      on the command that never completes.**  Setting it before the first
+      command stalls `CMD52` with no error at all (no `CTO`, no failure line);
+      setting it later merely times out, which is why the session-49 replay of
+      report 217 looked like an ordinary negative.  `HR` is an MMC
+      interrupt-mode feature; the reference's `CON` only tolerates it because
+      its command path never relies on a host response.  Port `CON` with `OD`
+      only.  (Session 49, report 227 §3a.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it
@@ -1850,6 +1996,31 @@ the route is `DAC1 -> MIXOUT -> LINEOUT1P/LINEOUT2P` with `PM3 = 0x3cf0`,
 `R0x01e = 0`, `R0x034/0x035 = 1` and `R0x038 = 0x0080`.  The board enables are
 `spk` (GPIO2_12, **active low**) and GPIO1_15 (the `audio_boost` enable,
 **high**).  Source: report 215, trap 210, DECISIONS §60.
+
+**3.29 `pmic_twl6030_cfg` *does* enable VMMC and *does* write regulator groups.**
+Report 219 §Q3 concluded the boot-image PMIC configurator "never touches
+VMMC/VPP/VUSIM enables" and "never sets a regulator GROUP".  A second pass with
+a mechanical `movw`/`movt` + call-site sweep (report 226, corroborated by report
+221 §3) shows **six** GROUP writes (all `0x01` = `P1_GRP_6030`, at `0x84`,
+`0x88`, `0x8C`, `0x98`, `0xAD`, `0xB0`) and a VMMC enable at `0x98`–`0x9B`
+(`GRP 01`, `TRANS 03`, `STATE 21`, `VOLT 15` → **3.0 V**).  VPP `0x9C`–`0x9F` and
+VUSIM `0xA4`–`0xA7` genuinely are untouched, so half the old statement stands.
+**It is still not the WLAN's gate**, and that is measured rather than argued:
+**VMMC's STATE register reads `0x00` on TabletOS too**, with `ti0` up — the
+regulator resmgr turns it back off before `wifi.sh` — and MMC5's supply is the
+fixed 1.8 V `vwl1283` in our design, not VMMC.  (Session 49, reports 221/226.)
+
+**3.30 The TWL6030 register at `0x8C`–`0x8E` is VAUX3, not `CLK32KG`.**
+Report 192 §7 (and §3.21 above) label that triple `CLK32KG`, taking the base from
+`drivers/clk/clk-twl.c`.  That table is `twl6032_clks[]` — a **TWL6032**-only
+table — and `TWL6030_REG_CLK32KG` is module index 48 in the PM slave-misc block,
+a different address entirely.  In the TWL6030 map `0x84`/`0x88`/`0x8C` are
+VAUX1/2/3, confirmed by the QNX regulator resmgr's own 20-record name table
+(report 221 §1).  Consequence: the "`CLK32KG` is APP-ON in both OSes" conclusion
+was about **VAUX3**, and the 32 kHz to the WL1283 has **never actually been
+verified** — the local read of `0x60` (`0x55`, i.e. fully on) is the first
+candidate but its identity is not nailed down.  Do not cite `0x8C` as `CLK32KG`.
+(Session 49, reports 219 §4.2, 221/226.)
 
 **Also corrected elsewhere, for completeness:** `0x1cce0` in `winch_lcdctl` is a
 HAL parameter-block defaults initialiser, not the register programmer — the
