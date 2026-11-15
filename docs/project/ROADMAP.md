@@ -4,16 +4,19 @@ Open work only.  Closed and parked item history is archived in
 [`docs/history/ROADMAP-CLOSED.md`](../history/ROADMAP-CLOSED.md).  Each open
 item states the evidence that would close it.
 
-Current focus: **item 7a** — the hd3 Nura root (read-only hd3 + overlayfs, the
-WLAN firmware), then SGX540 (session 54; reports 240/241), with **item 9**
-(peripherals) still active.  hd3 holds the Nura root and it boots; the eMMC write
-stall keeps the root read-only and the DE down.  The audio goal is closed
-(reports 214 and 215), the bench has **ssh over USB** (RNDIS + dropbear) with the
-gadget's DMA now working (session 52), and the **WL1283's WLAN associates and
-passes traffic** (on the region-1 root; the Nura root needs its firmware).  On
-the same chip, **BT's core works** (real inquiry; `hci0`
-registers with mgmt) with the controller-open blocked on a stray byte, then FM
-and GPS.
+Current focus: **item 7a** — the SGX540 is **working** (kernel driver + pvrports
+userspace; EGL/GLES 2.0 on `PowerVR SGX 540`, sessions 55, reports 243–245).
+What remains is to **bake the stack into hd3** (it was tested from the tmpfs
+overlay) and **pick a compositor that runs on this GLES2 driver** — catacomb
+needs `GL_EXT_unpack_subimage`, which the driver lacks.  The eMMC is out of the
+boot path and `elogind`/`tinydm`/`catacomb` start and get a seat.  hd3 holds the
+Nura root and it boots unattended; the region-1 BusyBox root stays the fallback.  The audio goal is
+closed (reports 214/215), the bench has **ssh over USB** (RNDIS + dropbear) with
+the gadget's DMA now working (session 52), and the **WL1283's WLAN associates and
+passes traffic** (on the region-1 root; the Nura root now carries its firmware
+and `wlcore` boots it).  On the same chip, **BT's core works** (real inquiry;
+`hci0` registers with mgmt) with the controller-open blocked on a stray byte,
+then FM and GPS.
 
 ## 7. Packaging (postmarketOS-style)
 
@@ -216,24 +219,39 @@ flasher can replace at every point:
 4. **Done (session 54) — re-point `ROOTFS_RAW_OFF` to `0x49000000`, flash region
    0, boot.**  The `lstat` hand-off fix is needed (the Nura `/sbin/init` is an
    absolute symlink); image `0x060B25F2` boots Nura from hd3.
-4a. **The read-only hd3 + overlayfs root — implemented and built; the flash is
-   the next step (session 54, report 242).**  The eMMC stalls on the first
-   journal/udev write; the initramfs mounts hd3 `MS_RDONLY`+`noload` on a
-   read-only loop and overlays a 256 MiB tmpfs upper.  The hd3 image (root
-   fstab line and tty1 getty removed, the WLAN firmware, the 43 modules) is
-   built, the region 0 is `0xE85217E5`, and the both-halves container
-   (`c3ed1f61…`) is packed.  **Next:** flash it in one bootrom session
-   (`bbusb.py flash --signed … --from-bootrom`), then `pbcon.py 'reboot -f'`,
-   boot the overlay root and check the DE/WLAN.  A writable eMMC root is a
-   separate experiment; the region-1 root is the fallback.
-5. **Only then** SGX: add `sgx-ddk-um` + `linux-openpvrsgx`'s driver (rebased to
-   7.3.3) and test with a trivial EGL/GLES program before any compositor.
+4a. **Done (session 55, report 243) — the read-only hd3 + overlayfs root is
+   flashed and booting.**  The packed container was written in one bootrom
+   session (`COMPLETE 0x40C0 -> cmd 0x4006`, `done`) and the unit booted
+   `7.3.3 #67` on `overlay / … lowerdir=/rootfs,upperdir=/overlay/upper` with
+   the lower `ro without journal`: **no eMMC stall, no journal abort**, and the
+   image's top-up took `BOOTCTR_FCTRY` `0x1d -> 0x32`.  `elogind`, `tinydm` and
+   `catacomb` start, `/run/user/10000` and the catacomb Wayland socket exist,
+   the touch is ready, the backlight is on, and `wlcore` boots the WLAN firmware.
+   The DE draws only its empty bar because the GL renderer fails
+   (`ZINK: failed to load libvulkan.so.1`) — the remaining blocker is the GPU.
+   A writable eMMC root is a separate experiment; the region-1 root is the
+   fallback.
+5. **SGX540 — the GPU WORKS (session 55, reports 244/245); the DE is the
+   remainder.**  The `openpvrsgx-devgroup` 7.3 driver (DDK 1.17.4948957) builds
+   in-tree and binds; the pvrports userspace (`libglvnd`, `mesa-pvr-dri-classic`
+   21.3.9, `sgx-ddk-um` 1.17.4948957 with `gcompat` + `wayland-libs-server`)
+   initializes it (`UM/KM DDK match`), and a headless EGL/GLES 2.0 context
+   reports `GL_RENDERER = PowerVR SGX 540`, `GL_VERSION = OpenGL ES 2.0 build
+   1.17@4948957`.  **Next:** bake the nine APKs + the module autoload + the
+   service into hd3 (the test was in the tmpfs upper), and choose a compositor
+   that works on this GLES2 driver — catacomb panics on
+   `GL_EXT_unpack_subimage`; pvrports supports Phosh (patched phoc) and Plasma,
+   and a wlroots DE is an alternative.
 
 Step 3 is reversible at any time by re-flashing the same block range — which is
 the whole reason it beats an in-place mkfs.
 
 **Closes when:** the unit boots a real rootfs from hd3 unattended, and a trivial
-EGL/GLES 2.0 program runs on SGX540.
+EGL/GLES 2.0 program runs on SGX540.  **Both are met** — Nura boots from the
+read-only hd3 (sessions 54/55) and the EGL/GLES2 probe reports `PowerVR SGX 540`
+(session 55, report 245).  The remaining DE work (a compositor that runs on this
+GLES2 driver, and baking the stack into hd3) is tracked under step 5 and does not
+reopen the GPU result.
 
 ## 8. A BB10 image on the PlayBook — **PARKED (operator, session 25)**
 

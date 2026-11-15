@@ -2194,9 +2194,115 @@ report 121 §3/§11/§12.
        the config.  (Session 54, report 242 §3.)
 
 271. **Before the overlay boot, the hd3 image needs the root `/etc/fstab` line
-       removed, the `tty1` getty removed (the `tinydm` VT), and the
-       `ti-connectivity` firmware added.**  `e2fsck -fn` must exit 0.  (Session
-       54, report 242 §3.)
+        removed, the `tty1` getty removed (the `tinydm` VT), and the
+        `ti-connectivity` firmware added.**  `e2fsck -fn` must exit 0.  (Session
+        54, report 242 §3.)
+
+272. **The overlay root is confirmed on the unit: no eMMC stall, a real seat,
+        and `catacomb` running.**  The flashed container (`0xE85217E5` + the
+        hd3 `1f14915f…`) boots `7.3.3 #67` with
+        `overlay / … lowerdir=/rootfs,upperdir=/overlay/upper,workdir=/overlay/work`,
+        the lower `EXT4-fs (loop0): … ro without journal`, no `Card stuck`/no
+        journal abort.  `elogind`/`tinydm` start, `/run/user/10000` and
+        `catacomb-wayland-1.sock` exist, the touch is ready (irq 110), the
+        backlight is 255, and `wlcore: firmware booted (Rev 7.3.5.0.98)`.
+        (Session 55, report 243.)
+
+273. **A black screen with only catacomb's empty bar is the GL renderer, not
+        the root.**  `/home/playbook/.local/state/tinydm.log` shows
+        `MESA: error: ZINK: failed to load libvulkan.so.1` (Mesa carries only
+        `swrast`/`kms_swrast`/`zink`; there is no `libvulkan`), plus
+        `smithay … failed to create signaled syncobj … ENOTSUP`.  The compositor
+        does get the `1024x600` output.  Do not "fix" this by re-flashing the
+        root: the next step is SGX540 (or a software-render fallback).  (Session
+        55, report 243 §3.)
+
+274. **The Nura `ttyGS0` shell prompt is `playbook:~#`, not `pb> `**, so
+        `tools/pbcon.py` (hardcoded to the old `pb> ` marker) reports "no
+        prompt" and sends nothing.  Drive that shell with a raw helper that
+        writes the line and reads for a fixed time; `reboot -f` sent that way
+        opens the bootrom window.  (Session 55; trap 268 is about the shell,
+        this is the tool mismatch.)
+
+275. **The SGX driver is the active `openpvrsgx-devgroup/linux_openpvrsgx`
+        `pvrsrvkm-7.3` branch, not the `tmlind` 6.1 fork.**  HEAD
+        `101c687a…` carries DDK 1.17.4948957 and already selects
+        `SOC=omap4 SGX=sgx540 SGX_REV=120`.  It needs one kernel export,
+        `EXPORT_SYMBOL(__vmalloc_node_range_noprof);` in `mm/vmalloc.c` (the
+        devgroup branch has it); without it modpost fails for every variant.
+        (Session 55, report 244.)
+
+276. **The pvrsgx Makefile builds nine SoC variants.**  Only
+        `pvrsrvkm_omap4_sgx540_120.ko` is ours; strip it with `--strip-debug`
+        (4.0 MB → 347 KB) and write it flat into
+        `/lib/modules/7.3.3/kernel/`.  `insmod <full path>` works without a
+        depmod index (the module has no external module deps).  (Session 55,
+        report 244.)
+
+277. **The SGX DDK userspace is glibc/armhf; the Nura root is musl 1.2.6.**
+        `libsrv_um`/`libusc`/`libsrv_init` `NEEDED libc.so.6` and use
+        `/lib/ld-linux-armhf.so.3`, so `gcompat` is required, and the Mesa that
+        loads `pvr_dri.so` is the patched `mesa-pvr-dri-classic` 21.3.9, not the
+        distribution Mesa.  `MESA_LOADER_DRIVER_OVERRIDE=pvr` selects it.
+        (Session 55, report 244 §4.)
+
+278. **`/init`'s `BOOTCTR_FCTRY` top-up fires only below `0x1e`.**  A boot
+        that reads `0x31` correctly writes nothing (`0x31 >= 0x1e`); do not
+        assume the counter is `0x32` — read the `dmesg | grep pbrpmb` line.
+        (Session 55; `SAFETY.md` §2.)
+
+279. **The vendor SGX `pvrsrvctl`/DDK blobs do not run under a hand-installed
+        `gcompat` 1.1.0 on this musl root.**  `gcompat` installs
+        `/lib/ld-linux-armhf.so.3` + `libc.so.6`, but `pvrsrvctl` segfaults even
+        on `--help` (`rc=139`), before any service init — i.e. it is the
+        loader/ABI path, not the SGX driver.  Do not conclude the kernel or the
+        blobs are wrong: build the stack the pvrports way in the Alpine/
+        pmbootstrap chroot.  (Session 55.)
+
+280. **The pvrports prebuilt stack (`v23.12/armv7`) installs on this edge
+        root and replaces mainline Mesa.**  `apk` purges `mesa` 26.2.6,
+        `mesa-{egl,gl,gles,dri-gallium,gbm}`, `llvm23-libs` and `spirv-tools`
+        and installs `libglvnd`, `mesa-pvr-dri-classic` and
+        `sgx-ddk-um{,-ti443x,-openrc}`.  It also needs `gcompat` (+
+        `musl-obstack`, `libucontext`) and **`wayland-libs-server`** (the
+        amber EGL needs `libwayland-server.so.0`; the root had only client).
+        The packages also build from source in the edge chroot.  (Session 55,
+        report 245.)
+
+281. **The SGX540 is usable headless: EGL/GLES 2.0 on the PowerVR SGX 540.**
+        `pvrsrvinit` logs `PVR_K: UM DDK-(4948957) and KM DDK-(4948957) match.
+        [ OK ]`; a surfaceless EGL pbuffer context (`EGL_PLATFORM_SURFACELESS_MESA
+        = 0x31DD`, `MESA_LOADER_DRIVER_OVERRIDE=pvr`) reports
+        `GL_RENDERER = PowerVR SGX 540`, `GL_VERSION = OpenGL ES 2.0 build
+        1.17@4948957`.  `/tmp/egltest.py` is the ctypes probe; `es2_info` is
+        useless headless (it insists on X).  (Session 55, report 245.)
+
+282. **catacomb (smithay) cannot use this GLES2 driver: `GLExtensionNotSupported
+        (["GL_EXT_unpack_subimage"])` at renderer creation (`src/udev.rs:400`).**
+        The GPU is fine; the compositor requirement is the blocker.  pvrports
+        supports Phosh (patched phoc) and Plasma, not catacomb.  Choose a
+        wlroots compositor or extend catacomb; do not read the panic as a GPU
+        failure.  (Session 55, report 245 §3.)
+
+283. **The pvr userspace was baked into the hd3 image offline with the x86_64
+        static `apk`.**  Loop-mount the image rw (as root; `pkexec` works), then
+        `apk --root /mnt/... --arch armv7 --allow-untrusted --no-network
+        --no-scripts --repositories-file /dev/null --repository <dir with
+        armv7/APKINDEX.tar.gz> add <pkgs>`.  The repo path must sit above an
+        `armv7/` subdirectory; `apk index --allow-untrusted --rewrite-arch
+        armv7` builds it.  Then `depmod -b <mnt> 7.3.3`, append the module to
+        `/etc/modules`, link the service in `/etc/runlevels/default`, and
+        `e2fsck -fn`.  The image is `85b44deb…`; only hd3 was flashed
+        (`--component --dest-block 0x4915`).  (Session 55, report 245 §6.)
+
+284. **After the SGX bake, a black panel with the backlight on is expected.**
+        The pvr stack replaces mainline Mesa, and catacomb (the only installed
+        compositor) panics on `GL_EXT_unpack_subimage`; the GPU and the display
+        are healthy (`card1`, `renderD129`, `PVR_K … match. [ OK ]`), but no
+        session runs.  Install a compatible compositor before judging the
+        screen.  Do not `dd` `mmcblk1` for a checksum — it is an unnecessary
+        eMMC read on the live overlay (session 55; the read caused a visible
+        display flicker and proves nothing).  (Session 55.)
 
 ## 3. Corrections to older reports
 

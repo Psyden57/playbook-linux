@@ -1670,3 +1670,34 @@ to pristine).  `BOOTCTR_FCTRY` reads **`0x22`** (`dmesg | grep pbrpmb`), above
 the `0x1e` threshold, so `/init` did not write; `0x23` at session start, one unit
 spent by the single reboot.  No flash, no NVRAM/MCT/RPMB write; nothing added to
 the UFS.  **No restore required.**
+
+## Session 54 snapshot (2026-11-15, replaced by the session-55 state)
+
+**The read-only hd3 + overlayfs root is implemented and built; the unit is
+still on the old `0x060B25F2` image + the dirty hd3 — the flash has not run.**
+The operator stopped before it.  The host has the new `0xE85217E5` region-0
+image (`0x9662A4` B, sha256 `fbeb6df0…`), the edited hd3 image
+(`blackberry-playbook-root-overlay.img`, sha256 `1f14915f…`) and the packed
+both-halves container (`both-0xE85217E5-overlay.signed`, 635 961 936 B, sha256
+`c3ed1f61…`; parse CRC `0x493FA440 OK`).
+
+* **The initramfs** mounts hd3 read-only (`LO_FLAGS_READ_ONLY`, `MS_RDONLY` +
+  `noload`) and overlays a 256 MiB tmpfs upper on `/newroot`; the
+  `/dev`/`/proc`/`/sys` binds and the `lstat` hand-off are on the overlay.
+  [report 242 §1]
+* **The hd3 image edits:** the root `/etc/fstab` line removed, the `tty1` getty
+  removed, the `ti-connectivity` WLAN firmware added, the 43 modules replaced;
+  the kernel/module vermagic matches (`7.3.3 mod_unload modversions ARMv6
+  p2v8`); `e2fsck -fn` exit 0.  [report 242 §3]
+* **The container** packs the region 0 at `16,0` and the hd3 at `16640,0` (the
+  loader block minus `0x815`).  [report 242 §4]
+* **Media unchanged:** region 0 `0x060B25F2`; region 1 `49e318bf…` (the
+  fallback, not booted); hd3 the dirty Nura root (the journal aborted); the
+  pristine host hd3 `076bafcf…`.  `BOOTCTR_FCTRY` `0x1e` (the same boot; no
+  reboot).  The unit is on the Nura read-only root; the ACM `0fca:8010`,
+  `ttyACM0` 0666; **no sshd**; the `ttyGS0` shell was busy at wrap-up.
+* **Next:** flash the container in one bootrom session
+  (`bbusb.py flash --signed … --from-bootrom --password 0000 --apply`, then
+  `pbcon.py 'reboot -f'`), boot the overlay root and check the DE/WLAN.  The
+  flash is destructive but flasher-restorable; region 1 stays intact.  [report
+  242 §5; HANDOFF]

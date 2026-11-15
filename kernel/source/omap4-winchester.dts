@@ -837,9 +837,9 @@
 	ti,no-reset-on-init;
 };
 
-/* GPU (SGX) and IVA-HD have no in-tree driver / are not needed yet. */
+/* GPU (SGX540) comes up through the out-of-tree pvrsgx driver. */
 &sgx_module {
-	status = "disabled";
+	status = "okay";
 };
 &iva_hd_target {
 	status = "disabled";

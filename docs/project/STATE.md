@@ -1,38 +1,51 @@
 # Current state
 
-## Current state — 2026-11-15 (session 54)
+## Current state — 2026-11-15 (session 55)
 
-**The read-only hd3 + overlayfs root is implemented and built; the unit is still
-on the old `0x060B25F2` image + the dirty hd3 — the flash has not run.**  The
-operator stopped before it.  The host has the new `0xE85217E5` region-0 image
-(`0x9662A4` B, sha256 `fbeb6df0…`), the edited hd3 image
-(`blackberry-playbook-root-overlay.img`, sha256 `1f14915f…`) and the packed
-both-halves container (`both-0xE85217E5-overlay.signed`, 635 961 936 B, sha256
-`c3ed1f61…`; parse CRC `0x493FA440 OK`).
+**The read-only hd3 + overlayfs root is flashed and booting, and the SGX540
+kernel driver builds on 7.3.3 and binds the GPU.**  The packed both-halves
+container was written in one bootrom session (`COMPLETE 0x40C0 -> cmd 0x4006`,
+`done`); the unit boots `7.3.3 #68` on
+`overlay / … lowerdir=/rootfs,upperdir=/overlay/upper,workdir=/overlay/work`
+with the lower `EXT4-fs (loop0): … ro without journal`.  **No eMMC stall and no
+journal abort.**  `elogind`, `tinydm` and `catacomb` run, `/run/user/10000` and
+the catacomb Wayland socket exist, the Munin touch is ready, the backlight is
+255, and `wlcore` boots the WLAN firmware.  `/init` took `BOOTCTR_FCTRY`
+`0x1d -> 0x32` (`PASS`).  [report 243]
 
-* **The initramfs** mounts hd3 read-only (`LO_FLAGS_READ_ONLY`, `MS_RDONLY` +
-  `noload`) and overlays a 256 MiB tmpfs upper on `/newroot`; the
-  `/dev`/`/proc`/`/sys` binds and the `lstat` hand-off are on the overlay.
-  [report 242 §1]
-* **The hd3 image edits:** the root `/etc/fstab` line removed, the `tty1` getty
-  removed, the `ti-connectivity` WLAN firmware added, the 43 modules replaced;
-  the kernel/module vermagic matches (`7.3.3 mod_unload modversions ARMv6
-  p2v8`); `e2fsck -fn` exit 0.  [report 242 §3]
-* **The container** packs the region 0 at `16,0` and the hd3 at `16640,0` (the
-  loader block minus `0x815`).  [report 242 §4]
-* **Media unchanged:** region 0 `0x060B25F2`; region 1 `49e318bf…` (the
-  fallback, not booted); hd3 the dirty Nura root (the journal aborted); the
-  pristine host hd3 `076bafcf…`.  `BOOTCTR_FCTRY` `0x1e` (the same boot; no
-  reboot).  The unit is on the Nura read-only root; the ACM `0fca:8010`,
-  `ttyACM0` 0666; **no sshd**; the `ttyGS0` shell was busy at wrap-up.
-* **Next:** flash the container in one bootrom session
-  (`bbusb.py flash --signed … --from-bootrom --password 0000 --apply`, then
-  `pbcon.py 'reboot -f'`), boot the overlay root and check the DE/WLAN.  The
-  flash is destructive but flasher-restorable; region 1 stays intact.  [report
-  242 §5; HANDOFF]
+**SGX540 (session 55, reports 244/245): THE GPU WORKS.**  The driver
+(`openpvrsgx-devgroup` 7.3, DDK 1.17.4948957) is in the tree and binds
+(`pvrsrvkm 56000000.gpu`, `card1`/`renderD129`); the pvrports userspace
+(`libglvnd` + `mesa-pvr-dri-classic` 21.3.9 + `sgx-ddk-um` 1.17.4948957, with
+`gcompat` and `wayland-libs-server`) initializes it —
+`PVR_K: UM DDK-(4948957) and KM DDK-(4948957) match. [ OK ]` — and a headless
+EGL/GLES 2.0 context reports **`GL_RENDERER = PowerVR SGX 540`,
+`GL_VERSION = OpenGL ES 2.0 build 1.17@4948957`**.  **The stack is baked into
+hd3** (image `85b44deb…`): the module autoloads, the `sgx-ddk-um` service runs,
+and the EGL probe works on a fresh boot.  **catacomb cannot use it**: smithay
+requires `GL_EXT_unpack_subimage`, which the SGX540 GLES2 driver lacks, and
+catacomb panics — so the panel is black with the backlight on.  A compatible
+compositor (Phosh/phoc or a wlroots DE) is the next step.
+
+* **Region 0 = `0xA8F0F30C`** (`0x967880` B, sha256 `fb9905f3…`, kernel
+  `7.3.3 #68`) — the read-only/overlay initramfs **with `&sgx_module` enabled**.
+* **hd3 = `85b44deb…`** (the overlay image + the **pvr userspace stack** and the
+  347 KB `pvrsrvkm_omap4_sgx540_120.ko`), flashed this session
+  (`--component --dest-block 0x4915`).
+* **Region 1 = `49e318bf…`** (the BusyBox fallback), intact and not booted.
+* **Bench:** the ACM is `0fca:8010`, `ttyACM0` 0666, the Nura `ttyGS0` shell is
+  `playbook:~#`; **no sshd**; `usb0` is DOWN on this root.
+* **Next:** the SGX **userspace** (`sgx-ddk-um` + `mesa-pvr-dri-classic` +
+  `libglvnd` + `gcompat`), a trivial EGL/GLES 2.0 test, then catacomb.  The
+  kernel patch re-export (358 driver files) is pending the packaging decision.
 
 ## Previous states
 
+* **session 54** (2026-11-15) — pmbootstrap built the Nura root, hd3 was flashed
+  at `0x4915` and Nura booted, but the eMMC write stall remounted the root
+  read-only; the read-only overlay root was implemented and built (reports
+  240–242).  The full snapshot is in
+  [`docs/history/STATE-HISTORY.md`](../history/STATE-HISTORY.md).
 * **session 53** (2026-11-15) — the WL1283 BT core works (a full BR/EDR
   inquiry; the reference's `WL1283.bts` replays 315/315 and makes `hci0`
   register with mgmt), and item 7a (hd3/Nura/SGX) was scoped.  The full
@@ -62,7 +75,7 @@ The per-session snapshots are in
 | DRAM / memory map | **working** | 1 GB at `0x80000000`; kernel runs from `0x84000000`-loaded zImage, decompressed to `0x80008000`; DTS comment |
 | Kernel self-capture | **working** | DRAM ring at PA `0x88000000` (32 KB) + breadcrumb/event log; `tools/pb_ring.py`, `tools/pb_events.py`. Bootstrap §3 |
 | WDT2 | **working — 58.6 s window, 10 s pet (session 31)** | The loader arms `WLDR = 0xFFFC1800` (7.8125 s); the kernel reprograms it to the reference's `0xFFE2B400` (58.6 s) at the late initcall via `WSPR` (`0xAAAA`→`0x5555` stop, write `WLDR`, `0xBBBB`→`0x4444` start), **polling `WWPS`** after each write, and pets every 10 s (`TGR` read→invert→write); fallback 2 s if the readback fails.  Verified on `0xE36C679A` by `WCRR` reload timing (~10 s) and uptime >275 s.  The expected dmesg line is missing on 7.3.3 (printk anomaly).  Report 109 §8.1 + correction; trap 115; decision §38 |
-| eMMC (MMC2) | **reads proven; writes healthy — but writers must use large blocks** | `mmcblk1` = MCGAFA 59.4 GiB, `boot0`/`boot1`/`rpmb`; needs the `vemmc` fixed supply for `ocr_avail` (report 109 §9).  Session 16 read a freshly flashed 11 152 064-byte image back **byte-exactly** and matched a pre-flash TabletOS capture (report 134); the MMC2 functional clock is 96 MHz.  Session 17 measured the write path (report 136): the driver has no request-size limit — an O_DIRECT write gives **256 KiB `CMD25`s, 5.5–7.0 MB/s** (4 KiB chunks: 0.93 MB/s), one `CMD13` per request (normal `mmc_blk_card_busy`).  The old 17–32 KB/s was `recv`'s tiny buffered writes plus 4–7 unthrottled `printk`s per request to **fbcon**.  Use ≥64 KiB (ideally 256 KiB–1 MiB) writes with the MMC trace off.  **Session 18: region 1 now holds a bootable Linux root** (32 MiB ext4 at raw `0x29000000`), written through the pre-OS `0xF7` loop (2055 frames) and read back byte-exactly (QNX `dd` and Linux `blk sumb`); it mounts read-only via a loop and its `/init` runs (report 140).  **Session 54 (report 241): the hd3 writable root stalls this path.**  The first ext4 journal/udev write after the 597 MiB bootrom image gives `mmc1: Card stuck being busy! __mmc_poll_for_busy`; the loop write fails, the journal aborts, and ext4 remounts `emergency_ro`.  A later 4 KiB write to scratch hd3 returns `I/O error`; reads are fine.  The region-1 root is **no journal** and stable.  Workaround: read-only hd3 + overlayfs (`CONFIG_OVERLAY_FS=y`); the eMMC write-latency/cache fix is a separate experiment. |
+| eMMC (MMC2) | **reads proven; writes healthy — but writers must use large blocks** | `mmcblk1` = MCGAFA 59.4 GiB, `boot0`/`boot1`/`rpmb`; needs the `vemmc` fixed supply for `ocr_avail` (report 109 §9).  Session 16 read a freshly flashed 11 152 064-byte image back **byte-exactly** and matched a pre-flash TabletOS capture (report 134); the MMC2 functional clock is 96 MHz.  Session 17 measured the write path (report 136): the driver has no request-size limit — an O_DIRECT write gives **256 KiB `CMD25`s, 5.5–7.0 MB/s** (4 KiB chunks: 0.93 MB/s), one `CMD13` per request (normal `mmc_blk_card_busy`).  The old 17–32 KB/s was `recv`'s tiny buffered writes plus 4–7 unthrottled `printk`s per request to **fbcon**.  Use ≥64 KiB (ideally 256 KiB–1 MiB) writes with the MMC trace off.  **Session 18: region 1 now holds a bootable Linux root** (32 MiB ext4 at raw `0x29000000`), written through the pre-OS `0xF7` loop (2055 frames) and read back byte-exactly (QNX `dd` and Linux `blk sumb`); it mounts read-only via a loop and its `/init` runs (report 140).  **Session 54 (report 241): the hd3 writable root stalls this path.**  The first ext4 journal/udev write after the 597 MiB bootrom image gives `mmc1: Card stuck being busy! __mmc_poll_for_busy`; the loop write fails, the journal aborts, and ext4 remounts `emergency_ro`.  A later 4 KiB write to scratch hd3 returns `I/O error`; reads are fine.  The region-1 root is **no journal** and stable.  Workaround: read-only hd3 + overlayfs (`CONFIG_OVERLAY_FS=y`); **session 55 (report 243) confirmed it: the overlay boot has no `Card stuck`, no journal abort, the lower `ro without journal` and all writes in the tmpfs upper.**  The eMMC write-latency/cache fix is a separate experiment. |
 | USB device + gadget | **working — DMA now actually used (session 52)** | enumerates `0fca:8010`: CDC-ACM (console) + **RNDIS** (network) in one configuration; High Speed (480 Mbps).  **Session 52 (report 236 §7): the RNDIS path had been running MUSB's PIO fallback** — `dma_channel_program()` refuses buffers that are not 4-byte aligned on RTL 2.00 (`MUSB_HWVERS = 0x0800`), and u_ether hands it 2-mod-4 addresses.  Fixed with `musb->g.quirk_avoids_skb_reserve = 1` (RX) and a TX realign in `gether_start_xmit()`: **RX 3.3 → 6.3 MB/s, TX 3.3 → 4.1 MB/s** (raw `nc`).  The RNDIS function's one-frame-per-transfer structure is now the limit; CDC-NCM is the untested next step.  The ACM console is still only ~134 KB/s and **drops bytes when the host blasts** (report 136 §3.3) — do not send multi-MB images through it.  Reports 114, 136, 236 |
 | **WL1283 (MMC5)** | **WORKING — associates, leases and passes traffic (session 52); scans (session 51)** | **Session 52 (report 236): the association blocker was the missing `ccm`/`ctr` crypto modules.**  `ieee80211_key_alloc()` allocates a `ccm(aes)` AEAD for every CCMP key; without it the PTK install returns `-ENOENT` and wpa_supplicant mislabels it `WRONG_KEY` (the handshake itself is fine — message 3 decrypts).  `ccm.ko`/`ctr.ko` ship in region 1 and `rcS` modprobes them before the stack: `wpa_state=COMPLETED`, WPA2-CCMP on 5785 MHz at −41 dBm, MCS7/65 Mbit/s, DHCP **192.168.0.212**, gateway and 1.1.1.1 reachable.  A 5 GHz AP needs `iw reg set <CC>` (the world domain marks 5735–5835 MHz `PASSIVE-SCAN`).  The **per-unit NVS** is shipped (`wl128x-nvs-perunit.bin`).  **Session 51 (report 232): the recovery loop was the firmware's ELP sleep.**  The failing transfer is the **FW-status read** — CMD53 to `0x1efc0`, 84 bytes, byte mode, 256-byte block — from the WL_IRQ thread right after `firmware booted`; it fails only once the chip has slept, and the identical read succeeds when it is awake.  Fix: `wl12xx_default_conf.conn.sta_sleep_auth = WL1271_PSM_CAM` (was `ILLEGAL` → ELP).  Verified after a real region-1 flash + reboot: one firmware boot, zero failures, `wlan0` `UP`, debugfs `sleep_auth` 0.  `wl128x-fw-4-sr.bin` is the **shipped** SR firmware (report 235): 5-sr (7.3.10.0.142) boots but panics on the first scan, so `wl12xx`'s floor is lowered to 7.3.5.0 and `WL128X_FW_NAME_SINGLE` names the 4-sr file; both files stay installed.  **WLAN (report 231):** `wlcore`/`wl12xx`/`mac80211`/`cfg80211` + `wl128x-nvs.bin`, the `ti,wl1283` child (`reg = <2>`, WL_IRQ gpio 53), `cap-power-off-card`, and an `mmc-pwrseq-simple` pulsing `WL_EN` (low → 50 ms → high → 120 ms) → firmware `Rev 7.3.5.0.98`, MAC `14:74:11:8f:9c:c3` (the assigned address, patched into the generic NVS; the radio calibration is still default).  **Enumeration (report 230):** the TWL6030 `CLK32KG` 32.768 kHz SLOW_CLK is physical `0xBC`–`0xBE` and was OFF; `CONFIG_CLK_TWL=y` + an enable in `clk-twl`'s probe (~1.9 s, before MMC5 at ~3.0 s) fixes it.  **Remaining (report 235):** the WLAN **associates** and passes traffic (session 52); open and not blocking use are *why* the 5-sr firmware panics on scan (235 §3) and *why* the ELP wake is not honoured (232 §6).  **Session-49/50 negatives (do not repeat):** the reference's MMCHS5 program and WL_EN ordering replayed, the stock-TabletOS diff, the boot-path RE, the clock sweep (reports 217/218/221–229).  The BT half's enable is `BT_EN` = gpio 55 = `GPIO2_23`, held low while the WLAN works (report 216). |
 | **WL1283 BT** | **the CORE WORKS — real inquiry; `hci0` now registers with mgmt (session 53)** | UART2 `0x4806C000` = `/dev/ttyS1`, H4 at 115200 8N1; `BT_EN` = gpio 55 = `GPIO2_23` (pad `0x4A10007C` mux 3), pulsed low → 50 ms → high.  **Measured (report 238):** the core answers `HCI_Reset`, reports `hci ver 6` / `lmp ver 6` / `mfr 0x002b` (TI, BT 4.0), and **runs a full BR/EDR inquiry that finds a peer** (`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.  **The reference's `WL1283.bts` loads 315/315** and moves LMP subversion `0x2b0f` → `0x2b33`; loaded **before** the attach it makes `hci0` **register with mgmt** (0 → 1 controller, negative control both ways) by fixing the `0x201c` reply length.  **Left:** opening the controller — a stray `0x30` byte arrives ~200 ms after the last init reply and the kernel's H4 receiver correctly rejects it as not-an-H4-type (`-EILSEQ` → `Frame reassembly failed (-84)` → `SET_POWERED` `0x05`); the instrumented `h4_recv()` shows it in 6 of 6 runs, but **which side emits it is open** (it never appears from userspace).  Then ship `l2cap`/`sco`/`rfcomm`/`hidp` (not in region 1 yet) and a stack.  **LE is refused by the controller**, though the chip reports BT 4.0 with the LE-supported bit — no known sequence, and impossibility not demonstrated.  The pack survives `HCI_Reset` but not a `BT_EN` power cycle.  Tools in `rootfs/bt/`.  Reports 216/237/238, traps 248–252, DECISIONS §72/§73 |
@@ -95,9 +108,10 @@ the durable record is the CRC and what it demonstrated, not the file.
 
 | image | base | role |
 |---|---|---|
-| `0xE85217E5` | 7.3.3 | **built, NOT flashed — the read-only hd3 + overlayfs init** (session 54: `0x9662A4` B, sha256 `fbeb6df0…`; `local/images/kernel-0xE85217E5-overlay.img`; the packed container `c3ed1f61…`) |
+| `0xA8F0F30C` | 7.3.3 | **current region 0 — the read-only hd3 + overlayfs init with `&sgx_module` enabled** (session 55: `0x967880` B, sha256 `fb9905f3…`, kernel `#68`; `local/images/kernel-0xA8F0F30C-sgx.img`) |
+| `0xE85217E5` | 7.3.3 | previous region 0 — the overlay init without SGX (session 55: `0x9662A4` B, sha256 `fbeb6df0…`; kernel `#67`; `local/images/kernel-0xE85217E5-overlay.img`) |
 | `0xE84693A1` | 7.3.3 | **built, NOT flashed** (session 54: the PB prints `pr_debug`/dyndbg, `PBREQ`/`PBIRQ` behind `pb_trace`; `CONFIG_DYNAMIC_DEBUG=y`, `CONFIG_OVERLAY_FS=y`; `0x967A94` B, sha256 `663348d0…`; `local/images/kernel-0xE84693A1-quietpb.img`) |
-| `0x060B25F2` | 7.3.3 | **current region 0** (session 54: `ROOTFS_RAW_OFF=0x49000000`, the `lstat` hand-off; `0x939D04` B, sha256 `b548ec6c…`) |
+| `0x060B25F2` | 7.3.3 | previous region 0 (session 54: `ROOTFS_RAW_OFF=0x49000000`, the `lstat` hand-off, read-write root; `0x939D04` B, sha256 `b548ec6c…`) |
 | `0x8B709950` | 7.3.3 | session-54 intermediate (`ROOTFS_RAW_OFF=0x49000000` with the old `access()` hand-off; `0x939D5C` B, sha256 `835fa863…`) |
 | `0xDD66D8C3` (readback) | 7.3.3 | the session-52 image, read back before the hd3 switch and CRC-verified (`local/images/kernel-0xDD66D8C3-readback.img`, sha256 `06e61587…`) |
 | `0xDD66D8C3` | 7.3.3 | session 52 (the UART2 **CTS/RTS pads** — the BT core answers HCI; `0x939E4C` B) — no longer current region 0 |
@@ -145,15 +159,15 @@ Do not boot `0x5E40C5C1` or `0xB9A1BC4F` (two lanes), or `0x3B04298E`
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **the session-54 Linux image `0x060B25F2`** (`0x939D04`, kernel `7.3.3`, `ROOTFS_RAW_OFF=0x49000000` + the `lstat` hand-off; `boot/chainloader/kernel.img` holds the newer `0xE84693A1`), region 0.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  The previous `0xDD66D8C3` was read back and saved (`local/images/kernel-0xDD66D8C3-readback.img`, sha256 `06e61587…`).  Earlier Linux images (region 0 only, block `0x825`): `0x8B709950`, `0x50CD2A48`, `0x5C37F181`, `0x5A7F15D8`, `0x9712A086`, `0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`, `0x17C2E119`, `0xBAFD9B3B`, `0x91E22899`, `0x12C8C320`, `0xAD85DF0F`, `0xF8BADFF3`, `0x36597040`, `0xB43F169B`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A` (`local/images/kernel-0xE36C679A-wdt58s.img`, 0x91A748, sha256 `bdbaf5fc…`), and the touch `0x04AF1433` |
+| region-0 IFS on media | **the session-55 SGX image `0xA8F0F30C`** (`0x967880` B, sha256 `fb9905f3…`, kernel `7.3.3 #68`, the read-only hd3 + overlayfs init with `&sgx_module` enabled; `boot/chainloader/kernel.img` matches), region 0.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier images (the `0xE85217E5` overlay, `0x060B25F2`, `0xDD66D8C3`, …) remain on the host.  Earlier Linux images (region 0 only, block `0x825`): `0xE85217E5`, `0xE84693A1`, `0x8B709950`, `0x50CD2A48`, `0x5C37F181`, `0x5A7F15D8`, `0x9712A086`, `0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`, `0x17C2E119`, `0xBAFD9B3B`, `0x91E22899`, `0x12C8C320`, `0xAD85DF0F`, `0xF8BADFF3`, `0x36597040`, `0xB43F169B`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A`, and the touch `0x04AF1433` |
 | region-0 RCFS (`/base`) | **now the full 1917 RCFS at `0xC00000`** (`local/work/rcfs-1917.rcfs`, the modified one with the `/accounts/devuser/startup.sh` hook, sha256 `c4ab6e34…`): session 49 wrote it to recover root on a stock-TabletOS boot, and it sits **outside** the 7.3.3 test image (which ends at `0x93A1DC`).  The pruned oracle RCFS is no longer on media — re-flash `local/work/minimal/setB.signed` for the minimal oracle (trap 227).  Not readable as `/base` without the 1917 IFS |
 | UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
 | `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it last ran during the session-35 S3/S2 TabletOS bench and topped `BOOTCTR_FCTRY` back to `0x32` |
-| `BOOTCTR_FCTRY` | **`0x1e`** (`1e000000`, block `0x3a` record@196, session-54 boot) — exactly at the `/init` threshold (`0x1e >= threshold 0x1e, no write`); the next boot spends one -> `0x1d` and `/init` tops it to `0x32`.  **Read it on Linux with `dmesg \| grep pbrpmb`** (the top-up line carries the 4-byte LE record).  Self-replenishing: `/init` tops up at ≤`0x1e`, a TabletOS boot writes `0x32` (`SAFETY.md` §2, `DEVELOPMENT.md` §5) |
-| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`49e318bf…`** (`local/images/rootfs-region1-wl1283-bt.ext4`, session 52: the WLAN fixes, **`ccm`/`ctr`**, the per-unit NVS, the CAM+4-sr `wl12xx.ko` and the seven Bluetooth modules), **43 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus **`cfg80211`, `mac80211`, `wlcore`, `wlcore_sdio`, `wl12xx`, `libarc4`, `crc7`** and **`bluetooth`, `hci_uart`, `btbcm`, `crc-ccitt`, `ecdh_generic`, `ecc`, `kpp`**), `pbplay`, `pbmix`, **dropbear**, **`/usr/bin/iw`**, **`/usr/sbin/wpa_{supplicant,cli,passphrase}`**, and **`/lib/firmware/ti-connectivity/{wl128x-fw-4-sr.bin,wl128x-fw-5-sr.bin,wl128x-nvs.bin}`** plus the signed **`/lib/firmware/regulatory.db`/`.p7s`**; `rcS` loads the wireless stack and `bluetooth hci_uart`.  Earlier images: `…-wl1283-final.ext4` (`877c42c3…`), `…-wl1283-assoc.ext4` (`6c2cfb30…`), `a148c362…`, `7e067560…`, `88084b78…`, `a4e76b18…` and `0342ab06…`.  The modules in any of them can be checked by extracting them with `debugfs` (trap 163).  **Session 54: not booted.**  The region-0 image is the hd3-pointing `0x060B25F2`; it mounts hd3 (Nura) and never touches region 1.  This root remains the fallback; its `rcS`/dropbear/WLAN/BT are unchanged. |
-| TabletOS / OS | **NOT running** — the unit is on the **Nura root from hd3** (image `0x060B25F2`, `0fca:8010`, console `playbook:~#` on the USB ACM, no sshd; the root is read-only `emergency_ro` after the eMMC stall).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
-| hd3 (MCT `0x1C`, FS at loader block `0x4915` / raw `0x49000000`) | **the Nura root** (625 999 872 B ext4; the pristine host image `local/work/nura/images/blackberry-playbook-root-hd3.img`, sha256 `076bafcf…`).  The media's journal is **aborted/dirty** from the first boot; the device-side SHA matched the host **immediately after the flash**.  Reflash the pristine image at **`0x4915`** (not `0x4905`) to restore.  The QNX userland is no longer on media; the 1917 IFS + vendor UFS are the way back |
-| device-side files | **persistent on the UFS**: `/accounts/devuser/startup.sh` and our `.ssh/authorized_keys` (root ssh); session 49 added `/var/ti1283/{firmware.bin,tiwlan.ini}` on `hd3` (the reference WLAN staging; the hd3 repurpose overwrote it).  `memdump3`/`memw32`/`pbi2c` are **not** on the UFS: push them to `/tmp` after every reboot (trap 177).  **Session 54 deployed nothing persistent**: the Nura root is read-only; the live `/var`/`/home`/`/tmp` tmpfs mounts and `/tmp/catacomb.log` are volatile.  The full boot log is on the host as `docs/captures/playbook-live-2026-11-15-hd3-nura-boot.txt` |
+| `BOOTCTR_FCTRY` | **`0x30`** (the session-55 boots read `0x1d` → `/init` wrote `0x32`; then `0x31` and `0x30`, both `>= 0x1e`, no write).  Block `0x3a` record@196.  **Read it on Linux with `dmesg \| grep pbrpmb`** (the top-up line carries the 4-byte LE record).  Self-replenishing: `/init` tops up at <`0x1e`, a TabletOS boot writes `0x32` (`SAFETY.md` §2, `DEVELOPMENT.md` §5) |
+| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`49e318bf…`** (`local/images/rootfs-region1-wl1283-bt.ext4`, session 52: the WLAN fixes, **`ccm`/`ctr`**, the per-unit NVS, the CAM+4-sr `wl12xx.ko` and the seven Bluetooth modules), **43 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus **`cfg80211`, `mac80211`, `wlcore`, `wlcore_sdio`, `wl12xx`, `libarc4`, `crc7`** and **`bluetooth`, `hci_uart`, `btbcm`, `crc-ccitt`, `ecdh_generic`, `ecc`, `kpp`**), `pbplay`, `pbmix`, **dropbear**, **`/usr/bin/iw`**, **`/usr/sbin/wpa_{supplicant,cli,passphrase}`**, and **`/lib/firmware/ti-connectivity/{wl128x-fw-4-sr.bin,wl128x-fw-5-sr.bin,wl128x-nvs.bin}`** plus the signed **`/lib/firmware/regulatory.db`/`.p7s`**; `rcS` loads the wireless stack and `bluetooth hci_uart`.  Earlier images: `…-wl1283-final.ext4` (`877c42c3…`), `…-wl1283-assoc.ext4` (`6c2cfb30…`), `a148c362…`, `7e067560…`, `88084b78…`, `a4e76b18…` and `0342ab06…`.  The modules in any of them can be checked by extracting them with `debugfs` (trap 163).  **Session 55: not booted.**  The region-0 image is the hd3-pointing `0xA8F0F30C`; it mounts hd3 (Nura) and never touches region 1.  This root remains the fallback; its `rcS`/dropbear/WLAN/BT are unchanged. |
+| TabletOS / OS | **NOT running** — the unit is on the **Nura root from hd3** (image `0xA8F0F30C`, `0fca:8010`, console `playbook:~#` on the USB ACM, no sshd; the root is the read-only hd3 + tmpfs overlay, `overlay / … rw`, the lower `ro without journal`, no `Card stuck`).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
+| hd3 (MCT `0x1C`, FS at loader block `0x4915` / raw `0x49000000`) | **the Nura overlay image + the SGX pvr userspace** (625 999 872 B ext4; sha256 `85b44deb…`), flashed this session with `--component --dest-block 0x4915`.  It is the session-54 overlay image + `/lib/modules/7.3.3/kernel/pvrsrvkm_omap4_sgx540_120.ko` + the pvrports stack (`libglvnd`, `mesa-pvr-dri-classic`, `sgx-ddk-um{,-ti443x,-openrc}`, `gcompat`, `wayland-libs-server`), with the module in `/etc/modules` and `modules.dep`, the `sgx-ddk-um` service in the default runlevel, and `MESA_LOADER_DRIVER_OVERRIDE=pvr` in a tinydm env file.  Mainline mesa 26.2.6 / llvm23 / spirv-tools were purged by the replacement.  It is mounted **read-only** at boot (`MS_RDONLY`+`noload`, a `LO_FLAGS_READ_ONLY` loop).  The pre-pvr images (`1fcf0cb0…`, `1f14915f…`) and the pristine `076bafcf…` remain on the host.  The QNX userland is no longer on media; the 1917 IFS + vendor UFS are the way back |
+| device-side files | **persistent on the UFS**: `/accounts/devuser/startup.sh` and our `.ssh/authorized_keys` (root ssh); session 49 added `/var/ti1283/{firmware.bin,tiwlan.ini}` on `hd3` (the reference WLAN staging; the hd3 repurpose overwrote it).  `memdump3`/`memw32`/`pbi2c` are **not** on the UFS: push them to `/tmp` after every reboot (trap 177).  **Session 55 baked the pvr userspace into hd3** (persistent, unlike the earlier tmpfs test); `/var`/`/home`/`/tmp` remain a tmpfs upper, so the DE state is still volatile.  The first-Nura-boot log is `docs/captures/playbook-live-2026-11-15-hd3-nura-boot.txt` |
 
 The factory boot budget is **self-maintaining in bench use**: every successful
 factory/CRC boot spends one unit, and the booted OS puts it back — our Linux
@@ -166,12 +180,16 @@ and a failed/half-formed write or a flat pack is still a brick risk.
 
 ## Blockers in play
 
-**Session 54 — the open blockers are:** (1) the **eMMC write stall** on the
-hd3 writable root (`mmc1: Card stuck being busy!`, the journal aborts and ext4
-remounts read-only); (2) the **Nura DE** (`tinydm`/`elogind`/`libseat`, no
-`/run/user/10000`); (3) the **WLAN firmware missing** from the Nura root; (4)
-**SGX540**.  The audio, the WLAN (on the region-1 root) and the touch below are
-**working/closed** and are kept for the record.
+**Session 55 — the open blockers are:** (1) the **SGX userspace** — the kernel
+driver binds (`pvrsrvkm` on `56000000.gpu`), but the DDK blobs are glibc/armhf
+and the root is musl, and `mesa-pvr-dri-classic` (the Mesa that loads
+`pvr_dri.so`) is not built; (2) the missing DE apps (`swayidle`, `tabula`,
+`epitaph`, `chatty`) if the desktop is wanted complete; (3) the **WLAN is up but
+unconfigured** on the Nura root.  **Closed this session:** the eMMC write stall
+is out of the boot path (read-only lower + tmpfs overlay), the DE's seat works
+(`/run/user/10000`), the Nura root carries the WLAN firmware, and the **SGX
+kernel side works** (card1/renderD129).  The audio, the WLAN (on the region-1
+root) and the touch below are **working/closed** and are kept for the record.
 
 **The audio blocker is closed, speakers included, and the diagnostics are
 retired (sessions 47/48, reports 214/215).**
@@ -233,19 +251,19 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 ## What is next
 
-0. **THE ACTIVE ITEM — the overlay root flash, then SGX540 (session 54,
-   report 242, ROADMAP item 7a).**  The read-only hd3 + overlayfs root is
-   built; **the flash has not run.**  The one next step is:
-   * flash `local/work/nura/images/both-0xE85217E5-overlay.signed` in one
-     bootrom session (`bbusb.py flash --signed … --from-bootrom --password
-     0000 --apply`), then `pbcon.py 'reboot -f'` from the Nura `ttyGS0` shell;
-   * boot the overlay root; check `dmesg` (no `Card stuck`/journal abort,
-     `overlay`), `/run/user/10000`/the tinydm log, `/dev/dri`, the touch,
-     `lsmod`/`wlcore`;
-   * if the DE runs, SGX540.  A writable eMMC root remains a separate
-     experiment (busy timeout / cache / no-journal).
-   **Region 1 stays intact as the fallback**, and hd3 always holds a
-   flasher-restorable image.
+0. **THE ACTIVE ITEM — SGX540: the GPU works; bake it and pick a compositor
+   (session 55, reports 243/244/245, ROADMAP item 7a step 5).**  The overlay
+   root boots and the **SGX540 runs EGL/GLES 2.0** (`PowerVR SGX 540`, DDK
+   `1.17@4948957`) with the pvrports stack.  The next steps:
+   * **the stack is baked into hd3** (`85b44deb…`: the nine APKs, the module
+     in `/etc/modules` + `modules.dep`, the `sgx-ddk-um` service in the default
+     runlevel, and `MESA_LOADER_DRIVER_OVERRIDE=pvr` in a tinydm env file);
+   * **choose a compositor that works on this GLES2 driver**: catacomb panics
+     on `GL_EXT_unpack_subimage` (trap 282); pvrports supports Phosh (patched
+     phoc) and Plasma, and a wlroots DE (e.g. `sxmo-de-dwm`) is the other
+     candidate;
+   * the **kernel patch re-export** (358 driver files) still needs its
+     packaging decision.
 1. **WL1283 — the WLAN ASSOCIATES (session 52, report 236).**  Session 51 fixed
    stability (CAM) and the scan (4-sr); session 52 found the association
    blocker — the **missing `ccm`/`ctr` modules** — and the link now reaches
@@ -307,14 +325,16 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    26 MHz ref/TCXO), the stack probes, and the firmware stays up; the only
    remaining node-level item is the **per-unit `wl128x-nvs.bin`** from the `hd5`
    calibration (report 197), to replace the generic NVS.
-5. **The unit is on the Nura root from hd3** (image `0x060B25F2`), read-only
-   after the eMMC stall; **no sshd** — use the `ttyGS0` shell on the USB ACM
-   (`/dev/ttyACM0`, `playbook:~#`).  `usb0` is `169.254.0.1/16` (RNDIS); the host
-   is `169.254.0.2/16`.  To return to TabletOS, flash the 1917 IFS at block
-   `0x825`; the region-1 root and the earlier images remain.
+5. **The unit is on the Nura overlay root from hd3** (image `0xE85217E5`), with
+   the lower read-only and every write in the tmpfs upper; **no sshd** — use the
+   `ttyGS0` shell on the USB ACM (`/dev/ttyACM0`, `playbook:~#`; note
+   `tools/pbcon.py` expects `pb> ` and does not drive this shell — trap 274).
+   `usb0` is `169.254.0.1/16` (RNDIS); the host is `169.254.0.2/16`.  To return
+   to TabletOS, flash the 1917 IFS at block `0x825`; the region-1 root and the
+   earlier images remain.
 6. **On the old region-1 root, use ssh** (`tools/pbssh.sh`); the Nura root has
-   no sshd, so the ACM is its software console (until the read-only overlay and a
-   session/sshd).  The QNX door uses `PB_LINK=door`.
+   no sshd, so the ACM is its software console.  The QNX door uses
+   `PB_LINK=door`.
 
 ## Workspace location
 

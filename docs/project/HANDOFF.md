@@ -16,36 +16,50 @@ gadget/console **and its RNDIS network link**, the whole display chain, the
 **WL1283 WLAN** (associates, DHCP, traffic on the region-1 root), and **the
 WL1283's BT core** (real inquiry; `hci0` registers with mgmt).
 
-**hd3:** the **Nura** root was flashed at loader block **`0x4915`** and it
-**boots** (7.3.3, Nura edge, OpenRC, the display and the Munin touch) — but the
-first ext4 journal/udev write stalls the eMMC (`mmc1: Card stuck being busy!`),
-aborts the journal and remounts the root read-only, so `tinydm`/`catacomb`
-cannot start.  The **read-only hd3 + overlayfs root is implemented and built**
-(report 242); **the flash did not run** (the operator stopped before it).  The
-unit is still on the old `0x060B25F2` + the dirty hd3.
+**hd3:** the **Nura** root boots on the read-only + overlayfs design (session 55,
+report 243): region 0 `0xA8F0F30C`, hd3 `1fcf0cb0…`, both written in one bootrom
+session.  The lower is `MS_RDONLY`+`noload` on a `LO_FLAGS_READ_ONLY` loop,
+writes go to a 256 MiB tmpfs upper at `/overlay`, and the boot has **no eMMC
+stall and no journal abort**.  `elogind`, `tinydm` and **`catacomb` run**,
+`/run/user/10000` and the catacomb Wayland socket exist, the touch is ready and
+the backlight is on (255).  The screen is black with only catacomb's empty bar
+because the GL path is not there yet.
 
-**What is left, in order:** flash the overlay build and boot the DE (§0d), then
-SGX540 (§0e).  BT's controller open and FM/GPS are parked with their blockers
-recorded (§0f).
+**SGX540 (session 55, reports 244/245): THE GPU WORKS.**  The
+`openpvrsgx-devgroup` 7.3 driver (DDK 1.17.4948957) is in-tree and binds
+(`pvrsrvkm 56000000.gpu`, `card1`/`renderD129`).  The pvrports userspace
+(`libglvnd` + `mesa-pvr-dri-classic` 21.3.9 + `sgx-ddk-um` 1.17.4948957, with
+`gcompat` and `wayland-libs-server`) initializes it —
+`PVR_K: UM DDK-(4948957) and KM DDK-(4948957) match. [ OK ]` — and a headless
+EGL/GLES 2.0 context reports **`GL_RENDERER = PowerVR SGX 540`**,
+`GL_VERSION = OpenGL ES 2.0 build 1.17@4948957`.  **catacomb cannot use it**:
+smithay needs `GL_EXT_unpack_subimage` and panics at renderer creation
+(trap 282); pvrports supports Phosh (patched phoc) and Plasma.
+
+**What is left:** the stack is **baked into hd3** (`85b44deb…`: module
+autoload, service, env) and verified on a fresh boot; the only failing piece is
+the **compositor** — catacomb panics on `GL_EXT_unpack_subimage`, so the panel is
+black with the backlight on.  Choose a compatible compositor (§0e).  BT's
+controller open and FM/GPS are parked with their blockers recorded (§0f).
 
 ## 0a. The media, and the way back
 
-* **region 0 = `0x060B25F2`** (`0x939D04` B, kernel `7.3.3`, the `lstat`
-  hand-off with `ROOTFS_RAW_OFF = 0x49000000`; sha256 `b548ec6c…`;
-  `boot/chainloader/kernel.img` holds the newer `0xE85217E5`).  **Unchanged.**
+* **region 0 = `0xA8F0F30C`** (`0x967880` B, kernel `7.3.3 #68`, the read-only
+  hd3 + overlayfs init **with `&sgx_module` enabled**; sha256 `fb9905f3…`;
+  `boot/chainloader/kernel.img` holds the same image).  **Flashed in session 55.**
 * **region 1 = `49e318bf…`** (`local/images/rootfs-region1-wl1283-bt.ext4`,
-  67 108 864 B, **43 modules**).  **This stays intact as the fallback through
-  the whole overlay move.**
-* **hd3 (`0x4915`, raw `0x49000000`) = the dirty Nura root** from the session-54
-  flash (the journal aborted; the pristine host image
-  `local/work/nura/images/blackberry-playbook-root-hd3.img`, sha256
-  `076bafcf…`).  The new edited image
-  `local/work/nura/images/blackberry-playbook-root-overlay.img` (sha256
-  `1f14915f…`) and the packed container
-  `local/work/nura/images/both-0xE85217E5-overlay.signed` (sha256 `c3ed1f61…`)
-  are **built, not flashed**.
-* The unit is **on the Nura root** (`0fca:8010`, console `playbook:~#` on the
-  ACM `/dev/ttyACM0`, `ttyACM0` `crw-rw-rw-`); **no sshd**.
+  67 108 864 B, **43 modules**).  **This stays intact as the fallback.**
+* **hd3 (`0x4915`, raw `0x49000000`) = the Nura overlay image + the SGX pvr
+  userspace** (`85b44deb…`, 625 999 872 B), flashed **alone** with
+  `--component --dest-block 0x4915`.  It carries the module (in `/etc/modules`
+  + `modules.dep`), the pvrports stack, the `sgx-ddk-um` service and the
+  `MESA_LOADER_DRIVER_OVERRIDE=pvr` tinydm env.  It is mounted read-only at
+  boot.  The pre-pvr images (`1fcf0cb0…`, `1f14915f…`) and the pristine
+  `076bafcf…` remain on the host.
+* The unit is **on the Nura overlay root** (`0fca:8010`, console
+  `playbook:~#` on the ACM `/dev/ttyACM0`, `ttyACM0` `crw-rw-rw-`); **no sshd**;
+  **`usb0` is DOWN** on this root (bring it up by hand if a fast transfer is
+  needed).
 * **To boot the ORACLE:** flash `local/work/ifs-shim-sealed.ifs` at block
   `0x825`, then reboot.  It enumerates `0fca:8012`; qconn
   `169.254.0.1:9090`, root ssh — use **`PB_LINK=door tools/pbssh.sh`**.  The
@@ -105,7 +119,7 @@ module swap by content) before running it.
 LE-supported bit, so no enable sequence is known and impossibility is **not**
 demonstrated.
 
-## 0d. THE ACTIVE ITEM — the read-only hd3 + overlayfs root (report 242, ROADMAP 7a)
+## 0d. DONE (session 55) — the read-only hd3 + overlayfs root is flashed and booting
 
 ### The design, which is the operator's
 
@@ -113,99 +127,151 @@ demonstrated.
 on boot.  Report 241 §3 measured the stall: after the 597 MiB bootrom image, the
 first ext4 journal/udev rewrite gives `mmc1: Card stuck being busy!
 __mmc_poll_for_busy`, the loop write fails, the journal aborts and ext4 remounts
-`emergency_ro`; a later 4 KiB write returns `I/O error` while reads still work.
-The region-1 root has **no journal** and is stable.  So the overlay build mounts
-hd3 read-only and holds every write in a tmpfs upper:
+`emergency_ro`.  So the overlay build mounts hd3 read-only and holds every write
+in a tmpfs upper:
 
 * the backing `/dev/mmcblk1` is opened `O_RDONLY`, the loop is
   `LO_FLAGS_READ_ONLY`;
-* the lower is `MS_RDONLY` + `noload` (the dirty media journal is not replayed);
+* the lower is `MS_RDONLY` + `noload` (the media journal is not replayed);
 * a 256 MiB tmpfs at `/overlay` holds `upper`/`work`; overlayfs is at
   `/newroot` with `lowerdir=/rootfs,upperdir=/overlay/upper,workdir=/overlay/work`;
 * the `/dev`/`/proc`/`/sys` binds and the `lstat` hand-off are on the overlay;
   the chroot/exec is unchanged.
 
-### THE ONE EXPERIMENT: flash the packed container and boot the overlay root
+### The result (reports 243 and 244)
 
-**Inputs (all built):**
-`local/work/nura/images/both-0xE85217E5-overlay.signed` — 635 961 936 B, sha256
-`c3ed1f61…`; it carries the region 0 (`0xE85217E5`) at `16,0` and the hd3 image
-(`1f14915f…`) at `16640,0`; `parse` gives V1 runs 151/9552 and CRC
-`0x493FA440 OK`.
+Two packed containers were flashed, each in one bootrom session from the booted
+Nura root (`bbusb.py flash --signed … --from-bootrom --password 0000 --apply`,
+then `reboot -f` from the `ttyGS0` shell):
 
-**The flash — one bootrom session, from the booted Nura root:**
+* `both-0xE85217E5-overlay.signed` (sha256 `c3ed1f61…`) — the overlay root,
+  boot `7.3.3 #67`;
+* `both-0xA8F0F30C-sgx.signed` (sha256 `3be2c73a…`, CRC `0x9CD674DA`) — the
+  same with `&sgx_module` enabled and `pvrsrvkm_omap4_sgx540_120.ko` in hd3,
+  boot `7.3.3 #68`; the **current** media.
 
-```bash
-lsusb | grep -i 0fca                       # 0fca:8010 = OS; 0001 = bootrom; 8001 = ramloader
-nohup python3 tools/bbusb.py flash --signed \
-      local/work/nura/images/both-0xE85217E5-overlay.signed \
-      --from-bootrom --password 0000 --apply > /tmp/f.log 2>&1 &
-sleep 2
-python3 tools/pbcon.py 'reboot -f'          # Nura ttyGS0 BusyBox shell; -f skips the shutdown
-until grep -qE 'COMPLETE|done|error' /tmp/f.log; do sleep 2; done; tail -5 /tmp/f.log
+Both reported `Connected in bootrom`, `Model ID: 0x06001A06`, the ramloader
+upload, both runs, `COMPLETE 0x40C0 -> cmd 0x4006`, `done`, `loader exit: device
+released`.  The unit boots:
+
+```
+overlay / overlay rw,relatime,lowerdir=/rootfs,upperdir=/overlay/upper,workdir=/overlay/work,uuid=on
+EXT4-fs (loop0): mounted filesystem aed244ce-… ro without journal
 ```
 
-`--from-bootrom` **uploads the ramloader**: the unit must be **booted**, not in
-the ramloader; the flasher catches the 60 s bootrom window opened by
-`reboot -f`.  One session carries both halves.  Success is
-`COMPLETE 0x40C0 -> cmd 0x4006` and `done`.  The `ttyGS0` shell is a plain
-`/bin/sh -l`; if `pbcon` says "no prompt — the shell is still running a
-command", send Ctrl-C with `tools/pbraw.py 2 03` (or wait).  `ttyACM0` is
-`0666`; if it comes back `root:uucp`, `pkexec chmod 666 /dev/ttyACM0`.
+**No `Card stuck`, no journal abort.**  The first boot read `BOOTCTR_FCTRY =
+0x1d` and `/init` wrote `0x32` (`PASS`); the second read `0x31` and correctly
+wrote nothing (`0x31 >= 0x1e`), so the counter is **`0x31`**.  `rc-status`:
+`elogind`, `tinydm`, `dbus`, `networkmanager`, `wpa_supplicant`, `bluetooth`,
+`iio-sensor-proxy` started; `/run/user/10000` + `catacomb-wayland-1.sock` +
+`wayland-1` exist; `catacomb` and `squeekboard` run; the Munin touch is ready
+(irq 110); the backlight is 255; `wlcore: firmware booted (Rev 7.3.5.0.98)`.
 
-**What each result means.**
+**The screen is black with catacomb's empty bar** because the GL path is not
+there yet: `MESA: error: ZINK: failed to load libvulkan.so.1` /
+`smithay … syncobj … ENOTSUP` on the pre-SGX boot, and on the SGX boot the
+kernel driver is loaded but the **userspace** stack is not (§0e).  The missing
+DE apps (`swayidle`, `tabula`, `epitaph`, `chatty`) are a separate, cosmetic
+gap.
 
-* **`COMPLETE`/`done`, the overlay boots** → check
-  `dmesg | grep -E 'mmc1|EXT4|overlay|Card stuck|Aborting'` (no stall, no
-  journal abort, `overlay` on `/newroot`), `dmesg | grep pbrpmb` (the counter),
-  `rc-status`/the tinydm log, `/run/user/10000`, `/dev/dri/card0`, `lsmod`/
-  `wlcore`, the touch, the backlight.  If the DE runs → SGX540 (§0e).
-* **The overlay mount fails** → `dmesg` for `overlay: mount` / `tmpfs` /
-  `rootfs: mount`; the `0xE85217E5` must carry `CONFIG_OVERLAY_FS=y`; the lower
-  must be mounted read-only.
-* **The eMMC still stalls** → the lower was not read-only (check the mount
-  flags/the loop `ro`), or the card is in the failed state from the earlier
-  boot; a cold power cycle + a fresh hd3 flash decides.  The writable-root fix
-  (busy timeout / cache / no-journal) is a separate experiment.
-* **The DE still fails** → read the tinydm/elogind log and `/run/user/10000`;
-  the likely causes are the seatd/logind backend or the PAM stack.  The root is
-  writable in the overlay, so a `seatd`/`elogind` test is possible.
-* **The WLAN firmware loads but no link** → the NVS/regdomain; `iw reg set`.
-* **The flash fails** → `0xF7 -> cmd 0x15` means the gate rejected (nothing
-  written); check the container's runs (16/16640) and the `--from-bootrom`
-  timing.  If the unit is left in the ramloader, `bbusb.py reset-loader`.
+### Generals that carried over
 
-### Facts about the overlay/images (measured)
+* The `ttyGS0` shell prompt is `playbook:~#`; `tools/pbcon.py` matches the old
+  `pb> ` and **does not drive it** (trap 274) — use a raw send/read helper.
+* `--from-bootrom` uploads the ramloader; the unit must be **booted**, the
+  flasher started first, then `reboot -f` opens the 60 s bootrom window (trap
+  266).  A success is `COMPLETE 0x40C0 -> cmd 0x4006` + `done`.
+* If a flash ever fails with `0xF7 -> cmd 0x15`, the gate rejected (nothing
+  written); check the runs and the `--from-bootrom` timing.  If left in the
+  ramloader, `bbusb.py reset-loader`.
+* `ttyACM0` may come back `root:uucp`; `pkexec chmod 666 /dev/ttyACM0`.
 
-* **region 0 `0xE85217E5`**: `0x9662A4` B (< `0xB00000`), sha256 `fbeb6df0…`;
-  `local/images/kernel-0xE85217E5-overlay.img`.
-* **hd3 image `1f14915f…`**: 625 999 872 B; the root `/etc/fstab` line removed
-  (only the header comment), the `tty1` getty removed from `/etc/inittab` (the
-  `ttyGS0` shell kept), the `ti-connectivity` firmware added, the 43 modules
-  replaced from `local/work/modules-7.3.3`; `e2fsck -fn` exit 0.
-* **The vermagic matches:** both the `0xE85217E5` kernel
-  (`local/kernel-tree/vmlinux`) and the new `wl12xx.ko` are
-  `7.3.3 mod_unload modversions ARMv6 p2v8`.
-* **The container** `c3ed1f61…`; the V1 runs at offset 16 (151 blocks) and
-  16640 (9552 blocks); the signature CRC `0x493FA440 OK`.
-* **Counter:** `BOOTCTR_FCTRY = 0x1e` at the session-54 boot; the same boot (no
-  reboot since); the next boot spends one → `0x1d` and `/init` tops it to `0x32`.
+## 0e. SGX540 — the kernel half is DONE; the userspace is the remaining piece
 
-## 0e. SGX540 (after the overlay boots)
+### Kernel side (session 55, report 244) — working
 
-**Mainline 7.3.3 has no driver** — nothing binds `ti,omap4430-gpu` /
-`img,powervr-sgx540`, though `omap4.dtsi` supplies the target-module, `prm_gfx`
-and the L3_GFX clock, and our board DTS leaves `&sgx_module` disabled.  The route
-is `gitlab.com/pvrports/pvrports`: `linux-openpvrsgx`
-(`CONFIG_SGX=y`, `CONFIG_SGX_OMAP=m`, `CONFIG_SGX_DRM=y`, tagged 6.1 → rebase to
-7.3.3) plus **proprietary** `sgx-ddk-um` (`pkgver=1.17.4948957`, SoC subpackage
-`ti443x`).  Its reference devices are the **Samsung espresso** — OMAP4430 with
-TWL6030, the same SoC family and PMIC generation, including the `clk32kg` work we
-already did for the WLAN.  **Blobs stay gitignored in `local/`.**  The
-reference's own QNX SGX userspace (`libsrv_um.so`, `libusc.so`, GLESv1/v2, EGL)
-is in `local/work/1917/base/usr/lib/graphics/omap4430/` with
+The driver is the **active** `openpvrsgx-devgroup/linux_openpvrsgx` branch
+**`pvrsrvkm-7.3`** (`https://github.com/openpvrsgx-devgroup/linux_openpvrsgx`,
+HEAD `101c687ac73c384e1ae1a0c50cc40efd6e1f6ba9`) — **not** the old
+`tmlind` fork the pvrports APKBUILD pins.  It carries DDK **1.17.4948957**.
+
+* the tree is `drivers/gpu/drm/pvrsgx` (Kconfig, Makefile, `pvr-drv.c/h`, and
+  `1.17.4948957/eurasia_km`, **358 files / 6.3 MB**);
+* `drivers/gpu/drm/Kconfig` sources the pvrsgx Kconfig, the Makefile adds
+  `obj-$(CONFIG_SGX) += pvrsgx/`;
+* config: `CONFIG_SGX=y`, `CONFIG_PVRSGX_1_17_4948957=y` (+ABI),
+  `CONFIG_SGX_DRM=y`, `CONFIG_SGX_OMAP=m`; the pvrsgx Makefile builds
+  `SOC=omap4 SGX=sgx540 SGX_REV=120` → `pvrsrvkm_omap4_sgx540_120.ko`;
+* **one kernel export is required**: `EXPORT_SYMBOL(__vmalloc_node_range_noprof);`
+  in `mm/vmalloc.c` (the devgroup branch does the same; without it modpost
+  fails);
+* the board DTS `&sgx_module` is `status = "okay"` (the `omap4.dtsi` node
+  supplies `gpu@0` with `ti,omap4430-gpu` / `img,powervr-sgx540`, IRQ
+  `GIC_SPI 21`, 32 MB, `prm_gfx`, the L3_GFX clock).
+
+Result on the unit (boot `#68`):
+
+```
+insmod /lib/modules/7.3.3/kernel/pvrsrvkm_omap4_sgx540_120.ko
+pvrsrvkm 56000000.gpu: Enabling quirks 00000001
+[drm] Initialized pvr 1.17.4948957 for 56000000.gpu on minor 1
+```
+
+`/dev/dri/card1` + `renderD129` exist; `uevent` reports `DRIVER=pvrsrvkm`,
+`/ocp/target-module@56000000/gpu@0`.  catacomb stayed up.
+
+### Userspace — DONE for the GPU (session 55, report 245)
+
+The working stack, installed on the live overlay for the test:
+
+* **`libglvnd` 1.6.0-r2** — the EGL/GLES dispatch (`libEGL.so.1`,
+  `libGLESv2.so.2`).
+* **`mesa-pvr-dri-classic` 21.3.9-r1** — the `amber-pvr` Mesa: `libEGL_amber`,
+  `libgbm.so.1`, `/usr/lib/xorg/modules/dri/pvr_dri.so`, and the libglvnd
+  vendor JSON `50_amber.json`.
+* **`sgx-ddk-um` 1.17.4948957-r1** + **`sgx-ddk-um-ti443x`** +
+  **`sgx-ddk-um-openrc`** — `pvrsrvinit`, `libsrv_init`, `libsrv_um`, `libusc`,
+  `libGLESv1/2_PVR_MESA`, `libpvr2d`, `libpvr_dri_support`, `pvrsrvctl`.
+* **`gcompat` 1.1.0-r4** (+ `musl-obstack`, `libucontext`) for the glibc blobs,
+  and **`wayland-libs-server` 1.26.0-r0**.
+* `MESA_LOADER_DRIVER_OVERRIDE=pvr` selects the DRI (`/etc/profile.d/mesa.sh`,
+  or a tinydm `env-wayland.d` file).
+
+The packages are **prebuilt** at
+`https://pvrports.antonialoytorrens.com/pvrports/v23.12/armv7/` and also build
+from source in the edge chroot (`pmbootstrap build --arch armv7
+mesa-pvr-dri-classic`, with `pkexec` for root — the host has no passwordless
+sudo).
+
+**Result:** `pvrsrvinit` → `PVR_K: UM DDK-(4948957) and KM DDK-(4948957) match.
+[ OK ]`; a headless surfaceless EGL/GLES2 probe
+(`local/work/egltest.py`, `MESA_LOADER_DRIVER_OVERRIDE=pvr`) →
+`GL_VENDOR = Imagination Technologies`, **`GL_RENDERER = PowerVR SGX 540`**,
+`GL_VERSION = OpenGL ES 2.0 build 1.17@4948957`.
+
+**Not usable with catacomb:** smithay requires `GL_EXT_unpack_subimage`, which
+the SGX540 GLES2 driver does not expose; catacomb panics at renderer creation
+(`src/udev.rs:400`).  pvrports supports Phosh (patched phoc) and Plasma; a
+wlroots DE is the other candidate.
+
+**The install is baked into hd3** (`85b44deb…`): the nine APKs, the module in
+`/etc/modules` + `modules.dep`, the `sgx-ddk-um` service in the default
+runlevel, and `MESA_LOADER_DRIVER_OVERRIDE=pvr`.  Verified on a fresh boot
+(module autoloads, service starts, `UM/KM DDK match`, EGL probe OK).
+
+**The patch re-export is pending a packaging decision:** the driver adds 358
+files to a patch that is currently 63 files / 8 998 lines.  Either commit it in
+the main patch or vendor the driver archive under `kernel/` with a documented
+copy step.
+
+### Reference material
+
+The reference's own QNX SGX userspace (`libsrv_um.so`, `libusc.so`, GLESv1/v2,
+EGL) is in `local/work/1917/base/usr/lib/graphics/omap4430/` with
 `gpu-string = SGX540rev120`, but it is QNX ABI — **there is no separate SGX
-firmware file anywhere in the reference**.
+firmware file anywhere in the reference**.  Its reference devices are the
+**Samsung espresso** (OMAP4430 + TWL6030).  **Blobs stay gitignored in
+`local/`.**
 
 ## 0f. FM and GPS (parked, after SGX)
 
@@ -302,25 +368,32 @@ staged pristine copy and compare.  Current: **63 files / 8 998 lines**, sha256
 
 ## 3. Bench
 
-* The unit is on the **Nura root** (image `0x060B25F2`), read-only
-  (`emergency_ro`); the ACM is `0fca:8010`, `ttyACM0` 0666; **no sshd**.
-* **The Nura `ttyGS0` shell is a plain `/bin/sh -l`.**  Use
-  `tools/pbcon.py 'cmd'`; if it says "no prompt — the shell is still running a
-  command", Ctrl-C with `tools/pbraw.py 2 03` (or wait).  `tools/pbssh.sh` is
-  for the **region-1** root, not the Nura.
-* **Reboot:** `tools/pbcon.py 'reboot -f'` (BusyBox; `-f` skips the shutdown).
-  **The flash:** start the flasher first, then the reboot; one bootrom session;
-  the 60 s window.
-* **`BOOTCTR_FCTRY`** read **`0x1e`** at the session-54 boot (the same boot; no
-  reboot).  `tools/pbcon.py 'dmesg | grep pbrpmb'` → the record and the
-  threshold line.  A logged read, not an RPMB access (`SAFETY.md` §2).
+* The unit is on the **Nura overlay root** (image `0xA8F0F30C`, `7.3.3 #68`),
+  writable via a tmpfs upper, the lower read-only; the ACM is `0fca:8010`,
+  `ttyACM0` 0666; **no sshd**; **`usb0` DOWN**.
+* **The Nura `ttyGS0` shell prompt is `playbook:~#`, not `pb> `** — so
+  `tools/pbcon.py` reports "no prompt" and sends nothing (trap 274).  Use a raw
+  send/read helper (`tools/pbraw.py` style).  `tools/pbssh.sh` is for the
+  **region-1** root, not the Nura.
+* **Reboot:** send `reboot -f` over the raw ACM (BusyBox; `-f` skips the
+  shutdown).  **The flash:** start the flasher first, then the reboot; one
+  bootrom session; the 60 s window.
+* **`BOOTCTR_FCTRY`** is **`0x31`** (the two session-55 boots read `0x1d` →
+  `/init` wrote `0x32`, then `0x31` → no write).  `dmesg | grep pbrpmb` gives
+  the record and the top-up line.  A logged read, not an RPMB access
+  (`SAFETY.md` §2).
+* **The SGX check:** `insmod
+  /lib/modules/7.3.3/kernel/pvrsrvkm_omap4_sgx540_120.ko` → `pvrsrvkm
+  56000000.gpu: Enabling quirks 00000001`, `[drm] Initialized pvr …
+  minor 1`; `ls /dev/dri` shows `card1`/`renderD129`; `uevent` says
+  `DRIVER=pvrsrvkm`.
 * **The eMMC checks:** `dmesg | grep -E 'Card stuck|Aborting|EXT4|overlay'`;
-  the overlay on `/newroot`; the lower read-only.
+  the overlay on `/`; the lower `ro without journal`.
 * **hd3 checks:** `dd` the superblock at `0x49000000`; mount from the running
-  Linux with `losetup -o`; the device-side sha256 (the read-only root makes it
-  safe).
-* **WLAN checks (region-1):** `lsmod` must show **`ccm` and `ctr`**;
-  `ip link set wlan0 up` → `wlcore: firmware booted (Rev 7.3.5.0.98)`.
+  Linux with `losetup -o`; the lower is never written, so a read-back is safe.
+* **WLAN checks:** `lsmod` shows `wlcore`/`wl12xx`/`mac80211`/`cfg80211` and
+  `wlcore: firmware booted (Rev 7.3.5.0.98)`; `wlan0` is UP.  The Nura root has
+  NetworkManager, so association is a separate item.
 * **BT checks:** `BT_EN` at pad `0x4A10007C` mux 3 and `GPIO2_DATAOUT` bit 23;
   UART2 pads `0x4118`/`0x411A`; then `rootfs/bt/`'s tools.  **`btdump` first** —
   it hexdumps and cannot hide a reply.  Check `cat /proc/tty/ldiscs` before
@@ -328,26 +401,48 @@ staged pristine copy and compare.  Current: **63 files / 8 998 lines**, sha256
 * WM8994: `i2ctransfer` args are DECIMAL (trap 166); bus 4, addr `0x1a`.
 * QNX device tools build `-static`; `/tmp` is wiped by a reboot.
 
-## 4. Traps added last session (full list 14–271 in `KNOWN-ISSUES.md` §2)
+## 4. Traps added last session (full list 14–284 in `KNOWN-ISSUES.md` §2)
 
-* **266.** `--from-bootrom` uploads the ramloader and needs the unit **booted**;
-  start the flasher, then reboot (`reboot -f`); the bootrom window is 60 s.
-  "Both halves in one bootrom session" means one packed container.
-* **267.** The `bbusb.py pack` coordinate is the loader block **minus `0x815`**
-  (`0x825`→16, `0x2915`→8448, `0x4915`→16640); `parse` must show the V1 runs and
-  the CRC `OK`.
-* **268.** The Nura `ttyGS0` shell is a plain `/bin/sh -l`; `pbcon.py` works at
-  a prompt; "no prompt" means `pbraw.py 2 03` (Ctrl-C).  `reboot -f` skips the
-  shutdown.
-* **269.** The read-only overlay: `MS_RDONLY`+`noload`, `LO_FLAGS_READ_ONLY`, an
-  `O_RDONLY` backing, a tmpfs upper/work, `/newroot`; the binds and the `lstat`
-  hand-off go on the overlay.  `CONFIG_OVERLAY_FS=y` is in the `0xE85217E5`.
-* **270.** The new 43 modules and the `0xE85217E5` kernel share the vermagic
-  `7.3.3 mod_unload modversions ARMv6 p2v8`; the image's modules were replaced,
-  the `modules.dep` unchanged.
-* **271.** The hd3 image needs the root fstab line and the `tty1` getty removed
-  and the `ti-connectivity` firmware; `e2fsck -fn` must exit 0.
-* Still current: **265** (`CONFIG_DYNAMIC_DEBUG`/`OVERLAY_FS`; the modules), 264
+* **272.** The overlay root is confirmed: no eMMC stall, `/run/user/10000`, and
+  `catacomb` running; the boot is repeatable.
+* **273.** A black screen with catacomb's empty bar is the **GL path**, not the
+  root; check the renderer before re-flashing.
+* **274.** The Nura prompt is `playbook:~#`; `pbcon.py` matches `pb> ` and does
+  not drive it.
+* **275.** The SGX driver is the **openpvrsgx-devgroup** `pvrsrvkm-7.3` branch
+  (not the `tmlind` 6.1 fork); DDK 1.17.4948957; it needs
+  `EXPORT_SYMBOL(__vmalloc_node_range_noprof)` in `mm/vmalloc.c`.
+* **276.** The driver builds nine SoC variants (`pvrsrvkm_omap4_sgx540_120` is
+  ours); package only that one, stripped with `--strip-debug`.
+* **277.** The SGX DDK blobs are **glibc/armhf**; the Nura root is musl, so
+  `gcompat` and the patched Mesa (`mesa-pvr-dri-classic`, `pvr` override) are
+  required for anything to draw.
+* **278.** `BOOTCTR_FCTRY` tops up only **below** `0x1e`; a boot at `0x31`
+  correctly writes nothing.  Read the value, don't assume `0x32`.
+* **279.** The vendor SGX `pvrsrvctl`/DDK blobs **do not run** under a
+  hand-installed `gcompat` 1.1.0 on this musl root (`pvrsrvctl --help` →
+  segfault, rc 139).  Build the userspace the pvrports/Alpine way.
+* **280.** The pvrports prebuilt stack (`v23.12/armv7`) installs on the edge
+  root and **replaces mainline Mesa**; it needs `gcompat` + `wayland-libs-server`.
+* **281.** The SGX540 works headless: EGL/GLES 2.0,
+  `GL_RENDERER = PowerVR SGX 540`, `GL_VERSION = OpenGL ES 2.0 build
+  1.17@4948957` (`local/work/egltest.py`, surfaceless).  `es2_info` insists
+  on X and is useless here.
+* **282.** catacomb panics on `GL_EXT_unpack_subimage` — a compositor
+  requirement, not a GPU failure; use Phosh/phoc or a wlroots DE.
+* **283.** The pvr stack is **baked into hd3 offline**: loop-mount the image,
+  `apk --root … --arch armv7 --allow-untrusted --no-network --no-scripts
+  --repositories-file /dev/null --repository <dir with armv7/APKINDEX.tar.gz>
+  add …`, then `depmod -b`, `/etc/modules`, the runlevel link and `e2fsck -fn`.
+  Image `85b44deb…`; hd3-only flash (`--component --dest-block 0x4915`).
+* **284.** After the bake, a **black panel with the backlight on is expected**
+  (catacomb is the only compositor and panics); the display and GPU are fine.
+  Do not `dd` `mmcblk1` for a checksum — it is an unnecessary eMMC read on the
+  live overlay (it caused a visible flicker).
+* Still current: **266** (`--from-bootrom` uploads the ramloader, boot first),
+  **267** (the pack coordinate is block minus `0x815`), **268** (the `ttyGS0`
+  shell), **269** (the overlay flags), **270** (the module vermagic), **271**
+  (the hd3 image edits), **265** (`CONFIG_DYNAMIC_DEBUG`/`OVERLAY_FS`), 264
   (the `PB*` prints are `pr_debug`), 261 (the eMMC stall), 260 (`lstat`), 259
   (`0x4915`), 253–258 (pmbootstrap), **250** (the `0x30`), **248** (the UART2
   CTS/RTS pads), **247** (no HT40), **244** (`ccm`/`ctr`), **246** (MUSB
@@ -362,11 +457,14 @@ staged pristine copy and compare.  Current: **63 files / 8 998 lines**, sha256
 |---|---|
 | safety before any write | `docs/project/SAFETY.md` |
 | build/flash/boot/console | `docs/project/DEVELOPMENT.md` |
-| **the active plan (hd3/Nura/SGX)** | `docs/project/ROADMAP.md` item 7a, report **242** |
+| **the active plan (SGX: bake + compositor)** | `docs/project/ROADMAP.md` item 7a step 5, reports **243/244/245** |
+| **the SGX kernel driver** | `local/kernel-tree/drivers/gpu/drm/pvrsgx/` (source `openpvrsgx-devgroup/linux_openpvrsgx` branch `pvrsrvkm-7.3`, HEAD `101c687a…`) |
+| **the working pvr userspace APKs** | `local/work/apks-pvr/` (pvrports `v23.12/armv7` + `gcompat` chain + `wayland-libs-server`) |
+| **the EGL/GLES probe** | `local/work/egltest.py` (Python ctypes, surfaceless) |
 | **the overlay root code** | `initramfs/init.c` (`rootfs_mount`/`overlay_mount`) |
-| **the packed both-halves container** | `local/work/nura/images/both-0xE85217E5-overlay.signed` |
-| **the hd3 images** | `local/work/nura/images/blackberry-playbook-root{-hd3,-overlay}.img` |
-| **the region-0 overlay image** | `local/images/kernel-0xE85217E5-overlay.img` |
+| **the packed both-halves container** | `local/work/nura/images/both-0xA8F0F30C-sgx.signed` |
+| **the hd3 images** | `local/work/nura/images/blackberry-playbook-root{-hd3,-overlay,-overlay-sgx}.img` |
+| **the region-0 image (on media)** | `local/images/kernel-0xA8F0F30C-sgx.img` |
 | flasher (region 0, region 1, **hd3**) | `tools/bbusb.py` |
 | the module staging | `local/work/modules-7.3.3/` |
 | board DTS + patched drivers | `kernel/source/`, `local/kernel-tree/` |
@@ -375,8 +473,8 @@ staged pristine copy and compare.  Current: **63 files / 8 998 lines**, sha256
 | reference SGX userspace | `local/work/1917/base/usr/lib/graphics/omap4430/` |
 | OSS player / mixer / BT probe | `rootfs/pbplay.c`, `rootfs/pbmix.c`, `rootfs/hci.c` |
 | qconn / ssh | `tools/QCL.py`, `tools/pbssh.sh` |
-| reports | `docs/reports/` (**242** current) |
-| sessions | `docs/sessions/session-54.md` (including the Continuation) |
+| reports | `docs/reports/` (**245** current) |
+| sessions | `docs/sessions/session-55.md` |
 
 ## 6. Working rules
 
@@ -404,108 +502,75 @@ staged pristine copy and compare.  Current: **63 files / 8 998 lines**, sha256
 ## 7. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 55 (absolute; Linux-era 49)
+PlayBook (OMAP4430 "winchester") — session 56 (absolute; Linux-era 50)
 
 Workspace: this repository — a git checkout.  Map: docs/README.md.  The earlier
 work tree $HOME/rea-work is READ-ONLY.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a AND item 9, KNOWN-ISSUES.md §2 (traps 14-271,
-especially 266-271) and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md
-(61-76), docs/reports/INDEX.md, reports 240-242, and sessions/session-54.md
-(including its Continuation).
+file), ROADMAP.md item 7a AND item 9, KNOWN-ISSUES.md §2 (traps 14-282,
+especially 266-282) and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md
+(61-78), docs/reports/INDEX.md, reports 242-245, and sessions/session-55.md.
 
 WHERE IT STANDS: audio (headphones + both speakers, 48 kHz), the touch, the
-sensors/charger, ssh over USB and the display all work; the WL1283 WLAN
-associates and passes traffic on the region-1 root; the WL1283 BT core works
-(a real BR/EDR inquiry; the reference's WL1283.bts 315/315 makes hci0 register
-with mgmt) with the controller open parked on the stray 0x30 byte (trap 250).
+sensors/charger, ssh over USB, the display and the read-only hd3 + OVERLAYFS
+Nura root all work.  The WL1283 WLAN associates and passes traffic on the
+region-1 root; the Nura root now carries its firmware and wlcore boots it.  The
+WL1283 BT core works (a real BR/EDR inquiry; the reference's WL1283.bts 315/315
+makes hci0 register with mgmt) with the controller open parked on the stray 0x30
+byte (trap 250).
 
-hd3 holds the Nura root and NURA BOOTS FROM IT (7.3.3, Nura edge, OpenRC, the
-display and the Munin touch) — but the first ext4 journal/udev write stalls the
-eMMC (mmc1: Card stuck being busy!), aborts the journal and remounts the root
-read-only, so tinydm/catacomb cannot start.  The READ-ONLY hd3 + OVERLAYFS root
-is IMPLEMENTED AND BUILT (report 242); THE FLASH DID NOT RUN (the operator
-stopped before it).  The unit is still on the old 0x060B25F2 + the dirty hd3.
+THE OVERLAY ROOT IS DONE (session 55, report 243): region 0 + hd3 were written
+in ONE bootrom session (COMPLETE 0x40C0 -> cmd 0x4006, done).  The unit boots
+7.3.3 #68 on "overlay / ... lowerdir=/rootfs, upperdir=/overlay/upper", the lower
+"ro without journal", NO eMMC stall and NO journal abort.  elogind, tinydm and
+CATACOMB run; /run/user/10000 and the catacomb Wayland socket exist; the Munin
+touch is ready; the backlight is 255.  The screen is black with only catacomb's
+empty bar because the GL path is not there yet.
 
-THE ACTIVE ITEM (operator): ROADMAP item 7a — the read-only hd3 + overlayfs
-root, then SGX540.  The design is the operator's: hd3 holds a FLASHER-RESTORABLE
-ext4 image, and the eMMC must not be written on boot.  The initramfs mounts the
-loop LO_FLAGS_READ_ONLY over an O_RDONLY /dev/mmcblk1, the ext4 MS_RDONLY +
-noload, and a 256 MiB tmpfs upper/work overlaid at /newroot; the /dev//proc//sys
-binds and the lstat hand-off are on the overlay.
+THE SGX540 WORKS (session 55, reports 244/245): the openpvrsgx-devgroup driver
+(branch pvrsrvkm-7.3, DDK 1.17.4948957) is in the tree at drivers/gpu/drm/pvrsgx
+(it needs EXPORT_SYMBOL(__vmalloc_node_range_noprof) in mm/vmalloc.c and
+&sgx_module enabled), and insmod binds it.  The pvrports userspace (libglvnd,
+mesa-pvr-dri-classic 21.3.9, sgx-ddk-um 1.17.4948957 ti443x, with gcompat and
+wayland-libs-server) then initializes it: pvrsrvinit logs "PVR_K: UM
+DDK-(4948957) and KM DDK-(4948957) match. [ OK ]", and the headless EGL/GLES2
+probe (local/work/egltest.py, MESA_LOADER_DRIVER_OVERRIDE=pvr) reports
+GL_RENDERER = PowerVR SGX 540, GL_VERSION = OpenGL ES 2.0 build 1.17@4948957.
 
-THE ONE EXPERIMENT: flash the packed both-halves container in one bootrom
-session and boot the overlay root.  Start
-  nohup python3 tools/bbusb.py flash --signed \
-      local/work/nura/images/both-0xE85217E5-overlay.signed \
-      --from-bootrom --password 0000 --apply > /tmp/f.log 2>&1 &
-then `tools/pbcon.py 'reboot -f'` from the Nura ttyGS0 shell (if "no prompt",
-Ctrl-C with tools/pbraw.py 2 03).  --from-bootrom UPLOADS THE RAMLOADER: the
-unit must be BOOTED, not in the ramloader; the flasher catches the 60 s bootrom
-window opened by reboot -f.  One session carries both halves (the container:
-region 0 0xE85217E5 at 16,0; hd3 1f14915f... at 16640,0; parse CRC
-0x493FA440 OK).  Success is `COMPLETE 0x40C0 -> cmd 0x4006` and `done`.
-
-THEN CHECK: dmesg | grep -E 'mmc1|EXT4|overlay|Card stuck|Aborting' (no stall,
-no journal abort, overlay on /newroot), dmesg | grep pbrpmb (the counter),
-rc-status / the tinydm log, /run/user/10000, /dev/dri/card0, lsmod / wlcore, the
-touch, the backlight.
-
-WHAT EACH RESULT MEANS:
-* COMPLETE + the overlay boots -> the eMMC is out of the boot path; check the
-  DE; if it runs -> SGX540.
-* the overlay mount fails -> dmesg for overlay/tmpfs/rootfs; the 0xE85217E5
-  must have CONFIG_OVERLAY_FS=y; the lower must be read-only.
-* the eMMC still stalls -> the lower was not read-only or the card is failed
-  from the earlier boot; cold power cycle + a fresh hd3 flash decides.
-* the DE still fails -> the tinydm/elogind log + /run/user/10000; the seatd/
-  logind backend or the PAM stack; the overlay root is writable.
-* the flash fails -> 0xF7 -> cmd 0x15 means the gate rejected (nothing
-  written); check the runs (16/16640) and the --from-bootrom timing; if left in
-  the ramloader, bbusb.py reset-loader.
-
-THE FACTS: region 0 0xE85217E5 (0x9662A4 B, sha256 fbeb6df0...); the hd3 image
-1f14915f... (root fstab line + tty1 getty removed, the ti-connectivity firmware,
-the 43 modules; e2fsck -fn exit 0); the kernel/module vermagic
-7.3.3 mod_unload modversions ARMv6 p2v8; the container c3ed1f61... (635 961 936
-B; the V1 runs at 16/16640; CRC 0x493FA440 OK); BOOTCTR_FCTRY 0x1e (the same
-boot; the next boot 0x1d -> /init tops it to 0x32).
-
-SGX (after the overlay boots): mainline 7.3.3 binds NOTHING to ti,omap4430-gpu
-though omap4.dtsi has the target-module, prm_gfx and L3_GFX clock.  Route:
-gitlab.com/pvrports/pvrports — linux-openpvrsgx (CONFIG_SGX=y, CONFIG_SGX_OMAP=m,
-CONFIG_SGX_DRM=y; tagged 6.1, rebase to 7.3.3) plus PROPRIETARY sgx-ddk-um
-(1.17.4948957, subpackage ti443x).  Reference devices are OMAP4430 Samsung
-espresso.  Blobs stay gitignored in local/.  The reference's QNX SGX userspace
+THE ACTIVE ITEM (operator): a COMPOSITOR that works on the SGX540 GLES2 driver.
+The GPU stack is done and BAKED into hd3 (image 85b44deb...: the nine APKs,
+module autoload, the sgx-ddk-um service, MESA_LOADER_DRIVER_OVERRIDE=pvr) and
+verified on a fresh boot; region 0 is 0xA8F0F30C.  catacomb panics on
+GL_EXT_unpack_subimage (trap 282), so the panel is black with the backlight on.
+pvrports supports Phosh (patched phoc) and Plasma; a wlroots DE is the other
+candidate.  Blobs stay gitignored in local/.  The reference's QNX SGX userspace
 (graphics.conf: gpu-string = SGX540rev120) is QNX ABI and there is NO separate
 SGX firmware file in it.
 
-PARKED: BT controller open (trap 250: a lone 0x30 byte breaks the kernel's H4
-receiver; origin unknown; flow control ruled out), LE (refused by the
-controller, but the chip reports BT 4.0 with the LE bit — no known enable
-sequence, impossibility NOT demonstrated), FM (forward-port
-drivers/media/radio/wl128x, removed in 6.13), GPS (2024 LKML patch, else RE the
-reference).
+THE FACTS: region 0 = 0xA8F0F30C (0x967880 B, sha256 fb9905f3..., kernel #68,
+&sgx_module enabled); hd3 = 85b44deb... (the overlay image + the pvr userspace
+stack + the module, with /etc/modules, the sgx-ddk-um service and the pvr
+tinydm env), mounted read-only at boot; region 1 = 49e318bf... (the fallback,
+not booted); BOOTCTR_FCTRY = 0x30 (the last boots read 0x31, 0x30 and did not
+top up; the threshold is < 0x1e).  The kernel/module vermagic is
+7.3.3 mod_unload modversions ARMv6 p2v8.
 
-PHYSICAL STATE: region 0 = 0x060B25F2 (0x939D04, the lstat image; sha256
-b548ec6c...); region 1 = 49e318bf... (the fallback); hd3 = the dirty Nura root
-at 0x4915 (the journal aborted; the pristine host 076bafcf...).  The unit is on
-the Nura root (0fca:8010, console playbook:~# on the ACM, no sshd).  The new
-0xE85217E5 / the hd3 overlay image / the packed container are on the HOST ONLY.
-To boot the ORACLE: flash local/work/ifs-shim-sealed.ifs at 0x825.  To stock
+PHYSICAL STATE: the unit is on the Nura overlay root (0fca:8010, console
+playbook:~# on the ACM /dev/ttyACM0, no sshd); usb0 is DOWN on this root.  To
+boot the ORACLE: flash local/work/ifs-shim-sealed.ifs at 0x825.  To stock
 TabletOS: that IFS at 0x825 + local/work/rcfs-1917.rcfs at 0x8D5 (+ the vendor
 UFS if hd3 was repurposed).  /tmp is wiped by a reboot.  Do NOT restore
 local/images/ifs0.sealed.bin (trap 84).
 
-BENCH: the Nura ttyGS0 shell is a plain /bin/sh -l — use tools/pbcon.py 'cmd';
-if "no prompt -- the shell is still running a command", Ctrl-C with
-tools/pbraw.py 2 03 (or wait).  tools/pbssh.sh is for the REGION-1 root, not the
-Nura.  REBOOT: tools/pbcon.py 'reboot -f' (BusyBox; -f skips the shutdown).  The
-flash: start the flasher first, then the reboot; one bootrom session; the 60 s
-window.  ttyACM0 is 0666; if it comes back root:uucp, pkexec chmod 666
-/dev/ttyACM0.  An agent NEVER writes RPMB; NVRAM read-only.  Read dmesg
-UNFILTERED; do not clear it without saying so.
+BENCH: the Nura ttyGS0 prompt is playbook:~#, NOT pb> " — tools/pbcon.py does
+not drive it (trap 274); use a raw send/read helper (tools/pbraw.py style).
+tools/pbssh.sh is for the REGION-1 root, not the Nura.  REBOOT: send `reboot -f`
+over the raw ACM (BusyBox; -f skips the shutdown).  THE FLASH: start the flasher
+first, then the reboot; one bootrom session; the 60 s window; --from-bootrom
+UPLOADS THE RAMLOADER, so the unit must be BOOTED (trap 266).  ttyACM0 is 0666;
+if it comes back root:uucp, pkexec chmod 666 /dev/ttyACM0.  An agent NEVER writes
+RPMB; NVRAM read-only.  Read dmesg UNFILTERED; do not clear it without saying so.
 
 BT: BT_EN pad 0x4A10007C mux 3 + GPIO2_DATAOUT bit 23; UART2 pads
 0x4118/0x411A; /dev/ttyS1.  After a cold boot EXPORT gpio535 first and pulse low
@@ -516,6 +581,11 @@ r3` -> 07 01 55; `lsmod` must show ccm and ctr; `ip link set wlan0 up` ->
 firmware Rev 7.3.5.0.98.  WM8994: i2ctransfer args DECIMAL, bus 4 addr 0x1a;
 debugfs is not mounted by rcS.  On the oracle use pbi2c rd16/wr16; push
 memdump3/memw32/pbi2c to /tmp after every boot.
+
+PARKED: BT controller open (trap 250), LE (refused by the controller, but the
+chip reports BT 4.0 with the LE bit — no known enable sequence, impossibility NOT
+demonstrated), FM (forward-port drivers/media/radio/wl128x, removed in 6.13),
+GPS (2024 LKML patch, else RE the reference).
 
 LISTENING TESTS ARE QUIET AND SHORT: lower `pbmix set "DAC1 Volume" 40` ONCE,
 run every test, restore 96 ONCE at the end; a bare `pbplay` plays a 2 s tone

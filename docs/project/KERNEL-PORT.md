@@ -1,48 +1,46 @@
-# Kernel base — 7.3.3 (port complete)
+# Kernel base — 7.3.3 (port complete; the SGX delta pending re-export)
 
 The port is **done**: `local/kernel-tree` is upstream **Linux 7.3.3**, the unit
-boots it to the region-1 BusyBox userland with a clean panel and working eMMC,
-and the exported patch reproduces the tree from pristine 7.3.3.
+boots it to the hd3 Nura root (read-only + overlayfs) and to the region-1
+BusyBox userland.
 
 * Base: **upstream 7.3.3** (not the pmOS package, which is still `!armhf`).
 * Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **63 files /
   8 998 lines**, sha256 `48c14a41…`, verified 0 rejects / 0 mismatches against
-  pristine 7.3.3 targets (session 54).  Session 54 makes the general MMC/GPIO/
-  syscatter/probe instrumentation `pr_debug` instead of unconditional
-  `pr_info` (`PBSIO`/`PBINI`/`PBX`/`PBM` in `omap_hsmmc.c`, `PBC` in
+  pristine 7.3.3 targets (session 54).  **It does not yet cover the session-55
+  SGX delta** — the re-export is pending a packaging decision (the driver alone
+  is 358 files).  Until then, a build from the patch alone has no SGX.
+* **Session 55 adds (in the tree, not yet exported):**
+  * `drivers/gpu/drm/pvrsgx/` — the `openpvrsgx-devgroup/linux_openpvrsgx`
+    branch `pvrsrvkm-7.3` (HEAD `101c687a…`) driver: `Kconfig`, `Makefile`,
+    `pvr-drv.c/h`, and `1.17.4948957/eurasia_km` (**358 files, 6.3 MB**);
+  * `drivers/gpu/drm/Kconfig` sources `drivers/gpu/drm/pvrsgx/Kconfig`;
+    `drivers/gpu/drm/Makefile` has `obj-$(CONFIG_SGX) += pvrsgx/`;
+  * `mm/vmalloc.c` gains `EXPORT_SYMBOL(__vmalloc_node_range_noprof);` (the
+    driver calls it; the devgroup branch has the same line);
+  * the board DTS `&sgx_module` is `status = "okay"` (the `omap4.dtsi` node
+    supplies `gpu@0` with `ti,omap4430-gpu` / `img,powervr-sgx540`).
+* Config: `kernel/winchester-7.3.3.config` (the canonical copy).  Session 55
+  adds the SGX block (`CONFIG_SGX=y`, `CONFIG_PVRSGX_1_17_4948957=y` +
+  `_ABI`, `CONFIG_SGX_DRM=y`, `CONFIG_SGX_OMAP=m`, the HW-perf/recovery
+  defaults) and the FB helpers SGX_DRM selects (`FB_CFB_FILLRECT/COPYAREA/
+  IMAGEBLIT`, `FB_IOMEM_FOPS/HELPERS`); session 54 added
+  `CONFIG_DYNAMIC_DEBUG=y` and `CONFIG_OVERLAY_FS=y`.
+* `initramfs/init.c`: `ROOTFS_RAW_OFF = 0x49000000` (hd3 at loader block
+  `0x4915`), the `lstat()` hand-off, and the read-only root: the loop
+  `LO_FLAGS_READ_ONLY`, the ext4 `MS_RDONLY`+`noload`, a 256 MiB tmpfs
+  upper/work and overlayfs on `/newroot`.  Unchanged in session 55; the region-0
+  image is `local/images/kernel-0xA8F0F30C-sgx.img` (`0x967880` B, CRC
+  `0xA8F0F30C`, sha256 `fb9905f3…`, with `&sgx_module` enabled).
+* Session 54's instrumentation change: the general MMC/GPIO/sysc/probe prints
+  are `pr_debug` (`PBSIO`/`PBINI`/`PBX`/`PBM` in `omap_hsmmc.c`, `PBC` in
   `mmc/core/{core,host,mmc_ops}.c`, `PBR` in `drivers/base/dd.c`, `PBG` in
   `gpio-omap.c`, `PBS` in `ti-sysc.c`, `PB:` in `arch/arm/mm/mmu.c`), with
-  `PBREQ`/`PBIRQ` still behind the `pb_trace` module parameter; it enables
-  `CONFIG_DYNAMIC_DEBUG` (the runtime flag) and `CONFIG_OVERLAY_FS` (the
-  read-only hd3 root).  The rebuilt image is `0x967A94` B, CRC `0xE84693A1`
-  (built, not flashed).  Session 52 added
-  `drivers/usb/musb/musb_gadget.c` (`quirk_avoids_skb_reserve`, so u_ether's RX
-  buffers stay 4-byte aligned and MUSB's HSDMA is actually used) and
-  `drivers/usb/gadget/function/u_ether.c` (the TX realign for the same reason),
-  and the board DTS `uart2_pins` gains the **CTS/RTS** pair
-  (`0x118`/`0x11A`) without which the BT core never answers.  It carries the E5 clock roles (`CBC_CFC`, CPU `CLKSM = 1`/`CLKGDV = 32`, FLL1
-  from BCLK, `mcbsp2_pins` `clkx`/`fsx` as outputs), the working audio card
-  (`mcbsp3_pins` on the PDM pads, `&mcbsp1` disabled, the second
-  `40126000.mcbsp + wm8994-aif2` link and the `omap-mcbsp` `XPHASE`
-  channel-layout guard with its `omap-mcbsp-priv.h` fields), the speaker path
-  (jack-dependent output stage, the line-out route, `spk-gpios`/`boost-gpios`,
-  the `disp-en-12-hog` removed), the `&l4_abe` ABE-refclk assignment and the
-  codec-GPIO init (reports 206/209/211/212/214/215).  Session 48 removed the
-  two session-45 diagnostics and added `sound/soc/ti/omap-mcbsp-priv.h`, which
-  every earlier export had omitted (trap 211).  Session 50 added the WL1283
-  chain: `drivers/clk/clk-twl.c` (`CLK32KG`) and the board DTS (the
-  `ti,wl1283` child, `cap-power-off-card`, the WL_EN pwrseq).  Session 51 adds
-  `drivers/net/wireless/ti/wl12xx/{main.c,wl12xx.h}`: the CAM default
-  (`sta_sleep_auth`) and the 4-sr firmware choice with the SR floor at 7.3.5.0
-  (reports 232/235, traps 239/243).  Trap 161.
-* Config: `kernel/winchester-7.3.3.config` (the canonical copy; session 54 adds
-  `CONFIG_DYNAMIC_DEBUG=y` and `CONFIG_OVERLAY_FS=y` with their resolved deps).
-* `initramfs/init.c`: `ROOTFS_RAW_OFF = 0x49000000` (hd3 at loader block
-  `0x4915`), the `lstat()` hand-off, and the session-54 read-only root: the
-  loop `LO_FLAGS_READ_ONLY`, the ext4 `MS_RDONLY`+`noload`, a 256 MiB tmpfs
-  upper/work and overlayfs on `/newroot`.  The image is
-  `local/images/kernel-0xE85217E5-overlay.img` (`0x9662A4` B, CRC
-  `0xE85217E5`, sha256 `fbeb6df0…`), built and not flashed.
+  `PBREQ`/`PBIRQ` behind the `pb_trace` module parameter.
+* Earlier session deltas already in the patch: the MUSb HSDMA fix
+  (`musb_gadget.c`, `u_ether.c`), the UART2 CTS/RTS pads, the WL1283 CAM/4-sr
+  (`wl12xx`), the CLK32KG (`clk-twl.c`), the audio path (McBSP3, the speaker
+  line-out route, `omap-mcbsp-priv.h`), the charger/display/sensor/touch set.
 * 6.15.11 reference: `local/pristine/linux-6.15.11.tar.xz`
   `local/kernel-tree-6.15.11`, and
   `kernel/patches/0001-playbook-winchester-6.15.11.patch` (incomplete by

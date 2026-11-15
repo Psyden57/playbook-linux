@@ -2682,6 +2682,90 @@ getty removed and the WLAN firmware; the region-0 image is `0xE85217E5`.  A
 writable eMMC root (busy timeout/cache/no-journal) remains a separate
 experiment.  [report 242]
 
+**Executed (session 55, report 243).**  The packed container
+(`both-0xE85217E5-overlay.signed`) was flashed in one bootrom session from the
+booted Nura root (`--from-bootrom --password 0000 --apply`; `COMPLETE 0x40C0 ->
+cmd 0x4006`, `done`).  The unit booted `7.3.3 #67` on the overlay
+(`overlay / … lowerdir=/rootfs,upperdir=/overlay/upper,workdir=/overlay/work`)
+with the lower `ro without journal`, **no** `Card stuck`/`Aborting`, and the
+image's own top-up moved `BOOTCTR_FCTRY` `0x1d -> 0x32` (`PASS`).  `elogind`
+and `tinydm` started, `/run/user/10000` and the catacomb Wayland socket exist,
+and `catacomb` runs; the screen is black because its GL renderer fails
+(`ZINK: failed to load libvulkan.so.1`), i.e. the next blocker is SGX540, not
+the root or the seat.
+
+## 77. SGX540: the openpvrsgx-devgroup 7.3 driver in-tree, DDK 1.17.4948957 (session 55)
+
+**Decision.**  Bring up SGX540 with the **`openpvrsgx-devgroup/linux_openpvrsgx`
+branch `pvrsrvkm-7.3`** (HEAD `101c687a…`), not the `tmlind` 6.1 fork the
+pvrports `linux-openpvrsgx` APKBUILD pins, and package only the
+`pvrsrvkm_omap4_sgx540_120.ko` variant.  The driver goes in-tree at
+`drivers/gpu/drm/pvrsgx/` with its Kconfig sourced from `drivers/gpu/drm/Kconfig`
+and `obj-$(CONFIG_SGX) += pvrsgx/`; the config is `CONFIG_SGX=y`,
+`CONFIG_PVRSGX_1_17_4948957=y` (+ABI), `CONFIG_SGX_DRM=y`, `CONFIG_SGX_OMAP=m`;
+`&sgx_module` is enabled in the board DTS.  Userspace is the TI DDK
+**1.17.4948957** (`sgx-ddk-um`, `MightyM17/sgx-ddk-um` `c7dbb0a0…`, `ti443x`)
+with `mesa-pvr-dri-classic` 21.3.9 and `libglvnd`, `MESA_LOADER_DRIVER_OVERRIDE=pvr`.
+
+**Why.**  Mainline 7.3.3 binds nothing to `ti,omap4430-gpu`; the devgroup's 7.3
+branch is the current port of the DDK to our kernel line, so no rebase is
+needed, and it already selects `SOC=omap4 SGX=sgx540 SGX_REV=120` (the board's
+`ti,omap4430-gpu` compatible).  The pvrports reference device (Samsung espresso,
+OMAP4430 + TWL6030) supplies the same DDK and the userspace recipe.
+
+**One kernel change the driver requires:** `EXPORT_SYMBOL(__vmalloc_node_range_noprof);`
+in `mm/vmalloc.c` (the devgroup branch has the same line; without it modpost
+fails for every variant).  It is a GPL export of an existing symbol, not a
+behaviour change.
+
+**Evidence.**  Report 244: the build (zImage `6 880 640` B, DTB `96 461` B,
+image CRC `0xA8F0F30C`), the probe (`pvrsrvkm 56000000.gpu: Enabling quirks
+00000001`, `[drm] Initialized pvr 1.17.4948957 for 56000000.gpu on minor 1`),
+`/dev/dri/card1`/`renderD129`, `uevent DRIVER=pvrsrvkm`, and the module
+vermagic `7.3.3 mod_unload modversions ARMv6 p2v8`.  The DDK blobs are
+glibc/armhf (`NEEDED libc.so.6`, `/lib/ld-linux-armhf.so.3`) and the root is
+musl 1.2.6, hence `gcompat` + the patched Mesa.
+
+**Constraint.**  The blobs stay gitignored in `local/`.  The kernel patch
+re-export (358 driver files) is pending: either the main patch grows by the
+driver or the driver is vendored under `kernel/` with a documented copy step.
+One variable per boot: the kernel driver was validated on its own before the
+userspace.
+
+## 78. SGX540 userspace: the pvrports stack (libglvnd + mesa-pvr + sgx-ddk-um) with gcompat (session 55)
+
+**Decision.**  Run the SGX540 userspace as the pvrports stack — `libglvnd`
+1.6.0, `mesa-pvr-dri-classic` 21.3.9 (the `amber-pvr` Mesa, `pvr` DRI), and the
+TI DDK `sgx-ddk-um` 1.17.4948957 (`ti443x`) — with **`gcompat`** for the glibc
+blobs on this musl root and **`wayland-libs-server`** (mesa-pvr's EGL needs it).
+Select the driver with `MESA_LOADER_DRIVER_OVERRIDE=pvr`; libglvnd reaches the
+vendor EGL through `/usr/share/glvnd/egl_vendor.d/50_amber.json`.  The packages
+are available prebuilt (pvrports `v23.12/armv7`) and also build from source in
+the edge chroot (`pmbootstrap build --arch armv7 mesa-pvr-dri-classic`).
+
+**Why.**  The DDK blobs are glibc/armhf and the root is musl 1.2.6; the
+pvrports Mesa is the only Mesa that carries the classic `pvr` DRI (mainline
+Mesa dropped classic drivers; the pvrports README uses the amber branch for
+this reason).  Hand-staging the vendor `pvrsrvctl` under a bare `gcompat` was
+tried and fails (`--help` segfaults, trap 279), so the packages are the route.
+
+**Evidence.**  Report 245: `pvrsrvinit` → `PVR_K: UM DDK-(4948957) and KM
+DDK-(4948957) match. [ OK ]`; the headless EGL/GLES2 probe reports
+`GL_VENDOR = Imagination Technologies`, `GL_RENDERER = PowerVR SGX 540`,
+`GL_VERSION = OpenGL ES 2.0 build 1.17@4948957`.  This closes ROADMAP 7a's
+"a trivial EGL/GLES 2.0 program runs on SGX540".
+
+**Constraint / open.**  catacomb (smithay) requires
+`GL_EXT_unpack_subimage`, which the SGX540 GLES2 driver does not expose, and
+panics at renderer creation; pvrports supports Phosh (patched phoc) and Plasma,
+not catacomb.  The DE choice (a wlroots compositor, or extending catacomb) is
+open.  **Executed (session 55):** the stack is **baked into hd3** (image
+`85b44deb…`) by an offline `apk --root` install into the loop-mounted image,
+with the module added to `/etc/modules`/`modules.dep`, the `sgx-ddk-um` service
+in the default runlevel and the `pvr` override in a tinydm env file; a fresh
+boot autoloads the module, starts the service, logs the DDK match and runs the
+EGL probe.  Blobs stay gitignored in `local/`.
+
 ---
 
 The repository licence and visibility are decided below; the remaining

@@ -1,15 +1,15 @@
 # Session numbering
 
-The project spans **fifty-four sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **fifty-five sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-54`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-55`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
-* **Linux-era** ("session 1…48") — used inside the reports and handoffs, because
+* **Linux-era** ("session 1…49") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
   started.  **Linux session N = absolute session N + 6.**
 
@@ -66,6 +66,7 @@ So:
 | **52** | **46** | **The WL1283 WLAN associates, leases and passes traffic — the blocker was the missing `ccm`/`ctr` crypto modules** (report 236).  The 4-way handshake was completing all along (message 3 decrypts with AES-UNWRAP, so the PSK was never wrong); the pairwise-key install returned `-ENOENT` because `ieee80211_key_alloc()` allocates a `ccm(aes)` AEAD for CCMP and the algorithm was not registered — `ccm.ko`/`ctr.ko` were absent from the rootfs and are not a link dependency of `mac80211.ko`, so `depmod` never supplied them; they now ship and `rcS` modprobes them before the stack.  Two `pr_info` probes (`PBNL`/`PBKEY`) localised it in one boot, after the `WLAN_STA_ASSOC` check at `cfg.c:692` was ruled out (`sta=yes state=3 assoc=1`).  Also: a **5 GHz AP needs `iw reg set <CC>`** (the world domain marks 5735–5835 MHz `PASSIVE-SCAN`; without it the auth times out after `regulatory prevented using AP config`); the **per-unit NVS** is shipped; `disable_scan_offload=1` and a `wpa_cli scan` nudge make bring-up reliable.  Second result: **the USB gadget's MUSB HSDMA was silently in PIO** — RTL 2.00 refuses buffers that are not 4-byte aligned and u_ether hands it 2-mod-4 addresses on both paths; fixed with `quirk_avoids_skb_reserve` (RX) and a TX realign → **RX 3.3 → 6.3 MB/s, TX 3.3 → 4.1 MB/s**.  Negative: advertising **HT40** on `wl12xx` associates then collapses to MCS0 (RX 622 KB/s) — reverted and proven (module byte-identical).  Region 0 `0x50CD2A48`, region 1 `877c42c3…` (36 modules), patch **61 files / 8 755 lines** (`741115a4…`).  Traps 244–247; DECISIONS §70/§71 |
 | **53** | **47** | **The WL1283's BT core works, and loading its service pack makes `hci0` register with mgmt for the first time** (report 238).  Driven over UART2 as H4 the core answers `HCI_Reset`, reports `hci ver 6` / `lmp ver 6` / `mfr 0x002b` (TI, BT 4.0) and BD_ADDR `8e:e4:3c:22:61:00`, and **runs a full BR/EDR inquiry that finds a peer** (`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.  The reference's `WL1283.bts` replays **315/315** over a userspace H4 loader and moves the LMP subversion `0x2b0f` → **`0x2b33`** (what its own header declares); loaded **before** the attach it makes `MGMT_OP_READ_INDEX_LIST` report **1** controller instead of **0**, with the no-pack case as the negative control.  The three-session `hci0` failure is thus identified: **`0x201c` is `HCI_LE_Read_Supported_States`** (report 237 §4 called it a benign TI vendor op — wrong), a bare ROM answers it **Command Disallowed** with 5 payload bytes where 9 are needed, `hci_cc_func()` rejects it, `le_init2` aborts, and the controller never registers — the pack fixes the **length** (11 → 12 bytes).  **Left:** opening the controller — `SET_POWERED` returns `0x05` after `Frame reassembly failed (-84)` (`-EILSEQ`), a kernel `hci_uart` fault since the same commands answer instantly from userspace (trap 250).  **LE is refused by the controller** and the reference stack is BR-EDR-only.  Settles the BT-firmware contradiction (the reference's file is `Quattro, 6.0.15 ROM`; `TIInit_*` is `BL6450, WL1271/3 2.0 ROM`).  Region 0 `0xDD66D8C3` and region 1 `49e318bf…` unchanged — **no flash this session**.  Traps 249/250; DECISIONS §73 |
 | **54** | **48** | **hd3/Nura device work and the read-only overlay build** (reports 240/241/242).  The host-side pmbootstrap experiment (240) built the Nura catacomb root and the artifact `linux-*` wrapper; the device work (241) found the hd3 filesystem at loader block **`0x4915`** (the MCT entry `0x4905` has a 1 MiB prefix; the loader gate rejected 0x4905), flashed 626 065 440 B and verified `sha256 076bafcf…`; fixed the initramfs hand-off (`lstat`, not `access`); and booted **Nura** from hd3, but the first ext4 journal/udev write stalls the eMMC and the root remounts read-only.  The continuation (242) implemented the **read-only hd3 + overlayfs** init (`LO_FLAGS_READ_ONLY`, `MS_RDONLY`+`noload`, a 256 MiB tmpfs upper), rebuilt region 0 as **`0xE85217E5`**, edited the hd3 image (root fstab line + tty1 getty removed, the WLAN firmware, the 43 modules; sha256 `1f14915f…`) and packed the both-halves container **`c3ed1f61…`**; **the flash did not run** (the operator stopped).  Traps 253–271; DECISIONS §74/§75/§76. |
+| **55** | **49** | **The overlay root is flashed and booting; the eMMC is out of the boot path; the SGX540 runs EGL/GLES 2.0** (reports 243/244/245).  The packed container was written in one bootrom session (`COMPLETE 0x40C0 -> cmd 0x4006`, `done`) and the unit booted `7.3.3 #68` on `overlay / … lowerdir=/rootfs,upperdir=/overlay/upper`, the lower `ro without journal`: **no `Card stuck`, no journal abort**.  `elogind`/`tinydm`/**`catacomb`** run, `/run/user/10000` and the catacomb Wayland socket exist, the Munin touch is ready, the backlight is 255, and `wlcore` boots the WLAN firmware.  The `openpvrsgx-devgroup` 7.3 driver (DDK 1.17.4948957) builds in-tree and binds (`pvrsrvkm 56000000.gpu`, `card1`/`renderD129`); the pvrports userspace (`libglvnd`, `mesa-pvr-dri-classic` 21.3.9, `sgx-ddk-um` + `gcompat` + `wayland-libs-server`) initializes it (`UM/KM DDK match`) and a headless EGL/GLES2 probe reports **`GL_RENDERER = PowerVR SGX 540`**, `GL_VERSION = OpenGL ES 2.0 build 1.17@4948957`.  catacomb panics on `GL_EXT_unpack_subimage` (compositor requirement); pvrports supports Phosh/phoc and Plasma.  The stack is **baked into hd3** (image `85b44deb…`: offline `apk --root` install, module in `/etc/modules`/`modules.dep`, the service in the default runlevel, the `pvr` tinydm env; hd3-only `--component --dest-block 0x4915` flash) and verified on a fresh boot.  Traps 272–284; DECISIONS §76 (executed), §77, §78. |
 
 ## Anchors (evidence for the mapping)
 
@@ -110,7 +111,7 @@ and each session knows its own position:
 Reports `10`…`102` are the pre-Linux phase's output (boot media, monitor
 security, IRAM tables, the ROM API, `hd0`, NVRAM records `0x2801`, RPMB, the CRC
 recipe, the loader audit, the pre-OS IFS reflash).
-`103`…`242` are the Linux-era sessions (and continuing).
+`103`…`245` are the Linux-era sessions (and continuing).
 
 ## Why the two schemes are kept
 
