@@ -1581,3 +1581,92 @@ workaround.
 * **No boot regressions:** codec revision D, McBSP2/McBSP3, the two-link sound
   card, the touch, the display, the ACM gadget and the charger all come up on
   the final image.
+
+## Session 53 snapshot (2026-11-15)
+
+**Focus has moved: item 7a — a real root on hd3, then SGX540** (operator,
+session 53).  Bluetooth was parked mid-way with its blocker located.
+
+**THE WL1283's BT CORE WORKS — and loading its service pack makes `hci0`
+register with mgmt for the first time.**  Driven over UART2 as H4 it answers
+`HCI_Reset`, reports itself (`hci ver 6`, `lmp ver 6`, `mfr 0x002b` = TI, i.e.
+Bluetooth 4.0) and **runs a complete BR/EDR inquiry that finds a nearby
+device** (`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.
+
+* **The service pack loads and it is what unblocks the kernel (report 238).**
+  `local/work/1917/base/lib/firmware/bluetooth/WL1283.bts` replays **315/315**
+  commands over H4 and moves the LMP subversion `0x2b0f` → **`0x2b33`**, exactly
+  what the file's own header declares (`Quattro … TI_P6_15.51`).  Measured with a
+  negative control on the same attach: **without** the pack
+  `MGMT_OP_READ_INDEX_LIST` returns **0 controllers**; **with** it, **1**, and
+  `MGMT_OP_READ_INFO` then gives BD_ADDR `8e:e4:3c:22:61:00`.  Session 52's
+  "`hci0` exists, use mgmt to power it" was unreachable — `hci0` was never in
+  mgmt's index list.  It is now.
+* **Why it was unreachable (report 238 §0, trap 249).**  `0x201c` is
+  `HCI_LE_Read_Supported_States`, **not** a benign TI vendor op (report 237 §4 is
+  wrong).  A bare ROM answers it **Command Disallowed `0x0c`** with only 5
+  payload bytes where 9 are needed, so `hci_cc_func()` rejects it, the LE init
+  stage aborts, `hci0` never opens, and mgmt reports zero controllers.  The pack
+  fixes the **length** (11 → 12 bytes) and that is enough to register.
+* **The remaining blocker is a stray `0x30` byte (trap 250).**  A temporary
+  instrument in `h4_recv()` shows it in **6 of 6** runs: the last init reply
+  arrives complete, then ~200 ms later a **single `0x30`** arrives and is
+  (correctly) rejected as not-an-H4-type (`-EILSEQ`), leaving `SET_POWERED` at
+  `0x05` (`-ETIMEDOUT`).  **Which side emits it is not yet known** — it never
+  appears when the same sequence is driven from userspace, so a host-side origin
+  is favoured.  Excluded by measurement: alignment/padding, chip idle-sleep,
+  leftover bytes, UART line errors (`LSR = 0x60`), truncated long replies, and
+  **hardware flow control** (an A/B on a clean boot registers the controller with
+  `CRTSCTS` on *and* off — `hci_uart_set_flow_control()` is never called by H4).
+* **LE is refused by the controller, but that does not prove the silicon cannot
+  do it** (`0x0c` with a plausible payload, `Write_LE_Host_Support` = `0x11`, LE
+  feature page all zeros).  The reference's own stack is **BR/EDR-only** (no LE
+  opcodes, no LE Meta event, no SMP/ATT/GATT), which reflects the vendor never
+  shipping an LE stack on this 2011 tablet — the chip itself reports **HCI 4.0 /
+  LMP 4.0** with the LE-supported feature bit.  So: no enable sequence is known,
+  and impossibility is **not** demonstrated.
+* **The BT-firmware contradiction is settled** in favour of the reference's
+  `WL1283.bts`: its header says `Compatibility: Quattro, 6.0.15 ROM`, while
+  linux-firmware's `TIInit_*.bts` say `BL6450, WL1271/3 2.0 ROM` — a different,
+  older family.  **The `wl128x-fw-4-sr/5-sr.bin` files are WLAN-core firmware**
+  (`request_firmware()` in `wlcore/main.c`) and have nothing to do with BT — the
+  BT core's firmware is the `.bts` pack.
+* **Ship `l2cap`/`sco`/`rfcomm`/`hidp` before expecting HID.**  They are modules
+  and none are in the region-1 rootfs yet (only `bluetooth`, `hci_uart`, `btbcm`
+  and their crypto deps are).
+
+**The next phase is scoped (report 239, ROADMAP item 7a).**  hd3 (62.86 GiB)
+will hold a **flasher-restorable ext4 image** — the operator's decision, so a
+broken root is recoverable from the bootrom.  The loader's allow-list already
+includes MCT type `0x1C` and `bbusb.py` encodes the extent, so the existing flash
+loop works.  Because `analyze_blocks()` skips `0xFF` runs and not zeros, a sparse
+image's holes are **not** skipped, so image size is set by the transfer budget
+(1 GiB = 1.59 % of hd3).  The userspace is **Nura** (postmarketOS renamed
+2026-09-27) with **Catacomb** or **Sxmo-dwm**; the PlayBook is not a supported
+device, so it needs a new port modelled on `device-samsung-espresso7` (OMAP4430,
+TWL6030).  The structural difference is that the PlayBook's kernel must remain
+the CRC-sealed chainloader image, not a `heimdall-bootimg`, so the Nura kernel
+package never flashes — see report 239 §4.  **SGX540** has no mainline driver
+(nothing binds `ti,omap4430-gpu`); the route is `pvrports`'
+`linux-openpvrsgx` (`CONFIG_SGX_OMAP=m`) plus proprietary `sgx-ddk-um`, both
+targeting the same SoC family.
+
+**The WLAN still associates (session 52).**  The blocker was the missing
+`ccm`/`ctr` crypto modules (`ieee80211_key_alloc()` needs a `ccm(aes)` AEAD;
+without it the PTK install is `-ENOENT`, which wpa_supplicant reports as
+`WRONG_KEY`).  `wpa_state=COMPLETED`, WPA2-PSK/CCMP on 5785 MHz at −41 dBm,
+DHCP **192.168.0.212**.  A 5 GHz AP needs `iw reg set <CC>` (the world domain
+marks 5735–5835 MHz `PASSIVE-SCAN`).  Wi-Fi is 1×1 HT20 (72 Mbit/s) — **do not
+advertise HT40** (trap 247).  The USB RNDIS link now uses MUSB's DMA
+(RX 6.3 / TX 4.1 MB/s raw, ssh 2.3).
+
+**Bench (session 53, measured).**  Unit on our Linux image **`0xDD66D8C3`**
+(`0x939E4C` B, kernel `7.3.3`; CRC recomputed and matching this session);
+region 1 = `local/images/rootfs-region1-wl1283-bt.ext4` (**`49e318bf…`**,
+**43 modules**).  `0fca:8010`, console `pb> `, **ssh on `169.254.0.1`**.
+Kernel patch: **61 files / 8 762 lines**, sha256 `20556c5f…` (unchanged — no DTS
+or driver edit; the one kernel instrument was reverted and proven byte-identical
+to pristine).  `BOOTCTR_FCTRY` reads **`0x22`** (`dmesg | grep pbrpmb`), above
+the `0x1e` threshold, so `/init` did not write; `0x23` at session start, one unit
+spent by the single reboot.  No flash, no NVRAM/MCT/RPMB write; nothing added to
+the UFS.  **No restore required.**

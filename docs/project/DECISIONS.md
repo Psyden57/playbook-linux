@@ -2598,6 +2598,75 @@ are modules and must be shipped before HID can work.
 
 ---
 
+## 74. The hd3 root is a Nura catacomb image; the kernel stays our chainloader (session 54)
+
+**Decision.**  The real root on hd3 is a **Nura** (formerly postmarketOS)
+**catacomb** rootfs produced by `pmbootstrap install --split` with a scaffolded
+`device-blackberry-playbook` port modelled on `device-samsung-espresso7` —
+**not** our `build_rootfs.py` BusyBox tree.  The kernel remains our CRC-sealed
+chainloader image: the port declares `flash_method="none"` and a
+`linux-blackberry-playbook` **artifact package** satisfies pmbootstrap's
+mandatory `mkinitfs` step by installing `/boot/vmlinuz`, the DTB,
+`/usr/share/kernel/winchester/kernel.release` and the 43 modules under
+`/lib/modules/7.3.3`.  The split **boot** image (512 MiB ext2) is unused; only
+the **root** image (597 MiB bare ext4) is flashed, to hd3 at loader block
+`0x4905` (raw `0x49000000`).  `initramfs/init.c`'s `ROOTFS_RAW_OFF` becomes
+`0x49000000`; the initramfs mounts the root read-write and execs `/sbin/init`
+(BusyBox init → OpenRC → `tinydm` → `catacomb`).
+
+**Why.**  This is the operator's item 7a design (session 53): hd3 holds a
+**flasher-restorable** ext4 image, so a broken root is recoverable from the
+bootrom; region 1 and the sealed IFS remain the fallback.  The host-side run
+(report 240) settled the two open questions: pmbootstrap builds the rootfs for
+a device that owns no kernel, and a `linux-*` package can wrap our 7.3.3 tree.
+The only structural difference from the espresso reference — its
+`heimdall-bootimg` flash method — is expressed by `flash_method="none"` plus the
+external chainloader.
+
+**Constraint.**  The `linux-blackberry-playbook` package is a **prebuilt
+artifact wrapper**, not a source rebuild inside pmbootstrap; a production port
+should use the pristine 7.3.3 tarball + `kernel/patches/` and
+`pmbootstrap build --envkernel` (`helpers/envkernel.sh`), with the same
+packaging layout.  Two host-side image fixes are required and must be part of
+the artefact: remove the `/etc/fstab` `/boot` UUID line (`tinydm` needs
+`localmount`, and there is no boot partition), and add
+`ttyGS0::respawn:/bin/sh -l` for the ACM console.  The DE will run on software
+rendering until SGX540 is up (item 7a step 5).  No NVRAM/MCT/RPMB write; the
+hd3 write is the operator's call.
+
+**Evidence.**  Report **240**; the pmbootstrap 3.12.1 run and its log; the
+image inspection (`debugfs`/`e2fsck`) showing `/sbin/init` → BusyBox init,
+`catacomb.desktop` as the tinydm session, `kernel.release` = `7.3.3`, 43
+modules, and 464 packages; the hd3 dry-run (`0x4905..0x6E54`, inside MCT
+`0x1C`).  The region-0 image is `0x939D5C` B, CRC `0x8B709950`.
+
+---
+
+## 75. The `PB*` bring-up instrumentation is `pr_debug` (dyndbg), not unconditional `pr_info`
+
+**Decision (operator, session 54):** the general bring-up traces must not print
+on every operation in production boots.  They stay compiled in but gated by
+dynamic debug; the two per-request traces stay behind the `pb_trace` module
+parameter.
+
+**Evidence.**  The first Nura boot `dmesg`
+(`docs/captures/playbook-live-2026-11-15-hd3-nura-boot.txt`, 1 746 lines) is
+dominated by `PBC`/`PBSIO`/`PBINI`/`PBX`/`PBM`/`PBG`/`PBS`/`PB:` lines on every
+MMC/probe operation; per-I/O `pr_info` to the console was itself the old
+17–32 KB/s write-path bottleneck (trap 52, report 136), and the operator asked
+to remove or gate the spam.  The eMMC stall is **not** caused by the prints — it
+precedes the `mmc1` rescan — so this is a log/perf fix, not the stall's fix.
+
+**Consequences.**  `PBSIO`/`PBINI`/`PBX`/`PBM` (`omap_hsmmc.c`), `PBC`
+(`mmc/core/{core,host,mmc_ops}.c`), `PBR` (`drivers/base/dd.c`), `PBG`
+(`gpio-omap.c`), `PBS` (`ti-sysc.c`), `PB:` (`arch/arm/mm/mmu.c`) are
+`pr_debug`; `CONFIG_DYNAMIC_DEBUG=y` is enabled so they can be turned on at
+runtime; `PBREQ`/`PBIRQ` remain behind `pb_trace`.  The patch is re-exported
+(63 files / 8 998 lines, sha256 `48c14a41…`) and the image is `0xE84693A1`
+(built, not flashed).  Do not re-add per-I/O `pr_info` (trap 264).
+
+---
+
 The repository licence and visibility are decided below; the remaining
 policy questions (publication of the proprietary corpus) stay open and are
 recorded here so nobody assumes a policy exists.

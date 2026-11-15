@@ -204,7 +204,9 @@ must use the shifted rule (and Python, not mental arithmetic).
 QNX6 root is at raw **`0x49000000`**, 1 MiB above the rule's value: writing an
 image to `/dev/hd3` and reading it back put its first sector at `0x49000000`, and
 the QNX6 superblock at `0x49002000`.  So the FS partition's loader start is
-`0x4915` under the rule (or the MCT's `0x4905` entry has a 1 MiB prefix).  The
+`0x4915` under the rule (or the MCT's `0x4905` entry has a 1 MiB prefix); **flash
+hd3 at `0x4915`, never at `0x4905`** — the loader gate rejects `0x4905` (`0xF7
+-> cmd 0x15 data 03`, nothing written; trap 259).  The
 region 0/1, IFS and NVRAM offsets above are unaffected.  A Linux-side mount of
 hd3 must use `0x49000000` (`console: qnx6`, default).
 

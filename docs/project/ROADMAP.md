@@ -4,11 +4,14 @@ Open work only.  Closed and parked item history is archived in
 [`docs/history/ROADMAP-CLOSED.md`](../history/ROADMAP-CLOSED.md).  Each open
 item states the evidence that would close it.
 
-Current focus: **item 7a** — a real root on hd3, then SGX540 (operator, session
-53), with **item 9** (peripherals) still active.  The audio goal is closed
+Current focus: **item 7a** — the hd3 Nura root (read-only hd3 + overlayfs, the
+WLAN firmware), then SGX540 (session 54; reports 240/241), with **item 9**
+(peripherals) still active.  hd3 holds the Nura root and it boots; the eMMC write
+stall keeps the root read-only and the DE down.  The audio goal is closed
 (reports 214 and 215), the bench has **ssh over USB** (RNDIS + dropbear) with the
 gadget's DMA now working (session 52), and the **WL1283's WLAN associates and
-passes traffic**.  On the same chip, **BT's core works** (real inquiry; `hci0`
+passes traffic** (on the region-1 root; the Nura root needs its firmware).  On
+the same chip, **BT's core works** (real inquiry; `hci0`
 registers with mgmt) with the controller-open blocked on a stray byte, then FM
 and GPS.
 
@@ -48,6 +51,50 @@ acceleration working so a real DE (Catacomb or Sxmo-dwm) can run.  This is item
 * **Device tool gap:** busybox has `mke2fs` but **no `offset=`** and **no
   `resize2fs`**.  The first is covered by `losetup -o`; the second is why the
   image is built on the host rather than grown on the device.
+
+**Established by measurement (session 54, report 240):**
+
+* **pmbootstrap builds the rootfs without owning the kernel, but its install
+  pipeline is not kernel-agnostic.**  A `device-blackberry-playbook` port with
+  `flash_method="none"` and no kernel dependency installs `postmarketos-base`
+  and the device package, then `create_device_rootfs()` runs `mkinitfs`, which
+  requires exactly one `/usr/share/kernel/*/kernel.release`; with none it fails
+  with `only one kernel release/flavor is supported, found: []`.
+* **A Nura `linux-*` package can wrap our 7.3.3 tree.**  The artifact package
+  `linux-blackberry-playbook` installs `/boot/vmlinuz`, the DTB,
+  `/usr/share/kernel/winchester/kernel.release`, and `/lib/modules/7.3.3`
+  (43 modules + `modules.dep`); `mkinitfs`/`boot-deploy` then complete.  A
+  production port would use `--envkernel`/the pristine tarball; the layout is
+  the same.
+* **`--split` produces the root image we need:** a 597 MiB bare ext4
+  (`pmOS_root`), Nura catacomb, **464 packages**, `/sbin/init` → BusyBox init →
+  OpenRC, `tinydm` → `catacomb.desktop`, 7.3.3 modules.  The 512 MiB boot image
+  is unused by our chainloader.
+* **Two host-side fixes are required:** remove the `/etc/fstab` `/boot` UUID
+  line (`tinydm` needs `localmount`, and there is no boot partition) and add
+  `ttyGS0::respawn:/bin/sh -l` for the ACM console.
+* **The hd3 flash plan passes the gate:** loader blocks `0x4905..0x6E54` inside
+  MCT `0x1C`.  The region-0 image with `ROOTFS_RAW_OFF = 0x49000000` is
+  `0x939D5C` B, CRC `0x8B709950`; the kernel patch is unchanged.
+
+**Established by measurement (session 54, report 241):**
+
+* **hd3's filesystem starts at loader block `0x4915`** (the MCT entry `0x4905`
+  has a 1 MiB prefix); the loader gate rejects `0x4905` (`0xF7 -> cmd 0x15
+  data 03`, nothing written).  The flash wrote 626 065 440 B and verified sha256
+  `076bafcf…` byte-exact.
+* **Nura boots from hd3** (7.3.3, Nura edge, OpenRC, the display and the Munin
+  touch) once the pre-chroot check uses `lstat` (the absolute `/sbin/init ->
+  /bin/busybox` symlink); image `0x060B25F2`.
+* **The first ext4 journal/udev write stalls the eMMC** (`mmc1: Card stuck being
+  busy! __mmc_poll_for_busy`), aborts the journal and remounts read-only;
+  `tinydm`/`catacomb` cannot get a libseat session.  The region-1 no-journal
+  root is stable; the read-only hd3 + overlayfs is the workaround.
+* **The Nura root lacks the WLAN firmware** (`wl128x-fw-4-sr.bin` `-2`); add
+  `local/work/firmware-nvs`.
+* **The `PB*` prints are now `pr_debug`** (dyndbg), `PBREQ`/`PBIRQ` behind
+  `pb_trace`; `CONFIG_DYNAMIC_DEBUG=y`, `CONFIG_OVERLAY_FS=y`; patch 63 files /
+  8 998 lines (sha256 `48c14a41…`), image `0xE84693A1` (built, not flashed).
 
 **The design decision (operator, session 53): hd3 holds a flasher-restorable
 ext4 image, not an in-place mkfs.**  A known-good Linux image that the bootrom
@@ -154,18 +201,29 @@ flasher can replace at every point:
    aportgen`, modelled on `device-samsung-espresso7`: codename
    `blackberry-playbook`, `arch=armv7`, `dtb=omap4-winchester` (ours),
    `chassis=tablet`, `drm=true`.  Determine the kernel-package story (§above)
-   against a real init run.  *No device writes.*
+   against a real init run.  *No device writes.*  **Done (session 54):** the
+   scaffold is `device/community/device-blackberry-playbook`.
 2. **`pmbootstrap install`** with `ui=catacomb` (or `sxmo-de-dwm`), configured to
    produce **image files** (`split`), not a flash.  Verify by loop-mounting the
    root image on the host and checking `/sbin/init`, the DE and the kernel
-   modules match 7.3.3.
-3. **Flash that root image to hd3** with
-   `bbusb.py --component … --dest-block 0x4905`; dry-run first and require the
-   plan line to show a run inside `0x1C` and `gate_runs` to pass.  Verify by
-   `dd`-ing the superblock at `0x49000000` and by mounting it from the running
-   Linux (`losetup -o 0x49000000`) and comparing a checksum with the host image.
-4. **Re-point `ROOTFS_RAW_OFF`**, rebuild the kernel image, flash region 0, boot.
-   Region 1 stays intact throughout as the fallback.
+   modules match 7.3.3.  **Done (session 54, report 240):** the root image is
+   597 MiB, Nura catacomb, and the kernel is the `linux-blackberry-playbook`
+   artifact package.
+3. **Done (session 54, report 241) — flash the root image to hd3 at `0x4915`**
+   (not `0x4905`: the MCT entry has a 1 MiB prefix; the loader gate rejected
+   `0x4905`).  The write was 626 065 440 B and the device-side sha256 was
+   `076bafcf…`, equal to the host image.
+4. **Done (session 54) — re-point `ROOTFS_RAW_OFF` to `0x49000000`, flash region
+   0, boot.**  The `lstat` hand-off fix is needed (the Nura `/sbin/init` is an
+   absolute symlink); image `0x060B25F2` boots Nura from hd3.
+4a. **Next — the read-only hd3 + overlayfs root.**  The first ext4 journal/udev
+   write stalls the eMMC (`mmc1: Card stuck being busy!`), aborts the journal
+   and remounts read-only; `tinydm`/`catacomb` cannot start.  Mount hd3
+   `MS_RDONLY` + `noload`, overlay a tmpfs upper, add
+   `local/work/firmware-nvs` and remove the tty1 getty, update the 43 modules,
+   flash hd3 at `0x4915` + region 0, boot the DE.  The eMMC writable-root fix
+   (busy timeout / cache / no-journal) is a separate experiment; the region-1
+   root is the fallback.
 5. **Only then** SGX: add `sgx-ddk-um` + `linux-openpvrsgx`'s driver (rebased to
    7.3.3) and test with a trivial EGL/GLES program before any compositor.
 

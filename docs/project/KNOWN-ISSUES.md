@@ -2050,6 +2050,119 @@ report 121 §3/§11/§12.
       wastes real time because the symptom is identical to a dead chip.
       (Session 53.)
 
+253. **`pmbootstrap install` runs `mkinitfs` even for a device whose kernel it
+       does not own, and `mkinitfs` requires exactly one kernel release.**  A
+       scaffolded device port with `flash_method="none"` and no kernel
+       dependency installs `postmarketos-base` and the device package, then
+       `create_device_rootfs()` calls `pmb.chroot.initfs.build()`; `mkinitfs`'s
+       `GetKernelVersion()` globs `/usr/share/kernel/*/kernel.release` and
+       fails with `only one kernel release/flavor is supported, found: []`.
+       The rootfs itself is kernel-agnostic; the install pipeline is not.  A
+       port whose kernel is external must still install a `linux-*` package
+       that provides that file (and the matching modules) for the install to
+       finish.  (Session 54, report 240.)
+
+254. **A prebuilt `linux-*` package's module metadata can vanish after the
+       package install, and `mkinitfs` then fails with `kernel module.dep not
+       found: /usr/lib/modules/<ver>`.**  The package shipped `modules.dep`
+       and friends, but after the `kmod` trigger ran, only `kernel/*.ko`
+       remained; running `depmod -a 7.3.3` inside the chroot regenerated them
+       and `mkinitfs` completed.  Ship a `post-install` that runs `depmod -a
+       <release>` and include `modules.order`/`modules.builtin`; do not rely
+       on the trigger for a prebuilt module tree.  (Session 54.)
+
+255. **pmbootstrap's split install writes a `/boot` UUID into `/etc/fstab`,
+       and `tinydm` needs `localmount`.**  With this chainloader there is no
+       separate boot partition, so `localmount`'s `mount -at …` fails on the
+       absent `/boot` device; because `tinydm` has `need localmount`, the
+       display session never starts.  Remove the `/boot` line from the
+       flash-ready image.  The root UUID line can stay: `/` is already mounted
+       by the initramfs and its fstab `pass` is 0.  (Session 54, report 240.)
+
+256. **Nura's `inittab` starts gettys on tty1–6 only; the PlayBook bench
+       console is `/dev/ttyGS0`.**  After the hand-off there is no shell on the
+       USB ACM console unless the image's `/etc/inittab` carries
+       `ttyGS0::respawn:/bin/sh -l` (the current BusyBox rootfs does the
+       same).  Add it to the flash-ready image; otherwise the only access is
+       the panel/touch, and the rootfs was built with `--no-sshd`.  (Session
+       54.)
+
+257. **`pmbootstrap install` reuses a cached device package; editing its
+       `depends` does not rebuild it.**  The new dependency is then never
+       installed, and the failure looks like the dependency was ignored (here:
+       `mkinitfs` still found no kernel).  Bump `pkgrel` or run
+       `pmbootstrap build --force <pkg>` before installing.  (Session 54.)
+
+258. **`ui=none` selects systemd because `postmarketos-ui-none` does not
+       exist, and `--no-firewall` then fails in a never-booted chroot.**  The
+       install reaches `systemctl preset nftables.service` and exits 1.  For
+       this device use a real UI (`catacomb`, which defaults to OpenRC) when
+       testing the rootfs; the `ui=none` run is only useful to observe the
+       kernel/initfs gate.  (Session 54.)
+
+259. **The hd3 filesystem starts at loader block `0x4915`, not at the MCT
+       entry `0x4905`.**  The MCT type-`0x1C` entry begins at `0x4905` but
+       carries a 1 MiB prefix; the QNX6/ext4 superblock is at raw
+       `0x49000000`, which is `(0x4915-0x15)*0x10000`.  A flash at `0x4905`
+       passes the host dry-run (it only checks the MCT extent) but the
+       loader's own gate rejects it at the header (`0xF7 seq 4 -> cmd 0x15
+       data 03`, nothing written); `0x4915` writes.  Always dry-run and check
+       the printed **raw start** is `0x49000000`, then flash at `0x4915`.
+       (Session 54, report 241 §1.)
+
+260. **`access("/rootfs/sbin/init")` follows an absolute rootfs symlink into
+       the initramfs.**  Nura's `/sbin/init` is `/bin/busybox` (absolute); the
+       ext4 mounts, but `access()` resolves it against the *initramfs* root,
+       where `/bin/busybox` does not exist, so the pre-chroot check fails and
+       the console fallback runs.  Use `lstat()` (does not follow the final
+       symlink).  Symptom: `EXT4-fs (loop0): mounted …` then `PB: rootfs: no
+       /sbin/init, keeping the initramfs console`.  (Session 54, report 241
+       §2.)
+
+261. **The first rewrite of the bootrom-written hd3 NAND stalls the eMMC.**  A
+       597 MiB sequential bootrom image is fine to write and read, but the
+       first kernel ext4 journal/udev rewrite gives `mmc1: Card stuck being
+       busy! __mmc_poll_for_busy`, the loop write fails, `Aborting journal on
+       device loop0-8`, and ext4 remounts `emergency_ro`.  A 4 KiB test write
+       afterwards returns `I/O error` (reads still work).  The region-1 root
+       has **no journal** and is stable; the read-only hd3 + overlayfs
+       (`CONFIG_OVERLAY_FS=y`) avoids the writes.  The **`PB*` prints are not
+       the trigger** — the stall precedes the rescan/prints.  (Session 54,
+       report 241 §3.)
+
+262. **The Nura DE needs a writable/session-capable `/var`; a bind-tmpfs over
+       it is not enough.**  `tinydm` starts after the tmpfs `/var`/`/home`/`/tmp`
+       + the `/var/run -> /run` symlinks, but `/run/user/10000` never appears
+       and `catacomb` fails `Unable to start libseat session: Ensure
+       logind/seatd service is running with no active session`; the tmpfs hides
+       the lower `/var/lib/elogind`.  Use overlayfs (lower visible) and check
+       the `tty1` getty/PAM; a `seatd` fallback is an option.  (Session 54,
+       report 241 §4.)
+
+263. **The pmbootstrap Nura rootfs lacks the WLAN firmware.**  `wlcore` fails
+       `Direct firmware load for ti-connectivity/wl128x-fw-4-sr.bin failed
+       with error -2` (and `wl128x-nvs.bin`); the root was not given
+       `local/work/firmware-nvs`.  Add `ti-connectivity/*` and
+       `regulatory.db*` to `/lib/firmware`.  This is a packaging omission, not
+       a driver/radio failure.  (Session 54, report 241 §5.)
+
+264. **The `PB*` bring-up instrumentation is now `pr_debug` (fix, session 54).**
+       `PBSIO`/`PBINI`/`PBX`/`PBM` (`omap_hsmmc.c`), `PBC`
+       (`mmc/core/{core,host,mmc_ops}.c`), `PBR` (`drivers/base/dd.c`), `PBG`
+       (`gpio-omap.c`), `PBS` (`ti-sysc.c`) and `PB:` (`arch/arm/mm/mmu.c`)
+       were unconditional `pr_info` on every MMC/probe operation — per-I/O
+       console logging on the MMC path (trap 52) and a log flood.  They are
+       now `pr_debug`, enabled with dynamic debug; `PBREQ`/`PBIRQ` remain
+       behind the `pb_trace` module parameter.  Do not re-add per-I/O
+       `pr_info`.  (Session 54, report 241 §6.)
+
+265. **Enable `CONFIG_DYNAMIC_DEBUG`/`CONFIG_OVERLAY_FS`, and keep the hd3
+       image's modules matched to the kernel.**  The `0xE84693A1` build has
+       both; the hd3 image still carries the older pmbootstrap artifact
+       modules.  Update `/lib/modules/7.3.3` from `local/work/modules-7.3.3`
+       (same vermagic) or bump the kernel package before flashing a new
+       region 0.  (Session 54.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it
@@ -2357,6 +2470,14 @@ decrements `BOOTCTR_FCTRY`" was an incomplete caller audit — reports 89 §3.5 
   V2 `rrcq` was not used.  A `bb10mt pack -v 2` container has a V1 header
   without a `qcfp` block and is rejected `0x11`; use `-v 1,2`.  (Trap 55,
   report 139.)
+
+* **The hd3 flash destination is loader block `0x4915`, not `0x4905`.**  The MCT
+  type-`0x1C` entry at `0x4905` has a 1 MiB prefix, so raw `0x49000000` is
+  `(0x4915-0x15)*0x10000`.  The session-54 flash at `0x4905` was rejected by the
+  loader gate (`0xF7 seq 4 -> cmd 0x15 data 03`, nothing written); `0x4915`
+  wrote 626 065 440 B and verified sha256 `076bafcf…`.  This corrects the
+  session-53 handoff/ROADMAP and report 239/240 wording; `SAFETY.md` §4 already
+  said `0x4915`.  (Report 241, trap 259.)
 
 ## 4. Documentation and tree defects (not behavioural bugs)
 

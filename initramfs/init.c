@@ -425,19 +425,17 @@ static void panel_tcon_init(void)
 		rlog("PB: tcon: Hitachi table sent (high byte first)");
 }
 
-/* ---- region-1 Linux root: mount it read-write and hand PID 1 to it ------
- * The real Linux root lives in media region 1 (raw 0x28000000) at region-1
- * offset 16 MiB, i.e. raw 0x29000000, placed there by
- * tools/pre_os_ifs_flash.py over the pre-OS 0xF7 loop (region 1 is inside the
- * loader's 0x1B allow-list, so no MCT edit).  It is our own ext4 (no journal),
- * and DECISIONS.md §18 allows a writable mount of our own data: the root must
- * be writable once it is a real userland (/run, /tmp, module links).
+/* ---- hd3 Linux root: mount it read-write and hand PID 1 to it -----------
+ * The real Linux root lives on hd3 (MCT type 0x1C), whose partition starts
+ * at raw 0x49000000.  It is a bare ext4 image written by the pre-OS 0xF7
+ * flasher at loader block 0x4905, so a broken root is recoverable from the
+ * bootrom (the operator's design, ROADMAP item 7a).  It is our own data
+ * (DECISIONS.md §18) and must be writable once it is a real userland.
  *
- * The image carries BusyBox and /sbin/init (BusyBox init), so this function
- * mounts it, mounts the pseudo-filesystems *inside* it, and chroots PID 1 into
- * it before exec'ing /sbin/init.  That is the item-5 hand-off: the unit boots
- * to a shell from the eMMC root, with the bring-up console and pbrpmb carried
- * in the image as /bin/pbconsole and /bin/pbrpmb.
+ * The image is Nura (formerly postmarketOS): /sbin/init is BusyBox init,
+ * which runs OpenRC and starts the Catacomb session.  This function mounts
+ * it, bind-mounts the pseudo-filesystems inside it, and chroots PID 1 into
+ * it before exec'ing /sbin/init.
  *
  * If there is no /sbin/init (no real userland on the media), the old
  * diagnostic /init is run and the function returns, so the initramfs console
@@ -445,7 +443,7 @@ static void panel_tcon_init(void)
  * debug channel.  If /sbin/init exists but fails to run, the unit is recovered
  * with the power button and the pre-OS flasher (the documented way back).
  */
-#define ROOTFS_RAW_OFF 0x29000000ULL
+#define ROOTFS_RAW_OFF 0x49000000ULL
 
 static int rootfs_mount(void)
 {
@@ -466,8 +464,8 @@ static int rootfs_mount(void)
 	}
 	snprintf(loopdev, sizeof(loopdev), "/dev/loop%d", n);
 	/* O_RDWR: the loop is writable only if its backing file is, and a
-	 * read-write mount of a read-only loop is refused (EACCES).  Region 1
-	 * is our own ext4, which DECISIONS.md §18 allows us to write. */
+	 * read-write mount of a read-only loop is refused (EACCES).  hd3 is our
+	 * own ext4, which DECISIONS.md §18 allows us to write. */
 	bfd = open("/dev/mmcblk1", O_RDWR);
 	if (bfd < 0) {
 		snprintf(b, sizeof(b), "PB: rootfs: /dev/mmcblk1: %s", strerror(errno));
@@ -524,6 +522,7 @@ static void rootfs_boot(void)
 	char b[160];
 	int st = 0;
 	pid_t pid;
+	struct stat sb;
 
 	if (rootfs_mount() < 0)
 		return;
@@ -542,7 +541,12 @@ static void rootfs_boot(void)
 	mount("/proc", "/rootfs/proc", NULL, MS_BIND, NULL);
 	mount("/sys", "/rootfs/sys", NULL, MS_BIND, NULL);
 
-	if (access("/rootfs/sbin/init", F_OK) != 0) {
+	/* lstat, not access: the rootfs's /sbin/init is an absolute symlink to
+	 * /bin/busybox, and access() resolves that inside the initramfs (where
+	 * /bin/busybox does not exist), so it would wrongly report "no rootfs".
+	 * lstat does not follow the final symlink; the chroot below resolves it
+	 * against the new root. */
+	if (lstat("/rootfs/sbin/init", &sb) != 0) {
 		/* No real userland on the media: run the diagnostic probe and
 		 * leave the initramfs console to come up as before. */
 		rlog("PB: rootfs: no /sbin/init, keeping the initramfs console");
@@ -567,7 +571,7 @@ static void rootfs_boot(void)
 		kf("PLAYBOOK: rootfs: chroot failed: %s\n", strerror(errno));
 		return;
 	}
-	out("<0>PLAYBOOK: handing PID 1 to /sbin/init on the region-1 root\n");
+	out("<0>PLAYBOOK: handing PID 1 to /sbin/init on the hd3 root\n");
 	execle("/sbin/init", "init", (char *)NULL,
 	       (char *[]){ "HOME=/", "PATH=/sbin:/bin:/usr/sbin:/usr/bin", NULL });
 	kf("PLAYBOOK: rootfs: exec /sbin/init failed: %s\n", strerror(errno));
@@ -678,7 +682,7 @@ int main(void)
 	topup_try();
 
 	/*
-	 * Hand PID 1 to the real userland on the region-1 ext4 root.  With
+	 * Hand PID 1 to the real userland on the hd3 ext4 root.  With
 	 * /sbin/init present this chroots into it and execs BusyBox init and
 	 * never returns, so the console below is the fallback for a media set
 	 * with no real root.  The gadget is bound by now, so /dev/ttyGS0 exists

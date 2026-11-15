@@ -112,6 +112,17 @@ succeeds and the interface stays up.
 
 The 30 s gap is the driver's `WL1271_SCAN_TIMEOUT`, not a hang (trap 240).
 
+## hd3/Nura first boot — the eMMC write stall (report 241, session 54)
+
+| file | what |
+|---|---|
+| `playbook-live-2026-11-15-hd3-nura-boot.txt` | the full first Nura boot `dmesg` from hd3 (image `0x060B25F2`, hd3 at 0x4915): the ext4 mount, `BOOTCTR_FCTRY = 0x1e`, `omapdrm`/Munin readiness, the `mmc1: Card stuck being busy! __mmc_poll_for_busy` at 21.376 s, the journal abort/`emergency_ro`, the second stall at 45.756 s, the `wl128x-fw-4-sr.bin`/`wl128x-nvs.bin` `-2` errors, and the unconditional `PBC`/`PBSIO`/`PBINI`/`PBX`/`PBM`/`PBG`/`PBS`/`PB:` traces (now `pr_debug`) |
+
+**Read the eMMC lines as the failure and the `PB*` lines as instrumentation.**
+The stall precedes the `mmc1` rescan/prints; the trigger is the first rewrite of
+the bootrom-written NAND, not the logging (report 241 §3).  The `PB*` prints are
+now `pr_debug` (dynamic debug); `PBREQ`/`PBIRQ` stay behind `pb_trace` (§6).
+
 ## Exact duplicates
 
 These pairs are byte-identical; keep one of each when pruning.

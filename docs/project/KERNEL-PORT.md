@@ -5,9 +5,17 @@ boots it to the region-1 BusyBox userland with a clean panel and working eMMC,
 and the exported patch reproduces the tree from pristine 7.3.3.
 
 * Base: **upstream 7.3.3** (not the pmOS package, which is still `!armhf`).
-* Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **61 files /
-  8 762 lines**, sha256 `20556c5f…`, verified 0 rejects / 61/61
-  byte-identical against pristine 7.3.3 targets (session 52).  Session 52 adds
+* Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **63 files /
+  8 998 lines**, sha256 `48c14a41…`, verified 0 rejects / 0 mismatches against
+  pristine 7.3.3 targets (session 54).  Session 54 makes the general MMC/GPIO/
+  syscatter/probe instrumentation `pr_debug` instead of unconditional
+  `pr_info` (`PBSIO`/`PBINI`/`PBX`/`PBM` in `omap_hsmmc.c`, `PBC` in
+  `mmc/core/{core,host,mmc_ops}.c`, `PBR` in `drivers/base/dd.c`, `PBG` in
+  `gpio-omap.c`, `PBS` in `ti-sysc.c`, `PB:` in `arch/arm/mm/mmu.c`), with
+  `PBREQ`/`PBIRQ` still behind the `pb_trace` module parameter; it enables
+  `CONFIG_DYNAMIC_DEBUG` (the runtime flag) and `CONFIG_OVERLAY_FS` (the
+  read-only hd3 root).  The rebuilt image is `0x967A94` B, CRC `0xE84693A1`
+  (built, not flashed).  Session 52 added
   `drivers/usb/musb/musb_gadget.c` (`quirk_avoids_skb_reserve`, so u_ether's RX
   buffers stay 4-byte aligned and MUSB's HSDMA is actually used) and
   `drivers/usb/gadget/function/u_ether.c` (the TX realign for the same reason),
@@ -27,7 +35,11 @@ and the exported patch reproduces the tree from pristine 7.3.3.
   `drivers/net/wireless/ti/wl12xx/{main.c,wl12xx.h}`: the CAM default
   (`sta_sleep_auth`) and the 4-sr firmware choice with the SR floor at 7.3.5.0
   (reports 232/235, traps 239/243).  Trap 161.
-* Config: `kernel/winchester-7.3.3.config` (the canonical copy).
+* Config: `kernel/winchester-7.3.3.config` (the canonical copy; session 54 adds
+  `CONFIG_DYNAMIC_DEBUG=y` and `CONFIG_OVERLAY_FS=y` with their resolved deps).
+* `initramfs/init.c`: `ROOTFS_RAW_OFF = 0x49000000` (hd3 at loader block
+  `0x4915`) and the `lstat()` hand-off check (the Nura `/sbin/init` is an
+  absolute symlink; `access()` resolved it inside the initramfs).
 * 6.15.11 reference: `local/pristine/linux-6.15.11.tar.xz`
   `local/kernel-tree-6.15.11`, and
   `kernel/patches/0001-playbook-winchester-6.15.11.patch` (incomplete by
