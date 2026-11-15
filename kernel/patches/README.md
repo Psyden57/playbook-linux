@@ -3,11 +3,19 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**8 713 lines / 59 files** against pristine **linux-7.3.3**
-(sha256 `2be9e99c…`, session-51 export).  It was verified by applying it to
-pristine 7.3.3 targets and comparing all 59 files byte-for-byte with
-`local/kernel-tree` — 0 rejects, 59/59 identical.  Session 51 adds two files,
-both `drivers/net/wireless/ti/wl12xx/`: `main.c` with
+**8 762 lines / 61 files** against pristine **linux-7.3.3**
+(sha256 `20556c5f…`, session-52 export).  It was verified by applying it to
+pristine 7.3.3 targets and comparing all 61 files byte-for-byte with
+`local/kernel-tree` — 0 rejects, 61/61 identical.  Session 52 adds two files,
+both in the USB gadget path: `drivers/usb/musb/musb_gadget.c` sets
+`musb->g.quirk_avoids_skb_reserve = 1` and
+`drivers/usb/gadget/function/u_ether.c` realigns misaligned TX frames — MUSB's
+HSDMA (RTL 2.00) refuses buffers that are not 4-byte aligned and silently fell
+back to PIO, which capped the RNDIS link at 3.3 MB/s; with the fix it is
+RX 6.3 / TX 4.1 MB/s (report 236 §7, trap 246).  The 40 MHz experiment in
+`wl12xx/main.c` was reverted and is **not** in the patch (the module is again
+byte-identical to the baseline, trap 247).  Session 51 adds two files, both
+`drivers/net/wireless/ti/wl12xx/`: `main.c` with
 `wl12xx_default_conf.conn.sta_sleep_auth = WL1271_PSM_CAM` (was
 `WL1271_PSM_ILLEGAL`, which selects ELP — the WL1283's `-110` recovery loop was
 the chip's ELP sleep, report 232/trap 239) **and**

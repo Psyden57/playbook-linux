@@ -6,10 +6,12 @@ item states the evidence that would close it.
 
 Current focus: **item 9** (peripherals).  The audio goal is closed (reports 214
 and 215: headphones and both speakers), its session-45 diagnostics are retired
-and the outputs re-verified (session 48), and the bench now has **ssh over USB**
-(RNDIS + dropbear, 2.3 MB/s), so the next work is the **reopened WL1283**, with
-the reference-first method (DECISIONS §61).  Item 7 (packaging) is untouched;
-item 8 (BB10) is parked by the operator.
+and the outputs re-verified (session 48), the bench has **ssh over USB**
+(RNDIS + dropbear) with the gadget's DMA now working (session 52), and the
+**WL1283's WLAN associates and passes traffic**.  The next work on the same
+chip is its **other cores — BT, then FM and GPS** (operator's order), with the
+reference-first method (DECISIONS §61).  Item 7 (packaging) is untouched; item 8
+(BB10) is parked by the operator.
 
 ## 7. Packaging (postmarketOS-style)
 
@@ -92,39 +94,34 @@ terminal (trap 216).
   without it).  **Session 47** used the oracle again for the speaker:
   `Headphone Select` = false routes it to the line outputs and the speaker
   sounds, which is how the missing board lines were found (report 215).
-* **WL1283 — the WLAN is UP and stable; what is left is making it useful
-  (session 51, report 232).**  The `-110` recovery loop was the chip's **ELP**
-  sleep: the FW-status read (CMD53 to `0x1efc0`, 84 bytes, byte mode, 256-byte
-  block) from the WL_IRQ thread times out only after the chip has slept.  The
-  driver now sets `sta_sleep_auth = WL1271_PSM_CAM` in
-  `wl12xx_default_conf`, so `wlan0` comes up and stays up — verified after a
-  real region-1 flash and reboot (one firmware boot, zero failures).  Getting
-  there needed the chain of session 50: `CLK32KG` (`0xBC`–`0xBE`) enabled for
-  enumeration (`CONFIG_CLK_TWL=y` + `clk-twl`), then `wlcore`/`wl12xx` +
-  `wl128x-fw-5-sr.bin` with the `ti,wl1283` child (`reg = <2>`),
-  `cap-power-off-card` and the `mmc-pwrseq-simple` `WL_EN` power cycle.
-  `wl128x-fw-4-sr.bin` is **the shipped firmware** (report 235): the
-  never-completing scan was **5-sr** — `wl128x-fw-5-sr.bin` (`7.3.10.0.142`)
-  boots but **panics on the first scan** — while **4-sr** (`7.3.5.0.98`) scans
-  normally (17–21 BSS per scan, both bands, no errors, also from flashed media).
-  The port lowers `wl12xx`'s SR floor to 7.3.5.0 and names 4-sr in
-  `WL128X_FW_NAME_SINGLE`; both files stay installed.  The board is exonerated:
-  stock TabletOS runs `ti0` UP/RUNNING and associated on vendor firmware
-  `Rev 7.1.4.10.77` with `IPC_EVENT_SCAN_COMPLETE` 6 s after boot (report 234),
-  and there is **no newer wl128x firmware** anywhere (linux-firmware and TI's
-  tree carry the same ten files).  **Remaining:** (i) **association** — the
-  client side is shipped (`iw` 6.17, `wpa_supplicant`/`wpa_cli`/
-  `wpa_passphrase` 2.12, signed `regulatory.db`), so a station config is the
-  next step and where throughput gets measured; (ii) the per-unit NVS (the
-  468-byte NVRAM record at raw `0x152cc`) for TX power; (iii) a **Linux BT
-  bring-up** (`BT_EN` = gpio 55, UART2) with linux-firmware's
-  `TIInit_7.2.31.bts` — mainline 7.3.3 has no `btiwlink`/`ti-st`, so plan on
-  H4 + a userspace `.bts` loader; (iv) open, neither blocking: why 5-sr panics
-  (235 §3) and why the ELP wake is not honoured (232 §6).  **Do not** re-run
-  the session-49/50 negatives, do **not** use `IRQ_TYPE_LEVEL_LOW` for WL_IRQ
-  (trap 238), do **not** use `wlcore_sdio dump=1` to measure a timing fault
-  (trap 239), and do **not** switch back to 5-sr without reproducing the panic
-  (trap 243).
+* **WL1283 WLAN — WORKING: it associates, leases and passes traffic (session
+  52, report 236).**  The association blocker was the **missing `ccm`/`ctr`
+  crypto modules**: `ieee80211_key_alloc()` allocates a `ccm(aes)` AEAD for
+  every CCMP key, so without them the PTK install returned `-ENOENT` — which
+  wpa_supplicant reports as `WRONG_KEY`, even though the 4-way handshake was
+  completing all along (message 3 decrypts).  They ship in region 1 and `rcS`
+  loads them before the stack.  Measured: `wpa_state=COMPLETED`, WPA2-PSK/CCMP,
+  5785 MHz, −41 dBm, MCS7/65 Mbit/s, DHCP **192.168.0.212**, traffic to the
+  gateway and to 1.1.1.1.  A 5 GHz AP needs `iw reg set <CC>` (the world domain
+  marks 5735–5835 MHz `PASSIVE-SCAN`), and `disable_scan_offload=1` plus a
+  `wpa_cli scan` nudge makes the bring-up reliable.  The **per-unit NVS** is
+  shipped.  Session 51 had already fixed stability (CAM, report 232) and the
+  scan (the 4-sr firmware, report 235).  **Wi-Fi is at its hardware ceiling**
+  (1×1 HT20, 72 Mbit/s; TX 2.9 / RX 4.4 MB/s) — advertising HT40 makes it
+  collapse to MCS0, so it stays off (trap 247).  **Open, none blocking use:**
+  *why* 5-sr panics on scan (235 §3), *why* the ELP wake is not honoured
+  (232 §6), and the occasional first-auth timeout.
+* **WL1283 BT / FM / GPS — the next work (operator's order: BT first).**
+  **BT:** `BT_EN` = gpio 55 = `GPIO2_23`, UART2 = `/dev/ttyS1`; use
+  linux-firmware's `TIInit_7.2.31.bts` (not the reference's `WL1283.bts`).
+  Mainline 7.3.3 has **no `btwilink`/`ti-st`**, so the plan is H4 over UART2
+  plus a userspace `.bts` loader, with `rootfs/hci.c` as the probe — and the
+  reference (`devc-seromap-winbt` + `btp-btmgr`) checked first (DECISIONS §61).
+  **FM:** mainline carried `drivers/media/radio/wl128x` from 2.6.39 to 6.13 and
+  removed it; bringing it back is a forward port.  **GPS:** no mainline driver;
+  a 2024 LKML patch is the candidate, the reference's own path the fallback.
+  **Closes when:** BT gets an HCI device and can scan a nearby device; FM tunes
+  and the GPS delivers a fix.
 * **Touch.**  Done; the remaining nicety is driving power/reset
   (GPIO1_14 / GPIO4_8) for cold boots — a warm reset keeps the controller up
   (session 42).

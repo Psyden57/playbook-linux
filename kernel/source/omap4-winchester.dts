@@ -558,10 +558,17 @@
  * chip's BT core with `pbhci` — a reply to HCI_Reset proves the chip is powered
  * and its digital core runs, which is what the silent SDIO side cannot tell us
  * (session 29, report 180 §6).  Pad values are the reference's own readback.
+ *
+ * The CTS/RTS half of the pair is NOT optional: with `0x118`/`0x11A` left in
+ * the bootloader's safe mode (mux 7) the chip answers nothing, and it starts
+ * answering HCI_Reset the moment they are muxed to UART2.  The reference's
+ * idle value for the 32-bit pad is `0x0000_0118` (session 52, report 237).
  */
 &omap4_pmx_core {
 	uart2_pins: uart2-pins {
 		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x118, 0x0118)	/* uart2_cts  (in, pull-up) */
+			OMAP4_IOPAD(0x11a, 0x0000)	/* uart2_rts  (out) */
 			OMAP4_IOPAD(0x11c, 0x4118)	/* uart2_rx  (in, pull-up) */
 			OMAP4_IOPAD(0x11e, 0x0000)	/* uart2_tx  (out) */
 		>;

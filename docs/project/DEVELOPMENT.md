@@ -316,6 +316,14 @@ Firmware blobs (including `regulatory.db` + its `.p7s`) go through
 `--firmware`, which copies a whole tree into `/lib/firmware/`.  Build recipes for
 the WLAN tools are in report 233 §6.
 
+**The module set must contain `ccm.ko` and `ctr.ko`** (session 52).  They are not
+a link dependency of `mac80211.ko`, so `depmod` will never add them, but
+`ieee80211_key_alloc()` allocates a `ccm(aes)` AEAD for every CCMP key — without
+them a WPA2 association completes the 4-way handshake and then fails the PTK
+install with `-ENOENT` (wpa_supplicant says `WRONG_KEY`).  `rcS` modprobes
+`ccm ctr` before the wireless stack; the current set is **36 modules**
+(`local/work/modules-7.3.3`).
+
 **The hand-off.**  `initramfs/init.c`'s `rootfs_boot()` mounts the region-1
 ext4 **read-write** (the loop's backing `/dev/mmcblk1` must be opened `O_RDWR`,
 trap 92), bind-mounts `/dev` `/proc` `/sys` into it, `chroot`s and `exec`s

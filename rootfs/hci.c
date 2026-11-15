@@ -17,6 +17,7 @@
  * and prints the pad / GPIO2 registers as evidence.
  *
  * usage: pbhci [device] [baud] [--no-pulse] [--tries N]
+ *        pbhci [device] --attach [--hold S]   (N_HCI + H4 -> hciN)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,6 +29,33 @@
 #include <dirent.h>
 #include <sys/select.h>
 #include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <time.h>
+
+/* The HCI line discipline; the same constants hciattach uses. */
+#ifndef N_HCI
+#define N_HCI			15
+#endif
+#define HCIUARTSETPROTO		_IOW('U', 200, int)
+#define HCIUARTGETDEVICE	_IOR('U', 202, int)
+#define HCI_UART_H4		0
+
+/* Raw HCI socket (no BlueZ headers on this rootfs). */
+#ifndef AF_BLUETOOTH
+#define AF_BLUETOOTH		31
+#endif
+#define BTPROTO_HCI		1
+#define HCI_CHANNEL_RAW		0
+#define HCI_CHANNEL_CONTROL	3
+#define HCI_DEV_NONE		0xffff
+#define HCIDEVUP		_IOW('H', 201, int)
+#define MGMT_OP_SET_POWERED	0x0005
+struct sockaddr_hci {
+	unsigned short	hci_family;
+	unsigned short	hci_dev;
+	unsigned short	hci_channel;
+};
 
 #define PAD_BT_EN	0x4A10007C
 #define PAD_UART2_RX	0x4A10011C
@@ -285,17 +313,174 @@ static int hci_reset(const char *dev, unsigned long baud)
 	return got ? 0 : 2;
 }
 
+/* Attach the HCI line discipline (H4) so the kernel creates hciN. */
+static int hci_attach(const char *dev, int hold_s)
+{
+	struct termios t;
+	int fd, ldisc = N_HCI, proto = HCI_UART_H4, devid = -1;
+
+	fd = open(dev, O_RDWR | O_NOCTTY);
+	if (fd < 0) {
+		fprintf(stderr, "pbhci: open %s: %s\n", dev, strerror(errno));
+		return -1;
+	}
+	if (tcgetattr(fd, &t) < 0) {
+		fprintf(stderr, "pbhci: tcgetattr: %s\n", strerror(errno));
+		close(fd);
+		return -1;
+	}
+	cfmakeraw(&t);
+	cfsetispeed(&t, B115200);
+	cfsetospeed(&t, B115200);
+	t.c_cflag &= ~CRTSCTS;
+	t.c_cflag |= CLOCAL | CREAD;
+	if (tcsetattr(fd, TCSANOW, &t) < 0) {
+		fprintf(stderr, "pbhci: tcsetattr: %s\n", strerror(errno));
+		close(fd);
+		return -1;
+	}
+	if (ioctl(fd, TIOCSETD, &ldisc) < 0) {
+		fprintf(stderr, "pbhci: TIOCSETD N_HCI: %s\n", strerror(errno));
+		close(fd);
+		return -1;
+	}
+	if (ioctl(fd, HCIUARTSETPROTO, proto) < 0) {
+		fprintf(stderr, "pbhci: HCIUARTSETPROTO: %s\n", strerror(errno));
+		close(fd);
+		return -1;
+	}
+	if (ioctl(fd, HCIUARTGETDEVICE, &devid) < 0)
+		devid = -1;
+	printf("pbhci: attached H4 on %s -> hci%d\n", dev, devid);
+	printf("pbhci: holding %d s\n", hold_s);
+	sleep(hold_s);
+	close(fd);
+	return 0;
+}
+
+/* Power hciN through the mgmt channel (HCIDEVUP is ENOSYS on this kernel). */
+static int mgmt_power(int dev, int on)
+{
+	int s, n;
+	struct sockaddr_hci sa;
+	unsigned char cmd[7] = { MGMT_OP_SET_POWERED & 0xff,
+				 MGMT_OP_SET_POWERED >> 8,
+				 dev & 0xff, (dev >> 8) & 0xff, 0x01, 0x00, on };
+	unsigned char buf[64];
+
+	s = socket(AF_BLUETOOTH, SOCK_RAW, BTPROTO_HCI);
+	if (s < 0)
+		return -1;
+	memset(&sa, 0, sizeof(sa));
+	sa.hci_family = AF_BLUETOOTH;
+	sa.hci_dev = HCI_DEV_NONE;
+	sa.hci_channel = HCI_CHANNEL_CONTROL;
+	if (bind(s, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+		close(s);
+		return -1;
+	}
+	if (write(s, cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
+		close(s);
+		return -1;
+	}
+	n = read(s, buf, sizeof(buf));
+	close(s);
+	if (n < 6)
+		return -1;
+	/* evt(2) opcode(2) index(2) len(2) status */
+	printf("pbhci: mgmt set_powered(%d) -> status 0x%02x\n", on,
+	       n > 8 ? buf[8] : 0xff);
+	return (n > 8 && buf[8] == 0) ? 0 : -1;
+}
+
+/* Bring hciN up and run one inquiry; print the addresses found. */
+static int hci_inquiry(int dev, int secs)
+{
+	int s, n, i;
+	struct sockaddr_hci sa;
+	unsigned char cmd[] = { 0x01, 0x01, 0x04, 0x05,
+				0x33, 0x8b, 0x9e, 0x04, 0x00 };
+	unsigned char buf[1024];
+	time_t end;
+
+	s = socket(AF_BLUETOOTH, SOCK_RAW, BTPROTO_HCI);
+	if (s < 0) {
+		fprintf(stderr, "pbhci: hci socket: %s\n", strerror(errno));
+		return -1;
+	}
+	memset(&sa, 0, sizeof(sa));
+	sa.hci_family = AF_BLUETOOTH;
+	sa.hci_dev = dev;
+	sa.hci_channel = HCI_CHANNEL_RAW;
+	if (bind(s, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+		fprintf(stderr, "pbhci: bind hci%d: %s\n", dev, strerror(errno));
+		close(s);
+		return -1;
+	}
+	mgmt_power(dev, 1);
+	usleep(500000);
+	if (write(s, cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
+		fprintf(stderr, "pbhci: inquiry write: %s\n", strerror(errno));
+		close(s);
+		return -1;
+	}
+	printf("pbhci: inquiry on hci%d for %d s\n", dev, secs);
+	end = time(NULL) + secs;
+	while (time(NULL) < end) {
+		fd_set rf;
+		struct timeval tv = { 1, 0 };
+
+		FD_ZERO(&rf);
+		FD_SET(s, &rf);
+		if (select(s + 1, &rf, NULL, NULL, &tv) <= 0)
+			continue;
+		n = read(s, buf, sizeof(buf));
+		if (n < 4)
+			continue;
+		for (i = 0; i + 3 <= n; ) {
+			unsigned char plen = buf[i + 2];
+			int j, num;
+
+			if (buf[i] != 0x04)
+				break;
+			if (buf[i + 1] == 0x02 && plen >= 1) {	/* Inquiry Result */
+				num = buf[i + 3];
+				for (j = 0; j < num && 4 + j * 14 + 6 <= plen; j++) {
+					unsigned char *p = &buf[i + 4 + j * 14];
+
+					printf("pbhci: found %02x:%02x:%02x:%02x:%02x:%02x\n",
+					       p[5], p[4], p[3], p[2], p[1], p[0]);
+				}
+			}
+			if (buf[i + 1] == 0x01)		/* Inquiry Complete */
+				printf("pbhci: inquiry complete\n");
+			i += 3 + plen;
+		}
+	}
+	close(s);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	const char *dev = "/dev/ttyS1";
 	unsigned long baud = 115200;
 	int pulse = 1, tries = 3, i, rc = 2, argi, pos = 0;
+	int attach = 0, hold_s = 20, inq = 0, inq_s = 8;
 
 	for (argi = 1; argi < argc; argi++) {
 		if (!strcmp(argv[argi], "--no-pulse")) {
 			pulse = 0;
 		} else if (!strcmp(argv[argi], "--tries") && argi + 1 < argc) {
 			tries = atoi(argv[++argi]);
+		} else if (!strcmp(argv[argi], "--attach")) {
+			attach = 1;
+		} else if (!strcmp(argv[argi], "--hold") && argi + 1 < argc) {
+			hold_s = atoi(argv[++argi]);
+		} else if (!strcmp(argv[argi], "--inquiry")) {
+			inq = 1;
+			if (argi + 1 < argc && argv[argi + 1][0] != '-')
+				inq_s = atoi(argv[++argi]);
 		} else if (pos == 0) {
 			dev = argv[argi];
 			pos++;
@@ -309,6 +494,15 @@ int main(int argc, char **argv)
 
 	if (map_regs() < 0)
 		pulse = 0;
+
+	if (attach) {
+		if (pulse)
+			pulse_bt_en();
+		return hci_attach(dev, hold_s) == 0 ? 0 : 2;
+	}
+
+	if (inq)
+		return hci_inquiry(0, inq_s) == 0 ? 0 : 2;
 
 	for (i = 0; i < tries; i++) {
 		if (pulse) {

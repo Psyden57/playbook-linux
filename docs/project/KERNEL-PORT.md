@@ -5,10 +5,14 @@ boots it to the region-1 BusyBox userland with a clean panel and working eMMC,
 and the exported patch reproduces the tree from pristine 7.3.3.
 
 * Base: **upstream 7.3.3** (not the pmOS package, which is still `!armhf`).
-* Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **59 files /
-  8 713 lines**, sha256 `2be9e99c…`, verified 0 rejects / 59/59
-  byte-identical against pristine 7.3.3 targets (session 51).  It
-  carries the E5 clock roles (`CBC_CFC`, CPU `CLKSM = 1`/`CLKGDV = 32`, FLL1
+* Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **61 files /
+  8 762 lines**, sha256 `20556c5f…`, verified 0 rejects / 61/61
+  byte-identical against pristine 7.3.3 targets (session 52).  Session 52 adds
+  `drivers/usb/musb/musb_gadget.c` (`quirk_avoids_skb_reserve`, so u_ether's RX
+  buffers stay 4-byte aligned and MUSB's HSDMA is actually used) and
+  `drivers/usb/gadget/function/u_ether.c` (the TX realign for the same reason),
+  and the board DTS `uart2_pins` gains the **CTS/RTS** pair
+  (`0x118`/`0x11A`) without which the BT core never answers.  It carries the E5 clock roles (`CBC_CFC`, CPU `CLKSM = 1`/`CLKGDV = 32`, FLL1
   from BCLK, `mcbsp2_pins` `clkx`/`fsx` as outputs), the working audio card
   (`mcbsp3_pins` on the PDM pads, `&mcbsp1` disabled, the second
   `40126000.mcbsp + wm8994-aif2` link and the `omap-mcbsp` `XPHASE`

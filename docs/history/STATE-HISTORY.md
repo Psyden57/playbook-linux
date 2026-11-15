@@ -14,6 +14,38 @@ duplicated here because the commit preserves it verbatim.
 `docs/project/STATE.md`; it was replaced by the session-43 state and is not
 duplicated here because the commit preserves it verbatim.
 
+## Previous state — 2026-11-14 (session 51)
+
+**THE WL1283 WLAN WORKS: it scans.**  Two findings closed the bring-up in one
+session — the `-110` recovery loop was the chip's **ELP** sleep (now CAM), and
+the never-completing scan was the **5-sr firmware**: with
+`wl128x-fw-4-sr.bin` (`Rev 7.3.5.0.98`) `wlan0` is stable **and**
+`iw dev wlan0 scan` returns real results (**17–21 BSS**, both bands, no
+errors), verified from flashed media after a reboot.
+
+* **The failing transfer (report 232):** the FW-status read — **CMD53 to
+  `0x1efc0`, 84 bytes, byte mode, 256-byte block** — issued from the WL_IRQ
+  thread right after `wlcore: firmware booted`.  It fails only once the chip
+  has slept, so the transfer is legal and the *state* was the fault.
+  Identified with a temporary `dev_err` on the error path only (`wlcore_sdio
+  dump=1` changes the timing and hides it — trap 239).
+* **The cause and the fix:** ELP.  `power/control = on` (no runtime PM) or
+  `sleep_auth = 0` (CAM) is stable; re-enabling ELP at runtime reproduces the
+  `-110` in seconds.  Fix: `wl12xx_default_conf.conn.sta_sleep_auth =
+  WL1271_PSM_CAM`.
+* **The scan was the firmware (report 235):** `5-sr` (`Rev 7.3.10.0.142`)
+  boots but **panics on the first scan**; `4-sr` (`Rev 7.3.5.0.98`) scans.  The
+  port lowers `wl12xx`'s SR floor to **7.3.5.0** and names 4-sr in
+  `WL128X_FW_NAME_SINGLE`; both files stay installed.
+* **The board was exonerated (report 234):** stock TabletOS on this unit runs
+  `ti0` UP/RUNNING, associated (`192.168.0.212`), on vendor firmware
+  `Rev 7.1.4.10.77` with `IPC_EVENT_SCAN_COMPLETE` 6 s after boot.
+* **Remaining then:** association, the per-unit NVS, BT, and two open
+  questions (5-sr's panic, the ELP wake) — association and the NVS were closed
+  in session 52 (report 236).
+* Bench: region 0 `0x9712A086` (unchanged), region 1 `f159a221…` (34 modules),
+  kernel patch 59 files / 8 713 lines, sha256 `2be9e99c…`.
+
 ## Previous state — 2026-11-14 (session 50)
 
 **The WL1283 enumerates and `wlcore` boots the firmware, but the `wlan0`

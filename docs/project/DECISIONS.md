@@ -2451,6 +2451,102 @@ sha256 `2be9e99c…`; traps 233/241/243.
 
 ---
 
+## 70. Ship the CCMP crypto modules and the per-unit NVS; the country is configuration (session 52)
+
+**Decision.**  The region-1 rootfs carries **`ccm.ko` and `ctr.ko`**, and `rcS`
+loads them (`ccm ctr`) **before** the wireless stack.  The shipped
+`wl128x-nvs.bin` is the **per-unit** calibration
+(`local/work/wl128x-nvs-perunit.bin`).  The regulatory country is **not**
+baked in: bring-up documentation requires `iw reg set <CC>` before associating
+on a 5 GHz AP the world domain does not permit.
+
+**Why.**  The modules are the actual association blocker: mac80211 allocates a
+`ccm(aes)` AEAD for every CCMP key in `ieee80211_key_alloc()`, so without
+`ccm` the PTK install returns `-ENOENT` and wpa_supplicant reports
+`WRONG_KEY` (traps 244).  `mac80211.ko` has no link dependency on them, so
+`depmod` cannot supply them — they must be shipped and loaded.  The NVS is the
+radio's own calibration (468-byte NVRAM record, first 468 bytes of the generic
+file) and is simply the correct baseline.  The country is deployment data:
+hard-coding Argentina would be wrong for any other unit, and the world domain's
+`PASSIVE-SCAN` on 5735–5835 MHz is a legal constraint, not a bug (trap 245).
+
+**Constraint.**  `ccm`/`ctr` are module-only, so adding them keeps the
+region-0 CRC and needs a region-1 flash (trap 190).  Older service packs are
+still rejected by the lowered SR floor; 4-sr remains the shipped firmware
+(§69).  BusyBox has no `udhcpc` default script, so the lease must be applied by
+hand (`ip addr add` / `ip route add`) — recorded rather than fixed.
+
+**Evidence.**  Report **236** §1–§5; the instrumented `-ENOENT`
+(`PBNL new_key enter` / `PBKEY-ENTER … cipher=0xfac04` / `err=-2`) and the same
+handshake succeeding with the modules loaded; `wpa_state=COMPLETED`,
+`PTK=CCMP GTK=CCMP`, DHCP lease 192.168.0.212, gateway and 1.1.1.1 reachable.
+
+---
+
+## 71. The gadget's DMA needs 4-byte-aligned buffers; do not widen Wi-Fi to 40 MHz (session 52)
+
+**Decision.**  Keep the two gadget-path changes that make MUSB's HSDMA
+actually engage: `musb->g.quirk_avoids_skb_reserve = 1` in
+`musb_gadget_probe()` (so u_ether leaves RX buffers at `NET_SKB_PAD`), and a
+realign copy for misaligned TX frames in `gether_start_xmit()`.  Keep
+`wl12xx_ht_cap` at **HT20** (`GRN_FLD | SGI_20 | RX_STBC`, `rx_highest = 72`).
+
+**Why.**  The gadget ran at 3.3 MB/s because `dma_channel_program()` refuses any
+buffer that is not 4-byte aligned on RTL >= 1.80 (ours reads `0x0800`) and
+silently falls back to PIO; both u_ether paths hand it 2-mod-4 addresses
+(trap 246).  With the fix the DMA IRQ scales with the transfer and throughput
+goes **RX 3.3 → 6.3 MB/s, TX 3.3 → 4.1 MB/s**.  The 40 MHz experiment is the
+opposite: the AP offers it and the firmware associates, but the rate collapses
+to MCS1/MCS0 and RX falls to 622 KB/s (trap 247), so the driver's HT20
+advertisement is correct rather than an omission to "fix".
+
+**Constraint.**  The realign is one ~1500-byte copy per misaligned frame — a
+deliberate cost, only on the frames that would otherwise be PIO.  The
+`quirk_avoids_skb_reserve` flag affects every gadget net function, which is the
+intent.  This is a workaround for u_ether's alignment, not a musb fix: a future
+u_ether that aligns its own buffers would make the copy dead code.  RNDIS'
+one-frame-per-transfer structure is now the USB limit; CDC-NCM is the next
+candidate and was **not** tested.
+
+**Evidence.**  Report **236** §6–§8; the interrupt counters before/after
+(`dma` IRQ 6 → scaling), the one-shot `PBDMA ep3-tx refused: addr 0x81907016`
+probe, the measured rates, and the proven revert of the 40 MHz change
+(`wl12xx.ko` md5 `2fb86c4d…`, identical to the baseline).
+
+---
+
+## 72. The BT transport is UART2 with its CTS/RTS pads muxed, H4 in userspace, and mgmt to power it (session 52)
+
+**Decision.**  The WL1283's BT core is driven over **UART2** (`/dev/ttyS1`) with
+the **full pad set** in `uart2_pins` — CTS (`0x118 = 0x0118`) and RTS
+(`0x11A = 0x0000`) as well as RX/TX.  `BT_EN` (gpio 55) is pulsed low → 50 ms →
+high before use.  Attach the **H4** line discipline from userspace (the two
+ioctls `hciattach` uses; `pbhci --attach`), and power/configure the controller
+over the **mgmt** channel, not `HCIDEVUP`.
+
+**Why.**  The pad pair is what made the core look dead for three sessions: with
+`0x4A100118` left in safe mode the chip never turns its transmitter around, and
+the moment the reference's idle value (`0x00000118`) is written it answers
+`HCI_Reset` — no other change.  Mainline 7.3.3 has no `btwilink`/`ti-st`, so the
+transport is H4 plus userspace; `HCIDEVUP` is `ENOSYS` on this kernel, so power
+comes from mgmt (which is also what BlueZ uses).
+
+**Constraint.**  This is the *transport*, not yet a working BT stack: `hci0` is
+created and the kernel exchanges commands with the chip (`0x201c` answers with a
+short Command Complete, which is benign), but the controller stays down until
+mgmt power works, and the service pack is not loaded.  `BT_EN` is held low by
+the reference while the WLAN runs (report 216) — check whether that is also
+required here before making the two cores run together.  The firmware question
+is open: the reference's `WL1283.bts` is the chip's own service pack (315 HCI
+commands), while the handoff's earlier preference for linux-firmware's
+`TIInit_7.2.31.bts` is unverified.
+
+**Evidence.**  Report **237**; the pad readback (`0x011F011F` → `0x00000118`
+→ `04 0e 04 01 03 0c 00`), the boot-time pad value after the DTS fix,
+`/sys/class/bluetooth/hci0`, and the `Opcode 0x201c` exchange.  Trap 248.
+
+---
+
 The repository licence and visibility are decided below; the remaining
 policy questions (publication of the proprietary corpus) stay open and are
 recorded here so nobody assumes a policy exists.

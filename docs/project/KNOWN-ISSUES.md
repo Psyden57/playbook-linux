@@ -1910,6 +1910,76 @@ report 121 §3/§11/§12.
       in linux-firmware, so "use the latest firmware" is the wrong default here.
       (Session 51, report 235.)
 
+244. **A WPA2 association that reports `WRONG_KEY` is usually not the key: the
+      `ccm`/`ctr` crypto modules were missing, so the PTK install fails with
+      `-ENOENT`.**  The 4-way handshake itself completed — message 3 decrypted
+      with AES-UNWRAP, so the PSK was right — and then `nl80211: kernel reports:
+      key addition failed` / `set_key failed; err=-2` appeared, after which
+      wpa_supplicant logs `reason=WRONG_KEY`.  The `-ENOENT` comes from
+      `ieee80211_key_alloc()`: for CCMP it calls
+      `crypto_alloc_aead("ccm(aes)")`, which returns `-ENOENT` when the
+      algorithm is not registered.  `CONFIG_CRYPTO_CCM=m` and
+      `CONFIG_CRYPTO_CTR=m` were set but **neither module was in the region-1
+      rootfs**, and `mac80211.ko` does not link against them (`depends:
+      cfg80211,libarc4`), so `depmod` never pulls them in.  Fix: ship
+      `ccm.ko`/`ctr.ko` and `modprobe ccm ctr` **before** the wireless stack in
+      `rcS`.  Note the trap inside the trap: the `-ENOENT` at
+      `net/mac80211/cfg.c` `ieee80211_add_key()`'s `WLAN_STA_ASSOC` check looks
+      like the culprit and is not — a probe showed `sta=yes state=3 assoc=1`.
+      (Session 52, report 236 §1–§3.)
+
+245. **A 5 GHz AP outside the world regulatory domain produces an auth timeout,
+      not a driver error.**  The stock regdomain (`country 00`) marks
+      5735–5835 MHz `PASSIVE-SCAN` (no IR), so cfg80211 refuses to transmit:
+      the log shows `wlan0: regulatory prevented using AP config, downgraded`
+      and then `authentication with … timed out` (the same signature as
+      `WL_IRQ`/firmware trouble — check the regulatory line first).  `iw reg
+      set <CC>` with the operator's country clears it.  This is configuration,
+      not a bug: a deployment that only sets the world domain will not
+      associate on those channels.  (Session 52, report 236 §4.)
+
+246. **MUSB's HSDMA silently falls back to PIO for buffers that are not 4-byte
+      aligned — the USB gadget ran at 3.3 MB/s because of it.**  The tell is
+      the interrupt counters: ~1 `mc` interrupt per 512-byte packet and the
+      `dma` IRQ essentially never firing (`6` total).  `MUSB_HWVERS` reads
+      `0x0800` (RTL 2.00), and for RTL >= 1.80 `dma_channel_program()` does
+      `if (dma_addr % 4) return false;` with no message.  u_ether hands it
+      `skb->data`: RX is 2 mod 4 because `rx_submit()` reserves
+      `NET_IP_ALIGN` (2), and TX was measured 2 mod 4 as well.  Fixes (both in
+      the gadget path): `musb->g.quirk_avoids_skb_reserve = 1` in
+      `musb_gadget_probe()` (RX stays at `NET_SKB_PAD` = 32) and a realign copy
+      for misaligned TX frames in `gether_start_xmit()`.  Measured: RX
+      3.3 -> **6.3 MB/s**, TX 3.3 -> **4.1 MB/s**.  Do not conclude "USB is
+      slow" from an RNDIS figure without checking the DMA IRQ.  (Session 52,
+      report 236 §7.)
+
+247. **Do not advertise 40 MHz on wl12xx: the firmware accepts the association
+      and then collapses.**  The AP offers it (`HT operation: primary 157,
+      secondary above, width any`) and adding
+      `IEEE80211_HT_CAP_SUP_WIDTH_20_40` does associate, but the rate falls to
+      MCS1 then MCS0 and **RX drops from 4.4 MB/s to 622 KB/s** (TX unchanged
+      at 2.9).  `wl12xx_ht_cap` (`GRN_FLD | SGI_20 | RX_STBC`,
+      `rx_highest = 72`, A-MPDU 8K) is correct: the link is 1x1 HT20 and that
+      is the ceiling.  Reverted; the rebuilt `wl12xx.ko` is byte-identical to
+      the baseline (`2fb86c4d…`).  Also do not trust `wpa_cli status`'s
+      `channel_width` — it reports the AP's capability.  (Session 52, report
+      236 §8.)
+
+248. **The WL1283's BT core is silent until the UART2 **CTS/RTS** pads are
+      muxed — it is not `BT_EN`, the clock or RX/TX.**  `0x4A100118` holds both
+      halves (`UART2_CTS[15:0]`, `UART2_RTS[31:16]`); left at the bootloader's
+      safe mode it reads `0x011F011F` (mux 7) and the chip answers nothing.  The
+      reference's idle value is **`0x00000118`** (CTS = `0x0118`, RTS = mux 0) —
+      `devc-seromap-winbt` is the only place it differs, and it even has a
+      "force-RTS" devctl that muxes RTS to GPIO4_28.  With the pads muxed,
+      `HCI_Reset` is answered immediately (`04 0e 04 01 03 0c 00`).  The DTS
+      `uart2_pins` now writes `0x118`/`0x11A` (pinctrl-single is 16-bit wide, so
+      a pair is two halfword entries).  **Also:** `HCIDEVUP` returns **`ENOSYS`**
+      on 7.3.3, so the controller can only be powered through the **mgmt**
+      channel (`HCI_CHANNEL_CONTROL`, `MGMT_OP_SET_POWERED`) — an inquiry on a
+      raw socket otherwise fails with `Network is down`.  (Session 52, report
+      237.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

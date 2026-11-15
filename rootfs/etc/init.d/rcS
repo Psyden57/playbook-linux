@@ -56,7 +56,20 @@ done
 # modules bind it.  Load the stack in order: wlcore_sdio's recorded module
 # dependency is incomplete, so a bare `modprobe wlcore_sdio` can bind it
 # before wlcore exists and the probe then returns -ENODEV silently.
-for m in cfg80211 mac80211 wlcore wl12xx wlcore_sdio; do
+#
+# `ccm` is not a link dependency of mac80211, so depmod does not pull it in,
+# but ieee80211_key_alloc() allocates a `ccm(aes)` AEAD for every CCMP key:
+# without it the PTK install fails with -ENOENT and every WPA2 association
+# dies right after the 4-way handshake.
+for m in ccm ctr cfg80211 mac80211 wlcore wl12xx wlcore_sdio; do
+	modprobe "$m" 2>/dev/null
+done
+
+# The WL1283's BT core is on UART2 (/dev/ttyS1).  Load the Bluetooth stack so
+# `pbhci --attach` can set the H4 line discipline and the kernel creates hciN.
+# BT_EN stays low until something asks for the core; the chip answers nothing
+# without it (and nothing at all if the UART2 CTS/RTS pads are not muxed).
+for m in bluetooth hci_uart; do
 	modprobe "$m" 2>/dev/null
 done
 
