@@ -77,6 +77,12 @@ and after that BT / FM / GPS on the same combo chip.
 * **`HCIDEVUP` is `ENOSYS` on 7.3.3**, so the controller stays down and a raw
   HCI inquiry fails `Network is down`; the mgmt `SET_POWERED` attempt made no
   visible status.  [report 237 §5]
+* **`BOOTCTR_FCTRY` is readable on our image.**  `/init`'s top-up logs the record
+  it read, so `dmesg | grep pbrpmb` gives
+  `pbrpmb: topup: BOOTCTR_FCTRY at block 0x3a record@196 = 23000000` and
+  `pbrpmb: topup: 0x23 >= threshold 0x1e, no write` — the counter read **`0x23`**
+  and the image did not write.  (`/dev/rpmb` itself is TabletOS-only; this is a
+  logged read, not an RPMB access.)  [bench; `SAFETY.md` §2, `DEVELOPMENT.md` §5]
 * **Patch re-export**: **61 files / 8 762 lines**, sha256 `20556c5f…`,
   0 rejects, 61/61 byte-identical against pristine 7.3.3 (including the
   `musb_gadget.c`/`u_ether.c` additions and the DTS pad fix).
@@ -139,9 +145,6 @@ and after that BT / FM / GPS on the same combo chip.
   and watching for WLAN recovery.
 * **Which service pack the BT core needs** — see the contradiction
   `bt-firmware-tiinit-vs-wl1283.md`.
-* **Whether `BOOTCTR_FCTRY` is still healthy.**  Not readable from Linux
-  (`/dev/rpmb` exists only on TabletOS); `/init` runs `pbrpmb topup 0x1E` each
-  boot.  Resolve by reading it on the next TabletOS boot.
 
 ## Superseded / uncertain
 
@@ -167,7 +170,7 @@ and after that BT / FM / GPS on the same combo chip.
 | region 1 | **`49e318bf11bccba163ef990c9fd8858baff0497e696ab3d8371f56ca28ddfef1`**, 67 108 864 B, **43 modules** (`local/images/rootfs-region1-wl1283-bt.ext4`) |
 | kernel patch | **61 files / 8 762 lines**, sha256 `20556c5f…`, 0 rejects, 61/61 |
 | OS running | **our Linux image** (`0fca:8010`), console `pb> `, **ssh `169.254.0.1`** (dropbear, key-only); no door (that exists only on TabletOS) |
-| `BOOTCTR_FCTRY` | **not read** — `/dev/rpmb` is TabletOS-only; `/init` tops up at ≤`0x1e` every boot (`SAFETY.md` §2, health check only) |
+| `BOOTCTR_FCTRY` | **`0x23`** — `dmesg \| grep pbrpmb` gives `pbrpmb: topup: BOOTCTR_FCTRY at block 0x3a record@196 = 23000000` then `0x23 >= threshold 0x1e, no write`; `/init` tops up at ≤`0x1e` (`SAFETY.md` §2) |
 | device-side files | `/tmp/pbhci`, `/tmp/wpa.conf`, `/tmp/att.log` — all on **tmpfs**, gone after a reboot; **nothing added to the UFS** |
 | flashes this session | region 0 four times (DMA work ×2, pads), region 1 four times (NVS, key diagnostics ×2, BT), plus one both-region session |
 | way back to TabletOS | `local/work/ifs-shim-sealed.ifs` at `0x825` **+** `local/work/rcfs-1917.rcfs` at `0x8D5` |

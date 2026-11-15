@@ -124,7 +124,12 @@ spends one unit and is replenished at the next boot; **it is not a reason to
 avoid an experiment.**  What still matters is the failure modes below — a value
 of `0`, `> 0x32`, a failed or half-formed write, a store that fails to read
 whole, and a pack too flat to boot.  Read the counter at both ends of a cycle as
-a **health check**, not as a go/no-go budget.
+a **health check**, not as a go/no-go budget.  **On our Linux image it is
+readable without `/dev/rpmb`:** `/init`'s top-up logs
+`pbrpmb: topup: BOOTCTR_FCTRY at block 0x3a record@196 = <4 bytes LE>` and then
+`pbrpmb: topup: 0x<value> >= threshold 0x1e, no write`, so
+`dmesg | grep pbrpmb` gives the value the boot saw (session 52 measured
+`23000000` = `0x23`).  This is a **read** of a logged value, not an RPMB access.
 
 **Power is part of the budget.** A unit on a flat pack can brown out and
 warm-reset on its own, and each such boot spends a counter unit. Session 30

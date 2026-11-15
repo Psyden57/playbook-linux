@@ -321,8 +321,9 @@ a link dependency of `mac80211.ko`, so `depmod` will never add them, but
 `ieee80211_key_alloc()` allocates a `ccm(aes)` AEAD for every CCMP key — without
 them a WPA2 association completes the 4-way handshake and then fails the PTK
 install with `-ENOENT` (wpa_supplicant says `WRONG_KEY`).  `rcS` modprobes
-`ccm ctr` before the wireless stack; the current set is **36 modules**
-(`local/work/modules-7.3.3`).
+`ccm ctr` before the wireless stack; the current set is **43 modules**
+(`local/work/modules-7.3.3` — the wireless stack, `ccm`/`ctr`, and the seven
+Bluetooth modules loaded after it).
 
 **The hand-off.**  `initramfs/init.c`'s `rootfs_boot()` mounts the region-1
 ext4 **read-write** (the loop's backing `/dev/mmcblk1` must be opened `O_RDWR`,
@@ -464,6 +465,20 @@ result read, one read-back, never a loop (report 175).  Its outcome is one
 console); the earlier modes are `>= threshold, no write` and `PASS`.  Because a
 factory boot spends one unit, a normal boot at `0x32` lands at `0x31` and does
 **not** write.
+
+**Reading the counter on a Linux boot.**  The top-up line carries the value, so
+`dmesg | grep pbrpmb` is a read-only health check on our image (`/dev/rpmb`
+exists only on TabletOS):
+
+```
+pbrpmb: topup: BOOTCTR_FCTRY at block 0x3a record@196 = 23000000
+pbrpmb: topup: 0x23 >= threshold 0x1e, no write
+```
+
+The first line is the **little-endian 4-byte record**, so this unit read
+**`0x23`** — above the `0x1e` threshold, hence no write.  Quote the byte string
+and the decoded value together; the record is at block `0x3a`, record offset
+`196`.
 
 **Listening tests: quiet, short, and one volume change per session (operator,
 session 48).**  The tone is loud enough to carry through a room.  Lower it

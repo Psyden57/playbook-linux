@@ -7,10 +7,11 @@ session-52 close.  See `docs/sessions/NUMBERING.md`.
 
 > **Session-52 result, in one line:** **the WL1283 WLAN associates** — the
 > blocker was the **missing `ccm`/`ctr` crypto modules** (the PTK install failed
-> with `-ENOENT`, which wpa_supplicant reports as `WRONG_KEY`), and the **USB
-> link got its DMA back** (RX 3.3 → 6.3 MB/s, TX 3.3 → 4.1).  Region 0 is now
-> **`0x50CD2A48`**; region 1 **`877c42c3…`**; patch **61 files / 8 755 lines**,
-> sha256 `741115a4…`.
+> with `-ENOENT`, which wpa_supplicant reports as `WRONG_KEY`), the **USB link
+> got its DMA back** (RX 3.3 → 6.3 MB/s, TX 3.3 → 4.1), and the **BT core now
+> answers HCI** (the UART2 CTS/RTS pads).  Region 0 is now **`0xDD66D8C3`**;
+> region 1 **`49e318bf…`**; patch **61 files / 8 762 lines**, sha256
+> `20556c5f…`.
 
 ## 0. The job, and where it stands
 
@@ -298,6 +299,12 @@ Current: **61 files / 8 755 lines**, sha256 `741115a4…`, 0 rejects / 61/61.
 * **Never `slay` by name on the oracle** (trap 221); kill by pid.
 * Device password `0000`, once.  An agent never writes RPMB; NVRAM read-only.
   `/dev/rpmb/` exists only on TabletOS; our `pbrpmb` tops up raw at boot.
+* **`BOOTCTR_FCTRY` is readable on our image** without `/dev/rpmb`:
+  `tools/pbssh.sh 'dmesg | grep pbrpmb'` →
+  `pbrpmb: topup: BOOTCTR_FCTRY at block 0x3a record@196 = <4 bytes LE>` then
+  `pbrpmb: topup: 0x<v> >= threshold 0x1e, no write`.  It read **`0x23`** at the
+  session-52 close (`23000000`).  This is a logged read, not an RPMB access
+  (`SAFETY.md` §2, `DEVELOPMENT.md` §5).
 * **WLAN checks:** `ls /sys/bus/sdio/devices/` → `mmc4:0001:1/:2`;
   `ip link set wlan0 up` → `wlcore: firmware booted (Rev 7.3.5.0.98)`;
   stability = zero `sdio read failed`/`wlcore: down` lines; `lsmod` must show
