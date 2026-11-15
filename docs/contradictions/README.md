@@ -27,7 +27,7 @@ note after it is what a reader needs before opening the file.
 | `111-vs-123-tcon-byte-order.md` | **resolved 2026-10-29** — high byte first (the static-RE answer): with the bridge correctly programmed both orders drive the panel, but low-first swaps magenta↔green and inverts black/white (report 132 §8).  The follow-on frame glitch was fixed by report 133 |
 | `118-vs-121-dsi-link-rate.md` | **resolved 2026-10-27** — 118 §8.2 was wrong; the reference runs four data lanes, not two |
 | `bootctr-drain-vs-session10-readings.md` | **resolved for the rate (session 22); session-10 anomaly open** — one factory boot spends one count and an OS boot tops it back up (`50 → 49 → 47 → 49 → 50` measured); why session 10 read a static `0x32` is still unexplained |
-| `bt-firmware-tiinit-vs-wl1283.md` | **open** — the session-51 handoff says to use linux-firmware's `TIInit_7.2.31.bts` and not the reference's `WL1283.bts`; report 216 §0 finds the reference file is the chip's own complete service pack (315 HCI commands, 227 × `0xFF05` = 56 771 bytes, then `0xFD09`/`0xFDA8`).  Neither has been loaded under Linux, and `TIInit_7.2.31.bts` is not even in the workspace.  Settle by powering `hci0` and comparing `HCI_Read_Local_Version_Information` before/after each file (report 237 §5) |
+| `bt-firmware-tiinit-vs-wl1283.md` | **resolved (session 53)** — the reference's `WL1283.bts` is the correct pack.  Both files' own headers settle it: the reference says `Compatibility: Quattro, 6.0.15 ROM` (this chip's BT-core generation) while linux-firmware's `TIInit_7.2.31.bts` and `TIInit_6.2.31.bts` say `BL6450, WL1271/3 2.0 ROM`, a different older family.  Confirmed on the bench: the reference pack replays **315/315** and moves the LMP subversion `0x2b0f` → **`0x2b33`**, exactly the value its header declares (report 238 §3) |
 | `expired-counter-nuke-vs-retry-halt.md` | **open** — `0xFFFFFFFF` is selector 2; normal-path nuke vs retry-branch halt depends on the expired unit's `0x2801`, which was not read, and there is no sacrificial unit left |
 | `fan5702-safe-model-vs-cm3217-race.md` | **open as a rule, resolved for the CM3217** — readings taken from TabletOS of a device whose QNX driver is running are unreliable (our I2C accesses interleave with `ls-cm3217`); the same part reads a clean 32 → 191 lux from Linux.  DECISIONS §31, traps 103/104 (report 182) |
 | `fan5702-dimming-register-bits.md` | **open** — the datasheet-derived `0b11xxxxxx` dimming write vs the bootloader/QNX `0x36`; the on/off path (GENERAL `0x10`) is unaffected (report 179) |
@@ -75,12 +75,9 @@ IFS rebuild, but each changes how a result should be read:
    bootloader's `0x36`; the on/off path (GENERAL `0x10`) is unaffected.
    *Would settle it:* a brightness sweep on the live unit, or datasheet Table 4.
 
-7. **`bt-firmware-tiinit-vs-wl1283.md`** — which BT service pack the WL1283
-   wants: linux-firmware's `TIInit_7.2.31.bts` (the old handoff's advice) or the
-   reference's own `WL1283.bts` (the chip's complete patch-RAM download,
-   report 216).  Neither has been loaded under Linux.  *Would settle it:*
-   power `hci0` over mgmt and compare `HCI_Read_Local_Version_Information`
-   before/after each file (report 237 §5).
+*(`bt-firmware-tiinit-vs-wl1283.md` was open here until session 53; it is now
+resolved — see the table above and report 238 §3.  Left out of the live list so
+nobody re-runs the experiment.)*
 
 Residual from the resolved `touch-bus` file: the touch driver/protocol
 (CY8CTMA3 Gen3 / Munin) and the `tp_intr = 1035 → GPIO2_3` inference are open;

@@ -5,40 +5,43 @@ Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolut
 `N+6` — this handoff is for **absolute 54 = Linux-era 48**, written at the
 session-53 close.  See `docs/sessions/NUMBERING.md`.
 
-> **Session-53 result, in one line:** **the WL1283's BT core works** — it answers
-> `HCI_Reset`, reports itself (`hci ver 6` / `lmp ver 6` / `mfr 0x002b` = TI,
-> BT 4.0) and **runs a full inquiry that finds a peer** — and **loading the
-> reference's `WL1283.bts` (315/315) makes `hci0` register with mgmt for the
-> first time** (0 → 1 controller).  What is left is **opening** the controller: a
-> **stray `0x30` byte** arrives after init and the H4 receiver (correctly)
-> rejects it, so `SET_POWERED` is `0x05`.  Region 0 `0xDD66D8C3`; region 1
+> **Session-53 result, in two lines.**  **BT's core works** — real BR/EDR
+> inquiry finding a peer, and loading the reference's service pack (315/315)
+> makes `hci0` register with mgmt for the first time; the controller *open* is
+> blocked by a stray `0x30` byte.  **The operator then redirected the project**:
+> the active work is now **ROADMAP item 7a — a real root on hd3 (62.86 GiB),
+> then SGX540**, with **Nura** (postmarketOS was renamed 2026-09-27) and
+> Catacomb or Sxmo-dwm as the DE.  Region 0 `0xDD66D8C3`; region 1
 > `49e318bf…`; patch **61 files / 8 762 lines**, sha256 `20556c5f…` (unchanged —
-> no flash and no DTS edit this session).
+> no flash, no DTS or driver edit this session).
 
 ## 0. The job, and where it stands
 
 **Goal.**  A clean, upstream **Linux 7.3.3** on a **BlackBerry PlayBook**
 (OMAP4430 ES2.2 "winchester", secure device), booting our chainloader image in
-media region 0 with an initramfs that hands PID 1 to a **real userland on the
-eMMC** (region 1), and the board's own sensors/peripherals working.
+media region 0 with an initramfs that hands PID 1 to a real userland, and the
+board's own peripherals working — now with the end state being **Nura on hd3
+with GPU acceleration**.
 
 **Working:** the SoC basics (DDR, UART3 console, eMMC on MMC2, WDT2), the USB
 gadget/console **and its RNDIS network link with ssh**, the whole display chain,
 the 64 MiB ext4 BusyBox root in region 1, the peripherals (I²C4 motion sensors,
 TMP103, BQ27541, FAN5702, CM3217, ISL9519 charger), the **Munin touch**, the
 **WM8994 audio** (headphones + both speakers, 48 kHz), the **WL1283 WLAN**
-(associates, DHCP, traffic), and now **the WL1283's BT core** (real inquiry).
+(associates, DHCP, traffic), and **the WL1283's BT core** (real inquiry; `hci0`
+registers with mgmt).
 
-**What is left:** open the **BT controller** so the kernel's stack can use it
-(§0c); then FM and GPS on the same chip; plus two open WLAN questions that block
-nothing.
+**What is left, in order:** the hd3 rootfs (§0d), then SGX540 (§0e).  BT's
+controller open and FM/GPS are parked with their blockers recorded (§0f).
 
 ## 0a. The media, and the way back
 
-* **region 0 = `0xDD66D8C3`** (`0x939E4C` B, kernel `7.3.3`;
-  `boot/chainloader/kernel.img`).  Unchanged in session 53.
+* **region 0 = `0xDD66D8C3`** (`0x939E4C` B, kernel `7.3.3`,
+  `boot/chainloader/kernel.img`; the CRC was recomputed this session and
+  matches).  Unchanged in session 53.
 * **region 1 = `49e318bf…`** (`local/images/rootfs-region1-wl1283-bt.ext4`,
-  67 108 864 B, **43 modules**).
+  67 108 864 B, **43 modules**).  **This stays intact as the fallback through
+  the whole hd3 move.**
 * The unit is **on our Linux image** (`0fca:8010`, console `pb> `, **ssh on
   `169.254.0.1`**).
 * **To boot the ORACLE:** flash `local/work/ifs-shim-sealed.ifs` at block
@@ -46,11 +49,14 @@ nothing.
   `169.254.0.1:9090`, root ssh — use **`PB_LINK=door tools/pbssh.sh`**.  The
   region-0 RCFS slot holds the **full 1917 RCFS** (trap 227); for the *minimal*
   oracle flash the pruned pair `local/work/minimal/setB.signed`.  `/tmp` is
-  wiped by a reboot.  Its `hd3` carries `/var/ti1283/…` from session 49.
+  wiped by a reboot.
 * **To stock TabletOS:** flash **two components** — `local/work/ifs-shim-sealed.ifs`
-  at `0x825` **and** `local/work/rcfs-1917.rcfs` at `0x8D5`.
-  `wayback.signed` does **not** boot this armed unit (trap 226).  **Do not
-  restore `local/images/ifs0.sealed.bin`** (2.0.0.4869, trap 84).
+  at `0x825` **and** `local/work/rcfs-1917.rcfs` at `0x8D5`, plus the vendor UFS
+  (`local/work/ufs-vendor.signed`, 707 MB) if hd3 has been repurposed.
+  **Do not restore `local/images/ifs0.sealed.bin`** (2.0.0.4869, trap 84).
+* **hd3 currently holds the QNX6 userland.**  Writing it destroys that on media;
+  the operator has the UFS images, so **no backup is required** and a reflash
+  restores it.
 
 ## 0b. The WLAN — it associates (session 52, unchanged)
 
@@ -73,107 +79,117 @@ Wi-Fi is 1×1 HT20 (72 Mbit/s) — **do not advertise HT40** (trap 247).  Do **n
 use `IRQ_TYPE_LEVEL_LOW` for WL_IRQ (trap 238), **not** `wlcore_sdio dump=1`
 (trap 239), **not** 5-sr (trap 243).
 
-## 0c. BT — the core works; opening the kernel's controller is the one task
+## 0c. BT — what works, and where it stopped
 
-### What is proven (report 238)
+**Proven (report 238):** over a plain H4 tty (`/dev/ttyS1`, 115200 8N1) the core
+answers `HCI_Reset`, reports `hci ver 6` / `lmp ver 6` / `mfr 0x002b` (TI) /
+BD_ADDR `8e:e4:3c:22:61:00`, and **runs a full BR/EDR inquiry that finds a peer**
+(`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.  Replaying
+`local/work/1917/base/lib/firmware/bluetooth/WL1283.bts` answers **315/315** and
+moves LMP subversion `0x2b0f` → `0x2b33`.  Loaded **before** the attach it makes
+`hci0` **register with mgmt** (0 → 1 controller; negative control both ways) by
+fixing the `0x201c` reply length.
 
-* **Real Bluetooth.**  Over a plain H4 tty (`/dev/ttyS1`, 115200 8N1) the core
-  answers `HCI_Reset`, reports `hci ver 6` / `lmp ver 6` / `subver 0x0f00` /
-  `mfr 0x002b` (TI) and BD_ADDR `8e:e4:3c:22:61:00`, then **runs a full BR/EDR
-  inquiry that finds a peer** (`f0:a3:b2:bb:d1:00`, class `0x011c00`),
-  reproducibly.  Tools in **`rootfs/bt/`** (see its `README.md`).
-* **The service pack loads and it is what registers the controller.**  Replay
-  `local/work/1917/base/lib/firmware/bluetooth/WL1283.bts` with `btsload`:
-  **315/315** answered, LMP subversion `0x2b0f` → **`0x2b33`**.  With the pack
-  loaded **before** the attach, `MGMT_OP_READ_INDEX_LIST` returns **1**
-  controller; without it, **0**.  Negative control run both ways.
-* **Why `hci0` never worked before (trap 249).**  `0x201c` is
-  `HCI_LE_Read_Supported_States`, not a "benign TI vendor op".  A bare ROM
-  returns **Command Disallowed `0x0c`** with 5 payload bytes where 9 are needed,
-  so `hci_cc_func()` rejects it, the LE init stage aborts, `hci0` never opens and
-  mgmt sees no controller.  The pack fixes the **length** (11 → 12 bytes).
-* The pack **survives `HCI_Reset`** but is lost on a `BT_EN` power cycle.
+**Parked blocker (trap 250):** a stray `0x30` byte.  After the last init reply
+completes, ~200 ms later a single `0x30` arrives (6 of 6 runs, instrumented
+`h4_recv()`); it is not an H4 type, so the kernel correctly returns `-EILSEQ` and
+`SET_POWERED` gives `0x05`.  **Which side emits it is unknown.**  The experiment
+to resume is in STATE.md §"What is next" 1a(b) — and note trap 251 (verify a
+module swap by content) before running it.
 
-### THE ONE EXPERIMENT: find who emits the stray `0x30`
+**LE** is refused by the controller, but the chip reports BT 4.0 with the
+LE-supported bit, so no enable sequence is known and impossibility is **not**
+demonstrated.
 
-`MGMT_OP_SET_POWERED` returns `0x05` (`AUTH_FAILED` = `-ETIMEDOUT`) and dmesg
-shows `Frame reassembly failed (-84)` (`-EILSEQ`).  An instrumented `h4_recv()`
-(already written and proven, in the session-53 note) shows the identical shape in
-**6 of 6 runs**:
+## 0d. THE ACTIVE ITEM — a real root on hd3 (report 239, ROADMAP 7a)
 
-```
-PBTMP h4_recv count=9 first=04 0e 06 01  rx_len=-1: 04 0e 06 01 12 0c 00 00 00
-PBTMP h4_recv count=1 first=30 00 00 00  rx_len=-1: 30
->>> Bluetooth: hci0: Frame reassembly failed (-84)
-```
+### The design, which is the operator's
 
-The last init reply is complete and correct; **~200 ms later a single `0x30`**
-arrives and is (correctly) rejected, because `0x30` is not an H4 type (0x01–0x04).
-**The open question is which side emits it.**  It *never* appears when the same
-sequence is driven from userspace (including a passive listen with no command
-sent), so a host-side origin is favoured — but that is not established.
+**hd3 holds a flasher-restorable ext4 image.**  Not an in-place mkfs: a broken
+Linux root must be recoverable from the bootrom without needing a working Linux
+on the device.  The loader's allow-list already includes MCT type `0x1C` and
+`bbusb.py` encodes the extent (`'0x1C FS Fixed': (0x4905, 0xFFFFF)`), so the
+existing flash loop works unchanged.
 
-**Do the module swap correctly** (trap 251 — this bit me): `btbcm` holds a
-reference to `hci_uart`, so `rmmod hci_uart` fails and `insmod` "succeeds" while
-keeping the old module, making the experiment look negative.  Order:
-`rmmod btbcm`, then `rmmod hci_uart`, then `insmod /tmp/hci_uart.ko`, then
-**verify by content** — `strings /tmp/hci_uart.ko | grep PBTMP`.  A reboot is the
-sure reset (`/tmp` is wiped; re-push the tools).
+### THE ONE EXPERIMENT: does `pmbootstrap` build a rootfs for this device?
 
-**Extend the instrument** to log what the driver *writes* (`hci_uart_write_work`
-in `hci_ldisc.c`) next to what it receives, with timestamps.  If a `0x30` shows
-up on the wire with nothing written in the preceding milliseconds, it is the
-chip; if it correlates with a write, the host path is echoing.
+**Inputs:** a host with `pmbootstrap`, a scaffolded PlayBook device port
+(`pmbootstrap init` + `aportgen`, modelled on `device-samsung-espresso7`:
+`arch=armv7`, `dtb=omap4-winchester`, `chassis=tablet`, `drm=true`).  **No device
+writes.**  Run `pmbootstrap install` with `ui=catacomb` (or `sxmo-de-dwm`) and
+`split` so it produces image files rather than flashing.
 
 **What each result means.**
 
-* **The `0x30` correlates with a host write** → the fix is in the kernel path, and
-  the `hci_uart` write/flush path is the place to look.
-* **Nothing is written and the `0x30` still arrives** → the chip emits it; then
-  ask whether a quirk/flush is the right response (the kernel's `hci_uart_flush`
-  or a `HCI_QUIRK_*`), not a bespoke driver.
-* **Open the controller (`SET_POWERED` → status `0x00`)**, then run an inquiry
-  through the stack and move to HID.
+* **`pmbootstrap install` produces a root image** → the plan holds.  Then: mount
+  it on the host, check `/sbin/init`, the DE and that its kernel modules match
+  7.3.3; flash it to hd3 with `bbusb.py --component <root image>
+  --dest-block 0x4905` (dry-run first — the plan line must show a run inside
+  `0x1C` and `gate_runs` must pass); verify by `dd`-ing the superblock at
+  `0x49000000` and by mounting it from the running Linux
+  (`losetup -o 0x49000000`) and comparing a checksum with the host image.
+* **It refuses because it also wants to own the kernel/boot** → the device port
+  must express "the boot chain is external" more explicitly.  Report 239 §4 has
+  the analysis; the fallback is to build the rootfs with `pmbootstrap` but take
+  the kernel from our tree, which is what we already do.
+* **A Nura `linux-*` package cannot wrap the 7.3.3 tree unchanged** → package
+  our tree as a `linux-*` aport, or bypass the package entirely and keep
+  `build_kernel_image.py` as the only kernel path.
 
-### Before expecting HID
+**Then, and only then:** re-point `initramfs/init.c`'s `ROOTFS_RAW_OFF` from
+`0x29000000` to `0x49000000`, rebuild the kernel image, flash region 0, boot.
+The initramfs already falls back to the bring-up console when the root will not
+mount, so a bad hd3 costs a boot, not a brick.  **Region 1 stays intact.**
 
-`l2cap`/`sco`/`rfcomm`/`hidp` are **modules and none are in the region-1 rootfs**
-(only `bluetooth`, `hci_uart`, `btbcm` and their crypto deps are).  Ship them.
-`CONFIG_BT_HIDP=m` is already set in the kernel config.
+### Size is a policy choice, not a constraint
 
-### Cold-boot gotchas for the BT bench (both cost real time)
+`analyze_blocks()` skips runs of **`0xFF`**, not `0x00`, so a sparse ext4 does
+**not** get its holes skipped: a fully expanded 62.86 GiB image would send all of
+it over the bootrom link.  Sizes: 1 GiB = 1.59 % of hd3, 2 GiB = 3.18 %, 4 GiB =
+6.36 %.  Grow by building a larger image and flashing it over the seed — the
+device has **no `resize2fs`**.
 
-1. **`/sys/class/gpio/gpio535` does not exist until exported**, and it reads `0`
-   (BT_EN low, core off) — so a pack load fails with "no HCI_Reset answer",
-   identical to a dead chip.  Export it, `direction` = `out`, then pulse
-   **low 2 s → high** (50 ms sometimes was not enough after a previous sleep).
-2. **`insmod` "succeeds" while keeping the old module** when something holds a
-   reference.  Verify swaps by content, never by exit status.
+### Facts about hd3 (measured)
 
-### LE
+* `0x49000000` = DOS MBR with a QNX **v1.2b** boot sector.
+* `0x49002000` = QNX6 superblock (magic `5d 55 29 c2 3e 56 45 21`) — agrees with
+  report 138, not with the naive MCT arithmetic (`0x48F00000`).
+* Region = MCT `0x4905–0xFFFFF` = **62.86 GiB** (67,494,412,288 B).
+* In-place mkfs works on the device (`losetup -f -o` → `mkfs.ext2` → mount →
+  write), useful for *populating*, not as the primary route.
 
-**Refused by the controller**: `0x201c` = Command Disallowed,
-`Write_LE_Host_Support` = `0x11`, LE feature page all zeros.  **But do not write
-the hardware off**: the chip reports **HCI 4.0 / LMP 4.0** with the LE-supported
-LMP bit, and the reference stack being BR/EDR-only reflects BlackBerry never
-shipping an LE stack on a 2011 tablet — not silicon.  What is missing is an
-enable sequence, and none is known.  The `wl128x-fw-4-sr/5-sr.bin` files are
-**WLAN** firmware — swapping them cannot change BT.
+## 0e. SGX540 (after the rootfs boots)
 
-## 0d. WM8994 audio — closed
+**Mainline 7.3.3 has no driver** — nothing binds `ti,omap4430-gpu` /
+`img,powervr-sgx540`, though `omap4.dtsi` supplies the target-module, `prm_gfx`
+and the L3_GFX clock, and our board DTS leaves `&sgx_module` disabled.  The route
+is `gitlab.com/pvrports/pvrports`: `linux-openpvrsgx`
+(`CONFIG_SGX=y`, `CONFIG_SGX_OMAP=m`, `CONFIG_SGX_DRM=y`, tagged 6.1 → rebase to
+7.3.3) plus **proprietary** `sgx-ddk-um` (`pkgver=1.17.4948957`, SoC subpackage
+`ti443x`).  Its reference devices are the **Samsung espresso** — OMAP4430 with
+TWL6030, the same SoC family and PMIC generation, including the `clk32kg` work we
+already did for the WLAN.  **Blobs stay gitignored in `local/`.**  The
+reference's own QNX SGX userspace (`libsrv_um.so`, `libusc.so`, GLESv1/v2, EGL)
+is in `local/work/1917/base/usr/lib/graphics/omap4430/` with
+`gpu-string = SGX540rev120`, but it is QNX ABI — **there is no separate SGX
+firmware file anywhere in the reference**.
 
-Headphones and both speakers play `pbplay`'s 440 Hz tone at 48 kHz ±1 %.
+## 0f. FM and GPS (parked, after SGX)
+
+**FM:** mainline carried `drivers/media/radio/wl128x` from 2.6.39 to 6.13 and
+removed it; a forward port is the route.  **GPS:** no mainline driver; the
+operator has a 2024 LKML patch (`lists.openwall.net/linux-kernel/2024/06/06/1445`)
+to evaluate, and the reference's own path is the fallback.
+
+## 0g. WM8994 audio, touch — closed
+
+Audio: headphones and both speakers play `pbplay`'s 440 Hz tone at 48 kHz.
 Listening tests: lower `pbmix set "DAC1 Volume" 40` **once**, restore `96` at the
-end; a bare `pbplay` plays a 2 s tone (trap 212); state what is playing
-(trap 191).
+end; a bare `pbplay` plays a 2 s tone (trap 212).  Touch: I²C2 `0x48072000` =
+`i2c-1` at `0x65`, GPIO2_3 edge IRQ (`irq 110`); a **cold** boot leaves it down
+until GPIO1_14/GPIO4_8 are pulsed, which the driver does not drive.
 
-## 0e. Touch — done; cold boots need the pulse
-
-I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c`; GPIO2_3 edge IRQ
-(`irq 110`).  A **cold** boot leaves the controller down until GPIO1_14/GPIO4_8
-are pulsed — the driver still does not drive them.
-
-## 0f. The minimal 1917 oracle
+## 0h. The minimal 1917 oracle
 
 Debloated 2.1.0.1917 IFS+RCFS (`tools/build_minimal_qnx.py`), qconn on
 `169.254.0.1:9090` + root ssh.  Its `/base` is pruned (no firmware dir).  No
@@ -187,13 +203,11 @@ are not on the UFS — push `memdump3`/`memw32`/`pbi2c` to `/tmp` after every bo
 * `local/work/1917/` — the 1917 `/base`, IFS tree and the WLAN calibration.
 * `local/work/1917/base/lib/firmware/bluetooth/WL1283.bts` — the **correct** BT
   service pack (md5 `78bc1f0a…`; `Compatibility: Quattro, 6.0.15 ROM`).
-  linux-firmware's `TIInit_*.bts` are for `BL6450, WL1271/3 2.0` — a different
-  chip family; the contradiction is resolved against them.
+* `local/work/1917/base/usr/lib/graphics/omap4430/` — the reference's QNX SGX
+  userspace and `graphics.conf` (`gpu-string = SGX540rev120`).
 * `local/work/firmware-nvs/` — the firmware tree with the **per-unit NVS**.
 * `local/work/modules-7.3.3/` — the staged modules (**43**).
-* `tools/build_minimal_qnx.py`, `local/work/minimal/` — the oracle.
-* Reports **238** (current), **232–237**; `hardware/twl6030.pdf`,
-  `hardware/WM8994.PDF` (gitignored), `hardware/swpu231ap.pdf.txt`.
+* Reports **239** (hd3/Nura/SGX scoping), **238** (BT), 232–237.
 
 ## 2. Build and flash (7.3.3)
 
@@ -223,10 +237,11 @@ python3 tools/build_rootfs.py --size-mb 64 \
   --extras local/work/rootfs-extras --krel 7.3.3 --out local/images/<name>.ext4
 ```
 
-`build_rootfs.py --out` **overwrites** (trap 213).  **Patch export** (traps
-161/211): walk the tree against pristine, filter build artifacts, apply to a
-staged pristine copy and compare.  Current: **61 files / 8 762 lines**, sha256
-`20556c5f…`.
+`build_rootfs.py --out` **overwrites** (trap 213).  **Flash hd3** with
+`bbusb.py --component <image> --dest-block 0x4905` (dry-run first).
+**Patch export** (traps 161/211): walk the tree against pristine, filter build
+artifacts, apply to a staged pristine copy and compare.  Current: **61 files /
+8 762 lines**, sha256 `20556c5f…`.
 
 ## 3. Bench
 
@@ -234,55 +249,49 @@ staged pristine copy and compare.  Current: **61 files / 8 762 lines**, sha256
   Dropbear has **no `scp`** — move files with `ssh … 'cat > /path' < file`, or
   raw `nc`/`socat` for anything large (6.3 MB/s vs ssh's 2.3).
 * **Reboot:** `tools/pbssh.sh 'reboot -f'`; if it hangs (trap 224) use
-  `echo b > /proc/sysrq-trigger`.  Start the flasher as a **background task** —
-  a `nohup … &` inside a foreground shell call keeps the tool's pipe open.
+  `echo b > /proc/sysrq-trigger`.  Start the flasher as a **background task**.
 * **Never `slay` by name on the oracle** (trap 221); kill by pid.
 * Device password `0000`, once.  An agent never writes RPMB; NVRAM read-only.
 * **`BOOTCTR_FCTRY` is readable on our image**:
   `tools/pbssh.sh 'dmesg | grep pbrpmb'` → `… record@196 = <4 bytes LE>` then
   `0x<v> >= threshold 0x1e, no write`.  It read **`0x22`** at the session-53
-  close (`22000000`; `0x23` at the start — one reboot for a clean module state).
-  A logged read, not an RPMB access (`SAFETY.md` §2).
+  close (`22000000`; `0x23` at the start — one reboot).  A logged read, not an
+  RPMB access (`SAFETY.md` §2).
 * **WLAN checks:** `lsmod` must show **`ccm` and `ctr`**;
   `ip link set wlan0 up` → `wlcore: firmware booted (Rev 7.3.5.0.98)`.
 * **BT checks:** `BT_EN` at pad `0x4A10007C` mux 3 and `GPIO2_DATAOUT` bit 23;
   UART2 pads `0x4118`/`0x411A`; then `rootfs/bt/`'s tools.  **`btdump` first** —
   it hexdumps and cannot hide a reply.  Check `cat /proc/tty/ldiscs` before
-  concluding "silent" (a stale `N_HCI` eats the bytes).
+  concluding "silent".  After a cold boot **export `gpio535` first** (trap 252).
+* **hd3 checks:** `dd` the superblock at `0x49000000`; mount from the running
+  Linux with `losetup -o 0x49000000`.
 * WM8994: `i2ctransfer` args are DECIMAL (trap 166); bus 4, addr `0x1a`.
 * QNX device tools build `-static`; `/tmp` is wiped by a reboot.
 
-## 4. Traps added last session (full list 14–250 in `KNOWN-ISSUES.md` §2)
+## 4. Traps added last session (full list 14–252 in `KNOWN-ISSUES.md` §2)
 
-* **249.** `0x201c` is **`HCI_LE_Read_Supported_States`**, not a "benign TI
-  vendor op" (report 237 §4 is wrong).  A bare ROM answers it **Command
-  Disallowed** with 5 payload bytes where 9 are needed, so `hci_cc_func()`
-  rejects it, the LE init stage aborts, and **`hci0` never registers with mgmt**
-  (`num_controllers = 0`) — so `SET_POWERED` was structurally impossible.
-  Loading `WL1283.bts` first fixes the length and the controller registers.
+* **249.** `0x201c` is **`HCI_LE_Read_Supported_States`**, not a benign TI vendor
+  op.  A bare ROM answers **Command Disallowed** with 5 payload bytes where 9 are
+  needed, so the LE init stage aborts and **`hci0` never registers with mgmt**
+  (`num_controllers = 0`).  Loading `WL1283.bts` first fixes the length.
   `/sys/class/bluetooth/hci0` existing is **not** liveness.
-* **250.** `Frame reassembly failed (-84)` = `-EILSEQ`, and on this board it is a
-  **lone `0x30` byte** arriving ~200 ms after init completes (instrumented
-  `h4_recv()`, 6 of 6 runs).  `0x30` is not an H4 type, so the kernel correctly
-  rejects it.  **Which side emits it is open** — it never appears from userspace.
-  Excluded: alignment/padding, chip idle-sleep, leftover bytes, UART line errors
-  (`LSR = 0x60`), truncated long replies, and **hardware flow control** (that
-  early claim is retracted: H4 never calls `hci_uart_set_flow_control()`, and a
-  clean A/B registers the controller with `CRTSCTS` on *and* off).
+* **250.** `Frame reassembly failed (-84)` = `-EILSEQ`, here a **lone `0x30`**
+  arriving ~200 ms after init (6 of 6 runs).  Which side emits it is **open**.
+  Hardware flow control is **not** the cause (clean A/B registers with `CRTSCTS`
+  on *and* off; H4 never calls `hci_uart_set_flow_control()`).
 * **251.** `insmod` reports success while keeping the old module when something
-  references it (`btbcm` → `hci_uart`).  `rmmod btbcm` first, then `hci_uart`,
-  then `insmod`; verify by content, not exit status.  Also the way a reverted
-  experiment looks un-reverted.
+  references it (`btbcm` → `hci_uart`).  `rmmod btbcm` first, then `hci_uart`;
+  verify by content, not exit status.
 * **252.** After a cold boot `/sys/class/gpio/gpio535` does not exist and reads
   `0`, so a pack load fails as if the chip were dead.  Export, set direction,
   pulse low 2 s.
-* Still current: **249** (`0x201c` is LE states, not benign), **248** (the UART2
-  CTS/RTS pads), **247** (no HT40), **244** (`ccm`/`ctr`), **246** (MUSB
-  alignment), **243** (4-sr not 5-sr), **241**, **239**, **238** (`LEVEL_LOW`
-  WL_IRQ), **237** (three wlcore board properties), **236** (`CLK32KG`), **227**
-  (the old measurement flaw), **224** (`reboot -f` wedge), **221** (`slay` kills
-  `rndis0`), **214** (composite net iface), **212** (bare `pbplay` plays), **211**
-  (tree walk + `Kconfig.*`), **190** (module-only CRC).
+* Still current: **248** (the UART2 CTS/RTS pads), **247** (no HT40), **244**
+  (`ccm`/`ctr`), **246** (MUSB alignment), **243** (4-sr not 5-sr), **241**,
+  **239**, **238** (`LEVEL_LOW` WL_IRQ), **237** (three wlcore board
+  properties), **236** (`CLK32KG`), **227** (the old measurement flaw), **224**
+  (`reboot -f` wedge), **221** (`slay` kills `rndis0`), **214** (composite net
+  iface), **212** (bare `pbplay` plays), **211** (tree walk + `Kconfig.*`),
+  **190** (module-only CRC).
 
 ## 5. Where things are
 
@@ -290,14 +299,18 @@ staged pristine copy and compare.  Current: **61 files / 8 762 lines**, sha256
 |---|---|
 | safety before any write | `docs/project/SAFETY.md` |
 | build/flash/boot/console | `docs/project/DEVELOPMENT.md` |
+| **the active plan (hd3/Nura/SGX)** | `docs/project/ROADMAP.md` item 7a, report **239** |
 | **BT bench tools** | **`rootfs/bt/`** (and its `README.md`) |
 | wireless rootfs builder | `tools/build_rootfs.py` |
+| flasher (region 0, region 1, **hd3**) | `tools/bbusb.py` |
+| initramfs root selection | `initramfs/init.c` `ROOTFS_RAW_OFF` |
 | board DTS + patched drivers | `kernel/source/`, `local/kernel-tree/` |
 | kernel delta + config | `kernel/patches/`, `kernel/winchester-7.3.3.config` |
 | BT service pack | `local/work/1917/base/lib/firmware/bluetooth/WL1283.bts` |
+| reference SGX userspace | `local/work/1917/base/usr/lib/graphics/omap4430/` |
 | OSS player / mixer / BT probe | `rootfs/pbplay.c`, `rootfs/pbmix.c`, `rootfs/hci.c` |
 | qconn / ssh | `tools/QCL.py`, `tools/pbssh.sh` |
-| reports | `docs/reports/` (**238** current) |
+| reports | `docs/reports/` (**239** current) |
 | sessions | `docs/sessions/session-53.md` |
 
 ## 6. Working rules
@@ -307,13 +320,15 @@ staged pristine copy and compare.  Current: **61 files / 8 762 lines**, sha256
 * **Don't clear `dmesg` under the operator** without saying so.
 * Write the durable fact into the repository in the same turn.
 * **One variable per boot.**  **A test boot is not a budget concern.**
-* **Never present a guess as a fact.**  Prefer a fresh read.
-* **A diagnostic that reports "nothing" may be lying.**  Three ways they did in
-  session 53 (buffered stdout, wrong Command Status offset, stale `N_HCI`) —
-  `rootfs/bt/README.md` lists them.  When in doubt, hexdump.
+* **Never present a guess as a fact.**  Prefer a fresh read.  Two claims from
+  this session were retracted after re-measurement (trap 250); a diagnostic can
+  manufacture the fault it reports.
 * **Use the reference before the bench** (DECISIONS §61).  Subagents:
   static/file-only (trap 109) — and **time-box them**; one ran 87 minutes with no
-  result in session 53 and had to be killed.
+  result in session 53.
+* **Look up every external fact.**  postmarketOS was renamed **Nura** on
+  2026-09-27; search "Nura", and expect `postmarketos`/`pmaports` in package
+  names and many URLs.
 * **Revert experiments and prove the revert.**
 * **Only the operator decides when to stop / wrap up.**
 
@@ -326,85 +341,95 @@ Workspace: this repository — a git checkout.  Map: docs/README.md.  The earlie
 work tree $HOME/rea-work is READ-ONLY.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 9, KNOWN-ISSUES.md §2 (traps 14-250, especially 244-250)
-and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md (69-73),
-docs/reports/INDEX.md, reports 236-238, and sessions/session-53.md.
+file), ROADMAP.md item 7a AND item 9, KNOWN-ISSUES.md §2 (traps 14-252,
+especially 248-252) and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md (61-73),
+docs/reports/INDEX.md, reports 238-239, and sessions/session-53.md.
 
 WHERE IT STANDS: audio (headphones + both speakers, 48 kHz), the touch, the
-sensors/charger, ssh over USB, the display and the WL1283 WLAN all work.  THE
-WLAN ASSOCIATES (session 52) — the blocker was the missing ccm/ctr modules.
-BT (session 53): THE CORE WORKS.  Over /dev/ttyS1 as H4 it answers HCI_Reset,
+sensors/charger, ssh over USB, the display and the WL1283 WLAN all work.  BT
+(session 53): THE CORE WORKS — over /dev/ttyS1 as H4 it answers HCI_Reset,
 reports hci ver 6 / lmp ver 6 / mfr 0x002b (TI, BT 4.0), BD_ADDR
-8e:e4:3c:22:61:00, and RUNS A FULL BR/EDR INQUIRY that finds a peer
-(f0:a3:b2:bb:d1:00, class 0x011c00), reproducibly.  Loading the reference's
-local/work/1917/base/lib/firmware/bluetooth/WL1283.bts (315/315 commands, LMP
-subversion 0x2b0f -> 0x2b33) BEFORE the H4 attach makes hci0 REGISTER WITH MGMT
-for the first time (READ_INDEX_LIST 0 -> 1 controller, negative control both
-ways) by fixing the length of the LE_Read_Supported_States (0x201c) reply
-(11 -> 12 bytes).  Tools are in rootfs/bt/ — READ ITS README FIRST, it lists
-three ways a diagnostic lied.
+8e:e4:3c:22:61:00, and RUNS A FULL BR/EDR INQUIRY finding a peer
+(f0:a3:b2:bb:d1:00, class 0x011c00).  Loading the reference's
+local/work/1917/base/lib/firmware/bluetooth/WL1283.bts (315/315, LMP subversion
+0x2b0f -> 0x2b33) BEFORE the H4 attach makes hci0 REGISTER WITH MGMT for the
+first time (READ_INDEX_LIST 0 -> 1 controller, negative control both ways).
+Tools are in rootfs/bt/ — READ ITS README FIRST.
 
-WHAT IS LEFT: OPEN THE CONTROLLER.  MGMT_OP_SET_POWERED returns 0x05
-(-ETIMEDOUT) after "Frame reassembly failed (-84)" (-EILSEQ).  The cause is
-LOCATED but not fixed: an instrumented h4_recv() shows a LONE 0x30 BYTE arriving
-~200 ms after the last complete init reply, in 6 of 6 runs; 0x30 is not an H4
-packet type, so the kernel correctly rejects it.  WHICH SIDE EMITS IT IS OPEN --
-it never appears when the same sequence is driven from userspace, so a host-side
-origin is favoured.  Next: extend the instrument to log what hci_uart WRITES
-(hci_uart_write_work in hci_ldisc.c) alongside what it receives, with timestamps.
-When swapping the module: rmmod btbcm FIRST, then hci_uart, then insmod, and
-verify by content (strings mod.ko | grep PBTMP) -- insmod "succeeds" while
-keeping the old module and the experiment silently looks negative (trap 251).
-Excluded already: alignment/padding, chip idle-sleep, leftover bytes, UART line
-errors (LSR=0x60), truncated long replies, and hardware flow control (an A/B on
-a clean boot registers the controller with CRTSCTS on AND off; H4 never calls
-hci_uart_set_flow_control() -- an earlier claim to the contrary is retracted).
-Then ship l2cap/sco/rfcomm/hidp (CONFIG_BT_HIDP=m is set but the modules are NOT
-in region 1) and a stack.  LE is refused by the controller (0x0c,
-Write_LE_Host_Support=0x11, LE feature page zero) BUT the chip reports BT 4.0
-with the LE-supported bit, and the reference being BR/EDR-only reflects the
-vendor never shipping an LE stack -- not the silicon -- so no enable sequence is
-known, and impossibility is NOT demonstrated.  The wl128x-fw-4-sr/5-sr.bin files
-are WLAN firmware — swapping them cannot change BT.
-COLD BOOT: /sys/class/gpio/gpio535 does not exist until exported and reads 0, so
-a pack load fails as if the chip were dead; export it, direction=out, pulse
-low 2 s -> high (trap 252).
-Then: FM (forward-port drivers/media/radio/wl128x, removed in 6.13) and GPS
-(2024 LKML patch, else RE the reference).  Open, neither blocking: why 5-sr
-panics on scan (235 §3) and why the ELP wake is not honoured (232 §6).
-Do NOT re-run the session-49/50 negatives (readable diff 218, replays 217,
-boot-path RE 221-226, domain test 225, BT probe 228, clock sweep 229).  Do NOT
-use IRQ_TYPE_LEVEL_LOW for WL_IRQ (trap 238), NOT wlcore_sdio dump=1 (trap 239),
-NOT 5-sr (trap 243), NOT HT40 (trap 247).  Do NOT pulse BT_EN after loading the
-service pack (it wipes it; HCI_Reset does not).
+THE ACTIVE ITEM (operator, session 53): ROADMAP item 7a — A REAL ROOT ON hd3
+(62.86 GiB), THEN SGX540.  The design is the operator's: hd3 holds a
+FLASHER-RESTORABLE ext4 image (not an in-place mkfs), so a broken root is
+recoverable from the bootrom.  The loader allow-lists MCT type 0x1C and
+bbusb.py encodes the extent ('0x1C FS Fixed': (0x4905, 0xFFFFF)), so the
+existing flash loop works: bbusb.py --component <image> --dest-block 0x4905.
+Userspace = Nura (postmarketOS was RENAMED Nura on 2026-09-27 — search "Nura")
+with Catacomb or Sxmo-dwm.  The PlayBook is NOT a supported device; model the
+port on device-samsung-espresso7 (OMAP4430, TWL6030).  Note the structural
+difference: espresso flashes with heimdall-bootimg, which we have no equivalent
+of — OUR kernel must stay the CRC-sealed chainloader image, so the Nura kernel
+package is NOT what flashes.
 
-PHYSICAL STATE: region 0 = our Linux image 0xDD66D8C3 (0x939E4C, kernel 7.3.3).
-Region 1 = 49e318bf... (43 modules) —
-local/images/rootfs-region1-wl1283-bt.ext4.  Kernel patch 61 files / 8 762
-lines, sha256 20556c5f... (no re-export needed unless the DTS/driver changes).
-The unit is on LINUX (0fca:8010, console `pb> `, ssh on 169.254.0.1); rcS loads
-the wireless stack but does not raise the link — see HANDOFF §0b for the
-association sequence.  To boot the ORACLE: flash
-local/work/ifs-shim-sealed.ifs at 0x825 (the RCFS slot holds the FULL 1917 RCFS,
-trap 227; the pruned oracle pair is local/work/minimal/setB.signed at 0x8D5).
-/tmp is wiped by a reboot.  To stock TabletOS: ifs-shim-sealed.ifs at 0x825 +
-rcfs-1917.rcfs at 0x8D5 (NOT wayback.signed, trap 226).  Do NOT restore
-local/images/ifs0.sealed.bin (2.0.0.4869, trap 84).
+THE ONE EXPERIMENT: a host-side pmbootstrap init + install with a scaffolded
+PlayBook device port (arch=armv7, dtb=omap4-winchester, chassis=tablet, drm=true)
+and ui=catacomb, using split image files.  NO DEVICE WRITES.  It answers: (a)
+will pmbootstrap build a rootfs for a device whose kernel it does not own? (b)
+can a Nura linux-* package wrap our 7.3.3 tree (61 files / 8 762 lines, sha256
+20556c5f...)?  If yes: mount the root image on the host and check /sbin/init +
+the DE + module versions; dry-run the hd3 flash and require a run inside 0x1C;
+flash; verify the superblock at 0x49000000 and a checksum; then re-point
+initramfs/init.c ROOTFS_RAW_OFF from 0x29000000 to 0x49000000, rebuild, flash
+region 0, boot.  REGION 1 STAYS INTACT as the fallback throughout.
 
-BENCH: `tools/pbssh.sh 'cmd'` is the DEFAULT ACCESS for commands; for bulk file
-moves use raw nc/socat (6.3 MB/s vs ssh 2.3).  The HOST's pb-rndis profile must
-bind the net interface of the booted OS — enp8s0f3u1i2 for our composite
-gadget, enp8s0f3u1 for the oracle's plain RNDIS (trap 214).  Dropbear has no
-scp.  REBOOT: if `reboot -f` hangs (trap 224) use `echo b >
-/proc/sysrq-trigger`.  NEVER `slay` by name on the oracle (trap 221).  Dropbear
-is key-only, root, on 169.254.0.1.  Device password 0000, once.  An agent NEVER
-writes RPMB; NVRAM read-only.  Read dmesg/sloginfo UNFILTERED.  Do not clear
-dmesg under the operator without saying so.
+SIZE IS POLICY, NOT CONSTRAINT: analyze_blocks() skips 0xFF runs, not zeros, so
+a sparse ext4 does NOT get its holes skipped — a full 62.86 GiB image sends all
+of it.  1 GiB = 1.59% of hd3, 2 GiB = 3.18%, 4 GiB = 6.36%.  The device has NO
+resize2fs, so grow by flashing a bigger image.
+
+hd3 TODAY (measured): 0x49000000 = DOS MBR with a QNX v1.2b boot sector;
+0x49002000 = QNX6 superblock (magic 5d 55 29 c2 3e 56 45 21).  Writing it
+destroys the QNX userland on media; the operator has the UFS images so no backup
+is required, and reflash restores it.
+
+SGX (after the rootfs boots): mainline 7.3.3 binds NOTHING to ti,omap4430-gpu
+though omap4.dtsi has the target-module, prm_gfx and L3_GFX clock.  Route:
+gitlab.com/pvrports/pvrports — linux-openpvrsgx (CONFIG_SGX=y, CONFIG_SGX_OMAP=m,
+CONFIG_SGX_DRM=y; tagged 6.1, so rebase to 7.3.3) plus PROPRIETARY sgx-ddk-um
+(1.17.4948957, subpackage ti443x).  Reference devices are OMAP4430 Samsung
+espresso.  Blobs stay gitignored in local/.  The reference's QNX SGX userspace
+(graphics.conf: gpu-string = SGX540rev120) is QNX ABI and there is NO separate
+SGX firmware file in it.
+
+PARKED: BT controller open (trap 250: a lone 0x30 byte breaks the kernel's H4
+receiver; origin unknown; flow control ruled out), LE (refused by the
+controller, but the chip reports BT 4.0 with the LE bit — no known enable
+sequence, impossibility NOT demonstrated), FM (forward-port
+drivers/media/radio/wl128x, removed in 6.13), GPS (2024 LKML patch, else RE the
+reference).
+
+PHYSICAL STATE: region 0 = our Linux image 0xDD66D8C3 (0x939E4C, kernel 7.3.3,
+CRC recomputed and matching).  Region 1 = 49e318bf... (43 modules).  Kernel
+patch 61 files / 8 762 lines, sha256 20556c5f...  The unit is on LINUX
+(0fca:8010, console `pb> `, ssh on 169.254.0.1); rcS loads the wireless stack
+but does not raise the link — see HANDOFF §0b for the association sequence.
+BOOTCTR_FCTRY = 0x22 (dmesg | grep pbrpmb).  To boot the ORACLE: flash
+local/work/ifs-shim-sealed.ifs at 0x825.  To stock TabletOS: that IFS at 0x825 +
+local/work/rcfs-1917.rcfs at 0x8D5 (+ the vendor UFS if hd3 was repurposed).
+/tmp is wiped by a reboot.  Do NOT restore local/images/ifs0.sealed.bin (trap 84).
+
+BENCH: `tools/pbssh.sh 'cmd'` is the DEFAULT ACCESS; for bulk moves use raw
+nc/socat (6.3 MB/s vs ssh 2.3).  The HOST's pb-rndis profile must bind the net
+interface of the booted OS — enp8s0f3u1i2 for our composite gadget, enp8s0f3u1
+for the oracle (trap 214).  Dropbear has no scp.  REBOOT: if `reboot -f` hangs
+(trap 224) use `echo b > /proc/sysrq-trigger`.  NEVER `slay` by name on the
+oracle (trap 221).  An agent NEVER writes RPMB; NVRAM read-only.  Read
+dmesg/sloginfo UNFILTERED.  Do not clear dmesg under the operator without
+saying so.
 
 BT: BT_EN pad 0x4A10007C mux 3 + GPIO2_DATAOUT bit 23; UART2 pads
-0x4118/0x411A; /dev/ttyS1.  Use rootfs/bt/ (build one, push to /tmp; dropbear
-has no scp).  ALWAYS check `cat /proc/tty/ldiscs` — a stale N_HCI eats the
-bytes and the chip looks dead.  WL1283 checks: `i2ctransfer -f -y 0 w1@0x48 0xbc
+0x4118/0x411A; /dev/ttyS1.  After a cold boot EXPORT gpio535 first and pulse low
+2 s (trap 252).  ALWAYS check `cat /proc/tty/ldiscs` — a stale N_HCI eats the
+bytes and the chip looks dead.  To swap a module: rmmod btbcm THEN hci_uart, and
+verify by content (trap 251).  WL1283 checks: `i2ctransfer -f -y 0 w1@0x48 0xbc
 r3` -> 07 01 55; `lsmod` must show ccm and ctr; `ip link set wlan0 up` ->
 firmware Rev 7.3.5.0.98.  WM8994: i2ctransfer args DECIMAL, bus 4 addr 0x1a;
 debugfs is not mounted by rcS.  On the oracle use pbi2c rd16/wr16; push
@@ -417,9 +442,8 @@ run every test, restore 96 ONCE at the end; a bare `pbplay` plays a 2 s tone
 STATIC RE: the REA MCP server exposes Ghidra 12.1.4; for a QNX ELF reconcile
 with ntoarmv7-readelf/objdump.  QNX device tools build -static.  USE THE
 REFERENCE FIRST, and put static RE in subagents (file-only, trap 109) — and
-TIME-BOX them (one ran 87 min with no result in session 53).  The TI TRM is
-local (hardware/swpu231ap.pdf.txt); the TWL6030 datasheet is
-hardware/twl6030.pdf; the WM8994 one hardware/WM8994.PDF (gitignored).
+TIME-BOX them.  The TI TRM is local (hardware/swpu231ap.pdf.txt); the TWL6030
+datasheet is hardware/twl6030.pdf.
 
 BUILD: modules IN-TREE (`make ... modules`), never `M=`; strip with
 `--strip-debug`, never `strip -s`.
@@ -431,10 +455,9 @@ module/firmware-only change keeps the CRC and needs a region-1-only flash (trap
 failed write / flat pack) remain.  Operator's call when to stop and to wrap up.
 
 UPDATE THE DOCS as you go and commit: STATE.md, HANDOFF.md, ROADMAP.md,
-KNOWN-ISSUES.md, DECISIONS.md and the session note — and move replaced or
-resolved material to docs/history/ or docs/parked/ with a link stub.  Re-export
-the kernel patch whenever the DTS or a driver changes (trap 161) and verify it
-by apply-and-compare, and run the TREE WALK too (trap 211, filtering Kconfig.*).
+KNOWN-ISSUES.md, DECISIONS.md and the session note.  Re-export the kernel patch
+whenever the DTS or a driver changes (trap 161) and verify by
+apply-and-compare, and run the TREE WALK too (trap 211, filtering Kconfig.*).
 A reverted experiment still has to be proven reverted.
 
 WRAP-UP: only the operator decides when the session stops.  Record the bench
@@ -443,4 +466,3 @@ tools/docs_audit.py and tools/tests/test_offline.py, then commit privately and
 publish the snapshot (docs/project/REPO-MANAGEMENT.md).  No IFS restore is
 required.
 ```
-

@@ -2,6 +2,9 @@
 
 ## Current state — 2026-11-15 (session 53)
 
+**Focus has moved: item 7a — a real root on hd3, then SGX540** (operator,
+session 53).  Bluetooth was parked mid-way with its blocker located.
+
 **THE WL1283's BT CORE WORKS — and loading its service pack makes `hci0`
 register with mgmt for the first time.**  Driven over UART2 as H4 it answers
 `HCI_Reset`, reports itself (`hci ver 6`, `lmp ver 6`, `mfr 0x002b` = TI, i.e.
@@ -50,6 +53,22 @@ device** (`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.
   and none are in the region-1 rootfs yet (only `bluetooth`, `hci_uart`, `btbcm`
   and their crypto deps are).
 
+**The next phase is scoped (report 239, ROADMAP item 7a).**  hd3 (62.86 GiB)
+will hold a **flasher-restorable ext4 image** — the operator's decision, so a
+broken root is recoverable from the bootrom.  The loader's allow-list already
+includes MCT type `0x1C` and `bbusb.py` encodes the extent, so the existing flash
+loop works.  Because `analyze_blocks()` skips `0xFF` runs and not zeros, a sparse
+image's holes are **not** skipped, so image size is set by the transfer budget
+(1 GiB = 1.59 % of hd3).  The userspace is **Nura** (postmarketOS renamed
+2026-09-27) with **Catacomb** or **Sxmo-dwm**; the PlayBook is not a supported
+device, so it needs a new port modelled on `device-samsung-espresso7` (OMAP4430,
+TWL6030).  The structural difference is that the PlayBook's kernel must remain
+the CRC-sealed chainloader image, not a `heimdall-bootimg`, so the Nura kernel
+package never flashes — see report 239 §4.  **SGX540** has no mainline driver
+(nothing binds `ti,omap4430-gpu`); the route is `pvrports`'
+`linux-openpvrsgx` (`CONFIG_SGX_OMAP=m`) plus proprietary `sgx-ddk-um`, both
+targeting the same SoC family.
+
 **The WLAN still associates (session 52).**  The blocker was the missing
 `ccm`/`ctr` crypto modules (`ieee80211_key_alloc()` needs a `ccm(aes)` AEAD;
 without it the PTK install is `-ENOENT`, which wpa_supplicant reports as
@@ -60,12 +79,14 @@ advertise HT40** (trap 247).  The USB RNDIS link now uses MUSB's DMA
 (RX 6.3 / TX 4.1 MB/s raw, ssh 2.3).
 
 **Bench (session 53, measured).**  Unit on our Linux image **`0xDD66D8C3`**
-(`0x939E4C` B, kernel `7.3.3`); region 1 =
-`local/images/rootfs-region1-wl1283-bt.ext4` (**`49e318bf…`**, **43 modules**).
-`0fca:8010`, console `pb> `, **ssh on `169.254.0.1`**.  Kernel patch:
-**61 files / 8 762 lines**, sha256 `20556c5f…`.  `BOOTCTR_FCTRY` reads **`0x23`**
-(`dmesg | grep pbrpmb`), above the `0x1e` threshold, so `/init` did not write.
-No NVRAM/MCT/RPMB write and **no flash at all** this session; nothing added to
+(`0x939E4C` B, kernel `7.3.3`; CRC recomputed and matching this session);
+region 1 = `local/images/rootfs-region1-wl1283-bt.ext4` (**`49e318bf…`**,
+**43 modules**).  `0fca:8010`, console `pb> `, **ssh on `169.254.0.1`**.
+Kernel patch: **61 files / 8 762 lines**, sha256 `20556c5f…` (unchanged — no DTS
+or driver edit; the one kernel instrument was reverted and proven byte-identical
+to pristine).  `BOOTCTR_FCTRY` reads **`0x22`** (`dmesg | grep pbrpmb`), above
+the `0x1e` threshold, so `/init` did not write; `0x23` at session start, one unit
+spent by the single reboot.  No flash, no NVRAM/MCT/RPMB write; nothing added to
 the UFS.  **No restore required.**
 
 ## Previous states
@@ -175,10 +196,10 @@ Do not boot `0x5E40C5C1` or `0xB9A1BC4F` (two lanes), or `0x3B04298E`
 | region-0 RCFS (`/base`) | **now the full 1917 RCFS at `0xC00000`** (`local/work/rcfs-1917.rcfs`, the modified one with the `/accounts/devuser/startup.sh` hook, sha256 `c4ab6e34…`): session 49 wrote it to recover root on a stock-TabletOS boot, and it sits **outside** the 7.3.3 test image (which ends at `0x93A1DC`).  The pruned oracle RCFS is no longer on media — re-flash `local/work/minimal/setB.signed` for the minimal oracle (trap 227).  Not readable as `/base` without the 1917 IFS |
 | UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
 | `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it last ran during the session-35 S3/S2 TabletOS bench and topped `BOOTCTR_FCTRY` back to `0x32` |
-| `BOOTCTR_FCTRY` | **`0x23`** (`23000000`, block `0x3a` record@196) — above the `0x1e` threshold, so `/init` did not write; **read it on Linux with `dmesg \| grep pbrpmb`** (the top-up line carries the 4-byte LE record).  Self-replenishing: `/init` tops up at ≤`0x1e`, a TabletOS boot writes `0x32` (`SAFETY.md` §2, `DEVELOPMENT.md` §5) |
+| `BOOTCTR_FCTRY` | **`0x22`** (`22000000`, block `0x3a` record@196) — above the `0x1e` threshold, so `/init` did not write; **read it on Linux with `dmesg \| grep pbrpmb`** (the top-up line carries the 4-byte LE record).  Was `0x23` at session-53 start; one unit spent by the single reboot.  Self-replenishing: `/init` tops up at ≤`0x1e`, a TabletOS boot writes `0x32` (`SAFETY.md` §2, `DEVELOPMENT.md` §5) |
 | region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`49e318bf…`** (`local/images/rootfs-region1-wl1283-bt.ext4`, session 52: the WLAN fixes, **`ccm`/`ctr`**, the per-unit NVS, the CAM+4-sr `wl12xx.ko` and the seven Bluetooth modules), **43 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus **`cfg80211`, `mac80211`, `wlcore`, `wlcore_sdio`, `wl12xx`, `libarc4`, `crc7`** and **`bluetooth`, `hci_uart`, `btbcm`, `crc-ccitt`, `ecdh_generic`, `ecc`, `kpp`**), `pbplay`, `pbmix`, **dropbear**, **`/usr/bin/iw`**, **`/usr/sbin/wpa_{supplicant,cli,passphrase}`**, and **`/lib/firmware/ti-connectivity/{wl128x-fw-4-sr.bin,wl128x-fw-5-sr.bin,wl128x-nvs.bin}`** plus the signed **`/lib/firmware/regulatory.db`/`.p7s`**; `rcS` loads the wireless stack and `bluetooth hci_uart`.  Earlier images: `…-wl1283-final.ext4` (`877c42c3…`), `…-wl1283-assoc.ext4` (`6c2cfb30…`), `a148c362…`, `7e067560…`, `88084b78…`, `a4e76b18…` and `0342ab06…`.  The modules in any of them can be checked by extracting them with `debugfs` (trap 163) |
 | TabletOS / OS | **NOT running** — the unit is on our Linux image `0xDD66D8C3` (`0fca:8010`, console `pb> `, **ssh on `169.254.0.1`**).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
-| device-side files | **persistent on the UFS**: `/accounts/devuser/startup.sh` and our `.ssh/authorized_keys` (root ssh); **session 49 added `/var/ti1283/{firmware.bin,tiwlan.ini}`** on `hd3` — the reference WLAN's own staging directory (report 217 §2.3; delete it for a clean oracle).  `memdump3`/`memw32`/`pbi2c` are **not** on the UFS: push them to `/tmp` after every reboot (trap 177) |
+| device-side files | **persistent on the UFS**: `/accounts/devuser/startup.sh` and our `.ssh/authorized_keys` (root ssh); **session 49 added `/var/ti1283/{firmware.bin,tiwlan.ini}`** on `hd3` — the reference WLAN's own staging directory (report 217 §2.3; delete it for a clean oracle).  `memdump3`/`memw32`/`pbi2c` are **not** on the UFS: push them to `/tmp` after every reboot (trap 177).  **Session 53 deployed to `/tmp` only** (tmpfs, gone after the next reboot): `/tmp/pbhci`, `/tmp/btsload`, `/tmp/btdump`, `/tmp/mgmtdiag`, `/tmp/btdetach`, `/tmp/WL1283.bts` — re-push from `rootfs/bt/` after a reboot.  `/dev/ttyS1` was left on `N_TTY` and no probes running |
 
 The factory boot budget is **self-maintaining in bench use**: every successful
 factory/CRC boot spends one unit, and the booted OS puts it back — our Linux
@@ -232,12 +253,13 @@ GPIO2_3 edge IRQ works (`irq 110`); the power/reset lines are still not driven
 by the driver.  It survived this session's warm boot; only cold boots need the
 GPIO pulse.
 
-**Media state: region 0 = `0x9712A086`** (kernel `7.3.3` **#60**,
-`0x939A74` B, the CLK32KG fix + the wl1283 DT child and pwrseq — unchanged in
-session 51); region 1 = the WLAN rootfs **`f159a221…`** (67,108,864 B, 34
-modules + **both** `wl128x` SR firmware files + the CAM/4-sr `wl12xx.ko` + `iw`/
-`wpa_supplicant`/`wpa_cli`/`passphrase` + the signed `regulatory.db`;
-`local/images/rootfs-region1-wl1283-scan.ext4`).  The unit is on Linux,
+**Media state: region 0 = `0xDD66D8C3`** (kernel `7.3.3`, `0x939E4C` B, the MUSB
+DMA fix + the UART2 CTS/RTS pads; CRC recomputed from
+`boot/chainloader/kernel.img` and matching this session); region 1 = the WLAN+BT
+rootfs **`49e318bf…`** (67,108,864 B, **43 modules** + both `wl128x` SR firmware
+files + the CAM/4-sr `wl12xx.ko` + the per-unit NVS + `iw`/`wpa_supplicant`/
+`wpa_cli`/`passphrase` + the signed `regulatory.db`;
+`local/images/rootfs-region1-wl1283-bt.ext4`).  The unit is on Linux,
 not TabletOS.  The way back to TabletOS is the 1917 IFS
 (`local/work/ifs-shim-sealed.ifs`, block `0x825`); the previous Linux images
 `0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`, `0x17C2E119`, `0xBAFD9B3B`,
@@ -250,6 +272,18 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 ## What is next
 
+0. **THE ACTIVE ITEM — a real root on hd3, then SGX540 (operator, session 53;
+   report 239, ROADMAP item 7a).**  The one next step is
+   **a `pmbootstrap init` + `install` run with a scaffolded PlayBook device port,
+   on the host, with no device writes**, to answer the two open questions in
+   report 239 §4: whether `pmbootstrap install` will build a rootfs for a device
+   whose kernel it neither builds nor flashes, and whether a Nura `linux-*`
+   package can wrap this 7.3.3 tree unchanged.  If both hold, the sequence is:
+   build the root image → flash it to hd3 at block `0x4905` with `bbusb.py`
+   (dry-run first; the plan must land inside MCT type `0x1C`) → re-point
+   `ROOTFS_RAW_OFF` from `0x29000000` to `0x49000000` → flash region 0 → boot.
+   **Region 1 stays intact throughout as the fallback**, and hd3 always holds a
+   flasher-restorable image.  SGX is step 5, after the rootfs boots.
 1. **WL1283 — the WLAN ASSOCIATES (session 52, report 236).**  Session 51 fixed
    stability (CAM) and the scan (4-sr); session 52 found the association
    blocker — the **missing `ccm`/`ctr` modules** — and the link now reaches
@@ -261,21 +295,22 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    `IRQ_TYPE_LEVEL_LOW` for WL_IRQ (trap 238), do **not** use
    `wlcore_sdio dump=1` to measure a timing fault (trap 239), do **not**
    switch back to 5-sr (trap 243), and do **not** advertise HT40 (trap 247).
-1a. **WL1283 BT — the core WORKS; opening the kernel's controller is the next
-    experiment (session 53, report 238).**
+1a. **WL1283 BT — the core WORKS; the controller open is parked (session 53,
+    report 238).**  Parked by the operator to move to item 7a; the blocker is
+    located, so this is resumable in one experiment.
     (a) **What is proven:** the core answers `HCI_Reset`, reports itself
     (`hci ver 6` / `lmp ver 6` / `mfr 0x002b` = TI, BT 4.0) and **runs a full
     BR/EDR inquiry that finds a peer**, reproducibly.  The reference's
     `WL1283.bts` loads **315/315** and moves LMP subversion `0x2b0f` → `0x2b33`;
     loaded **before** the attach it makes `hci0` **register with mgmt** (0 → 1
     controller, negative control both ways).
-    (b) **The one experiment:** find who emits the stray `0x30` that breaks the
-    kernel's H4 receiver.  `MGMT_OP_SET_POWERED` returns `0x05` (`-ETIMEDOUT`)
-    after `Frame reassembly failed (-84)` (`-EILSEQ`); an instrumented
-    `h4_recv()` shows a single `0x30` arriving ~200 ms after the last complete
-    init reply, in 6 of 6 runs.  It never appears from userspace.  Swap the
-    instrument in with `rmmod btbcm` **then** `hci_uart` (trap 251) and log the
-    driver's *writes* too, so a host-side echo is visible.
+    (b) **The one experiment when resumed:** find who emits the stray `0x30` that
+    breaks the kernel's H4 receiver.  `MGMT_OP_SET_POWERED` returns `0x05`
+    (`-ETIMEDOUT`) after `Frame reassembly failed (-84)` (`-EILSEQ`); an
+    instrumented `h4_recv()` shows a single `0x30` arriving ~200 ms after the
+    last complete init reply, in 6 of 6 runs.  It never appears from userspace.
+    Swap the instrument in with `rmmod btbcm` **then** `hci_uart` (trap 251) and
+    log the driver's *writes* too, so a host-side echo is visible.
     Excluded by measurement: alignment/padding, chip idle-sleep, leftover bytes,
     UART line errors (`LSR = 0x60`), truncated long replies, and hardware flow
     control (identical A/B on a clean boot).
@@ -297,10 +332,10 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
     evaluate, and the reference's own GPS path is the fallback.
 2. **The WM8994 audio — DONE and the diagnostics retired (sessions 47/48,
    reports 214/215).**  Stereo 440 Hz at 48 kHz on headphones and speakers,
-   re-verified at DAC1 volume 40 after the cleanup; image `0x9712A086` +
-   rootfs `f159a221…`.  The only items left are optional: the **MCLK1 probe**
-   (trap 165) and identifying what the GPIO1_15 `audio_boost` enable supplies if
-   a schematic appears.  The ABE is not needed (DECISIONS §58/§59).
+   re-verified at DAC1 volume 40 after the cleanup.  The only items left are
+   optional: the **MCLK1 probe** (trap 165) and identifying what the GPIO1_15
+   `audio_boost` enable supplies if a schematic appears.  The ABE is not needed
+   (DECISIONS §58/§59).
 3. **Touch: DONE (session 38, report 198) but down after a cold boot.**  The
    calibration and the IRQ are in the tree and proven; after a cold boot the
    controller does not boot (`0x65` NAKs) until the power/reset GPIOs
@@ -310,8 +345,8 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    26 MHz ref/TCXO), the stack probes, and the firmware stays up; the only
    remaining node-level item is the **per-unit `wl128x-nvs.bin`** from the `hd5`
    calibration (report 197), to replace the generic NVS.
-5. **The unit is on Linux `0x9712A086`** (region 0, kernel #60) + the WLAN
-   rootfs (`f159a221…`, region 1), reachable over **ssh on `169.254.0.1`** as
+5. **The unit is on Linux `0xDD66D8C3`** (region 0) + the WLAN+BT rootfs
+   (`49e318bf…`, region 1), reachable over **ssh on `169.254.0.1`** as
    well as the ACM console.  `rcS` loads the wireless stack but does **not**
    raise the link: bring `wlan0` up with `ip link set wlan0 up`.  To return to
    TabletOS, flash the 1917 IFS at block `0x825`; the previous Linux images

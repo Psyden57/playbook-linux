@@ -77,6 +77,7 @@ The guides are in `docs/parked/`.
 | **Codec-GPIO init implemented in the machine driver** | **report 211** | negative for MCLK1; fixes the WM8994 probe; Linux/OMAP gpio-numbering trap |
 | **E5/E6/E7-E9: the McBSP as clock provider, the data ball, and the ABE wall** | **report 212** | current for the audio transport and the fault: `CLKSM`/SRG-clock findings, 48 kHz, the data ball `abe_mcbsp1_dx`, the two-link build, and the reference's ABE-clocked McBSP; `docs/captures/wm8994-e5-master-srg-2026-11-13.txt` |
 | Public snapshot / repository management | `docs/project/REPO-MANAGEMENT.md` |
+| **hd3 + Nura + SGX540 scoping** (**239 is current for the next phase**) | **report 239** | hd3's live contents (QNX v1.2b MBR at `0x49000000`, QNX6 superblock at `0x49002000`); the loader's `0x1C` allow-list; why image size is a policy choice (`analyze_blocks` skips `0xFF`, not zeros); the **Nura** rename (2026-09-27) and the espresso OMAP4430 reference port; the SGX route through `pvrports` (`linux-openpvrsgx` + proprietary `sgx-ddk-um`).  Design decision: hd3 holds a **flasher-restorable** ext4 image |
 
 ## Superseded or read-with-care
 
