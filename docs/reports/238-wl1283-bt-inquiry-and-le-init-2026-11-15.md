@@ -33,11 +33,14 @@ btinq2: inquiry complete
    premise ("`hci0` exists, use mgmt to power it") was unreachable, because
    `hci0` was never in mgmt's index list; it is now.
 
-3. **Powering still fails, on a UART framing fault.**  `MGMT_OP_SET_POWERED`
-   returns `0x05` (`AUTH_FAILED` = `-ETIMEDOUT`), and dmesg shows
-   `Frame reassembly failed (-84)` (= `-EILSEQ`) followed by
-   `Opcode 0x1003 failed: -110`.  The chip answers `0x1003` instantly from
-   userspace, so this is in the kernel's H4 path, not the chip (§4).
+3. **Powering still fails, on a stray byte.**  `MGMT_OP_SET_POWERED` returns
+   `0x05` (`AUTH_FAILED` = `-ETIMEDOUT`), and dmesg shows
+   `Frame reassembly failed (-84)` (`-EILSEQ`) then
+   `Opcode 0x1003 failed: -110`.  A temporary instrument in `h4_recv()` found the
+   cause, in 6 of 6 runs: after the last init reply completes, a **lone `0x30`
+   byte** arrives and is (correctly) rejected as not-an-H4-type.  Whether the
+   chip or the host emits it is the open question — it never appears from
+   userspace (§4).
 
 **And the LE question is answered separately**: mainline's LE init stage is why
 `hci0` could not open at all, and the chip refuses LE commands with
@@ -177,62 +180,82 @@ by `request_firmware()` into the **WLAN** core (`wlcore/main.c`), not the BT
 core.  Switching to 5-sr cannot change BT behaviour; it only changes the WLAN
 firmware, which 4-sr is chosen for (report 235, trap 243).
 
-## 4. The remaining blocker: the kernel's H4 receive path drops frames
+## 4. The remaining blocker: a lone `0x30` byte breaks the kernel's H4 receiver
 
-`MGMT_OP_SET_POWERED` returns status `0x05` = `MGMT_STATUS_AUTH_FAILED`, and
-`mgmt_status()` maps that from **`-ETIMEDOUT`** — so the power request reached
-the kernel and its command timed out.  dmesg shows the pair on every attempt:
+`MGMT_OP_SET_POWERED` returns status `0x05` = `MGMT_STATUS_AUTH_FAILED`, which
+`mgmt_status()` maps from **`-ETIMEDOUT`** — the power request reaches the kernel
+and its command times out.  dmesg shows, on every attempt:
 
 ```
 Bluetooth: hci0: Frame reassembly failed (-84)     <- -EILSEQ
 Bluetooth: hci0: Opcode 0x1003 failed: -110        <- -ETIMEDOUT
 ```
 
-`-84` is `EILSEQ`, and there is exactly one place that returns it:
-`h4_recv_buf()` (`drivers/bluetooth/hci_h4.c:194`) does so when the **first byte
-of a chunk is not a known H4 packet type** (0x01–0x04).  So the kernel's receiver
-is being handed a byte it cannot place.
-
-**The identical commands answer perfectly from userspace at the same moment**,
-which is what makes this a kernel-path fault and not a chip fault:
+**A temporary instrument in `h4_recv()` found the byte** (the error path does not
+print the data, which is the same lesson as report 232).  Every failure has the
+identical shape, in **6 of 6** runs:
 
 ```
-btdump 0x1002 -> 48 B: 04 0e 44 01 02 10 00 ff ...
-              -> 23 B: 00 00 00 ...               (71 bytes, split by the tty)
-btdump 0x1003 -> 15 B: 04 0e 0c 01 03 10 00 ff fe 2d fe db ff 7b 87
+PBTMP h4_recv count=9 first=04 0e 06 01  rx_len=-1: 04 0e 06 01 12 0c 00 00 00
+PBTMP h4_recv count=1 first=30 00 00 00  rx_len=-1: 30
+>>> Bluetooth: hci0: Frame reassembly failed (-84)
 ```
 
-Measured and **excluded** as causes:
+The last init reply is **complete and correct**, and then, about 200 ms later, a
+**single `0x30` byte** arrives on its own.  `0x30` is not an H4 packet type
+(0x01–0x04), so `h4_recv_buf()` returns `-EILSEQ` exactly as designed.  The
+kernel is behaving correctly; the stream contains a byte that does not belong.
+
+`0x30` is ASCII `'0'`.  What is **not** yet established is whether the chip emits
+it or something on the host side does:
+
+* **From userspace it never appears.**  Driving the same sequence by hand —
+  including a passive 3 s listen with no command sent — produces clean H4 framing
+  every time.  So it is not simply "the chip emits junk after init".
+* It is **not console traffic**: UART2 is not in `/proc/consoles`, and
+  `ttyS1` is nobody's console.
+* It is **not `hci_uart`'s flow control**: `hci_uart_set_flow_control()` is only
+  called by the vendor protocols (`hci_bcm`, `hci_qca`, `hci_intel`, `hci_mrvl`);
+  **H4 never calls it**, and `hci_uart_setup()` is a no-op for H4 (`h4p` has no
+  `setup`/`set_baudrate`).  An early hypothesis that it was in that path was
+  **wrong and is retracted**.
+* It is **not a lost/short frame in general**.  An earlier note here claimed the
+  252-byte `Read_Local_Name` reply was corrupt; that was **my own display buffer
+  truncating at 240 bytes**, not the wire.  Re-measured properly, that reply
+  arrives complete (255 bytes, `04 0e fc 01 14 0c 00 00 …`) with flow control on
+  *or* off.
+
+### What is excluded, by measurement
 
 * **alignment/padding** — `hci_ldisc.c:533-535` sets `hu->alignment = 1`,
-  `hu->padding = 0` ("disable alignment support by default"); H4 does not
-  override them.
-* **chip idling out between commands** — `0x1002` then `0x1003` answers
-  back-to-back, after 1 s and after 2 s.
-* **leftover unread bytes** poisoning the next frame — after `0x1002` a
-  following `HCI_Reset` sees exactly its own 7-byte reply, nothing stale.
-* **UART line errors** — `UART2` `LSR` reads `0x60` (THRE|TEMT, no overrun,
-  parity or framing bit set).
-* **a long reply being truncated** — the 71-byte `0x1002` reply arrives complete
-  (48 + 23), and the split is normal tty chunking that `h4_recv_buf` handles by
-  design (it keeps a partial `rx_skb` between calls).
+  `hu->padding = 0`, and H4 does not override them.
+* **the chip idling out between commands** — `0x1002` then `0x1003` answers
+  back-to-back, after 1 s, and after 2 s.
+* **leftover unread bytes poisoning the next frame** — after `0x1002` a following
+  `HCI_Reset` sees exactly its own 7-byte reply.
+* **UART line errors** — `UART2` `LSR` reads `0x60` (THRE|TEMT; no overrun,
+  parity or framing bit).
+* **a long reply being truncated** — 71-byte and 255-byte replies both arrive
+  complete, split across tty chunks, which `h4_recv_buf()` reassembles correctly
+  (its `rx_len` climbs 2 → 48 → 113 → 178 → 203 across calls).
+* **hardware flow control as the discriminator** — an A/B on a clean boot gives
+  **the same result both ways** (`num_controllers = 1` with `CRTSCTS` on *and*
+  off).  An earlier reading of this as a clean win was taken while an
+  instrumented module was still loaded, and does **not** reproduce; it is
+  retracted.
 
-That leaves the kernel-side UART interaction.  The two things `hci_uart` does
-that the userspace probe does not are both in `hci_ldisc.c`:
-`hci_uart_set_flow_control()` toggles **RTS/DTR via `tiocmset`** and **sets
-`CRTSCTS`** (`:386-389`), and it re-uses `tty->ops->write` from a workqueue while
-calling **`tty_unthrottle()`** on every receive (`:672`).  On this board the
-UART2 CTS/RTS pads are muxed to the chip (trap 248), so hardware flow control is
-live, and `RTS` is also the line the reference stack has a dedicated
-**"force-RTS"** devctl for (report 216 §2.3) — evidence that this pair is
-unusual on this board, not standard.
+### The next experiment
 
-**This is the experiment to run next**, and it is one variable: force
-`CRTSCTS`/modem-line handling off for the H4 attach and see whether the `-84`
-disappears.  A one-line addition to `hci_uart_set_flow_control()` that avoids the
-`tiocmset` path for this port is the smallest version of it; if that works, the
-next question is whether it belongs in the driver, a DTS property, or a board
-quirk.
+Find the origin of the `0x30`.  The instrument is written and proven; what is
+needed is a **clean** module swap (the previous attempt left the old
+`hci_uart` loaded because `btbcm` holds a reference — unload `btbcm` *first*,
+then `hci_uart`, then `insmod` the instrumented one, and confirm by
+`strings … | grep PBTMP` that the file is the instrument).  Print, in the
+instrument, the byte plus the tty's `tty->disc_data`/termios state and the exact
+inter-call gap, and log the bytes the driver *writes* too (`hci_uart_write_work`)
+so a host-side echo is visible.  A `0x30` that never appears from userspace but
+appears 200 ms after the kernel's last init reply most likely has a host-side
+origin, and knowing which side emits it decides the fix.
 
 ## 5. What this means for the goal
 
@@ -281,21 +304,26 @@ replay**, and "the reference does it" cannot be the answer here.
 
 ## 7. Next
 
-1. **The decisive experiment is one variable: the kernel's H4 attach with the
-   CTS/RTS and modem-line handling out of the picture** (§4).  Load
-   `WL1283.bts`, attach, and see whether `Frame reassembly failed (-84)`
-   disappears and `SET_POWERED` succeeds.  If it does, `hci0` should come up with
-   BR/EDR working and LE unavailable — **strictly more than today**, and enough
-   for BR/EDR HID (a keyboard/mouse).
+1. **Find who emits the `0x30`** (§4).  The instrument exists and is proven; the
+   swap has to be done in the right order — `rmmod btbcm` **first**, then
+   `hci_uart`, then `insmod` the instrumented one, and verify with
+   `strings … | grep PBTMP` that the loaded file really is the instrument (a
+   previous attempt silently kept the old module, because `btbcm` holds a
+   reference and `insmod` reported success anyway).
 2. **Then** `HCIDEVUP`/mgmt power, an HCI-socket inquiry through the stack, and
-   only then `bluetoothd` + `BT_HIDP` (`CONFIG_BT_HIDP=m` is already set; the
+   only then `bluetoothd` + HID (`CONFIG_BT_HIDP=m` is already set; the
    module is **not** shipped in region 1 — add it).
 3. **Also needed for a usable stack:** `l2cap`/`sco`/`rfcomm`/`hidp` are modules
    and none are in the region-1 rootfs (only `bluetooth`, `hci_uart`, `btbcm` and
    their crypto deps are).  Ship them before expecting HID to work.
-4. **LE is a separate, later question**: whether the controller can be made to
-   permit it at all.  Nothing on this unit's reference OS knows how, so there is
-   no reference sequence to copy.
+4. **LE is a separate, later question.**  The *controller* refuses it (`0x0c`,
+   `Write_LE_Host_Support` = `0x11`, LE feature page all zeros), but note two
+   things before writing it off: the chip reports **HCI 4.0 / LMP 4.0** and its
+   LMP feature page sets the LE-supported bit, and the reference OS being
+   BR/EDR-only says nothing about the silicon — it reflects that BlackBerry never
+   shipped an LE stack on a 2011 tablet.  So "the reference does not do it" is
+   **not** evidence that the chip cannot.  What is missing is a working enable
+   sequence, not a demonstrated impossibility.
 
 ## 8. Artefacts
 

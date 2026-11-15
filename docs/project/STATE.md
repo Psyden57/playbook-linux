@@ -23,23 +23,29 @@ device** (`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.
   payload bytes where 9 are needed, so `hci_cc_func()` rejects it, the LE init
   stage aborts, `hci0` never opens, and mgmt reports zero controllers.  The pack
   fixes the **length** (11 → 12 bytes) and that is enough to register.
-* **The remaining blocker is a kernel-side UART framing fault (trap 250).**
-  `MGMT_OP_SET_POWERED` returns `0x05` (`-ETIMEDOUT`) after
-  `Frame reassembly failed (-84)` (`-EILSEQ`) and `Opcode 0x1003 failed: -110`.
-  The **same commands answer instantly from userspace**, so it is `hci_uart`'s
-  CTS/RTS and modem-line handling (`hci_uart_set_flow_control()`), not the chip.
-  Excluded by measurement: alignment/padding, chip idle-sleep between commands,
-  leftover bytes, UART line errors (`LSR = 0x60`), truncated long replies.
-* **LE is refused by the controller** (`0x0c` with a plausible payload,
-  `Write_LE_Host_Support` = `0x11`, LE feature page all zeros).  The reference's
-  own stack is **BR/EDR-only** (no LE opcodes, no LE Meta event, no SMP/ATT/GATT),
-  so there is no reference LE sequence to copy.  **The `wl128x-fw-4-sr/5-sr.bin`
-  files are WLAN-core firmware and have nothing to do with BT** — the BT core's
-  firmware is the `.bts` pack.
+* **The remaining blocker is a stray `0x30` byte (trap 250).**  A temporary
+  instrument in `h4_recv()` shows it in **6 of 6** runs: the last init reply
+  arrives complete, then ~200 ms later a **single `0x30`** arrives and is
+  (correctly) rejected as not-an-H4-type (`-EILSEQ`), leaving `SET_POWERED` at
+  `0x05` (`-ETIMEDOUT`).  **Which side emits it is not yet known** — it never
+  appears when the same sequence is driven from userspace, so a host-side origin
+  is favoured.  Excluded by measurement: alignment/padding, chip idle-sleep,
+  leftover bytes, UART line errors (`LSR = 0x60`), truncated long replies, and
+  **hardware flow control** (an A/B on a clean boot registers the controller with
+  `CRTSCTS` on *and* off — `hci_uart_set_flow_control()` is never called by H4).
+* **LE is refused by the controller, but that does not prove the silicon cannot
+  do it** (`0x0c` with a plausible payload, `Write_LE_Host_Support` = `0x11`, LE
+  feature page all zeros).  The reference's own stack is **BR/EDR-only** (no LE
+  opcodes, no LE Meta event, no SMP/ATT/GATT), which reflects the vendor never
+  shipping an LE stack on this 2011 tablet — the chip itself reports **HCI 4.0 /
+  LMP 4.0** with the LE-supported feature bit.  So: no enable sequence is known,
+  and impossibility is **not** demonstrated.
 * **The BT-firmware contradiction is settled** in favour of the reference's
   `WL1283.bts`: its header says `Compatibility: Quattro, 6.0.15 ROM`, while
   linux-firmware's `TIInit_*.bts` say `BL6450, WL1271/3 2.0 ROM` — a different,
-  older family.
+  older family.  **The `wl128x-fw-4-sr/5-sr.bin` files are WLAN-core firmware**
+  (`request_firmware()` in `wlcore/main.c`) and have nothing to do with BT — the
+  BT core's firmware is the `.bts` pack.
 * **Ship `l2cap`/`sco`/`rfcomm`/`hidp` before expecting HID.**  They are modules
   and none are in the region-1 rootfs yet (only `bluetooth`, `hci_uart`, `btbcm`
   and their crypto deps are).
@@ -90,7 +96,7 @@ The per-session snapshots are in
 | eMMC (MMC2) | **reads proven; writes healthy — but writers must use large blocks** | `mmcblk1` = MCGAFA 59.4 GiB, `boot0`/`boot1`/`rpmb`; needs the `vemmc` fixed supply for `ocr_avail` (report 109 §9).  Session 16 read a freshly flashed 11 152 064-byte image back **byte-exactly** and matched a pre-flash TabletOS capture (report 134); the MMC2 functional clock is 96 MHz.  Session 17 measured the write path (report 136): the driver has no request-size limit — an O_DIRECT write gives **256 KiB `CMD25`s, 5.5–7.0 MB/s** (4 KiB chunks: 0.93 MB/s), one `CMD13` per request (normal `mmc_blk_card_busy`).  The old 17–32 KB/s was `recv`'s tiny buffered writes plus 4–7 unthrottled `printk`s per request to **fbcon**.  Use ≥64 KiB (ideally 256 KiB–1 MiB) writes with the MMC trace off.  **Session 18: region 1 now holds a bootable Linux root** (32 MiB ext4 at raw `0x29000000`), written through the pre-OS `0xF7` loop (2055 frames) and read back byte-exactly (QNX `dd` and Linux `blk sumb`); it mounts read-only via a loop and its `/init` runs (report 140). |
 | USB device + gadget | **working — DMA now actually used (session 52)** | enumerates `0fca:8010`: CDC-ACM (console) + **RNDIS** (network) in one configuration; High Speed (480 Mbps).  **Session 52 (report 236 §7): the RNDIS path had been running MUSB's PIO fallback** — `dma_channel_program()` refuses buffers that are not 4-byte aligned on RTL 2.00 (`MUSB_HWVERS = 0x0800`), and u_ether hands it 2-mod-4 addresses.  Fixed with `musb->g.quirk_avoids_skb_reserve = 1` (RX) and a TX realign in `gether_start_xmit()`: **RX 3.3 → 6.3 MB/s, TX 3.3 → 4.1 MB/s** (raw `nc`).  The RNDIS function's one-frame-per-transfer structure is now the limit; CDC-NCM is the untested next step.  The ACM console is still only ~134 KB/s and **drops bytes when the host blasts** (report 136 §3.3) — do not send multi-MB images through it.  Reports 114, 136, 236 |
 | **WL1283 (MMC5)** | **WORKING — associates, leases and passes traffic (session 52); scans (session 51)** | **Session 52 (report 236): the association blocker was the missing `ccm`/`ctr` crypto modules.**  `ieee80211_key_alloc()` allocates a `ccm(aes)` AEAD for every CCMP key; without it the PTK install returns `-ENOENT` and wpa_supplicant mislabels it `WRONG_KEY` (the handshake itself is fine — message 3 decrypts).  `ccm.ko`/`ctr.ko` ship in region 1 and `rcS` modprobes them before the stack: `wpa_state=COMPLETED`, WPA2-CCMP on 5785 MHz at −41 dBm, MCS7/65 Mbit/s, DHCP **192.168.0.212**, gateway and 1.1.1.1 reachable.  A 5 GHz AP needs `iw reg set <CC>` (the world domain marks 5735–5835 MHz `PASSIVE-SCAN`).  The **per-unit NVS** is shipped (`wl128x-nvs-perunit.bin`).  **Session 51 (report 232): the recovery loop was the firmware's ELP sleep.**  The failing transfer is the **FW-status read** — CMD53 to `0x1efc0`, 84 bytes, byte mode, 256-byte block — from the WL_IRQ thread right after `firmware booted`; it fails only once the chip has slept, and the identical read succeeds when it is awake.  Fix: `wl12xx_default_conf.conn.sta_sleep_auth = WL1271_PSM_CAM` (was `ILLEGAL` → ELP).  Verified after a real region-1 flash + reboot: one firmware boot, zero failures, `wlan0` `UP`, debugfs `sleep_auth` 0.  `wl128x-fw-4-sr.bin` is the **shipped** SR firmware (report 235): 5-sr (7.3.10.0.142) boots but panics on the first scan, so `wl12xx`'s floor is lowered to 7.3.5.0 and `WL128X_FW_NAME_SINGLE` names the 4-sr file; both files stay installed.  **WLAN (report 231):** `wlcore`/`wl12xx`/`mac80211`/`cfg80211` + `wl128x-nvs.bin`, the `ti,wl1283` child (`reg = <2>`, WL_IRQ gpio 53), `cap-power-off-card`, and an `mmc-pwrseq-simple` pulsing `WL_EN` (low → 50 ms → high → 120 ms) → firmware `Rev 7.3.5.0.98`, MAC `14:74:11:8f:9c:c3` (the assigned address, patched into the generic NVS; the radio calibration is still default).  **Enumeration (report 230):** the TWL6030 `CLK32KG` 32.768 kHz SLOW_CLK is physical `0xBC`–`0xBE` and was OFF; `CONFIG_CLK_TWL=y` + an enable in `clk-twl`'s probe (~1.9 s, before MMC5 at ~3.0 s) fixes it.  **Remaining (report 235):** the WLAN **associates** and passes traffic (session 52); open and not blocking use are *why* the 5-sr firmware panics on scan (235 §3) and *why* the ELP wake is not honoured (232 §6).  **Session-49/50 negatives (do not repeat):** the reference's MMCHS5 program and WL_EN ordering replayed, the stock-TabletOS diff, the boot-path RE, the clock sweep (reports 217/218/221–229).  The BT half's enable is `BT_EN` = gpio 55 = `GPIO2_23`, held low while the WLAN works (report 216). |
-| **WL1283 BT** | **the CORE WORKS — real inquiry; `hci0` now registers with mgmt (session 53)** | UART2 `0x4806C000` = `/dev/ttyS1`, H4 at 115200 8N1; `BT_EN` = gpio 55 = `GPIO2_23` (pad `0x4A10007C` mux 3), pulsed low → 50 ms → high.  **Measured (report 238):** the core answers `HCI_Reset`, reports `hci ver 6` / `lmp ver 6` / `mfr 0x002b` (TI, BT 4.0), and **runs a full BR/EDR inquiry that finds a peer** (`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.  **The reference's `WL1283.bts` loads 315/315** and moves LMP subversion `0x2b0f` → `0x2b33`; loaded **before** the attach it makes `hci0` **register with mgmt** (0 → 1 controller, negative control both ways) by fixing the `0x201c` reply length.  **Left:** opening the controller — `MGMT_OP_SET_POWERED` returns `0x05` (`-ETIMEDOUT`) after `Frame reassembly failed (-84)` / `-EILSEQ`, a kernel `hci_uart` fault (the same commands answer from userspace); then ship `l2cap`/`sco`/`rfcomm`/`hidp` (not in region 1 yet) and a stack.  **LE is refused by the controller** and the reference stack is BR/EDR-only.  The pack survives `HCI_Reset` but not a `BT_EN` power cycle.  Tools in `rootfs/bt/`.  Reports 216/237/238, traps 248–250, DECISIONS §72/§73 |
+| **WL1283 BT** | **the CORE WORKS — real inquiry; `hci0` now registers with mgmt (session 53)** | UART2 `0x4806C000` = `/dev/ttyS1`, H4 at 115200 8N1; `BT_EN` = gpio 55 = `GPIO2_23` (pad `0x4A10007C` mux 3), pulsed low → 50 ms → high.  **Measured (report 238):** the core answers `HCI_Reset`, reports `hci ver 6` / `lmp ver 6` / `mfr 0x002b` (TI, BT 4.0), and **runs a full BR/EDR inquiry that finds a peer** (`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.  **The reference's `WL1283.bts` loads 315/315** and moves LMP subversion `0x2b0f` → `0x2b33`; loaded **before** the attach it makes `hci0` **register with mgmt** (0 → 1 controller, negative control both ways) by fixing the `0x201c` reply length.  **Left:** opening the controller — a stray `0x30` byte arrives ~200 ms after the last init reply and the kernel's H4 receiver correctly rejects it as not-an-H4-type (`-EILSEQ` → `Frame reassembly failed (-84)` → `SET_POWERED` `0x05`); the instrumented `h4_recv()` shows it in 6 of 6 runs, but **which side emits it is open** (it never appears from userspace).  Then ship `l2cap`/`sco`/`rfcomm`/`hidp` (not in region 1 yet) and a stack.  **LE is refused by the controller**, though the chip reports BT 4.0 with the LE-supported bit — no known sequence, and impossibility not demonstrated.  The pack survives `HCI_Reset` but not a `BT_EN` power cycle.  Tools in `rootfs/bt/`.  Reports 216/237/238, traps 248–252, DECISIONS §72/§73 |
 | **GPIO1 pads / board lines** | **fixed (session 49): three pads were driving GPMC alternate functions** | `0x4A100050` (`gpmc_ad0/1`) and `0x4A100074` (`gpmc_ncs0/1`) were left at mode 0, so pad logic drove GPMC bus lines on a board with no GPMC device while gpiolib could not touch them (trap 228); `0x4A31E058` (GPIO1_31) was unmuxed with its input buffer off.  The DTS now sets mode 3 + pull-down and hogs GPIO1 0/18/28/31 low, so `GPIO1_OE = 0x6FFB1FBA` against the reference's `0x6FFB1FAA` (the missing bit 4 is pad `0x058`'s low half = GPIO2_4, owned by `bridge_pins`, trap 229) and `GPIO1_DATAOUT` is identical.  Image `0x0114FFD3`.  **Not** the WL1283 blocker (card still silent).  Report 220 |
 | **Munin touch (CY8CTMA3)** | **working — calibrated, IRQ wired (session 38)** | I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c` boots the app and maps the 12-bit report through the 1917 `scaling.conf` calib (raw x 172→1108 → 102→922, y 110→658 → 60→540) to 1024×600.  IRQ gpio 35 = GPIO2_3 pad `0x056` = `0x410B`, `EDGE_FALLING`, `irq 110`; the ~330–380/s rate is the chip's report rate.  Power/reset GPIO1_14/GPIO4_8 are not driven.  Report 198, DECISIONS §47 |
 | **WM8994 audio** | **WORKING — stereo 440 Hz on headphones AND speakers at 48 kHz; diagnostics retired and re-verified (session 48)** | I²C4 `0x1a` (`0x8994`, revision D); the board machine driver makes `0 [WM8994]: PlayBook_WM8994`.  **Data path (session 46):** the codec's AIF1 is on McBSP3 (the oracle's routing log `AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3`, the live `PCR0 = 0x3`, the PDM pads `0x106/0x108/0x10a/0x10c` = `0x0109/0x0009/0x0109/0x0109`); the card is two ASoC links (`40124000.mcbsp + wm8994-aif1` clocks, `CBC_CFC`; `40126000.mcbsp + wm8994-aif2` data, `CBP_CFP`); the codec is the AIF1 slave, FLL1 locks from our BCLK (`R0x302 = 0x0000`, `R0x732 = 0x6020`, `R0x200 = 0x0011`), no MCLK1; the `omap-mcbsp` channel-layout guard keeps `XCR2 = 0x8041`.  **Speaker (session 47, report 215):** the speakers are on the codec's **line outputs**, so the output stage follows the jack: headphones → HPOUT1 + charge pump (`R0x060 = 0xcc`); jack out → LINEOUT1P/2P (PM3 `0x3cf0`, `R0x01e = 0`, `R0x034/0x035 = 1`, `R0x036 = 0`, `R0x038 = 0x80`, `R0x04c = 0x1f25`, `R0x060 = 0`) with **`spk` (GPIO2_12) driven low** and **GPIO1_15 (the `audio_boost` enable) high**.  **Session 48** removed the `pcm:` ring readback and the `live N:` FIFO dump and re-verified both outputs at DAC1 volume 40: `jack out (speaker)` / `jack in (headphone)`, "done, FLL1 locked", both PCMs `RUNNING`, the full byte count written, `spk` low during the speaker route and high on the headphone route, `boost` high.  Reports 214/215, DECISIONS §59/§60. |
@@ -263,21 +269,25 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
     `WL1283.bts` loads **315/315** and moves LMP subversion `0x2b0f` → `0x2b33`;
     loaded **before** the attach it makes `hci0` **register with mgmt** (0 → 1
     controller, negative control both ways).
-    (b) **The one experiment:** `MGMT_OP_SET_POWERED` currently returns `0x05`
-    (`-ETIMEDOUT`) after `Frame reassembly failed (-84)` (`-EILSEQ`) and
-    `Opcode 0x1003 failed: -110`.  The same commands answer instantly from
-    userspace, so it is `hci_uart`'s **CTS/RTS and modem-line handling**
-    (`hci_uart_set_flow_control()` toggles RTS/DTR and sets `CRTSCTS`) — take
-    that out of the picture for this port and see whether the `-84` goes away.
+    (b) **The one experiment:** find who emits the stray `0x30` that breaks the
+    kernel's H4 receiver.  `MGMT_OP_SET_POWERED` returns `0x05` (`-ETIMEDOUT`)
+    after `Frame reassembly failed (-84)` (`-EILSEQ`); an instrumented
+    `h4_recv()` shows a single `0x30` arriving ~200 ms after the last complete
+    init reply, in 6 of 6 runs.  It never appears from userspace.  Swap the
+    instrument in with `rmmod btbcm` **then** `hci_uart` (trap 251) and log the
+    driver's *writes* too, so a host-side echo is visible.
     Excluded by measurement: alignment/padding, chip idle-sleep, leftover bytes,
-    UART line errors (`LSR = 0x60`), truncated long replies.
+    UART line errors (`LSR = 0x60`), truncated long replies, and hardware flow
+    control (identical A/B on a clean boot).
     (c) **Then** power, an inquiry through the stack, and HID.  **Ship
     `l2cap`/`sco`/`rfcomm`/`hidp` first** — they are modules and none are in
     region 1 yet.
     (d) **LE is refused by the controller** (`0x0c`, `Write_LE_Host_Support` =
-    `0x11`, LE feature page zero) and the reference stack is BR/EDR-only, so
-    there is no sequence to copy.  **The `wl128x-fw-4-sr/5-sr.bin` files are WLAN
-    firmware, not BT** — do not swap them expecting a BT change.
+    `0x11`, LE feature page zero), but the chip reports BT 4.0 with the
+    LE-supported bit and the reference stack being BR/EDR-only reflects the
+    vendor's choices, not the silicon — so no enable sequence is known, and
+    impossibility is **not** demonstrated.  **The `wl128x-fw-4-sr/5-sr.bin` files
+    are WLAN firmware, not BT** — do not swap them expecting a BT change.
     `BT_EN` = gpio 55, UART2 = `/dev/ttyS1`; tools in `rootfs/bt/`.
     **Do not** re-run the "BT is silent" probes — answered.
     **FM:** mainline had `drivers/media/radio/wl128x` from 2.6.39 to 6.13 and

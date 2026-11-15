@@ -17,7 +17,7 @@
  * and prints the pad / GPIO2 registers as evidence.
  *
  * usage: pbhci [device] [baud] [--no-pulse] [--tries N]
- *        pbhci [device] --attach [--hold S]   (N_HCI + H4 -> hciN)
+ *        pbhci [device] --attach [--hold S] [--no-cts]   (N_HCI + H4 -> hciN)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -314,7 +314,7 @@ static int hci_reset(const char *dev, unsigned long baud)
 }
 
 /* Attach the HCI line discipline (H4) so the kernel creates hciN. */
-static int hci_attach(const char *dev, int hold_s)
+static int hci_attach(const char *dev, int hold_s, int cts)
 {
 	struct termios t;
 	int fd, ldisc = N_HCI, proto = HCI_UART_H4, devid = -1;
@@ -332,7 +332,19 @@ static int hci_attach(const char *dev, int hold_s)
 	cfmakeraw(&t);
 	cfsetispeed(&t, B115200);
 	cfsetospeed(&t, B115200);
-	t.c_cflag &= ~CRTSCTS;
+	/* Hardware flow control ON by default for --attach.
+	 *
+	 * The chip's transmitter waits for CTS (that is why session 52's
+	 * CTS/RTS pad fix was what made it answer at all), and its long replies
+	 * — Read_Local_Name is 255 bytes — overrun the UART FIFO without it:
+	 * the kernel's H4 receiver loses ~50 bytes and the command times out
+	 * with -110.  Short replies are unaffected, which is why this hid for
+	 * so long.  --no-cts restores the old behaviour for an A/B test.
+	 */
+	if (cts)
+		t.c_cflag |= CRTSCTS;
+	else
+		t.c_cflag &= ~CRTSCTS;
 	t.c_cflag |= CLOCAL | CREAD;
 	if (tcsetattr(fd, TCSANOW, &t) < 0) {
 		fprintf(stderr, "pbhci: tcsetattr: %s\n", strerror(errno));
@@ -466,10 +478,12 @@ int main(int argc, char **argv)
 	const char *dev = "/dev/ttyS1";
 	unsigned long baud = 115200;
 	int pulse = 1, tries = 3, i, rc = 2, argi, pos = 0;
-	int attach = 0, hold_s = 20, inq = 0, inq_s = 8;
+	int attach = 0, hold_s = 20, inq = 0, inq_s = 8, cts = 1;
 
 	for (argi = 1; argi < argc; argi++) {
-		if (!strcmp(argv[argi], "--no-pulse")) {
+		if (!strcmp(argv[argi], "--no-cts")) {
+			cts = 0;
+		} else if (!strcmp(argv[argi], "--no-pulse")) {
 			pulse = 0;
 		} else if (!strcmp(argv[argi], "--tries") && argi + 1 < argc) {
 			tries = atoi(argv[++argi]);
@@ -498,7 +512,7 @@ int main(int argc, char **argv)
 	if (attach) {
 		if (pulse)
 			pulse_bt_en();
-		return hci_attach(dev, hold_s) == 0 ? 0 : 2;
+		return hci_attach(dev, hold_s, cts) == 0 ? 0 : 2;
 	}
 
 	if (inq)

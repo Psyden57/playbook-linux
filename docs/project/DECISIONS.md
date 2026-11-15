@@ -2569,11 +2569,16 @@ now: the controller refuses it and the reference stack never used it.
    without the pack `MGMT_OP_READ_INDEX_LIST` = **0 controllers**, with it =
    **1**.  So the previous plan ("power it over mgmt") was unreachable, and the
    pack is not optional.
-3. **What is left is the kernel.**  `MGMT_OP_SET_POWERED` returns `0x05`
-   (`-ETIMEDOUT`) after `Frame reassembly failed (-84)` (`-EILSEQ`) and
-   `Opcode 0x1003 failed: -110` — while the *same* commands answer instantly from
-   userspace.  That excludes the chip, the pads, the baud and the wiring, and
-   points at `hci_uart`'s CTS/RTS and modem-line handling.
+3. **What is left is a stray byte, and its origin is the open question.**  After
+   the last init reply completes, a single `0x30` arrives ~200 ms later and the
+   kernel's H4 receiver rejects it as not-an-H4-type (`-EILSEQ`, logged as
+   `Frame reassembly failed (-84)`), which leaves the controller unopenable and
+   `SET_POWERED` returning `0x05` (`-ETIMEDOUT`).  It **never** appears when the
+   same sequence is driven from userspace, so a host-side origin is favoured but
+   not established.  Flow control was a wrong guess and is retracted:
+   `hci_uart_set_flow_control()` is called only by the vendor protocols and never
+   by H4, and an A/B on a clean boot registers the controller with `CRTSCTS` on
+   *and* off.
 
 **Constraint.**  The pack is **volatile across a `BT_EN` power cycle** (it
 survives `HCI_Reset`), so a raw probe must not pulse `BT_EN` after loading it.
@@ -2581,10 +2586,11 @@ survives `HCI_Reset`), so a raw probe must not pulse `BT_EN` after loading it.
 discipline behind and the kernel silently eats later bytes — reset it with
 `rootfs/bt/btdetach.c` before a raw probe, or a live chip looks dead.  LE is
 **refused by the controller** (`0x0c` with a plausible payload,
-`Write_LE_Host_Support` = `0x11`, LE feature page all zeros) and the reference's
-own stack is BR/EDR-only (no LE opcodes, no LE Meta event, no SMP/ATT/GATT), so
-there is no sequence to copy for it.  `l2cap`/`sco`/`rfcomm`/`hidp` are modules
-and must be shipped before HID can work.
+`Write_LE_Host_Support` = `0x11`, LE feature page all zeros) — but the chip
+reports **BT 4.0** and sets the LE-supported LMP bit, and the reference OS being
+BR/EDR-only reflects the vendor never shipping an LE stack, **not** a hardware
+limit, so "no known sequence" is not "impossible".  `l2cap`/`sco`/`rfcomm`/`hidp`
+are modules and must be shipped before HID can work.
 
 **Evidence.**  Report **238**; the inquiry run; the `READ_INDEX_LIST` 11-byte vs
 13-byte replies; `MGMT_OP_READ_INFO` returning BD_ADDR `8e:e4:3c:22:61:00`;

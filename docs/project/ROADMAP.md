@@ -121,15 +121,19 @@ terminal (trap 216).
   **register with mgmt for the first time** (0 → 1 controller, with the
   no-pack case as the negative control), by fixing the
   `LE_Read_Supported_States` (`0x201c`) reply length.
-  **Open:** opening the controller — `MGMT_OP_SET_POWERED` returns `0x05`
-  (`-ETIMEDOUT`) after `Frame reassembly failed (-84)` (`-EILSEQ`), and the same
-  commands answer instantly from userspace, so it is `hci_uart`'s CTS/RTS and
-  modem-line handling, not the chip (trap 250).  Then ship
+  **Open:** opening the controller.  A stray `0x30` byte arrives ~200 ms after
+  the last init reply (found with an instrumented `h4_recv()`, 6 of 6 runs) and
+  the kernel's H4 receiver correctly rejects it as not-an-H4-type (`-EILSEQ`,
+  `Frame reassembly failed (-84)`), so `SET_POWERED` returns `0x05`
+  (`-ETIMEDOUT`).  It never appears from userspace, so **which side emits it** is
+  the next experiment (trap 250).  Then ship
   `l2cap`/`sco`/`rfcomm`/`hidp` (modules; none in region 1 yet) and a stack.
-  **LE is refused by the controller** and the reference stack is BR/EDR-only.
+  **LE is refused by the controller**, but the chip reports BT 4.0 and the
+  LE-supported feature bit, so an enable sequence may exist even though the
+  reference stack never had one.
   Tools in `rootfs/bt/`.  **Closes when:** `hci0` powers up and a scan through
   the stack finds a device; the operator's fuller goal (LE, HID) is recorded in
-  report 238 §5/§7 and is a separate question.
+  report 238 §7 and is a separate question.
   **FM:** mainline carried `drivers/media/radio/wl128x` from 2.6.39 to 6.13 and
   removed it; bringing it back is a forward port.  **GPS:** no mainline driver;
   a 2024 LKML patch is the candidate, the reference's own path the fallback.

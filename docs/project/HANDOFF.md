@@ -9,11 +9,11 @@ session-53 close.  See `docs/sessions/NUMBERING.md`.
 > `HCI_Reset`, reports itself (`hci ver 6` / `lmp ver 6` / `mfr 0x002b` = TI,
 > BT 4.0) and **runs a full inquiry that finds a peer** — and **loading the
 > reference's `WL1283.bts` (315/315) makes `hci0` register with mgmt for the
-> first time** (0 → 1 controller).  What is left is **opening** the controller:
-> `SET_POWERED` returns `0x05` after a kernel-side `Frame reassembly failed
-> (-84)` (`-EILSEQ`).  Region 0 `0xDD66D8C3`; region 1 `49e318bf…`; patch
-> **61 files / 8 762 lines**, sha256 `20556c5f…` (unchanged — no flash, no DTS
-> edit this session).
+> first time** (0 → 1 controller).  What is left is **opening** the controller: a
+> **stray `0x30` byte** arrives after init and the H4 receiver (correctly)
+> rejects it, so `SET_POWERED` is `0x05`.  Region 0 `0xDD66D8C3`; region 1
+> `49e318bf…`; patch **61 files / 8 762 lines**, sha256 `20556c5f…` (unchanged —
+> no flash and no DTS edit this session).
 
 ## 0. The job, and where it stands
 
@@ -94,42 +94,46 @@ use `IRQ_TYPE_LEVEL_LOW` for WL_IRQ (trap 238), **not** `wlcore_sdio dump=1`
   mgmt sees no controller.  The pack fixes the **length** (11 → 12 bytes).
 * The pack **survives `HCI_Reset`** but is lost on a `BT_EN` power cycle.
 
-### THE ONE EXPERIMENT: open the controller
+### THE ONE EXPERIMENT: find who emits the stray `0x30`
 
 `MGMT_OP_SET_POWERED` returns `0x05` (`AUTH_FAILED` = `-ETIMEDOUT`) and dmesg
-shows `Frame reassembly failed (-84)` (`-EILSEQ`) then
-`Opcode 0x1003 failed: -110`.  **The same commands answer instantly from
-userspace**, so this is in the kernel's `hci_uart` path.  Already excluded by
-measurement: alignment/padding, chip idle-sleep, leftover bytes, UART line
-errors (`LSR = 0x60`), truncated long replies.
+shows `Frame reassembly failed (-84)` (`-EILSEQ`).  An instrumented `h4_recv()`
+(already written and proven, in the session-53 note) shows the identical shape in
+**6 of 6 runs**:
 
-The prime suspect is `hci_uart_set_flow_control()` (`drivers/bluetooth/
-hci_ldisc.c:335`), which toggles **RTS/DTR via `tiocmset`** and **sets
-`CRTSCTS`** — and this board has the UART2 CTS/RTS pads muxed to the chip
-(trap 248), with a "force-RTS" devctl in the reference for that very pair.
-
-Procedure:
-
-```sh
-# 1. power-cycle BT_EN, then load the pack (do NOT pulse afterwards)
-echo 0 > /sys/class/gpio/gpio535/value; sleep 2
-echo 1 > /sys/class/gpio/gpio535/value; sleep 1
-/tmp/btsload /tmp/WL1283.bts /dev/ttyS1 115200 --stay-awake
-# 2. attach
-/tmp/pbhci /dev/ttyS1 --no-pulse --attach --hold 300 &
-# 3. check registration, then power
-/tmp/mgmtdiag readindex          # want 13 B: ... 03 00 00 01  (1 controller)
-/tmp/mgmtdiag power 0 1          # want 07 00 ... 05 00 00     (status 0x00)
 ```
+PBTMP h4_recv count=9 first=04 0e 06 01  rx_len=-1: 04 0e 06 01 12 0c 00 00 00
+PBTMP h4_recv count=1 first=30 00 00 00  rx_len=-1: 30
+>>> Bluetooth: hci0: Frame reassembly failed (-84)
+```
+
+The last init reply is complete and correct; **~200 ms later a single `0x30`**
+arrives and is (correctly) rejected, because `0x30` is not an H4 type (0x01–0x04).
+**The open question is which side emits it.**  It *never* appears when the same
+sequence is driven from userspace (including a passive listen with no command
+sent), so a host-side origin is favoured — but that is not established.
+
+**Do the module swap correctly** (trap 251 — this bit me): `btbcm` holds a
+reference to `hci_uart`, so `rmmod hci_uart` fails and `insmod` "succeeds" while
+keeping the old module, making the experiment look negative.  Order:
+`rmmod btbcm`, then `rmmod hci_uart`, then `insmod /tmp/hci_uart.ko`, then
+**verify by content** — `strings /tmp/hci_uart.ko | grep PBTMP`.  A reboot is the
+sure reset (`/tmp` is wiped; re-push the tools).
+
+**Extend the instrument** to log what the driver *writes* (`hci_uart_write_work`
+in `hci_ldisc.c`) next to what it receives, with timestamps.  If a `0x30` shows
+up on the wire with nothing written in the preceding milliseconds, it is the
+chip; if it correlates with a write, the host path is echoing.
 
 **What each result means.**
 
-* **`power` returns status `0x00`** → the controller is UP.  Then run an inquiry
-  through the stack (or `pbhci --inquiry`) and move to HID.
-* **Still `0x05`** → the framing fault persists; the next step is the driver
-  change: make `hci_uart_set_flow_control()` not fight this port (one variable).
-* **`readindex` says 0 controllers** → the pack did not take (did you pulse
-  `BT_EN` after loading?), or the attach died.
+* **The `0x30` correlates with a host write** → the fix is in the kernel path, and
+  the `hci_uart` write/flush path is the place to look.
+* **Nothing is written and the `0x30` still arrives** → the chip emits it; then
+  ask whether a quirk/flush is the right response (the kernel's `hci_uart_flush`
+  or a `HCI_QUIRK_*`), not a bespoke driver.
+* **Open the controller (`SET_POWERED` → status `0x00`)**, then run an inquiry
+  through the stack and move to HID.
 
 ### Before expecting HID
 
@@ -137,13 +141,24 @@ echo 1 > /sys/class/gpio/gpio535/value; sleep 1
 (only `bluetooth`, `hci_uart`, `btbcm` and their crypto deps are).  Ship them.
 `CONFIG_BT_HIDP=m` is already set in the kernel config.
 
+### Cold-boot gotchas for the BT bench (both cost real time)
+
+1. **`/sys/class/gpio/gpio535` does not exist until exported**, and it reads `0`
+   (BT_EN low, core off) — so a pack load fails with "no HCI_Reset answer",
+   identical to a dead chip.  Export it, `direction` = `out`, then pulse
+   **low 2 s → high** (50 ms sometimes was not enough after a previous sleep).
+2. **`insmod` "succeeds" while keeping the old module** when something holds a
+   reference.  Verify swaps by content, never by exit status.
+
 ### LE
 
-**Refused by the controller**: `0x201c` = Command Disallowed, `Write_LE_Host_Support`
-= `0x11`, LE feature page all zeros.  The reference's own stack is **BR/EDR-only**
-(no LE opcodes, no LE Meta event, no SMP/ATT/GATT), so there is no sequence to
-copy.  The `wl128x-fw-4-sr/5-sr.bin` files are **WLAN** firmware — swapping them
-cannot change BT.
+**Refused by the controller**: `0x201c` = Command Disallowed,
+`Write_LE_Host_Support` = `0x11`, LE feature page all zeros.  **But do not write
+the hardware off**: the chip reports **HCI 4.0 / LMP 4.0** with the LE-supported
+LMP bit, and the reference stack being BR/EDR-only reflects BlackBerry never
+shipping an LE stack on a 2011 tablet — not silicon.  What is missing is an
+enable sequence, and none is known.  The `wl128x-fw-4-sr/5-sr.bin` files are
+**WLAN** firmware — swapping them cannot change BT.
 
 ## 0d. WM8994 audio — closed
 
@@ -225,8 +240,9 @@ staged pristine copy and compare.  Current: **61 files / 8 762 lines**, sha256
 * Device password `0000`, once.  An agent never writes RPMB; NVRAM read-only.
 * **`BOOTCTR_FCTRY` is readable on our image**:
   `tools/pbssh.sh 'dmesg | grep pbrpmb'` → `… record@196 = <4 bytes LE>` then
-  `0x<v> >= threshold 0x1e, no write`.  It read **`0x23`** at the session-53
-  close (`23000000`).  A logged read, not an RPMB access (`SAFETY.md` §2).
+  `0x<v> >= threshold 0x1e, no write`.  It read **`0x22`** at the session-53
+  close (`22000000`; `0x23` at the start — one reboot for a clean module state).
+  A logged read, not an RPMB access (`SAFETY.md` §2).
 * **WLAN checks:** `lsmod` must show **`ccm` and `ctr`**;
   `ip link set wlan0 up` → `wlcore: firmware booted (Rev 7.3.5.0.98)`.
 * **BT checks:** `BT_EN` at pad `0x4A10007C` mux 3 and `GPIO2_DATAOUT` bit 23;
@@ -245,19 +261,28 @@ staged pristine copy and compare.  Current: **61 files / 8 762 lines**, sha256
   (`num_controllers = 0`) — so `SET_POWERED` was structurally impossible.
   Loading `WL1283.bts` first fixes the length and the controller registers.
   `/sys/class/bluetooth/hci0` existing is **not** liveness.
-* **250.** `Frame reassembly failed (-84)` = `-EILSEQ`: the first byte of an H4
-  receive chunk was not 0x01–0x04.  It happens only through the kernel's
-  `hci_uart` path, never from userspace on the same port.  Excluded:
-  alignment/padding, chip idle-sleep, leftover bytes, UART line errors
-  (`LSR = 0x60`), truncated long replies.  Suspect: `hci_uart_set_flow_control()`
-  (RTS/DTR via `tiocmset`, `CRTSCTS`).
-* Still current: **248** (the UART2 CTS/RTS pads), **247** (no HT40), **244**
-  (`ccm`/`ctr`), **246** (MUSB alignment), **243** (4-sr not 5-sr), **241**,
-  **239**, **238** (`LEVEL_LOW` WL_IRQ), **237** (three wlcore board
-  properties), **236** (`CLK32KG`), **227** (the old measurement flaw), **224**
-  (`reboot -f` wedge), **221** (`slay` kills `rndis0`), **214** (composite net
-  iface), **212** (bare `pbplay` plays), **211** (tree walk + `Kconfig.*`),
-  **190** (module-only CRC).
+* **250.** `Frame reassembly failed (-84)` = `-EILSEQ`, and on this board it is a
+  **lone `0x30` byte** arriving ~200 ms after init completes (instrumented
+  `h4_recv()`, 6 of 6 runs).  `0x30` is not an H4 type, so the kernel correctly
+  rejects it.  **Which side emits it is open** — it never appears from userspace.
+  Excluded: alignment/padding, chip idle-sleep, leftover bytes, UART line errors
+  (`LSR = 0x60`), truncated long replies, and **hardware flow control** (that
+  early claim is retracted: H4 never calls `hci_uart_set_flow_control()`, and a
+  clean A/B registers the controller with `CRTSCTS` on *and* off).
+* **251.** `insmod` reports success while keeping the old module when something
+  references it (`btbcm` → `hci_uart`).  `rmmod btbcm` first, then `hci_uart`,
+  then `insmod`; verify by content, not exit status.  Also the way a reverted
+  experiment looks un-reverted.
+* **252.** After a cold boot `/sys/class/gpio/gpio535` does not exist and reads
+  `0`, so a pack load fails as if the chip were dead.  Export, set direction,
+  pulse low 2 s.
+* Still current: **249** (`0x201c` is LE states, not benign), **248** (the UART2
+  CTS/RTS pads), **247** (no HT40), **244** (`ccm`/`ctr`), **246** (MUSB
+  alignment), **243** (4-sr not 5-sr), **241**, **239**, **238** (`LEVEL_LOW`
+  WL_IRQ), **237** (three wlcore board properties), **236** (`CLK32KG`), **227**
+  (the old measurement flaw), **224** (`reboot -f` wedge), **221** (`slay` kills
+  `rndis0`), **214** (composite net iface), **212** (bare `pbplay` plays), **211**
+  (tree walk + `Kconfig.*`), **190** (module-only CRC).
 
 ## 5. Where things are
 
@@ -320,18 +345,30 @@ ways) by fixing the length of the LE_Read_Supported_States (0x201c) reply
 three ways a diagnostic lied.
 
 WHAT IS LEFT: OPEN THE CONTROLLER.  MGMT_OP_SET_POWERED returns 0x05
-(-ETIMEDOUT) after "Frame reassembly failed (-84)" (-EILSEQ) and
-"Opcode 0x1003 failed: -110", while the SAME commands answer instantly from
-userspace -> it is the kernel's hci_uart, not the chip.  Prime suspect:
-hci_uart_set_flow_control() (hci_ldisc.c:335) toggling RTS/DTR via tiocmset and
-setting CRTSCTS, on a board whose UART2 CTS/RTS pads are muxed to the chip
-(trap 248).  Excluded already: alignment/padding, chip idle-sleep, leftover
-bytes, UART line errors (LSR=0x60), truncated long replies.  Then ship
-l2cap/sco/rfcomm/hidp (CONFIG_BT_HIDP=m is set but the modules are NOT in
-region 1) and a stack.  LE is refused by the controller (0x0c,
-Write_LE_Host_Support=0x11, LE feature page zero) and the reference stack is
-BR/EDR-only, so there is no sequence to copy.  The wl128x-fw-4-sr/5-sr.bin files
+(-ETIMEDOUT) after "Frame reassembly failed (-84)" (-EILSEQ).  The cause is
+LOCATED but not fixed: an instrumented h4_recv() shows a LONE 0x30 BYTE arriving
+~200 ms after the last complete init reply, in 6 of 6 runs; 0x30 is not an H4
+packet type, so the kernel correctly rejects it.  WHICH SIDE EMITS IT IS OPEN --
+it never appears when the same sequence is driven from userspace, so a host-side
+origin is favoured.  Next: extend the instrument to log what hci_uart WRITES
+(hci_uart_write_work in hci_ldisc.c) alongside what it receives, with timestamps.
+When swapping the module: rmmod btbcm FIRST, then hci_uart, then insmod, and
+verify by content (strings mod.ko | grep PBTMP) -- insmod "succeeds" while
+keeping the old module and the experiment silently looks negative (trap 251).
+Excluded already: alignment/padding, chip idle-sleep, leftover bytes, UART line
+errors (LSR=0x60), truncated long replies, and hardware flow control (an A/B on
+a clean boot registers the controller with CRTSCTS on AND off; H4 never calls
+hci_uart_set_flow_control() -- an earlier claim to the contrary is retracted).
+Then ship l2cap/sco/rfcomm/hidp (CONFIG_BT_HIDP=m is set but the modules are NOT
+in region 1) and a stack.  LE is refused by the controller (0x0c,
+Write_LE_Host_Support=0x11, LE feature page zero) BUT the chip reports BT 4.0
+with the LE-supported bit, and the reference being BR/EDR-only reflects the
+vendor never shipping an LE stack -- not the silicon -- so no enable sequence is
+known, and impossibility is NOT demonstrated.  The wl128x-fw-4-sr/5-sr.bin files
 are WLAN firmware — swapping them cannot change BT.
+COLD BOOT: /sys/class/gpio/gpio535 does not exist until exported and reads 0, so
+a pack load fails as if the chip were dead; export it, direction=out, pulse
+low 2 s -> high (trap 252).
 Then: FM (forward-port drivers/media/radio/wl128x, removed in 6.13) and GPS
 (2024 LKML patch, else RE the reference).  Open, neither blocking: why 5-sr
 panics on scan (235 §3) and why the ELP wake is not honoured (232 §6).

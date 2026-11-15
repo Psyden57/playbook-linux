@@ -2003,22 +2003,52 @@ report 121 §3/§11/§12.
       The service pack also survives `HCI_Reset` (patch RAM is not cleared) but
       **not** a `BT_EN` power cycle.  (Session 53, report 238.)
 
-250. **`-84` from the H4 line discipline is `EILSEQ`: the first byte of a receive
-      chunk was not 0x01–0x04.**  `h4_recv_buf()` (`drivers/bluetooth/hci_h4.c`)
-      returns it, `h4_recv()` logs `Frame reassembly failed (-84)`, and it shows
-      up on this board on the kernel's H4 attach even though the *same* commands
-      answer perfectly from a userspace tty at the same moment.  Excluded
-      causes, all measured: alignment/padding (`hu->alignment = 1`,
-      `hu->padding = 0`), the chip idling out between commands (answers with
-      0/1/2 s gaps), leftover unread bytes, UART line errors (`LSR = 0x60`), and
-      a long reply being truncated (the 71-byte `Read_Local_Commands` reply
-      arrives complete as 48 + 23).  What `hci_uart` does that a plain tty
-      reader does not is in `hci_ldisc.c`: `hci_uart_set_flow_control()` toggles
-      **RTS/DTR via `tiocmset`** and **sets `CRTSCTS`**, and the receive path
-      calls `tty_unthrottle()` per chunk.  The UART2 CTS/RTS pads are muxed to
-      the chip on this board (trap 248) and the reference stack carries a
-      dedicated **"force-RTS"** devctl for that pair, so the modem-line handling
-      is the first suspect.  (Session 53, report 238 §4.)
+250. **`-84` from the H4 line discipline is `EILSEQ`, and on this board it is a
+      lone `0x30` byte arriving after init.**  `h4_recv_buf()`
+      (`drivers/bluetooth/hci_h4.c`) returns `EILSEQ` when the first byte of a
+      receive chunk is not an H4 packet type (0x01–0x04); `h4_recv()` logs
+      `Frame reassembly failed (-84)`.  An instrument in `h4_recv()` (the error
+      path does not print the data — the report-232 lesson again) shows the same
+      shape in **6 of 6** runs: the last init reply arrives complete, then about
+      200 ms later a **single `0x30`** arrives on its own and is (correctly)
+      rejected.  **Not yet known which side emits it.**  It never appears when
+      the same sequence is driven from userspace, so this is not "the chip emits
+      junk after init".  Excluded by measurement: alignment/padding
+      (`hu->alignment = 1`, `hu->padding = 0`), chip idle-sleep between commands,
+      leftover unread bytes, UART line errors (`LSR = 0x60`), truncated long
+      replies, and **hardware flow control** — an A/B on a clean boot gives
+      `num_controllers = 1` with `CRTSCTS` on *and* off.  **Two retractions to
+      heed:** `hci_uart_set_flow_control()` is called only by the *vendor*
+      protocols (`bcm`/`qca`/`intel`/`mrvl`) and **never by H4** (`hci_uart_setup`
+      is a no-op for H4), so a flow-control cause was a wrong guess; and the
+      `Read_Local_Name` reply is **not** corrupt — it arrives complete at 255
+      bytes, and the "corruption" first seen was the probe's own 240-byte display
+      buffer.  (Session 53, report 238 §4.)
+
+251. **`insmod` reports success while keeping the old module, when something
+      still references it.**  Swapping `hci_uart.ko` for an instrumented build
+      appeared to work (`insmod` printed nothing, `/proc/modules` showed
+      `hci_uart` loaded) but the old code kept running, so the instrument never
+      fired and the experiment looked like a negative.  `btbcm` holds a reference
+      to `hci_uart`, so `rmmod hci_uart` fails with `Resource temporarily
+      unavailable` while `insmod` cheerfully "succeeds".  Order matters:
+      **`rmmod btbcm`, then `hci_uart`, then `insmod`** — and verify the swap by
+      content (`strings /path/to/module | grep <marker>`), never by exit status.
+      The same trap makes a reverted experiment look un-reverted; after reverting
+      `hci_h4.c`, confirm the rebuilt module has no marker rather than trusting
+      the build.  A reboot is the sure reset (`/tmp` is wiped, so re-push the
+      tools).  (Session 53, report 238 §4.)
+
+252. **After a cold boot `/sys/class/gpio/gpio535` does not exist and `BT_EN`
+      reads low, so the BT service pack fails with "no HCI_Reset answer".**
+      `pulse_bt_en()` in `pbhci` resolves the GPIO2 sysfs base and exports the
+      line itself, but a hand-written script that just writes to
+      `/sys/class/gpio/gpio535/value` silently does nothing until the line is
+      exported.  Export it first, set `direction` to `out`, then pulse low → 2 s
+      → high.  A **2 s** low time was reliably sufficient where 50 ms sometimes
+      was not, after the core had been left asleep by a previous run.  This
+      wastes real time because the symptom is identical to a dead chip.
+      (Session 53.)
 
 ## 3. Corrections to older reports
 
