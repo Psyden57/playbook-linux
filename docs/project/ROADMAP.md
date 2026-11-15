@@ -101,24 +101,73 @@ until then; region 1 and the sealed IFS are the way back, and the MCT/NVRAM/RPMB
 are untouched throughout (`SAFETY.md` §6).
 
 **Open decision that gates the writes:** which userspace goes on hd3 —
-**postmarketOS (a pmaports device port)** or **our own minimal root, grown**?
-pmOS is the operator's target and is what the SGX port assumes, so it is
-recommended; it also means building an OMAP4430/PlayBook device port.
+**Nura (formerly postmarketOS, renamed 2026-09-27)** or **our own minimal root,
+grown**?
+
+**Decided (operator, session 53): Nura, with Catacomb or Sxmo-dwm as the DE.**
+Research notes, all from primary sources (`nura.eco`, `docs.nura.eco`,
+`wiki.nura.eco`) — the rename is seven weeks old, so **search "Nura", not
+"postmarketOS"**, and note that most of the ecosystem's URLs and package names
+still say `postmarketos`/`pmaports`:
+
+* **Both interfaces exist and fit.**  Catacomb is described as a *lightweight
+  interface optimised for low-end hardware with limited battery*; Sxmo is
+  selectable as `sxmo-de-dwm` (`pmbootstrap config ui sxmo-de-dwm`).  Either is a
+  sane target for 1 GB RAM / SGX540.
+* **The PlayBook is NOT a supported device** — a search for a PlayBook/winchester
+  port finds only this project — so this is a **new device port**.
+* **The OMAP4430 reference port is `device-samsung-espresso7`** (Galaxy Tab 2,
+  same SoC family and TWL6030), and it is the model to copy.  Its
+  `deviceinfo` shows the shape: `deviceinfo_arch="armv7"`,
+  `deviceinfo_dtb="omap4-samsung-espresso7"`, `deviceinfo_append_dtb="true"`,
+  `deviceinfo_drm="true"`, `deviceinfo_chassis="tablet"`, and
+  `depends="postmarketos-base linux-openpvrsgx mkbootimg"`.
+* **The one structural difference is how the kernel gets on the device.**  The
+  espresso port uses `deviceinfo_flash_method="heimdall-bootimg"` (a Samsung
+  download-mode boot image at fixed offsets).  The PlayBook has **no such
+  path**: its kernel must be the **CRC-sealed chainloader image** that
+  `tools/build_kernel_image.py` produces and that the pre-OS `0xF7` flasher
+  writes to region 0, block `0x825`.  So the Nura **kernel package** here is not
+  what flashes — our chainloader is — and the device port must be built around
+  that.  That is the single biggest piece of integration work, and it is
+  **already solved**: the chainloader boots a zImage + DTB and the initramfs
+  hands PID 1 to a rootfs.  What is missing is only that the *rootfs* comes from
+  Nura instead of our BusyBox tree.
+* **The rootfs can be produced without flashing.**  `pmbootstrap install` builds
+  through `pmb.install.blockdevice.create(sector_size, size_boot, size_root,
+  split)`, which creates image files (with `split` for separate boot/root) rather
+  than requiring a device.  So the flow is: `pmbootstrap install` → take the
+  **root** image → flash it to hd3 with `bbusb.py` → the chainloader's initramfs
+  mounts hd3 as `/`.  That keeps the operator's "always flashable" property and
+  needs **no** bootloader cooperation.
+* **Kernel packaging.**  Nura expects a `linux-*` package providing the kernel;
+  ours is the 7.3.3 tree + `kernel/patches/` + `winchester-7.3.3.config`.  The
+  package can wrap exactly that (`envkernel.sh` exists for out-of-tree kernel
+  work) — the image it produces must then be wrapped by
+  `build_kernel_image.py` rather than used as a boot.img.  Worth confirming
+  against a real `pmbootstrap init` run before committing to the packaging.
 
 **Sequence** — each step independently verifiable, and hd3 stays in a state the
 flasher can replace at every point:
 
-1. **Settle the userspace choice** (above).  *No writes.*
-2. **Build the ext4 image on the host** from that rootfs (`mkfs.ext4`, populate,
-   `e2fsck`, record sha256).  Verify by loop-mounting it on the host first.
-3. **Flash it to hd3** with `bbusb.py --component … --dest-block 0x4905`;
-   dry-run first and require that the plan line shows a run inside `0x1C` and
-   `gate_runs` passes.  Verify by `dd`-ing the superblock at `0x49000000` and by
-   mounting it from the running Linux (`losetup -o 0x49000000`) and comparing a
-   checksum with the host image.
+1. **Scaffold the Nura device port** with `pmbootstrap init` + `pmbootstrap
+   aportgen`, modelled on `device-samsung-espresso7`: codename
+   `blackberry-playbook`, `arch=armv7`, `dtb=omap4-winchester` (ours),
+   `chassis=tablet`, `drm=true`.  Determine the kernel-package story (§above)
+   against a real init run.  *No device writes.*
+2. **`pmbootstrap install`** with `ui=catacomb` (or `sxmo-de-dwm`), configured to
+   produce **image files** (`split`), not a flash.  Verify by loop-mounting the
+   root image on the host and checking `/sbin/init`, the DE and the kernel
+   modules match 7.3.3.
+3. **Flash that root image to hd3** with
+   `bbusb.py --component … --dest-block 0x4905`; dry-run first and require the
+   plan line to show a run inside `0x1C` and `gate_runs` to pass.  Verify by
+   `dd`-ing the superblock at `0x49000000` and by mounting it from the running
+   Linux (`losetup -o 0x49000000`) and comparing a checksum with the host image.
 4. **Re-point `ROOTFS_RAW_OFF`**, rebuild the kernel image, flash region 0, boot.
    Region 1 stays intact throughout as the fallback.
-5. **Only then** SGX.
+5. **Only then** SGX: add `sgx-ddk-um` + `linux-openpvrsgx`'s driver (rebased to
+   7.3.3) and test with a trivial EGL/GLES program before any compositor.
 
 Step 3 is reversible at any time by re-flashing the same block range — which is
 the whole reason it beats an in-place mkfs.
