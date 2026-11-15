@@ -2,44 +2,34 @@
 
 ## Current state — 2026-11-15 (session 54)
 
-**hd3 holds the Nura root and it boots; the eMMC write path stalls, so the root
-is read-only and the DE is not up.**  The host-side experiment (report 240) is
-answered; the device work (report 241) flashed hd3 at the **correct block
-`0x4915`** (the MCT entry `0x4905` has a 1 MiB prefix; the loader gate rejects
-0x4905), verified the image byte-for-byte (`sha256 076bafcf…`), and booted
-**Nura** from hd3 (kernel 7.3.3, Nura edge, OpenRC, the display and the Munin
-touch) after fixing the initramfs hand-off (`lstat`, not `access`, for the
-absolute `/sbin/init -> /bin/busybox` symlink).
+**The read-only hd3 + overlayfs root is implemented and built; the unit is still
+on the old `0x060B25F2` image + the dirty hd3 — the flash has not run.**  The
+operator stopped before it.  The host has the new `0xE85217E5` region-0 image
+(`0x9662A4` B, sha256 `fbeb6df0…`), the edited hd3 image
+(`blackberry-playbook-root-overlay.img`, sha256 `1f14915f…`) and the packed
+both-halves container (`both-0xE85217E5-overlay.signed`, 635 961 936 B, sha256
+`c3ed1f61…`; parse CRC `0x493FA440 OK`).
 
-* **The blocker:** the first ext4 journal/udev write after the 597 MiB bootrom
-  image stalls the eMMC (`mmc1: Card stuck being busy! __mmc_poll_for_busy`),
-  aborts the journal, and ext4 remounts read-only (`emergency_ro`); `tinydm`
-  fails, `catacomb` cannot get a libseat session, and `/run/user/10000` is not
-  created.  A later 4 KiB write to hd3 returns `I/O error`; the card is in a
-  failed write state (reads are fine).  The region-1 no-journal root is stable.
-* **The workaround designed, not yet implemented:** a **read-only hd3** (mount
-  `MS_RDONLY` + `noload`) with an **overlayfs** tmpfs upper (`CONFIG_OVERLAY_FS=y`
-  is built in) and the WLAN firmware added; then flash hd3 pristine + region 0
-  and boot the DE.  The bind-tmpfs live test started `tinydm` but hid the lower
-  `/var/lib/elogind`, so no session; the overlay is the fix.
-* **Media now:** region 0 = **`0x060B25F2`** (`0x939D04` B, the lstat image with
-  the hd3 offset; sha256 `b548ec6c…`); region 1 = **`49e318bf…`** (intact, not
-  booted); hd3 = the Nura root at 0x4915 (the media's journal is aborted/dirty;
-  the pristine host image is `…-root-hd3.img`, sha256 `076bafcf…`).
-* **Built, not flashed:** the quiet-print kernel **`0xE84693A1`** (`0x967A94` B,
-  sha256 `663348d0…`; the `PB*` prints are `pr_debug`/dyndbg, `PBREQ`/`PBIRQ`
-  behind `pb_trace`; `CONFIG_DYNAMIC_DEBUG=y`, `CONFIG_OVERLAY_FS=y`; patch
-  **63 files / 8 998 lines**, sha256 `48c14a41…`).
-* **Counter:** `BOOTCTR_FCTRY = 0x1e` (the last boot's `pbrpmb` line); the next
-  boot spends one -> 0x1d and `/init` tops it to `0x32`.
-* **Unit:** on Linux, `0fca:8010`, console `playbook:~#` on the ACM, no sshd;
-  `usb0` 169.254.0.1/16; the backlight restored (`bl_power=0`), console loglevel
-  3.  The live `/var`/`/home`/`/tmp` tmpfs mounts are volatile.
-
-**Next:** the read-only hd3 + overlayfs root (`init.c`), the hd3 image
-(firmware, no tty1 getty, the new modules), flash hd3 at `0x4915` + region 0,
-boot the DE; then SGX540.  The eMMC writable-root fix (busy timeout / cache /
-no-journal) is a separate experiment.
+* **The initramfs** mounts hd3 read-only (`LO_FLAGS_READ_ONLY`, `MS_RDONLY` +
+  `noload`) and overlays a 256 MiB tmpfs upper on `/newroot`; the
+  `/dev`/`/proc`/`/sys` binds and the `lstat` hand-off are on the overlay.
+  [report 242 §1]
+* **The hd3 image edits:** the root `/etc/fstab` line removed, the `tty1` getty
+  removed, the `ti-connectivity` WLAN firmware added, the 43 modules replaced;
+  the kernel/module vermagic matches (`7.3.3 mod_unload modversions ARMv6
+  p2v8`); `e2fsck -fn` exit 0.  [report 242 §3]
+* **The container** packs the region 0 at `16,0` and the hd3 at `16640,0` (the
+  loader block minus `0x815`).  [report 242 §4]
+* **Media unchanged:** region 0 `0x060B25F2`; region 1 `49e318bf…` (the
+  fallback, not booted); hd3 the dirty Nura root (the journal aborted); the
+  pristine host hd3 `076bafcf…`.  `BOOTCTR_FCTRY` `0x1e` (the same boot; no
+  reboot).  The unit is on the Nura read-only root; the ACM `0fca:8010`,
+  `ttyACM0` 0666; **no sshd**; the `ttyGS0` shell was busy at wrap-up.
+* **Next:** flash the container in one bootrom session
+  (`bbusb.py flash --signed … --from-bootrom --password 0000 --apply`, then
+  `pbcon.py 'reboot -f'`), boot the overlay root and check the DE/WLAN.  The
+  flash is destructive but flasher-restorable; region 1 stays intact.  [report
+  242 §5; HANDOFF]
 
 ## Previous states
 
@@ -105,6 +95,7 @@ the durable record is the CRC and what it demonstrated, not the file.
 
 | image | base | role |
 |---|---|---|
+| `0xE85217E5` | 7.3.3 | **built, NOT flashed — the read-only hd3 + overlayfs init** (session 54: `0x9662A4` B, sha256 `fbeb6df0…`; `local/images/kernel-0xE85217E5-overlay.img`; the packed container `c3ed1f61…`) |
 | `0xE84693A1` | 7.3.3 | **built, NOT flashed** (session 54: the PB prints `pr_debug`/dyndbg, `PBREQ`/`PBIRQ` behind `pb_trace`; `CONFIG_DYNAMIC_DEBUG=y`, `CONFIG_OVERLAY_FS=y`; `0x967A94` B, sha256 `663348d0…`; `local/images/kernel-0xE84693A1-quietpb.img`) |
 | `0x060B25F2` | 7.3.3 | **current region 0** (session 54: `ROOTFS_RAW_OFF=0x49000000`, the `lstat` hand-off; `0x939D04` B, sha256 `b548ec6c…`) |
 | `0x8B709950` | 7.3.3 | session-54 intermediate (`ROOTFS_RAW_OFF=0x49000000` with the old `access()` hand-off; `0x939D5C` B, sha256 `835fa863…`) |
@@ -242,23 +233,17 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 ## What is next
 
-0. **THE ACTIVE ITEM — the hd3 Nura root, then SGX540 (session 54, reports
-   240/241, ROADMAP item 7a).**  hd3 is flashed at **`0x4915`** and Nura boots;
-   the remaining blocker is the eMMC write stall.  The next experiment is the
-   **read-only hd3 + overlayfs root**:
-   * `initramfs/init.c`: mount hd3 read-only (`MS_RDONLY` + `noload`), a tmpfs
-     upper/work, `mount -t overlay` on `/newroot`, then the existing binds and
-     chroot (`CONFIG_OVERLAY_FS=y` is built in).
-   * The hd3 image: start from `blackberry-playbook-root-hd3.img`; remove the
-     root `/etc/fstab` line, remove the `tty1` getty, add
-     `local/work/firmware-nvs` under `/lib/firmware`, and update the 43 modules
-     from `local/work/modules-7.3.3` (the `0xE84693A1` kernel's vermagic).
-   * Flash hd3 at **`0x4915`**, flash region 0 (`0xE84693A1` or the overlay
-     build), boot; check `/run/user/10000`, the tinydm log, `/dev/dri`, the
-     touch, `lsmod`/`wlcore`.
-   * If the DE runs: SGX540.  A writable root needs a separate eMMC busy/erase
-     timeout / cache / no-journal experiment; do not repeat the bind-tmpfs
-     `/var` (it hides the lower elogind state).
+0. **THE ACTIVE ITEM — the overlay root flash, then SGX540 (session 54,
+   report 242, ROADMAP item 7a).**  The read-only hd3 + overlayfs root is
+   built; **the flash has not run.**  The one next step is:
+   * flash `local/work/nura/images/both-0xE85217E5-overlay.signed` in one
+     bootrom session (`bbusb.py flash --signed … --from-bootrom --password
+     0000 --apply`), then `pbcon.py 'reboot -f'` from the Nura `ttyGS0` shell;
+   * boot the overlay root; check `dmesg` (no `Card stuck`/journal abort,
+     `overlay`), `/run/user/10000`/the tinydm log, `/dev/dri`, the touch,
+     `lsmod`/`wlcore`;
+   * if the DE runs, SGX540.  A writable eMMC root remains a separate
+     experiment (busy timeout / cache / no-journal).
    **Region 1 stays intact as the fallback**, and hd3 always holds a
    flasher-restorable image.
 1. **WL1283 — the WLAN ASSOCIATES (session 52, report 236).**  Session 51 fixed

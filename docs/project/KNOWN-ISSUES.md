@@ -2163,6 +2163,41 @@ report 121 §3/§11/§12.
        (same vermagic) or bump the kernel package before flashing a new
        region 0.  (Session 54.)
 
+266. **`--from-bootrom` does not mean the unit is in the ramloader; it uploads
+       the ramloader and needs the unit booted.**  The flasher must be started
+       first, then the running OS rebooted (`reboot -f`; the Nura `ttyGS0`
+       shell via `pbcon.py`), which opens the 60 s bootrom window.  "Flash both
+       halves in one bootrom session" means one packed container, not two
+       `flash` runs.  (Session 54, report 242 §5.)
+
+267. **The `bbusb.py pack` component coordinate is the loader block minus
+       `0x815`.**  Region 0 `0x825` → `16`; region 1 `0x2915` → `8448`; hd3
+       `0x4915` → `16640`.  `parse` shows the V1 runs; the signature CRC must
+       be `OK`.  (Session 54, report 242 §4.)
+
+268. **The Nura `ttyGS0` shell is a plain `/bin/sh -l`, not the old
+       `pbcon`/`/console`.**  `tools/pbcon.py 'reboot -f'` works when the shell
+       is at a prompt; "no prompt — the shell is still running a command"
+       means send Ctrl-C with `tools/pbraw.py 2 03` (or wait).  `reboot -f`
+       skips the slow BusyBox shutdown.  (Session 54.)
+
+269. **The read-only overlay root is `MS_RDONLY`+`noload`,
+       `LO_FLAGS_READ_ONLY`, an `O_RDONLY` backing, a tmpfs upper/work, and
+       `/newroot`.**  The `noload` tolerates the dirty media journal (no replay
+       write); the binds and the `lstat` hand-off go on the overlay, not the
+       lower.  `CONFIG_OVERLAY_FS=y` is in the `0xE85217E5`.  (Session 54,
+       report 242 §1.)
+
+270. **The new 43 modules and the `0xE85217E5` kernel have the same vermagic**
+       (`7.3.3 mod_unload modversions ARMv6 p2v8`); the image's modules were
+       replaced, the `modules.dep` unchanged.  Keep them matched when changing
+       the config.  (Session 54, report 242 §3.)
+
+271. **Before the overlay boot, the hd3 image needs the root `/etc/fstab` line
+       removed, the `tty1` getty removed (the `tinydm` VT), and the
+       `ti-connectivity` firmware added.**  `e2fsck -fn` must exit 0.  (Session
+       54, report 242 §3.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

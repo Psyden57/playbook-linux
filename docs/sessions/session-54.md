@@ -182,6 +182,103 @@ tree.  Then, if both hold, flash the root to hd3, verify it, re-point
   firmware, the read-only/overlay decision, and the `ttyGS0`/tty1 console
   choices; its `/etc/fstab` `/boot` line was removed.
 
+## Continuation — the read-only overlay build (same session, after the first wrap-up)
+
+**The operator resumed the session; the read-only hd3 + overlayfs root was
+implemented and built, but the flash did not run (the operator stopped before
+it).**  The unit is unchanged.
+
+### Confirmed
+
+* **The initramfs now mounts hd3 read-only and overlays a tmpfs upper.**
+  `initramfs/init.c`: the loop is `LO_FLAGS_READ_ONLY` with the backing
+  `/dev/mmcblk1` opened `O_RDONLY`; the ext4 is `MS_RDONLY` + `noload`; a
+  256 MiB tmpfs at `/overlay` holds `upper`/`work`; overlayfs is mounted at
+  `/newroot`; the `/dev`/`/proc`/`/sys` binds and the `lstat` hand-off are on
+  the overlay.  Compiled (`arm-linux-gcc -static -O2 -Wall`; only the
+  pre-existing UDC `snprintf` truncation warning).
+* **The region-0 image was rebuilt and verified.**  `zImage` relinked with the
+  new `init` in the cpio (`/usr/initramfs_data.cpio` lists `init` 595 784 B);
+  the DTB rebuilt; `build_kernel_image.py` → **`0x9662A4` B, CRC
+  `0xE85217E5`** (below `0xB00000`), sha256 `fbeb6df0…`; saved as
+  `local/images/kernel-0xE85217E5-overlay.img`; `boot/chainloader/kernel.img`
+  replaced.  [bench]
+* **The hd3 image was edited.**  `blackberry-playbook-root-overlay.img`
+  (625 999 872 B, sha256 `1f14915f…`): the root `/etc/fstab` line removed (only
+  the header comment remains), the `tty1` getty removed from `/etc/inittab`
+  (the `ttyGS0` shell kept), `ti-connectivity/{wl128x-fw-4-sr.bin,
+  wl128x-fw-5-sr.bin,wl128x-nvs.bin}` added under `/lib/firmware`, and the 43
+  modules replaced from `local/work/modules-7.3.3`; `e2fsck -fn` exit 0.
+  [bench; `debugfs`]
+* **The kernel/module vermagic matches.**  Both the `0xE85217E5` kernel
+  (`local/kernel-tree/vmlinux`) and the new `wl12xx.ko` are
+  `7.3.3 mod_unload modversions ARMv6 p2v8`.  [bench; `modinfo`/`strings`]
+* **The both-halves container was packed.**  `bbusb.py pack -l /tmp/both.lst
+  -v 1,2 -s -f` → `/tmp/both.signed`, 635 961 936 B, sha256 `c3ed1f61…`;
+  `parse` shows the V1 runs at offset 16 (151 blocks, region 0) and 16640
+  (9552 blocks, hd3), CRC `0x493FA440 OK`.  Saved as
+  `local/work/nura/images/both-0xE85217E5-overlay.signed`.  [bench]
+* **The flash did not run.**  The operator stopped before it; the unit is still
+  on `0x060B25F2` + the dirty hd3 (see the first wrap-up's bench state).  The
+  `pbcon` probe found the Nura `ttyGS0` shell busy ("no prompt — the shell is
+  still running a command"); the ACM is `0fca:8010`, `ttyACM0` 0666.
+
+### Inferred
+
+* **The overlay should keep the eMMC out of the boot path.**  Medium-strong:
+  the lower is read-only at the loop and the fs, so the journal/udev writes go
+  to the tmpfs; the `0xE85217E5` has `CONFIG_OVERLAY_FS=y`; the ext4 `noload`
+  tolerates the dirty media journal.
+* **The DE should start once the overlay is booted.**  Medium: the tmpfs
+  `/var` test started `tinydm` but hid the lower elogind state; the overlay
+  keeps the lower visible; the `tty1` getty is removed and the root fstab line
+  gone.  Untested.
+* **The 43 new modules load on the `0xE85217E5` kernel.**  Strong on the
+  vermagic; the `CONFIG_MODVERSIONS` CRCs are from the same tree/config, so the
+  match is exact.  Untested on the unit.
+
+### Dead ends and wrong assumptions
+
+* **The first wrap-up's "the overlay is the workaround, not implemented"** —
+  now implemented and built; the flash is the remaining step.  The newer
+  statement is current.
+* **"`--from-bootrom` means the unit is already in the bootrom."**  It means
+  the flasher uploads the ramloader; the unit is **booted**, the flash is
+  started, then the OS's `reboot -f` opens the 60 s bootrom window
+  (`DEVELOPMENT.md` §4).  The command has not been run.
+* **"A separate `flash` per component is fine."**  The docs say flash both
+  halves in **one bootrom session**; the packed container is the supported
+  path.
+* **"The hd3 image's old modules can stay."**  They could vermagic-match, but
+  the 43 were replaced with the exact build; the image now matches the kernel.
+
+### Unknown
+
+* **Does the overlay boot and start `tinydm`/`catacomb`?**  Settle by the flash
+  + boot (the HANDOFF).
+* **Does the eMMC stay quiet under the read-only lower?**  Settle by the boot
+  dmesg (`mmc1`/`EXT4`/`overlay`).
+* **Do the 43 modules load and the WLAN firmware bind?**  Settle by `lsmod`/
+  `wlcore` on the overlay boot.
+
+### Superseded
+
+* **The first wrap-up's STATE/HANDOFF/report 241 §7 "the read-only overlay is
+  next / not implemented".**  It is implemented and built; the next step is the
+  flash.  The current note/report 242/STATE are current; the report 241 §7 is
+  the then-next.
+
+### Artefacts
+
+* `initramfs/init.c` — the read-only loop + `MS_RDONLY`/`noload` + overlayfs.
+* `local/images/kernel-0xE85217E5-overlay.img` — region 0, `0x9662A4` B, CRC
+  `0xE85217E5`, sha256 `fbeb6df0…`.
+* `local/work/nura/images/blackberry-playbook-root-overlay.img` — hd3,
+  625 999 872 B, sha256 `1f14915f…`.
+* `local/work/nura/images/both-0xE85217E5-overlay.signed` — the packed
+  container, 635 961 936 B, sha256 `c3ed1f61…`.
+* `docs/reports/242-read-only-hd3-overlay-build-2026-11-15.md`.
+
 ## Artefacts produced
 
 * `docs/reports/240-hd3-nura-pmbootstrap-2026-11-15.md` — the host-side

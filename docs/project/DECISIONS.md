@@ -2665,6 +2665,23 @@ runtime; `PBREQ`/`PBIRQ` remain behind `pb_trace`.  The patch is re-exported
 (63 files / 8 998 lines, sha256 `48c14a41…`) and the image is `0xE84693A1`
 (built, not flashed).  Do not re-add per-I/O `pr_info` (trap 264).
 
+## 76. The hd3 root is read-only, with a tmpfs overlay for writes (session 54)
+
+**Decision (operator, session 54):** the hd3 Nura root is mounted read-only and
+all writes go to a tmpfs overlay; the eMMC is not written on boot.
+
+**Evidence.**  The first ext4 journal/udev write after the 597 MiB bootrom image
+stalls the eMMC (`mmc1: Card stuck being busy!`, report 241 §3); a later 4 KiB
+write returns `I/O error`; the region-1 no-journal root is stable.  The operator
+approved flashing the overlay image (the read-only design) at the session's end.
+
+**Consequences.**  `initramfs/init.c` mounts the loop `LO_FLAGS_READ_ONLY` and
+the ext4 `MS_RDONLY`+`noload`, with a 256 MiB tmpfs upper/work on `/overlay`
+and overlayfs at `/newroot`; the hd3 image has the root fstab line and the tty1
+getty removed and the WLAN firmware; the region-0 image is `0xE85217E5`.  A
+writable eMMC root (busy timeout/cache/no-journal) remains a separate
+experiment.  [report 242]
+
 ---
 
 The repository licence and visibility are decided below; the remaining

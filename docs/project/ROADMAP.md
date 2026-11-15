@@ -216,14 +216,16 @@ flasher can replace at every point:
 4. **Done (session 54) — re-point `ROOTFS_RAW_OFF` to `0x49000000`, flash region
    0, boot.**  The `lstat` hand-off fix is needed (the Nura `/sbin/init` is an
    absolute symlink); image `0x060B25F2` boots Nura from hd3.
-4a. **Next — the read-only hd3 + overlayfs root.**  The first ext4 journal/udev
-   write stalls the eMMC (`mmc1: Card stuck being busy!`), aborts the journal
-   and remounts read-only; `tinydm`/`catacomb` cannot start.  Mount hd3
-   `MS_RDONLY` + `noload`, overlay a tmpfs upper, add
-   `local/work/firmware-nvs` and remove the tty1 getty, update the 43 modules,
-   flash hd3 at `0x4915` + region 0, boot the DE.  The eMMC writable-root fix
-   (busy timeout / cache / no-journal) is a separate experiment; the region-1
-   root is the fallback.
+4a. **The read-only hd3 + overlayfs root — implemented and built; the flash is
+   the next step (session 54, report 242).**  The eMMC stalls on the first
+   journal/udev write; the initramfs mounts hd3 `MS_RDONLY`+`noload` on a
+   read-only loop and overlays a 256 MiB tmpfs upper.  The hd3 image (root
+   fstab line and tty1 getty removed, the WLAN firmware, the 43 modules) is
+   built, the region 0 is `0xE85217E5`, and the both-halves container
+   (`c3ed1f61…`) is packed.  **Next:** flash it in one bootrom session
+   (`bbusb.py flash --signed … --from-bootrom`), then `pbcon.py 'reboot -f'`,
+   boot the overlay root and check the DE/WLAN.  A writable eMMC root is a
+   separate experiment; the region-1 root is the fallback.
 5. **Only then** SGX: add `sgx-ddk-um` + `linux-openpvrsgx`'s driver (rebased to
    7.3.3) and test with a trivial EGL/GLES program before any compositor.
 

@@ -38,8 +38,11 @@ and the exported patch reproduces the tree from pristine 7.3.3.
 * Config: `kernel/winchester-7.3.3.config` (the canonical copy; session 54 adds
   `CONFIG_DYNAMIC_DEBUG=y` and `CONFIG_OVERLAY_FS=y` with their resolved deps).
 * `initramfs/init.c`: `ROOTFS_RAW_OFF = 0x49000000` (hd3 at loader block
-  `0x4915`) and the `lstat()` hand-off check (the Nura `/sbin/init` is an
-  absolute symlink; `access()` resolved it inside the initramfs).
+  `0x4915`), the `lstat()` hand-off, and the session-54 read-only root: the
+  loop `LO_FLAGS_READ_ONLY`, the ext4 `MS_RDONLY`+`noload`, a 256 MiB tmpfs
+  upper/work and overlayfs on `/newroot`.  The image is
+  `local/images/kernel-0xE85217E5-overlay.img` (`0x9662A4` B, CRC
+  `0xE85217E5`, sha256 `fbeb6df0…`), built and not flashed.
 * 6.15.11 reference: `local/pristine/linux-6.15.11.tar.xz`
   `local/kernel-tree-6.15.11`, and
   `kernel/patches/0001-playbook-winchester-6.15.11.patch` (incomplete by
