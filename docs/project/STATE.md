@@ -1,68 +1,75 @@
 # Current state
 
-## Current state — 2026-11-15 (session 52)
+## Current state — 2026-11-15 (session 53)
 
-**THE WL1283 WLAN ASSOCIATES — and the USB link got its DMA back.**  Two
-independent results: the association blocker was the **missing `ccm`/`ctr`
-crypto modules**, and the RNDIS link had been running in MUSB's **PIO**
-fallback because its buffers were not 4-byte aligned.
+**THE WL1283's BT CORE WORKS — and loading its service pack makes `hci0`
+register with mgmt for the first time.**  Driven over UART2 as H4 it answers
+`HCI_Reset`, reports itself (`hci ver 6`, `lmp ver 6`, `mfr 0x002b` = TI, i.e.
+Bluetooth 4.0) and **runs a complete BR/EDR inquiry that finds a nearby
+device** (`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.
 
-* **Association (report 236):** the 4-way handshake completed all along —
-  message 3 decrypts with AES-UNWRAP, so the passphrase was never the problem —
-  and the pairwise-key install failed with `-ENOENT`, which wpa_supplicant
-  labels `WRONG_KEY`.  The error came from `ieee80211_key_alloc()`:
-  `crypto_alloc_aead("ccm(aes)")` returns `-ENOENT` when the algorithm is not
-  registered, and `ccm.ko`/`ctr.ko` were not in the rootfs (and are not a link
-  dependency of `mac80211.ko`, so `depmod` never pulled them in).  Shipped and
-  `modprobe`d in `rcS` before the wireless stack.  `wpa_state=COMPLETED`,
-  WPA2-PSK/CCMP on 5785 MHz at −41 dBm, MCS7/65 Mbit/s, DHCP lease
-  **192.168.0.212**, gateway and 1.1.1.1 reachable.
-* **5 GHz needs the country:** the world regdomain marks 5735–5835 MHz
-  `PASSIVE-SCAN`, so `iw reg set <CC>` is required or the auth times out
-  (`regulatory prevented using AP config, downgraded`).  Configuration, not a
-  bug — see DECISIONS §70.
-* **The per-unit NVS is now shipped** (`local/work/wl128x-nvs-perunit.bin`,
-  md5 `547e62d7…`): the generic file's first 468 bytes replaced by the NVRAM
-  record.  It changes nothing functionally; it is the correct calibration.
-* **USB (report 236 §7):** the gadget ran at 3.3 MB/s because MUSB's HSDMA
-  (RTL 2.00) refuses buffers that are not 4-byte aligned and silently falls
-  back to PIO — ~1 `mc` interrupt per 512-byte packet, the `dma` IRQ never
-  firing.  Fixed with `musb->g.quirk_avoids_skb_reserve = 1` (RX) and a TX
-  realign in `gether_start_xmit()`.  **RX 3.3 → 6.3 MB/s, TX 3.3 → 4.1 MB/s.**
-* **Wi-Fi is at its ceiling:** 1×1 HT20, `rx_highest = 72`, A-MPDU 8K; measured
-  TX 2.9 / RX 4.4 MB/s.  The AP offers 40 MHz, but advertising
-  `SUP_WIDTH_20_40` makes the firmware collapse to MCS0 (RX 622 KB/s) — tested,
-  reverted, proven (trap 247).
-* **BT — the core answers HCI (report 237).**  The three-session silence was the
-  **UART2 CTS/RTS pads**: `0x4A100118` sat in the bootloader's safe mode
-  (`0x011F011F`); the reference's idle value is `0x00000118`.  `uart2_pins` now
-  sets them, so `pbhci`'s `HCI_Reset` gets `04 0e 04 01 03 0c 00` at boot.
-  `pbhci --attach` (N_HCI + `HCI_UART_H4`) makes the kernel create
-  `/sys/class/bluetooth/hci0`, which then exchanges commands with the chip.
-  **Not yet working:** powering it (`HCIDEVUP` is `ENOSYS`; use mgmt
-  `SET_POWERED`), the service pack (see the BT-firmware contradiction), and a
-  stack.
+* **The service pack loads and it is what unblocks the kernel (report 238).**
+  `local/work/1917/base/lib/firmware/bluetooth/WL1283.bts` replays **315/315**
+  commands over H4 and moves the LMP subversion `0x2b0f` → **`0x2b33`**, exactly
+  what the file's own header declares (`Quattro … TI_P6_15.51`).  Measured with a
+  negative control on the same attach: **without** the pack
+  `MGMT_OP_READ_INDEX_LIST` returns **0 controllers**; **with** it, **1**, and
+  `MGMT_OP_READ_INFO` then gives BD_ADDR `8e:e4:3c:22:61:00`.  Session 52's
+  "`hci0` exists, use mgmt to power it" was unreachable — `hci0` was never in
+  mgmt's index list.  It is now.
+* **Why it was unreachable (report 238 §0, trap 249).**  `0x201c` is
+  `HCI_LE_Read_Supported_States`, **not** a benign TI vendor op (report 237 §4 is
+  wrong).  A bare ROM answers it **Command Disallowed `0x0c`** with only 5
+  payload bytes where 9 are needed, so `hci_cc_func()` rejects it, the LE init
+  stage aborts, `hci0` never opens, and mgmt reports zero controllers.  The pack
+  fixes the **length** (11 → 12 bytes) and that is enough to register.
+* **The remaining blocker is a kernel-side UART framing fault (trap 250).**
+  `MGMT_OP_SET_POWERED` returns `0x05` (`-ETIMEDOUT`) after
+  `Frame reassembly failed (-84)` (`-EILSEQ`) and `Opcode 0x1003 failed: -110`.
+  The **same commands answer instantly from userspace**, so it is `hci_uart`'s
+  CTS/RTS and modem-line handling (`hci_uart_set_flow_control()`), not the chip.
+  Excluded by measurement: alignment/padding, chip idle-sleep between commands,
+  leftover bytes, UART line errors (`LSR = 0x60`), truncated long replies.
+* **LE is refused by the controller** (`0x0c` with a plausible payload,
+  `Write_LE_Host_Support` = `0x11`, LE feature page all zeros).  The reference's
+  own stack is **BR/EDR-only** (no LE opcodes, no LE Meta event, no SMP/ATT/GATT),
+  so there is no reference LE sequence to copy.  **The `wl128x-fw-4-sr/5-sr.bin`
+  files are WLAN-core firmware and have nothing to do with BT** — the BT core's
+  firmware is the `.bts` pack.
+* **The BT-firmware contradiction is settled** in favour of the reference's
+  `WL1283.bts`: its header says `Compatibility: Quattro, 6.0.15 ROM`, while
+  linux-firmware's `TIInit_*.bts` say `BL6450, WL1271/3 2.0 ROM` — a different,
+  older family.
+* **Ship `l2cap`/`sco`/`rfcomm`/`hidp` before expecting HID.**  They are modules
+  and none are in the region-1 rootfs yet (only `bluetooth`, `hci_uart`, `btbcm`
+  and their crypto deps are).
 
-**Bench (session 52, measured).**  Unit on our Linux image **`0xDD66D8C3`**
-(`0x939E4C` B, kernel `7.3.3`: the musb DMA fix and the UART2 CTS/RTS pads);
-region 1 = `local/images/rootfs-region1-wl1283-bt.ext4` (**`49e318bf…`**,
-**43 modules** = the 36 plus the seven Bluetooth ones, both SR firmware files,
-the per-unit NVS, the CAM+4-sr `wl12xx.ko` `2fb86c4d…`, `iw` 6.17, `wpa_*` 2.12,
-signed `regulatory.db`).  `0fca:8010`, console `pb> `, **ssh on
-`169.254.0.1`**.  `rcS` loads the wireless stack but does not raise the link;
-association is manual (`ip link set wlan0 up`, `iw reg set <CC>`,
-`wpa_supplicant`, and a `wpa_cli scan` nudge if the first auth times out).
-Kernel patch: **61 files / 8 762 lines**, sha256 `20556c5f…`.
-`BOOTCTR_FCTRY` reads **`0x23`** at the end of the session
-(`dmesg | grep pbrpmb` → `… record@196 = 23000000`, `0x23 >= threshold 0x1e,
-no write`); `/init` tops up at ≤`0x1e`, so this is a health check.
-No NVRAM/MCT/RPMB write; **no restore required**.
+**The WLAN still associates (session 52).**  The blocker was the missing
+`ccm`/`ctr` crypto modules (`ieee80211_key_alloc()` needs a `ccm(aes)` AEAD;
+without it the PTK install is `-ENOENT`, which wpa_supplicant reports as
+`WRONG_KEY`).  `wpa_state=COMPLETED`, WPA2-PSK/CCMP on 5785 MHz at −41 dBm,
+DHCP **192.168.0.212**.  A 5 GHz AP needs `iw reg set <CC>` (the world domain
+marks 5735–5835 MHz `PASSIVE-SCAN`).  Wi-Fi is 1×1 HT20 (72 Mbit/s) — **do not
+advertise HT40** (trap 247).  The USB RNDIS link now uses MUSB's DMA
+(RX 6.3 / TX 4.1 MB/s raw, ssh 2.3).
+
+**Bench (session 53, measured).**  Unit on our Linux image **`0xDD66D8C3`**
+(`0x939E4C` B, kernel `7.3.3`); region 1 =
+`local/images/rootfs-region1-wl1283-bt.ext4` (**`49e318bf…`**, **43 modules**).
+`0fca:8010`, console `pb> `, **ssh on `169.254.0.1`**.  Kernel patch:
+**61 files / 8 762 lines**, sha256 `20556c5f…`.  `BOOTCTR_FCTRY` reads **`0x23`**
+(`dmesg | grep pbrpmb`), above the `0x1e` threshold, so `/init` did not write.
+No NVRAM/MCT/RPMB write and **no flash at all** this session; nothing added to
+the UFS.  **No restore required.**
 
 ## Previous states
 
 The per-session snapshots are in
 [`docs/history/STATE-HISTORY.md`](../history/STATE-HISTORY.md):
 
+* **session 52** (2026-11-15) — the WL1283 WLAN associates (the `ccm`/`ctr`
+  modules), the USB link gets its DMA, and the BT core answers HCI (the UART2
+  CTS/RTS pads); reports 236/237.
 * **session 51** (2026-11-14) — the WL1283 WLAN works: the `-110` loop was the
   chip's ELP sleep (now CAM) and the never-completing scan was the 5-sr
   firmware (4-sr scans); reports 232–235.
@@ -82,8 +89,8 @@ The per-session snapshots are in
 | WDT2 | **working — 58.6 s window, 10 s pet (session 31)** | The loader arms `WLDR = 0xFFFC1800` (7.8125 s); the kernel reprograms it to the reference's `0xFFE2B400` (58.6 s) at the late initcall via `WSPR` (`0xAAAA`→`0x5555` stop, write `WLDR`, `0xBBBB`→`0x4444` start), **polling `WWPS`** after each write, and pets every 10 s (`TGR` read→invert→write); fallback 2 s if the readback fails.  Verified on `0xE36C679A` by `WCRR` reload timing (~10 s) and uptime >275 s.  The expected dmesg line is missing on 7.3.3 (printk anomaly).  Report 109 §8.1 + correction; trap 115; decision §38 |
 | eMMC (MMC2) | **reads proven; writes healthy — but writers must use large blocks** | `mmcblk1` = MCGAFA 59.4 GiB, `boot0`/`boot1`/`rpmb`; needs the `vemmc` fixed supply for `ocr_avail` (report 109 §9).  Session 16 read a freshly flashed 11 152 064-byte image back **byte-exactly** and matched a pre-flash TabletOS capture (report 134); the MMC2 functional clock is 96 MHz.  Session 17 measured the write path (report 136): the driver has no request-size limit — an O_DIRECT write gives **256 KiB `CMD25`s, 5.5–7.0 MB/s** (4 KiB chunks: 0.93 MB/s), one `CMD13` per request (normal `mmc_blk_card_busy`).  The old 17–32 KB/s was `recv`'s tiny buffered writes plus 4–7 unthrottled `printk`s per request to **fbcon**.  Use ≥64 KiB (ideally 256 KiB–1 MiB) writes with the MMC trace off.  **Session 18: region 1 now holds a bootable Linux root** (32 MiB ext4 at raw `0x29000000`), written through the pre-OS `0xF7` loop (2055 frames) and read back byte-exactly (QNX `dd` and Linux `blk sumb`); it mounts read-only via a loop and its `/init` runs (report 140). |
 | USB device + gadget | **working — DMA now actually used (session 52)** | enumerates `0fca:8010`: CDC-ACM (console) + **RNDIS** (network) in one configuration; High Speed (480 Mbps).  **Session 52 (report 236 §7): the RNDIS path had been running MUSB's PIO fallback** — `dma_channel_program()` refuses buffers that are not 4-byte aligned on RTL 2.00 (`MUSB_HWVERS = 0x0800`), and u_ether hands it 2-mod-4 addresses.  Fixed with `musb->g.quirk_avoids_skb_reserve = 1` (RX) and a TX realign in `gether_start_xmit()`: **RX 3.3 → 6.3 MB/s, TX 3.3 → 4.1 MB/s** (raw `nc`).  The RNDIS function's one-frame-per-transfer structure is now the limit; CDC-NCM is the untested next step.  The ACM console is still only ~134 KB/s and **drops bytes when the host blasts** (report 136 §3.3) — do not send multi-MB images through it.  Reports 114, 136, 236 |
-| **WL1283 (MMC5)** | **WORKING — associates, leases and passes traffic (session 52); scans (session 51)** | **Session 52 (report 236): the association blocker was the missing `ccm`/`ctr` crypto modules.**  `ieee80211_key_alloc()` allocates a `ccm(aes)` AEAD for every CCMP key; without it the PTK install returns `-ENOENT` and wpa_supplicant mislabels it `WRONG_KEY` (the handshake itself is fine — message 3 decrypts).  `ccm.ko`/`ctr.ko` ship in region 1 and `rcS` modprobes them before the stack: `wpa_state=COMPLETED`, WPA2-CCMP on 5785 MHz at −41 dBm, MCS7/65 Mbit/s, DHCP **192.168.0.212**, gateway and 1.1.1.1 reachable.  A 5 GHz AP needs `iw reg set <CC>` (the world domain marks 5735–5835 MHz `PASSIVE-SCAN`).  The **per-unit NVS** is shipped (`wl128x-nvs-perunit.bin`).  **Session 51 (report 232): the recovery loop was the firmware's ELP sleep.**  The failing transfer is the **FW-status read** — CMD53 to `0x1efc0`, 84 bytes, byte mode, 256-byte block — from the WL_IRQ thread right after `firmware booted`; it fails only once the chip has slept, and the identical read succeeds when it is awake.  Fix: `wl12xx_default_conf.conn.sta_sleep_auth = WL1271_PSM_CAM` (was `ILLEGAL` → ELP).  Verified after a real region-1 flash + reboot: one firmware boot, zero failures, `wlan0` `UP`, debugfs `sleep_auth` 0.  `wl128x-fw-4-sr.bin` is the **shipped** SR firmware (report 235): 5-sr (7.3.10.0.142) boots but panics on the first scan, so `wl12xx`'s floor is lowered to 7.3.5.0 and `WL128X_FW_NAME_SINGLE` names the 4-sr file; both files stay installed.  **WLAN (report 231):** `wlcore`/`wl12xx`/`mac80211`/`cfg80211` + `wl128x-nvs.bin`, the `ti,wl1283` child (`reg = <2>`, WL_IRQ gpio 53), `cap-power-off-card`, and an `mmc-pwrseq-simple` pulsing `WL_EN` (low → 50 ms → high → 120 ms) → firmware `Rev 7.3.5.0.98`, MAC `14:74:11:8f:9c:c3` (the assigned address, patched into the generic NVS; the radio calibration is still default).  **Enumeration (report 230):** the TWL6030 `CLK32KG` 32.768 kHz SLOW_CLK is physical `0xBC`–`0xBE` and was OFF; `CONFIG_CLK_TWL=y` + an enable in `clk-twl`'s probe (~1.9 s, before MMC5 at ~3.0 s) fixes it.  **Remaining (report 235):** the WLAN **scans** (17–21 BSS per scan, both bands) — next is **association** (station config with `wpa_passphrase`/`wpa_supplicant`, both in the image), then the per-unit **NVS** (found: the 468-byte NVRAM record at raw `0x152cc`; matters for TX power), the BT bring-up, and two open questions: *why* the 5-sr firmware panics on scan (235 §3) and *why* the ELP wake is not honoured (232 §6).  **Session-49/50 negatives (do not repeat):** the reference's MMCHS5 program and WL_EN ordering replayed, the stock-TabletOS diff, the boot-path RE, the clock sweep (reports 217/218/221–229).  The BT half's enable is `BT_EN` = gpio 55 = `GPIO2_23`, held low while the WLAN works (report 216). |
-| **WL1283 BT** | **transport WORKS — the core answers HCI and `hci0` appears (session 52)** | UART2 `0x4806C000` = `/dev/ttyS1`, 115200 8N1; `BT_EN` = gpio 55 = `GPIO2_23` (pad `0x4A10007C` mux 3), pulsed low → 50 ms → high.  **The three-session "silent BT" was the UART2 CTS/RTS pads** (`0x4A100118`): in safe mode (`0x011F011F`) the chip never answers; with the reference's `0x00000118` it returns `04 0e 04 01 03 0c 00` to `HCI_Reset` immediately.  `uart2_pins` now carries them, so it answers at boot.  `pbhci --attach` sets `N_HCI` + `HCI_UART_H4` and the kernel creates `/sys/class/bluetooth/hci0`, which then exchanges commands (the `Opcode 0x201c` error is benign).  **Not yet working:** powering the controller (`HCIDEVUP` returns `ENOSYS`; the mgmt `SET_POWERED` path is the route), the service pack (`WL1283.bts`), and a stack.  Reports 216/237, trap 248, DECISIONS §72 |
+| **WL1283 (MMC5)** | **WORKING — associates, leases and passes traffic (session 52); scans (session 51)** | **Session 52 (report 236): the association blocker was the missing `ccm`/`ctr` crypto modules.**  `ieee80211_key_alloc()` allocates a `ccm(aes)` AEAD for every CCMP key; without it the PTK install returns `-ENOENT` and wpa_supplicant mislabels it `WRONG_KEY` (the handshake itself is fine — message 3 decrypts).  `ccm.ko`/`ctr.ko` ship in region 1 and `rcS` modprobes them before the stack: `wpa_state=COMPLETED`, WPA2-CCMP on 5785 MHz at −41 dBm, MCS7/65 Mbit/s, DHCP **192.168.0.212**, gateway and 1.1.1.1 reachable.  A 5 GHz AP needs `iw reg set <CC>` (the world domain marks 5735–5835 MHz `PASSIVE-SCAN`).  The **per-unit NVS** is shipped (`wl128x-nvs-perunit.bin`).  **Session 51 (report 232): the recovery loop was the firmware's ELP sleep.**  The failing transfer is the **FW-status read** — CMD53 to `0x1efc0`, 84 bytes, byte mode, 256-byte block — from the WL_IRQ thread right after `firmware booted`; it fails only once the chip has slept, and the identical read succeeds when it is awake.  Fix: `wl12xx_default_conf.conn.sta_sleep_auth = WL1271_PSM_CAM` (was `ILLEGAL` → ELP).  Verified after a real region-1 flash + reboot: one firmware boot, zero failures, `wlan0` `UP`, debugfs `sleep_auth` 0.  `wl128x-fw-4-sr.bin` is the **shipped** SR firmware (report 235): 5-sr (7.3.10.0.142) boots but panics on the first scan, so `wl12xx`'s floor is lowered to 7.3.5.0 and `WL128X_FW_NAME_SINGLE` names the 4-sr file; both files stay installed.  **WLAN (report 231):** `wlcore`/`wl12xx`/`mac80211`/`cfg80211` + `wl128x-nvs.bin`, the `ti,wl1283` child (`reg = <2>`, WL_IRQ gpio 53), `cap-power-off-card`, and an `mmc-pwrseq-simple` pulsing `WL_EN` (low → 50 ms → high → 120 ms) → firmware `Rev 7.3.5.0.98`, MAC `14:74:11:8f:9c:c3` (the assigned address, patched into the generic NVS; the radio calibration is still default).  **Enumeration (report 230):** the TWL6030 `CLK32KG` 32.768 kHz SLOW_CLK is physical `0xBC`–`0xBE` and was OFF; `CONFIG_CLK_TWL=y` + an enable in `clk-twl`'s probe (~1.9 s, before MMC5 at ~3.0 s) fixes it.  **Remaining (report 235):** the WLAN **associates** and passes traffic (session 52); open and not blocking use are *why* the 5-sr firmware panics on scan (235 §3) and *why* the ELP wake is not honoured (232 §6).  **Session-49/50 negatives (do not repeat):** the reference's MMCHS5 program and WL_EN ordering replayed, the stock-TabletOS diff, the boot-path RE, the clock sweep (reports 217/218/221–229).  The BT half's enable is `BT_EN` = gpio 55 = `GPIO2_23`, held low while the WLAN works (report 216). |
+| **WL1283 BT** | **the CORE WORKS — real inquiry; `hci0` now registers with mgmt (session 53)** | UART2 `0x4806C000` = `/dev/ttyS1`, H4 at 115200 8N1; `BT_EN` = gpio 55 = `GPIO2_23` (pad `0x4A10007C` mux 3), pulsed low → 50 ms → high.  **Measured (report 238):** the core answers `HCI_Reset`, reports `hci ver 6` / `lmp ver 6` / `mfr 0x002b` (TI, BT 4.0), and **runs a full BR/EDR inquiry that finds a peer** (`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.  **The reference's `WL1283.bts` loads 315/315** and moves LMP subversion `0x2b0f` → `0x2b33`; loaded **before** the attach it makes `hci0` **register with mgmt** (0 → 1 controller, negative control both ways) by fixing the `0x201c` reply length.  **Left:** opening the controller — `MGMT_OP_SET_POWERED` returns `0x05` (`-ETIMEDOUT`) after `Frame reassembly failed (-84)` / `-EILSEQ`, a kernel `hci_uart` fault (the same commands answer from userspace); then ship `l2cap`/`sco`/`rfcomm`/`hidp` (not in region 1 yet) and a stack.  **LE is refused by the controller** and the reference stack is BR/EDR-only.  The pack survives `HCI_Reset` but not a `BT_EN` power cycle.  Tools in `rootfs/bt/`.  Reports 216/237/238, traps 248–250, DECISIONS §72/§73 |
 | **GPIO1 pads / board lines** | **fixed (session 49): three pads were driving GPMC alternate functions** | `0x4A100050` (`gpmc_ad0/1`) and `0x4A100074` (`gpmc_ncs0/1`) were left at mode 0, so pad logic drove GPMC bus lines on a board with no GPMC device while gpiolib could not touch them (trap 228); `0x4A31E058` (GPIO1_31) was unmuxed with its input buffer off.  The DTS now sets mode 3 + pull-down and hogs GPIO1 0/18/28/31 low, so `GPIO1_OE = 0x6FFB1FBA` against the reference's `0x6FFB1FAA` (the missing bit 4 is pad `0x058`'s low half = GPIO2_4, owned by `bridge_pins`, trap 229) and `GPIO1_DATAOUT` is identical.  Image `0x0114FFD3`.  **Not** the WL1283 blocker (card still silent).  Report 220 |
 | **Munin touch (CY8CTMA3)** | **working — calibrated, IRQ wired (session 38)** | I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c` boots the app and maps the 12-bit report through the 1917 `scaling.conf` calib (raw x 172→1108 → 102→922, y 110→658 → 60→540) to 1024×600.  IRQ gpio 35 = GPIO2_3 pad `0x056` = `0x410B`, `EDGE_FALLING`, `irq 110`; the ~330–380/s rate is the chip's report rate.  Power/reset GPIO1_14/GPIO4_8 are not driven.  Report 198, DECISIONS §47 |
 | **WM8994 audio** | **WORKING — stereo 440 Hz on headphones AND speakers at 48 kHz; diagnostics retired and re-verified (session 48)** | I²C4 `0x1a` (`0x8994`, revision D); the board machine driver makes `0 [WM8994]: PlayBook_WM8994`.  **Data path (session 46):** the codec's AIF1 is on McBSP3 (the oracle's routing log `AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3`, the live `PCR0 = 0x3`, the PDM pads `0x106/0x108/0x10a/0x10c` = `0x0109/0x0009/0x0109/0x0109`); the card is two ASoC links (`40124000.mcbsp + wm8994-aif1` clocks, `CBC_CFC`; `40126000.mcbsp + wm8994-aif2` data, `CBP_CFP`); the codec is the AIF1 slave, FLL1 locks from our BCLK (`R0x302 = 0x0000`, `R0x732 = 0x6020`, `R0x200 = 0x0011`), no MCLK1; the `omap-mcbsp` channel-layout guard keeps `XCR2 = 0x8041`.  **Speaker (session 47, report 215):** the speakers are on the codec's **line outputs**, so the output stage follows the jack: headphones → HPOUT1 + charge pump (`R0x060 = 0xcc`); jack out → LINEOUT1P/2P (PM3 `0x3cf0`, `R0x01e = 0`, `R0x034/0x035 = 1`, `R0x036 = 0`, `R0x038 = 0x80`, `R0x04c = 0x1f25`, `R0x060 = 0`) with **`spk` (GPIO2_12) driven low** and **GPIO1_15 (the `audio_boost` enable) high**.  **Session 48** removed the `pcm:` ring readback and the `live N:` FIFO dump and re-verified both outputs at DAC1 volume 40: `jack out (speaker)` / `jack in (headphone)`, "done, FLL1 locked", both PCMs `RUNNING`, the full byte count written, `spk` low during the speaker route and high on the headphone route, `boost` high.  Reports 214/215, DECISIONS §59/§60. |
@@ -248,21 +255,36 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    `IRQ_TYPE_LEVEL_LOW` for WL_IRQ (trap 238), do **not** use
    `wlcore_sdio dump=1` to measure a timing fault (trap 239), do **not**
    switch back to 5-sr (trap 243), and do **not** advertise HT40 (trap 247).
-1a. **The WL1283's other cores — BT (transport done), then FM, GPS (next).**
-   (a) **BT:** the core answers HCI and `hci0` exists (report 237) — the blocker
-   was the **UART2 CTS/RTS pads**, now in the DTS.  What is left: power the
-   controller through **mgmt** (`HCIDEVUP` is `ENOSYS`), load the service pack
-   (`local/work/1917/base/lib/firmware/bluetooth/WL1283.bts`; 315 HCI commands),
-   and give it a stack (BlueZ over mgmt, or HCI sockets).  `BT_EN` = gpio 55,
-   UART2 = `/dev/ttyS1`.  **Do not** re-run the "BT is silent" probes — that
-   question is answered.
-   (b) **FM:** mainline had `drivers/media/radio/wl128x` from 2.6.39 to 6.13 and
-   removed it; bringing it back means porting that driver forward and whatever
-   transport it needs.
-   (c) **GPS:** no mainline driver; the operator has a 2024 LKML patch to
-   evaluate, and the reference's own GPS path is the fallback.  Both are
-   *investigations* until the BT transport is settled — the three cores share
-   the chip, so BT comes first.
+1a. **WL1283 BT — the core WORKS; opening the kernel's controller is the next
+    experiment (session 53, report 238).**
+    (a) **What is proven:** the core answers `HCI_Reset`, reports itself
+    (`hci ver 6` / `lmp ver 6` / `mfr 0x002b` = TI, BT 4.0) and **runs a full
+    BR/EDR inquiry that finds a peer**, reproducibly.  The reference's
+    `WL1283.bts` loads **315/315** and moves LMP subversion `0x2b0f` → `0x2b33`;
+    loaded **before** the attach it makes `hci0` **register with mgmt** (0 → 1
+    controller, negative control both ways).
+    (b) **The one experiment:** `MGMT_OP_SET_POWERED` currently returns `0x05`
+    (`-ETIMEDOUT`) after `Frame reassembly failed (-84)` (`-EILSEQ`) and
+    `Opcode 0x1003 failed: -110`.  The same commands answer instantly from
+    userspace, so it is `hci_uart`'s **CTS/RTS and modem-line handling**
+    (`hci_uart_set_flow_control()` toggles RTS/DTR and sets `CRTSCTS`) — take
+    that out of the picture for this port and see whether the `-84` goes away.
+    Excluded by measurement: alignment/padding, chip idle-sleep, leftover bytes,
+    UART line errors (`LSR = 0x60`), truncated long replies.
+    (c) **Then** power, an inquiry through the stack, and HID.  **Ship
+    `l2cap`/`sco`/`rfcomm`/`hidp` first** — they are modules and none are in
+    region 1 yet.
+    (d) **LE is refused by the controller** (`0x0c`, `Write_LE_Host_Support` =
+    `0x11`, LE feature page zero) and the reference stack is BR/EDR-only, so
+    there is no sequence to copy.  **The `wl128x-fw-4-sr/5-sr.bin` files are WLAN
+    firmware, not BT** — do not swap them expecting a BT change.
+    `BT_EN` = gpio 55, UART2 = `/dev/ttyS1`; tools in `rootfs/bt/`.
+    **Do not** re-run the "BT is silent" probes — answered.
+    **FM:** mainline had `drivers/media/radio/wl128x` from 2.6.39 to 6.13 and
+    removed it; bringing it back means porting that driver forward and whatever
+    transport it needs.
+    **GPS:** no mainline driver; the operator has a 2024 LKML patch to
+    evaluate, and the reference's own GPS path is the fallback.
 2. **The WM8994 audio — DONE and the diagnostics retired (sessions 47/48,
    reports 214/215).**  Stereo 440 Hz at 48 kHz on headphones and speakers,
    re-verified at DAC1 volume 40 after the cleanup; image `0x9712A086` +

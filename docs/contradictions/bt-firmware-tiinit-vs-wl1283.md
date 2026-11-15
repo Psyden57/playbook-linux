@@ -1,7 +1,33 @@
 # Which BT service pack does the WL1283 need — linux-firmware's `TIInit_7.2.31.bts` or the reference's `WL1283.bts`?
 
-**Status: open.**  Nothing has been loaded under Linux yet, so neither claim has
-been tested on the chip.
+**Status: RESOLVED (session 53, report 238 §3) — use the reference's `WL1283.bts`.**
+
+Settled by reading both files' own headers and by what they do on the chip, not
+by inference:
+
+| file | its own header |
+|---|---|
+| reference `WL1283.bts` | `Description : Quattro L ROM Initialization Script`, `Compatibility: Quattro, 6.0.15 ROM`, `Version: TI_P6_15.51`, `# Quattro LMP Subversion: 2b33` |
+| linux-firmware `TIInit_7.2.31.bts` (48 909 B) | `Description : ORCA-Trio BTIP 2.0 ROM Initialization Script`, `Compatibility: BL6450, WL1271/3 2.0 ROM`, `Version: TI_P31.115`, `Notes: Use this script on BL6450, WL1271/3 2.0 ROM device only (FW v2.0.31)` |
+
+`Quattro` is this chip's BT-core generation; `BL6450 / WL1271/3 2.0` is a
+different, older family — and the `TIInit_*` files fetched for comparison
+(`6.2.31` too) say the same.  So claim 1 (in the original text below) is
+**wrong**, and the reference's file is the correct one for this device.
+
+Measured confirmation on the bench: replaying `WL1283.bts` over H4 gives
+**315/315 commands answered** and moves the LMP subversion from `0x2b0f` to
+**`0x2b33`**, which is exactly what that file's header declares.  It also fixes
+the `LE_Read_Supported_States` reply length (11 → 12 bytes), which is what lets
+`hci0` register with mgmt at all (report 238 §2, trap 249).
+
+Not related: `wl128x-fw-4-sr.bin` / `wl128x-fw-5-sr.bin` are the **WLAN** core's
+firmware (`request_firmware()` in `wlcore/main.c`).  Changing them cannot change
+BT behaviour.
+
+The original text is kept below for its history.
+
+---
 
 ## Claims
 

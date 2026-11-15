@@ -111,17 +111,28 @@ terminal (trap 216).
   collapse to MCS0, so it stays off (trap 247).  **Open, none blocking use:**
   *why* 5-sr panics on scan (235 §3), *why* the ELP wake is not honoured
   (232 §6), and the occasional first-auth timeout.
-* **WL1283 BT / FM / GPS — the next work (operator's order: BT first).**
-  **BT:** `BT_EN` = gpio 55 = `GPIO2_23`, UART2 = `/dev/ttyS1`; use
-  linux-firmware's `TIInit_7.2.31.bts` (not the reference's `WL1283.bts`).
-  Mainline 7.3.3 has **no `btwilink`/`ti-st`**, so the plan is H4 over UART2
-  plus a userspace `.bts` loader, with `rootfs/hci.c` as the probe — and the
-  reference (`devc-seromap-winbt` + `btp-btmgr`) checked first (DECISIONS §61).
+* **WL1283 BT — the CORE WORKS; the kernel's controller open is the next step
+  (session 53, report 238).**  Over a plain H4 tty the core answers
+  `HCI_Reset`, reports `hci ver 6` / `lmp ver 6` / `mfr 0x002b` (TI, BT 4.0) and
+  **runs a full BR/EDR inquiry that finds a peer**
+  (`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.  The reference's
+  `WL1283.bts` replays **315/315** and moves the LMP subversion
+  `0x2b0f` → `0x2b33`.  Loaded **before** the H4 attach it makes `hci0`
+  **register with mgmt for the first time** (0 → 1 controller, with the
+  no-pack case as the negative control), by fixing the
+  `LE_Read_Supported_States` (`0x201c`) reply length.
+  **Open:** opening the controller — `MGMT_OP_SET_POWERED` returns `0x05`
+  (`-ETIMEDOUT`) after `Frame reassembly failed (-84)` (`-EILSEQ`), and the same
+  commands answer instantly from userspace, so it is `hci_uart`'s CTS/RTS and
+  modem-line handling, not the chip (trap 250).  Then ship
+  `l2cap`/`sco`/`rfcomm`/`hidp` (modules; none in region 1 yet) and a stack.
+  **LE is refused by the controller** and the reference stack is BR/EDR-only.
+  Tools in `rootfs/bt/`.  **Closes when:** `hci0` powers up and a scan through
+  the stack finds a device; the operator's fuller goal (LE, HID) is recorded in
+  report 238 §5/§7 and is a separate question.
   **FM:** mainline carried `drivers/media/radio/wl128x` from 2.6.39 to 6.13 and
   removed it; bringing it back is a forward port.  **GPS:** no mainline driver;
   a 2024 LKML patch is the candidate, the reference's own path the fallback.
-  **Closes when:** BT gets an HCI device and can scan a nearby device; FM tunes
-  and the GPS delivers a fix.
 * **Touch.**  Done; the remaining nicety is driving power/reset
   (GPIO1_14 / GPIO4_8) for cold boots — a warm reset keeps the controller up
   (session 42).

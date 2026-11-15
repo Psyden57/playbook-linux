@@ -2547,6 +2547,51 @@ commands), while the handoff's earlier preference for linux-firmware's
 
 ---
 
+## 73. Load the BT service pack before attaching H4; the kernel's controller is the thing to fix (session 53)
+
+**Decision.**  The WL1283's BT core is brought up by replaying the reference's
+**`local/work/1917/base/lib/firmware/bluetooth/WL1283.bts`** over H4 **before**
+attaching the line discipline, and the remaining work is treated as a
+**mainline `hci_uart` problem**, not a chip problem.  `LE` is out of scope for
+now: the controller refuses it and the reference stack never used it.
+
+**Why.**  Three measurements, in report 238:
+
+1. **The core works.**  Over a plain H4 tty it answers `HCI_Reset`, reports
+   `hci ver 6` / `lmp ver 6` / `mfr 0x002b` (TI, Bluetooth 4.0) and **runs a full
+   BR/EDR inquiry that finds a peer** (`f0:a3:b2:bb:d1:00`, class `0x011c00`),
+   reproducibly.  Nothing about BR/EDR needs the reference any more.
+2. **The pack is what lets the kernel register.**  `WL1283.bts` replays 315/315
+   and moves the LMP subversion `0x2b0f` → `0x2b33` (the value its own header
+   declares).  It also fixes the **length** of the `LE_Read_Supported_States`
+   (`0x201c`) reply, from 11 to 12 bytes, which is what stops `hci_cc_func()`
+   rejecting it.  Measured with a negative control on the identical attach:
+   without the pack `MGMT_OP_READ_INDEX_LIST` = **0 controllers**, with it =
+   **1**.  So the previous plan ("power it over mgmt") was unreachable, and the
+   pack is not optional.
+3. **What is left is the kernel.**  `MGMT_OP_SET_POWERED` returns `0x05`
+   (`-ETIMEDOUT`) after `Frame reassembly failed (-84)` (`-EILSEQ`) and
+   `Opcode 0x1003 failed: -110` — while the *same* commands answer instantly from
+   userspace.  That excludes the chip, the pads, the baud and the wiring, and
+   points at `hci_uart`'s CTS/RTS and modem-line handling.
+
+**Constraint.**  The pack is **volatile across a `BT_EN` power cycle** (it
+survives `HCI_Reset`), so a raw probe must not pulse `BT_EN` after loading it.
+`N_HCI` attaches to the **tty**, so killing the attaching process leaves the
+discipline behind and the kernel silently eats later bytes — reset it with
+`rootfs/bt/btdetach.c` before a raw probe, or a live chip looks dead.  LE is
+**refused by the controller** (`0x0c` with a plausible payload,
+`Write_LE_Host_Support` = `0x11`, LE feature page all zeros) and the reference's
+own stack is BR/EDR-only (no LE opcodes, no LE Meta event, no SMP/ATT/GATT), so
+there is no sequence to copy for it.  `l2cap`/`sco`/`rfcomm`/`hidp` are modules
+and must be shipped before HID can work.
+
+**Evidence.**  Report **238**; the inquiry run; the `READ_INDEX_LIST` 11-byte vs
+13-byte replies; `MGMT_OP_READ_INFO` returning BD_ADDR `8e:e4:3c:22:61:00`;
+`README.md` and the five tools in `rootfs/bt/`.  Traps 249/250.
+
+---
+
 The repository licence and visibility are decided below; the remaining
 policy questions (publication of the proprietary corpus) stay open and are
 recorded here so nobody assumes a policy exists.

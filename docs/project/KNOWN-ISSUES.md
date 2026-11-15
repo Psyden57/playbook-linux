@@ -1980,6 +1980,46 @@ report 121 §3/§11/§12.
       raw socket otherwise fails with `Network is down`.  (Session 52, report
       237.)
 
+249. **`0x201c` is `HCI_LE_Read_Supported_States`, and on a bare ROM it stops
+      `hci0` from ever *registering* — it is not a benign TI vendor op.**  Report
+      237 §4 called it "a TI vendor op that `hci_uart` sends generically" and
+      dismissed the `-38`; that is wrong on both counts.  `0x201c` is OGF 0x08
+      (LE Controller Commands), OCF 0x01C.  A bare WL1283 ROM answers it with
+      **Command Disallowed (0x0c)** and only **5 payload bytes** where
+      `struct hci_rp_le_read_supported_states` needs 9, so `hci_cc_func()`
+      (`hci_event.c`) logs `unexpected cc 0x201c length: 5 < 9`, returns
+      `HCI_ERROR_UNSPECIFIED`, and `bt_to_errno()` maps that to `-ENOSYS` (the
+      `failed: -38`).  `hci_le_read_supported_states_sync()` is the **last** step
+      of `le_init2`, and `hci_init_stage_sync()` aborts the stage on any non-zero
+      return, so `hci_dev_init_sync()` fails: `hci0` is created but never opened,
+      and **mgmt reports `num_controllers = 0`**, which makes
+      `MGMT_OP_SET_POWERED` structurally impossible.  Two consequences:
+      (a) **loading the BT service pack (`WL1283.bts`) before the attach fixes
+      the length** (the reply becomes a full 12-byte event) and the controller
+      then registers with mgmt — measured as the
+      `READ_INDEX_LIST` difference 0 → 1 controller; (b) presence of
+      `/sys/class/bluetooth/hci0` is **not** liveness — the node exists from
+      `HCIUARTSETPROTO` alone, and mgmt registration is the real milestone.
+      The service pack also survives `HCI_Reset` (patch RAM is not cleared) but
+      **not** a `BT_EN` power cycle.  (Session 53, report 238.)
+
+250. **`-84` from the H4 line discipline is `EILSEQ`: the first byte of a receive
+      chunk was not 0x01–0x04.**  `h4_recv_buf()` (`drivers/bluetooth/hci_h4.c`)
+      returns it, `h4_recv()` logs `Frame reassembly failed (-84)`, and it shows
+      up on this board on the kernel's H4 attach even though the *same* commands
+      answer perfectly from a userspace tty at the same moment.  Excluded
+      causes, all measured: alignment/padding (`hu->alignment = 1`,
+      `hu->padding = 0`), the chip idling out between commands (answers with
+      0/1/2 s gaps), leftover unread bytes, UART line errors (`LSR = 0x60`), and
+      a long reply being truncated (the 71-byte `Read_Local_Commands` reply
+      arrives complete as 48 + 23).  What `hci_uart` does that a plain tty
+      reader does not is in `hci_ldisc.c`: `hci_uart_set_flow_control()` toggles
+      **RTS/DTR via `tiocmset`** and **sets `CRTSCTS`**, and the receive path
+      calls `tty_unthrottle()` per chunk.  The UART2 CTS/RTS pads are muxed to
+      the chip on this board (trap 248) and the reference stack carries a
+      dedicated **"force-RTS"** devctl for that pair, so the modem-line handling
+      is the first suspect.  (Session 53, report 238 §4.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it
