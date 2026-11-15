@@ -92,30 +92,39 @@ terminal (trap 216).
   without it).  **Session 47** used the oracle again for the speaker:
   `Headphone Select` = false routes it to the line outputs and the speaker
   sounds, which is how the missing board lines were found (report 215).
-* **WL1283 — the chip enumerates and wlcore boots the firmware; the `wlan0`
-  interface is not stable yet (session 50, reports 230/231).**  The blocker was the TWL6030
-  `CLK32KG` 32.768 kHz SLOW_CLK: physical `0xBC`–`0xBE` (module-relative `0x8C`
-  + the PM_RECEIVER base `0x30`), OFF under Linux (`07/01/00`) and ON under the
-  reference (`07/05/55`).  Enabling it makes the card enumerate; the permanent
-  fix is `CONFIG_CLK_TWL=y` + `clk32kg` enabled in `clk-twl`'s probe.  The
-  mainline `wlcore`/`wl12xx`/`mac80211`/`cfg80211` stack + `wl128x-fw-5-sr.bin`
-  then boots firmware (`Rev 7.3.10.0.142`) with the `ti,wl1283` child
-  (`reg = <2>`), `cap-power-off-card`, and an `mmc-pwrseq-simple` that pulses
-  `WL_EN` on every power cycle (`omap_hsmmc` has no `card_hw_reset`).  The five
-  negative host-state surfaces and the two session-50 negatives (the BT probe
-  and the 400/300/200/100 kHz sweep) are history now; the earlier address
-  claims (`0x8C` = VAUX3, `0x60` = VCORE3) are corrected in KNOWN-ISSUES 3.31.
-  **Remaining (the WLAN is NOT usable yet):** (i) the WL_IRQ status read times
-  out (`-110`) after firmware boot and wlcore recovery-loops — investigate the
-  firmware/chip revision match (`wl128x-fw-4-sr.bin` vs the 5-sr), the SDIO
-  block size/byte-mode, and the ELP/status path (report 231 §6);
-  (ii) the **per-unit NVS from the `hd5` calibration** (report 197) — the MAC is
-  already the assigned `14:74:11:8f:9c:c3` patched into the generic NVS, but the
-  radio calibration is the default; (iii) a **userspace supplicant**
-  (`iw`/`wpa_supplicant`) and `regulatory.db`; (iv) a **Linux BT bring-up**
-  (`BT_EN` + UART2) — the BT core is silent even with `BT_EN` driven (report
-  228).  **Do not** re-run the session-49/50 negatives, and do **not** use
-  `IRQ_TYPE_LEVEL_LOW` for WL_IRQ (trap 238).
+* **WL1283 — the WLAN is UP and stable; what is left is making it useful
+  (session 51, report 232).**  The `-110` recovery loop was the chip's **ELP**
+  sleep: the FW-status read (CMD53 to `0x1efc0`, 84 bytes, byte mode, 256-byte
+  block) from the WL_IRQ thread times out only after the chip has slept.  The
+  driver now sets `sta_sleep_auth = WL1271_PSM_CAM` in
+  `wl12xx_default_conf`, so `wlan0` comes up and stays up — verified after a
+  real region-1 flash and reboot (one firmware boot, zero failures).  Getting
+  there needed the chain of session 50: `CLK32KG` (`0xBC`–`0xBE`) enabled for
+  enumeration (`CONFIG_CLK_TWL=y` + `clk-twl`), then `wlcore`/`wl12xx` +
+  `wl128x-fw-5-sr.bin` with the `ti,wl1283` child (`reg = <2>`),
+  `cap-power-off-card` and the `mmc-pwrseq-simple` `WL_EN` power cycle.
+  `wl128x-fw-4-sr.bin` is **the shipped firmware** (report 235): the
+  never-completing scan was **5-sr** — `wl128x-fw-5-sr.bin` (`7.3.10.0.142`)
+  boots but **panics on the first scan** — while **4-sr** (`7.3.5.0.98`) scans
+  normally (17–21 BSS per scan, both bands, no errors, also from flashed media).
+  The port lowers `wl12xx`'s SR floor to 7.3.5.0 and names 4-sr in
+  `WL128X_FW_NAME_SINGLE`; both files stay installed.  The board is exonerated:
+  stock TabletOS runs `ti0` UP/RUNNING and associated on vendor firmware
+  `Rev 7.1.4.10.77` with `IPC_EVENT_SCAN_COMPLETE` 6 s after boot (report 234),
+  and there is **no newer wl128x firmware** anywhere (linux-firmware and TI's
+  tree carry the same ten files).  **Remaining:** (i) **association** — the
+  client side is shipped (`iw` 6.17, `wpa_supplicant`/`wpa_cli`/
+  `wpa_passphrase` 2.12, signed `regulatory.db`), so a station config is the
+  next step and where throughput gets measured; (ii) the per-unit NVS (the
+  468-byte NVRAM record at raw `0x152cc`) for TX power; (iii) a **Linux BT
+  bring-up** (`BT_EN` = gpio 55, UART2) with linux-firmware's
+  `TIInit_7.2.31.bts` — mainline 7.3.3 has no `btiwlink`/`ti-st`, so plan on
+  H4 + a userspace `.bts` loader; (iv) open, neither blocking: why 5-sr panics
+  (235 §3) and why the ELP wake is not honoured (232 §6).  **Do not** re-run
+  the session-49/50 negatives, do **not** use `IRQ_TYPE_LEVEL_LOW` for WL_IRQ
+  (trap 238), do **not** use `wlcore_sdio dump=1` to measure a timing fault
+  (trap 239), and do **not** switch back to 5-sr without reproducing the panic
+  (trap 243).
 * **Touch.**  Done; the remaining nicety is driving power/reset
   (GPIO1_14 / GPIO4_8) for cold boots — a warm reset keeps the controller up
   (session 42).

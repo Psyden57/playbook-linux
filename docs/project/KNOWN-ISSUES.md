@@ -1830,6 +1830,86 @@ report 121 §3/§11/§12.
       the unit in the bootrom (`0fca:0001`); flash the known-good region-0 image
       from there.  (Session 50, report 231 §6.)
 
+239. **The WL1283's `-110` recovery loop is the chip's ELP sleep: keep it in
+      CAM.**  The failing transfer is the **FW-status read** — CMD53 to
+      **`0x1efc0`, 84 bytes, byte mode (`fixed = 0`), 256-byte block** — issued
+      from the WL_IRQ thread (`irq/132-wl12xx`) right after `firmware booted`.
+      It fails only once the chip has entered ELP; with
+      `sta_sleep_auth = WL1271_PSM_CAM` the interface comes up and stays up.
+      The fix is `wl12xx_default_conf.conn.sta_sleep_auth =
+      WL1271_PSM_CAM` (was `WL1271_PSM_ILLEGAL` → ELP).  Measured causally:
+      `echo 2 > /sys/kernel/debug/ieee80211/phyN/wlcore/sleep_auth` on a
+      working system reproduces the loop in seconds, `echo 0` restores it.
+      **`wlcore_sdio dump=1` hides the failure** (per-transfer printk on fbcon
+      changes the timing, trap 52) — get the address from the error path
+      instead (a temporary `dev_err` with `addr`/`len`/`fixed`/`cur_blksize`).
+      `wl128x-fw-4-sr.bin` was rejected by wlcore's floor (`7.3.10.*.133`;
+      4-sr is `7.3.5.0.98`) before that floor was lowered — and with the floor
+      lowered, 4-sr is the firmware that works (trap 243).  (Session 51, report 232.)
+
+240. **A `wlcore` scan that "completes due to error" after ~30 s is the
+      driver's own `WL1271_SCAN_TIMEOUT`, not a hang and not a transport
+      fault.**  `wlcore_scan()` sets `wl->scan.failed = true` *by design* and
+      only the firmware's scan-complete event clears it; if no event arrives,
+      `wl1271_scan_complete_work()` logs `wlcore: Scan completed due to error.`
+      at exactly 30 s (`WL1271_SCAN_TIMEOUT`) and queues an unintended
+      recovery.  Count the `wl12xx` IRQs during the window before blaming the
+      bus: ~13 means the firmware never reported the scan.  A passive scan, a
+      single-channel scan and `power_save off` all behave the same when the
+      firmware is the problem.  `wlcore`'s fwlog cannot be enabled from sysfs —
+      `fw_logger_write()` refuses while `conf.fwlog.output == 0` — so the conf
+      default must be changed in the driver or supplied via `wlconf`.  The
+      per-unit NVS does not change this symptom (spliced and tested).  (Session
+      51, report 233.)
+
+241. **Do not enable `wlcore`'s host fwlog on wl12xx: the panic-log reader is
+      wl18xx-shaped and oopses.**  `modprobe wlcore fwlog=continuous` sets
+      `conf.fwlog.output = HOST` (the compiled default is `DBG_PINS`), and the
+      next recovery then runs `wlcore_event_fw_logger()`, which reads the FW
+      log block and parses it with the **wl18xx** field layout
+      (`WL18XX_LOGGER_BUFF_OFFSET`, `max_buff_size`, …).  On this WL1283 the
+      log address translates **out of range** — `WARN` at `io.c:84`,
+      `HW address 0x40159c out of range` — the read returns garbage, the
+      "actual" length is nonsense, and `wl12xx_copy_fwlog()` memcpys from an
+      unmapped vmalloc address: **`Unable to handle kernel paging request …
+      Internal error: Oops: 5` at `mmiocpy`**, taint `0x1280`
+      (`DIE|WARN|OOT`).  The worker dies holding state, so afterwards
+      **`ip link show` blocks** (ssh still answers) and the only recovery is a
+      reboot (`echo b > /proc/sysrq-trigger`).  `module_param_named(fwlog, …,
+      0)` creates no sysfs file, so the setting can only be passed at load.
+      **The one useful datum:** the recovery asks for the panic log because
+      `WL1271_FLAG_INTENDED_FW_RECOVERY` is clear, i.e. the **firmware itself
+      panics** on the failing scan.  Do not repeat this without first fixing
+      the parse (the FW log needs the wl12xx layout, not wl18xx's).  (Session
+      51, report 233.)
+
+242. **On a stock TabletOS boot the door's `sshd` may not come up — `qconn`
+      still does, so drive the unit with `tools/QCL.py`.**  After flashing the
+      shim IFS and letting a cold TabletOS boot, `169.254.0.1:22` was **refused**
+      while **9090 answered** (`QCL.py info` reports the target:
+      `OMAP4430_ES2.2_HS_Winchester_Rev:07`, `RELEASE=6.6.0`).  A stale
+      `door-hold` from before the reboot does **not** recover (trap 17) — kill it
+      by pid and start a fresh one.  `QCL.py exec /bin/<cmd> <args…>` runs single
+      commands; `exec /bin/sh -c '…'` does **not** survive its argument handling
+      (it silently runs the wrong thing), except where the whole pipeline is one
+      argument (`exec /bin/sh -c 'sloginfo' | grep …` on the host side works).
+      And rebind the host's `pb-rndis` profile to the **plain** `enp8s0f3u1` for
+      the oracle (trap 214) — with it still on `enp8s0f3u1i2` the unit is
+      unreachable even though the link is up.  (Session 51, report 234.)
+
+243. **The WL1283 must run `wl128x-fw-4-sr.bin`, not `5-sr`: the newer service
+      pack panics on the first scan.**  `5-sr` (`Rev 7.3.10.0.142`) boots and
+      keeps `wlan0` up, but every scan dies inside the firmware (no
+      scan-complete event; the driver's 30 s timeout, then recovery — reports
+      233/241), while `4-sr` (`Rev 7.3.5.0.98`) scans normally on the same
+      driver, NVS and board (**17–21 BSS per scan, both bands, no errors**).
+      The port therefore lowers `wl12xx`'s SR floor to **7.3.5.0**
+      (`WL128X_MAJOR_SR_VER 5`, `WL128X_MINOR_SR_VER 0`) and sets
+      `WL128X_FW_NAME_SINGLE` to the `4-sr` file; both files stay installed so
+      switching back is one `#define`.  `5-sr` was also the *newest* wl128x blob
+      in linux-firmware, so "use the latest firmware" is the wrong default here.
+      (Session 51, report 235.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

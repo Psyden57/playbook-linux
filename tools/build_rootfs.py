@@ -205,10 +205,33 @@ def install_firmware(stage, firmware_dir):
     return n
 
 
+def install_extras(stage, extras_dir):
+    """Copy a prebuilt tree into the image root (layout preserved).
+
+    For tools that are not built by this script — static ARM binaries such as
+    iw and wpa_supplicant — laid out as they should appear on the device, e.g.
+    local/work/rootfs-extras/usr/sbin/wpa_supplicant.
+    """
+    n = 0
+    if extras_dir and os.path.isdir(extras_dir):
+        for dp, _, fns in os.walk(extras_dir):
+            for fn in fns:
+                src = os.path.join(dp, fn)
+                rel = os.path.relpath(src, extras_dir)
+                dst = os.path.join(stage, rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+                os.chmod(dst, os.stat(src).st_mode & 0o777)
+                n += 1
+    return n
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--size-mb', type=int, default=64)
     ap.add_argument('--out', default=DEFAULT_OUT)
+    ap.add_argument('--extras', default=None,
+                    help='prebuilt tree copied into the image root (layout kept)')
     ap.add_argument('--cross', default=os.environ.get('CROSS_COMPILE', 'arm-linux-'))
     ap.add_argument('--uuid', default=DEFAULT_UUID)
     ap.add_argument('--busybox', default=None)
@@ -299,6 +322,11 @@ def main():
         nfw = install_firmware(stage, args.firmware)
         if nfw:
             print('firmware : %d file(s) in /lib/firmware' % nfw)
+
+        # Prebuilt tools (iw, wpa_supplicant, ...), layout preserved.
+        nx = install_extras(stage, args.extras)
+        if nx:
+            print('extras   : %d file(s) from %s' % (nx, args.extras))
 
         # Stable timestamps so builds differ only in the superblock.
         for dirpath, dirnames, filenames in os.walk(stage):

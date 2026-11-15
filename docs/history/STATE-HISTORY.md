@@ -14,6 +14,131 @@ duplicated here because the commit preserves it verbatim.
 `docs/project/STATE.md`; it was replaced by the session-43 state and is not
 duplicated here because the commit preserves it verbatim.
 
+## Previous state — 2026-11-14 (session 50)
+
+**The WL1283 enumerates and `wlcore` boots the firmware, but the `wlan0`
+interface is NOT stable yet.**  The SDIO card comes up, the driver binds, and
+firmware `Rev 7.3.10.0.142` boots — then the WL_IRQ handler's SDIO status read
+times out (`-110`) and wlcore recovery-loops (report 231 §6).  The enumeration
+blocker was the TWL6030 `CLK32KG`; the remaining issue is the status-read path
+(firmware/chip match, SDIO block size, or ELP), not calibration.
+
+* **Root cause (report 230):** `CLK32KG` is physical `0xBC`–`0xBE`
+  (module-relative `0x8C`; `twl_i2c` adds the `PM_RECEIVER` base `0x30`).  Linux
+  booted it `07/01/00` (**OFF**); the reference runs `07/05/55` (ON).  Enabling it
+  (`0xBE = 0xE1`) on a fresh boot turns `mmc4: Failed to initialize a
+  non-removable card` into `mmc4: new high speed SDIO card at address 0001`
+  (`0x0097:0x4076`, two functions).  Permanent fix: **`CONFIG_CLK_TWL=y`** plus an
+  enable of `clk32kg` in `clk-twl`'s probe (~1.9 s, before MMC5 at ~3.0 s).
+  Earlier address claims (`0x8C` = VAUX3, `0x60` = VCORE3) were wrong —
+  KNOWN-ISSUES 3.31.
+* **WLAN up (report 231):** mainline `wlcore`/`wl12xx`/`mac80211`/`cfg80211` with
+  `wl128x-fw-5-sr.bin` + `wl128x-nvs.bin`, the `ti,wl1283` child
+  (`reg = <2>`, WL_IRQ gpio 53 edge-falling), `cap-power-off-card`, and an
+  `mmc-pwrseq-simple` that pulses `WL_EN` (low → 50 ms → high → 120 ms) on every
+  power cycle (`omap_hsmmc` has no `card_hw_reset`).  Result:
+  `wlcore: firmware booted (Rev 7.3.10.0.142)`, `wlan0` appears with
+  MAC **`14:74:11:8f:9c:c3`** (the assigned address, patched into the NVS) —
+  **but the interface does not stay up**: the WL_IRQ status read times out
+  (`-110`) and wlcore recovery-loops (report 231 §6).  `rcS` loads the stack in
+  order.
+* **Not the cause / negative:** the 38.4 MHz reference clock (the reference INI
+  says 38.4; both boot and both loop — reverted to 26), a long host autosuspend
+  delay, and `IRQ_TYPE_LEVEL_LOW` (storms at boot and wedges the unit — trap
+  238; keep `EDGE_FALLING`).  The unpatched generic NVS loops identically, so the
+  recovery is not a calibration symptom.
+* **Both session-49 tests were negative (reports 228/229):** BT is silent even
+  with `BT_EN` driven and the UART verified (so BT is not a die-liveness oracle),
+  and 400/300/200/100 kHz all return `CTO` only (so "slower than 160 µs" is
+  dead).  Both experiments were reverted and proven; `omap_hsmmc.c`/`core.c` are
+  byte-identical to pristine + the shipped patch.
+* **Remaining WL1283 work (not blocking):** the per-unit **calibration** NVS
+  from the `hd5` data (report 197) — the MAC is already correct — plus a
+  userspace supplicant (`iw`/`wpa_supplicant`), `regulatory.db`, and a Linux
+  **BT** bring-up.
+
+**Bench (session 50, measured).**  Unit on our Linux image **`0x9712A086`**
+(region 0, `0x939A74` B, kernel `7.3.3` **#60** — the `CLK32KG` fix plus the
+`ti,wl1283` child, `cap-power-off-card` and the pwrseq); region 1 =
+`local/images/rootfs-region1-wl1283.ext4` (sha256 `88084b78…`, 34 modules +
+`ti-connectivity/wl128x-*`, dropbear).  `0fca:8010`, console `pb> `, **ssh on
+`169.254.0.1`**.  Battery `Full`, 4.156 V.  No NVRAM/MCT/RPMB write; no restore
+needed.
+
+## Previous state — 2026-11-14 (session 49)
+
+**The WL1283 blocker is measured from both sides, the host program is excluded,
+and the "silent card" measurement itself was found to be invalid and fixed.**
+Session 49 did what DECISIONS §61 prescribes: it booted the minimal 1917 oracle,
+loaded the reference's **own** WLAN driver exactly as `/base/scripts/wifi.sh`
+does, and watched it **bring the chip up live**; replayed the reference's entire
+MMCHS5 program and its WL_EN power-on ordering on Linux (both negative); compared
+stock TabletOS at `ti0`-up against our boot (negative); ran a full RE of the
+boot path (negative); tested the one clock-domain difference it found
+(negative); and then, on the operator's challenge, found that the way "silence"
+had been measured since session 33 was wrong.  Corrected, the measurement is a
+stronger negative — see the last bullet of this list.
+
+* **The measurement was flawed and is now correct.**  `WL_IRQ` (GPIO2_21) is
+  **not** a liveness signal — the oracle's own chip reads `0x08000018`
+  (bit 21 = 0) *before* its driver runs and only `0x08200018` after firmware, so
+  every "the chip is not up" claim compared our pre-driver state with the
+  reference's post-firmware state.  With `PBX`/`PBIRQ` restored (archived at
+  `kernel/archive/wl1283/measurement-instrumentation-2026-11-14.patch`) the real
+  reading is: at the instant of `CMD52`/`CMD5` the bus is correct
+  (`SYSCTL=000e1e07` → `CEN=1`, `ICE=1`, `CLKD=120` = 400 kHz;
+  `HCTL=00000b00` → `SDBP=1`, `SDVS=5` = 1.8 V; `CON=00000600`), `STAT=00018000`
+  decodes as **`CTO` only** (`CCRC=CEB=CIE=0`, `RSP0=0`, `PSTATE` `CLEV=1`), and
+  `CMD0` succeeds.  `CON=0x85` must **not** be copied: its `HR` bit makes the core
+  generate a response *instead of* the command and hangs the rescan (trap 233).
+  Report 227.
+
+* **The reference works on this unit, live** (not a recollection):
+  `sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7` → firmware download
+  → `Firmware running` / `Firmware Version: Rev 7.1.4.10.77` → `ti0`
+  **UP,RUNNING**, MAC `14:74:11:8f:9c:c3`, and on the pins WL_EN high **and
+  WL_IRQ high** (`GPIO2_DATAIN = 0x08200018`, bit 21 = 1).
+* **The reference's load path, which the earlier plan had wrong**: stage
+  `firmware.bin` in `/var/ti1283` (the minimal image's `/base` has no firmware
+  directory), then `mount -Tio-pkt -o nvram,firmdir=/var/ti1283/
+  /lib/dll/devnp-ti1283.so` and **`ifconfig ti0 up`**.  `-o nvram` is what
+  supplies the NVS (468 bytes from NVRAM); no `nvs_map.bin` exists anywhere in
+  the image.  The driver loads the **firmware before** it touches the bus, so a
+  missing file looks exactly like a card that will not enumerate.
+* **Our Linux image on the same unit is register-identical apart from one bit**:
+  `GPIO2_OE = 0xCE2ECDFF`, `DATAOUT = 0x31413200` (WL_EN high), pads
+  `0x07C = 0x00030003`, `0x148/0x14C/0x150 = 0x01180118` — and
+  `GPIO2_DATAIN = 0x01000010`, i.e. **WL_IRQ never goes high**, so the chip is
+  not up.  Replaying the reference's controller program (`ti,playbook-ref-init`:
+  `SYSCONFIG`, `SOFTRESET`, `SRA`, `CAPA|VS18`, `SDBP`, `IE = 0x317f0137`,
+  `CON = 0x85`, early DTW) and the reference's EN ordering (driver-owned EN,
+  low → 20 ms → high → 120 ms, after the controller is up) both left it
+  silent.  **Both experiments were reverted**; the tree is byte-identical to
+  pristine + the shipped patch again, per file.
+* **The BT half has its own enable, and it is not the WLAN's**: `BT_EN` =
+  **gpio 55 = GPIO2_23** (pad `0x4A10007C` bits 31:16), driven low → 50 ms →
+  high by `btp-btmgr`, and it is held **low while the WLAN works**.  So it
+  explains the silent `HCI_Reset` and nothing about the SDIO card (report 216,
+  new `docs/reference/qnx-hwio/gpio-table-winchester.csv`).
+* **What is left** is a board line the reference's *boot* asserts and its WLAN
+  driver does not, or the chip-side pins (VBAT/TCXO/SLOW_CLK, unmeasurable,
+  trap 165).  The next evidence is a **stock-TabletOS** capture at the moment
+  `ti0` comes up, diffed against our Linux boot — the oracle cannot stand in
+  for it (it needed the firmware and NVS supplied by hand).
+
+**Also this session, from the bench:** leaving MMCHS5 in the reference's
+command-phase state **wedges `reboot -f`** (trap 224; `sysrq b` recovers), and
+`slay -f io-pkt-v6-hc` on the oracle kills the stack that carries `rndis0`
+(trap 221 — it cost a power cycle).
+
+**Bench (session 49, measured).** Unit on our Linux image **`0xBAFD9B3B`**
+(region 0, `0x93A384` B, kernel `7.3.3` **#57**, the session-48 tree plus
+report 220's GPIO1 pad fix); region 1 = rootfs **`a4e76b18…`** (unchanged).
+`0fca:8010`, console `pb> `, **ssh on `169.254.0.1`**.  `BOOTCTR_FCTRY` read
+`0x29` at the last boot (`>= threshold 0x1e, no write`).
+The oracle is not on media; its `hd3` now carries `/var/ti1283/{firmware.bin,
+tiwlan.ini}` (report 217 §2.3 — delete for a clean oracle).
+
 ## Previous state — 2026-11-11 (session 39)
 
 **The WM8994 playback path is built and the DAI streams; the codec clock is

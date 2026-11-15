@@ -3,10 +3,21 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**8 658 lines / 57 files** against pristine (session-50 export)
-**linux-7.3.3** (sha256 `e7cf9628…`, session-50).  It was verified by
-applying it to pristine 7.3.3 targets and comparing all 57 files byte-for-byte
-with `local/kernel-tree` — 0 rejects, 57/57 identical.  Session 50 adds
+**8 713 lines / 59 files** against pristine **linux-7.3.3**
+(sha256 `2be9e99c…`, session-51 export).  It was verified by applying it to
+pristine 7.3.3 targets and comparing all 59 files byte-for-byte with
+`local/kernel-tree` — 0 rejects, 59/59 identical.  Session 51 adds two files,
+both `drivers/net/wireless/ti/wl12xx/`: `main.c` with
+`wl12xx_default_conf.conn.sta_sleep_auth = WL1271_PSM_CAM` (was
+`WL1271_PSM_ILLEGAL`, which selects ELP — the WL1283's `-110` recovery loop was
+the chip's ELP sleep, report 232/trap 239) **and**
+`WL128X_FW_NAME_SINGLE = "ti-connectivity/wl128x-fw-4-sr.bin"`, and `wl12xx.h`
+with the SR firmware floor lowered to `7.3.5.0` (`WL128X_MAJOR_SR_VER 5`,
+`WL128X_MINOR_SR_VER 0`) because the newer **5-sr** service pack boots but
+**panics on the first scan**, while **4-sr** scans (report 235, trap 243).  The
+diagnostic `dev_err` used to find the failing transfer was in `wlcore/sdio.c`
+and is **not** in the patch: that file is `cmp`-identical to pristine.
+Session 50 adds
 `drivers/clk/clk-twl.c` (the CLK32KG enable) and the board-DTS WL1283 changes
 (the `ti,wl1283` child, `cap-power-off-card`, the WL_EN pwrseq).
 **Session 48 retires the session-45 diagnostics** (the machine driver's `pcm:`

@@ -94,6 +94,24 @@ instrumentation, and the experiment was reverted afterwards.
 The raw capture is `dmesg`; the `PBR:`/`PBSIO:`/`PBC:` lines are the project's
 own driver-binding/bus traces.
 
+## WL1283 stability — the `-110` is ELP (report 232, session 51)
+
+| file | what |
+|---|---|
+| `wl1283-elp-2026-11-14.txt` | the causal toggle on a working `wlan0`: `echo 2 > …/wlcore/sleep_auth` (ELP) and the `-110` + `wlcore_irq` recovery loop that follows, on the final image (`0x9712A086` + rootfs `7e067560…`).  The header quotes the instrumented run that located the failing transfer (`PBRD addr 0x1efc0 len 84 fixed 0 blksz 256`), which a `dump=1` trace cannot show — it hides the failure (trap 239) |
+
+**It is not a fault capture**: the failure is induced on purpose, in one
+variable, to prove the mechanism.  With the driver's CAM default the same read
+succeeds and the interface stays up.
+
+## WL1283 scan — accepted, never completed (report 233, session 51)
+
+| file | what |
+|---|---|
+| `wl1283-scan-2026-11-14.txt` | `iw dev wlan0 scan` with the interface stable: power save, the failed scan, the `wl12xx` IRQ count and the `wlcore: Scan completed due to error.` at the driver's 30 s timeout, which then queues the unintended recovery |
+
+The 30 s gap is the driver's `WL1271_SCAN_TIMEOUT`, not a hang (trap 240).
+
 ## Exact duplicates
 
 These pairs are byte-identical; keep one of each when pruning.

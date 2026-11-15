@@ -1,137 +1,76 @@
 # Current state
 
-## Current state — 2026-11-14 (session 50)
+## Current state — 2026-11-14 (session 51)
 
-**The WL1283 enumerates and `wlcore` boots the firmware, but the `wlan0`
-interface is NOT stable yet.**  The SDIO card comes up, the driver binds, and
-firmware `Rev 7.3.10.0.142` boots — then the WL_IRQ handler's SDIO status read
-times out (`-110`) and wlcore recovery-loops (report 231 §6).  The enumeration
-blocker was the TWL6030 `CLK32KG`; the remaining issue is the status-read path
-(firmware/chip match, SDIO block size, or ELP), not calibration.
+**THE WL1283 WLAN WORKS: it scans.**  Two findings closed the bring-up in one
+session — the `-110` recovery loop was the chip's **ELP** sleep (now CAM), and
+the never-completing scan was the **5-sr firmware**: with
+`wl128x-fw-4-sr.bin` (`Rev 7.3.5.0.98`) `wlan0` is stable **and**
+`iw dev wlan0 scan` returns real results (**17–21 BSS**, both bands, no
+errors), verified from flashed media after a reboot.
 
-* **Root cause (report 230):** `CLK32KG` is physical `0xBC`–`0xBE`
-  (module-relative `0x8C`; `twl_i2c` adds the `PM_RECEIVER` base `0x30`).  Linux
-  booted it `07/01/00` (**OFF**); the reference runs `07/05/55` (ON).  Enabling it
-  (`0xBE = 0xE1`) on a fresh boot turns `mmc4: Failed to initialize a
-  non-removable card` into `mmc4: new high speed SDIO card at address 0001`
-  (`0x0097:0x4076`, two functions).  Permanent fix: **`CONFIG_CLK_TWL=y`** plus an
-  enable of `clk32kg` in `clk-twl`'s probe (~1.9 s, before MMC5 at ~3.0 s).
-  Earlier address claims (`0x8C` = VAUX3, `0x60` = VCORE3) were wrong —
-  KNOWN-ISSUES 3.31.
-* **WLAN up (report 231):** mainline `wlcore`/`wl12xx`/`mac80211`/`cfg80211` with
-  `wl128x-fw-5-sr.bin` + `wl128x-nvs.bin`, the `ti,wl1283` child
-  (`reg = <2>`, WL_IRQ gpio 53 edge-falling), `cap-power-off-card`, and an
-  `mmc-pwrseq-simple` that pulses `WL_EN` (low → 50 ms → high → 120 ms) on every
-  power cycle (`omap_hsmmc` has no `card_hw_reset`).  Result:
-  `wlcore: firmware booted (Rev 7.3.10.0.142)`, `wlan0` appears with
-  MAC **`14:74:11:8f:9c:c3`** (the assigned address, patched into the NVS) —
-  **but the interface does not stay up**: the WL_IRQ status read times out
-  (`-110`) and wlcore recovery-loops (report 231 §6).  `rcS` loads the stack in
-  order.
-* **Not the cause / negative:** the 38.4 MHz reference clock (the reference INI
-  says 38.4; both boot and both loop — reverted to 26), a long host autosuspend
-  delay, and `IRQ_TYPE_LEVEL_LOW` (storms at boot and wedges the unit — trap
-  238; keep `EDGE_FALLING`).  The unpatched generic NVS loops identically, so the
-  recovery is not a calibration symptom.
-* **Both session-49 tests were negative (reports 228/229):** BT is silent even
-  with `BT_EN` driven and the UART verified (so BT is not a die-liveness oracle),
-  and 400/300/200/100 kHz all return `CTO` only (so "slower than 160 µs" is
-  dead).  Both experiments were reverted and proven; `omap_hsmmc.c`/`core.c` are
-  byte-identical to pristine + the shipped patch.
-* **Remaining WL1283 work (not blocking):** the per-unit **calibration** NVS
-  from the `hd5` data (report 197) — the MAC is already correct — plus a
-  userspace supplicant (`iw`/`wpa_supplicant`), `regulatory.db`, and a Linux
-  **BT** bring-up.
+* **The failing transfer (report 232):** the FW-status read — **CMD53 to
+  `0x1efc0`, 84 bytes (`0x54`), byte mode, 256-byte block** — issued from the
+  WL_IRQ thread (`irq/132-wl12xx`) right after `wlcore: firmware booted`.  The
+  same read succeeds whenever the chip is awake, so the transfer is legal and
+  the *state* was the fault.  Identified with a temporary `dev_err` on the error
+  path only (the prescribed `wlcore_sdio dump=1` changes the timing and hides
+  the failure — trap 239); that instrument was reverted.
+* **The cause and the fix:** the chip's **ELP** (firmware sleep).  With
+  `power/control = on` (no runtime PM) or with `sleep_auth = 0` (CAM) the
+  interface is stable; re-enabling ELP at runtime
+  (`echo 2 > …/wlcore/sleep_auth`) reproduces the `-110` and the loop within
+  seconds.  The fix is one field: `wl12xx_default_conf.conn.sta_sleep_auth =
+  WL1271_PSM_CAM` (was `WL1271_PSM_ILLEGAL` → ELP).  Dynamic PS is unaffected;
+  only the host-driven ELP is off, which costs power, not function.
+* **The scan was the firmware (report 235):** `5-sr` (`Rev 7.3.10.0.142`)
+  boots but **panics on the first scan** (no event, 30 s timeout, recovery; the
+  panic-log read proved a crash — reports 233/241).  `4-sr`
+  (`Rev 7.3.5.0.98`) **scans** on the same driver/NVS/board.  The port lowers
+  `wl12xx`'s SR floor to **7.3.5.0** (`WL128X_MAJOR_SR_VER 5`,
+  `WL128X_MINOR_SR_VER 0`) and sets `WL128X_FW_NAME_SINGLE` to
+  `wl128x-fw-4-sr.bin`; both files stay installed.
+* **The board was exonerated (report 234):** stock TabletOS on this unit runs
+  `ti0` UP/RUNNING, **associated** (`192.168.0.212`), on vendor firmware
+  `Rev 7.1.4.10.77` with `IPC_EVENT_SCAN_COMPLETE` 6 s after boot.
+* **Not the cause:** the client tooling and `regulatory.db` (both shipped and
+  verified), the per-unit NVS (spliced, no change), the block size/byte mode,
+  the 32 kHz slow clock (`CLK32KG` = `07 01 55`).
+* **Remaining WL1283 work:** **association** (station config with
+  `wpa_passphrase`/`wpa_supplicant`, whose binaries are in the image), the
+  per-unit **calibration** NVS (report 233 — matters for TX power now), the
+  Linux **BT** bring-up (`BT_EN` = gpio 55 = `GPIO2_23`, UART2), and *why* the
+  ELP wake is not honoured (report 232 §6) and *why* 5-sr panics (235 §3) —
+  neither blocks use.
 
-**Bench (session 50, measured).**  Unit on our Linux image **`0x9712A086`**
-(region 0, `0x939A74` B, kernel `7.3.3` **#60** — the `CLK32KG` fix plus the
-`ti,wl1283` child, `cap-power-off-card` and the pwrseq); region 1 =
-`local/images/rootfs-region1-wl1283.ext4` (sha256 `88084b78…`, 34 modules +
-`ti-connectivity/wl128x-*`, dropbear).  `0fca:8010`, console `pb> `, **ssh on
-`169.254.0.1`**.  Battery `Full`, 4.156 V.  No NVRAM/MCT/RPMB write; no restore
-needed.
+**Bench (session 51, measured).**  Unit on our Linux image **`0x9712A086`**
+(region 0 unchanged this session: `0x939A74` B, kernel `7.3.3` **#60**); region 1
+= `local/images/rootfs-region1-wl1283-scan.ext4` (sha256 **`f159a221…`**, 34
+modules, the CAM + 4-sr `wl12xx.ko` md5 `2fb86c4d…`, built in-tree so it carries
+no `(O)` taint, both SR firmware files, plus **`/usr/bin/iw`**,
+**`/usr/sbin/wpa_{supplicant,cli,passphrase}`** and the signed
+**`/lib/firmware/regulatory.db`(.p7s)**).  Region 1 was flashed on its own at
+`0x2915` three times (module/firmware/tool changes → region-0 CRC unchanged,
+trap 190).  `0fca:8010`, console `pb> `, **ssh on `169.254.0.1`**; `wlan0` `UP`
+after `ip link set wlan0 up` (rcS loads the stack, it does not raise the link),
+firmware `Rev 7.3.5.0.98`, `iw dev wlan0 scan` → 17 BSS.  Kernel patch:
+**59 files / 8 713 lines**, sha256 `2be9e99c…`.  **`BOOTCTR_FCTRY` is not
+readable from Linux** (`/dev/rpmb` exists only on TabletOS); every boot's `/init`
+runs `pbrpmb topup 0x1E`, so read it as a health check on the next TabletOS
+boot (`SAFETY.md` §2).  **No device-side files were deployed** (`/tmp` is empty
+after the last reboot; nothing added to the UFS).  No NVRAM/MCT/RPMB write; **no
+restore required** — the unit is left on our Linux image.
 
-## Previous state — 2026-11-14 (session 49)
+## Previous states
 
-**The WL1283 blocker is measured from both sides, the host program is excluded,
-and the "silent card" measurement itself was found to be invalid and fixed.**
-Session 49 did what DECISIONS §61 prescribes: it booted the minimal 1917 oracle,
-loaded the reference's **own** WLAN driver exactly as `/base/scripts/wifi.sh`
-does, and watched it **bring the chip up live**; replayed the reference's entire
-MMCHS5 program and its WL_EN power-on ordering on Linux (both negative); compared
-stock TabletOS at `ti0`-up against our boot (negative); ran a full RE of the
-boot path (negative); tested the one clock-domain difference it found
-(negative); and then, on the operator's challenge, found that the way "silence"
-had been measured since session 33 was wrong.  Corrected, the measurement is a
-stronger negative — see the last bullet of this list.
+The per-session snapshots are in
+[`docs/history/STATE-HISTORY.md`](../history/STATE-HISTORY.md):
 
-* **The measurement was flawed and is now correct.**  `WL_IRQ` (GPIO2_21) is
-  **not** a liveness signal — the oracle's own chip reads `0x08000018`
-  (bit 21 = 0) *before* its driver runs and only `0x08200018` after firmware, so
-  every "the chip is not up" claim compared our pre-driver state with the
-  reference's post-firmware state.  With `PBX`/`PBIRQ` restored (archived at
-  `kernel/archive/wl1283/measurement-instrumentation-2026-11-14.patch`) the real
-  reading is: at the instant of `CMD52`/`CMD5` the bus is correct
-  (`SYSCTL=000e1e07` → `CEN=1`, `ICE=1`, `CLKD=120` = 400 kHz;
-  `HCTL=00000b00` → `SDBP=1`, `SDVS=5` = 1.8 V; `CON=00000600`), `STAT=00018000`
-  decodes as **`CTO` only** (`CCRC=CEB=CIE=0`, `RSP0=0`, `PSTATE` `CLEV=1`), and
-  `CMD0` succeeds.  `CON=0x85` must **not** be copied: its `HR` bit makes the core
-  generate a response *instead of* the command and hangs the rescan (trap 233).
-  Report 227.
-
-* **The reference works on this unit, live** (not a recollection):
-  `sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7` → firmware download
-  → `Firmware running` / `Firmware Version: Rev 7.1.4.10.77` → `ti0`
-  **UP,RUNNING**, MAC `14:74:11:8f:9c:c3`, and on the pins WL_EN high **and
-  WL_IRQ high** (`GPIO2_DATAIN = 0x08200018`, bit 21 = 1).
-* **The reference's load path, which the earlier plan had wrong**: stage
-  `firmware.bin` in `/var/ti1283` (the minimal image's `/base` has no firmware
-  directory), then `mount -Tio-pkt -o nvram,firmdir=/var/ti1283/
-  /lib/dll/devnp-ti1283.so` and **`ifconfig ti0 up`**.  `-o nvram` is what
-  supplies the NVS (468 bytes from NVRAM); no `nvs_map.bin` exists anywhere in
-  the image.  The driver loads the **firmware before** it touches the bus, so a
-  missing file looks exactly like a card that will not enumerate.
-* **Our Linux image on the same unit is register-identical apart from one bit**:
-  `GPIO2_OE = 0xCE2ECDFF`, `DATAOUT = 0x31413200` (WL_EN high), pads
-  `0x07C = 0x00030003`, `0x148/0x14C/0x150 = 0x01180118` — and
-  `GPIO2_DATAIN = 0x01000010`, i.e. **WL_IRQ never goes high**, so the chip is
-  not up.  Replaying the reference's controller program (`ti,playbook-ref-init`:
-  `SYSCONFIG`, `SOFTRESET`, `SRA`, `CAPA|VS18`, `SDBP`, `IE = 0x317f0137`,
-  `CON = 0x85`, early DTW) and the reference's EN ordering (driver-owned EN,
-  low → 20 ms → high → 120 ms, after the controller is up) both left it
-  silent.  **Both experiments were reverted**; the tree is byte-identical to
-  pristine + the shipped patch again, per file.
-* **The BT half has its own enable, and it is not the WLAN's**: `BT_EN` =
-  **gpio 55 = GPIO2_23** (pad `0x4A10007C` bits 31:16), driven low → 50 ms →
-  high by `btp-btmgr`, and it is held **low while the WLAN works**.  So it
-  explains the silent `HCI_Reset` and nothing about the SDIO card (report 216,
-  new `docs/reference/qnx-hwio/gpio-table-winchester.csv`).
-* **What is left** is a board line the reference's *boot* asserts and its WLAN
-  driver does not, or the chip-side pins (VBAT/TCXO/SLOW_CLK, unmeasurable,
-  trap 165).  The next evidence is a **stock-TabletOS** capture at the moment
-  `ti0` comes up, diffed against our Linux boot — the oracle cannot stand in
-  for it (it needed the firmware and NVS supplied by hand).
-
-**Also this session, from the bench:** leaving MMCHS5 in the reference's
-command-phase state **wedges `reboot -f`** (trap 224; `sysrq b` recovers), and
-`slay -f io-pkt-v6-hc` on the oracle kills the stack that carries `rndis0`
-(trap 221 — it cost a power cycle).
-
-**Bench (session 49, measured).** Unit on our Linux image **`0xBAFD9B3B`**
-(region 0, `0x93A384` B, kernel `7.3.3` **#57**, the session-48 tree plus
-report 220's GPIO1 pad fix); region 1 = rootfs **`a4e76b18…`** (unchanged).
-`0fca:8010`, console `pb> `, **ssh on `169.254.0.1`**.  `BOOTCTR_FCTRY` read
-`0x29` at the last boot (`>= threshold 0x1e, no write`).
-The oracle is not on media; its `hd3` now carries `/var/ti1283/{firmware.bin,
-tiwlan.ini}` (report 217 §2.3 — delete for a clean oracle).
-
-## Earlier state — session 48
-
-The session-48 snapshot (RNDIS/dropbear, the 2.3 MB/s ssh link, the retired
-audio diagnostics and the both-output audio re-verification, image
-`0x12C8C320` + rootfs `a4e76b18…`) was moved to
-[`docs/history/STATE-HISTORY.md`](../history/STATE-HISTORY.md) at the
-session-50 wrap-up.  It is superseded; nothing in it is current state.
+* **session 50** (2026-11-14) — the WL1283 enumerates (`CLK32KG`) and firmware
+  boots; the interface recovery-looped (reports 230/231).
+* **session 49** (2026-11-14) — the blocker measured from both sides, the host
+  program excluded, the "silent card" instrument corrected (reports 216–227).
+* **session 48 and older** — see the same file.
 
 ## Per-subsystem state
 
@@ -143,7 +82,7 @@ session-50 wrap-up.  It is superseded; nothing in it is current state.
 | WDT2 | **working — 58.6 s window, 10 s pet (session 31)** | The loader arms `WLDR = 0xFFFC1800` (7.8125 s); the kernel reprograms it to the reference's `0xFFE2B400` (58.6 s) at the late initcall via `WSPR` (`0xAAAA`→`0x5555` stop, write `WLDR`, `0xBBBB`→`0x4444` start), **polling `WWPS`** after each write, and pets every 10 s (`TGR` read→invert→write); fallback 2 s if the readback fails.  Verified on `0xE36C679A` by `WCRR` reload timing (~10 s) and uptime >275 s.  The expected dmesg line is missing on 7.3.3 (printk anomaly).  Report 109 §8.1 + correction; trap 115; decision §38 |
 | eMMC (MMC2) | **reads proven; writes healthy — but writers must use large blocks** | `mmcblk1` = MCGAFA 59.4 GiB, `boot0`/`boot1`/`rpmb`; needs the `vemmc` fixed supply for `ocr_avail` (report 109 §9).  Session 16 read a freshly flashed 11 152 064-byte image back **byte-exactly** and matched a pre-flash TabletOS capture (report 134); the MMC2 functional clock is 96 MHz.  Session 17 measured the write path (report 136): the driver has no request-size limit — an O_DIRECT write gives **256 KiB `CMD25`s, 5.5–7.0 MB/s** (4 KiB chunks: 0.93 MB/s), one `CMD13` per request (normal `mmc_blk_card_busy`).  The old 17–32 KB/s was `recv`'s tiny buffered writes plus 4–7 unthrottled `printk`s per request to **fbcon**.  Use ≥64 KiB (ideally 256 KiB–1 MiB) writes with the MMC trace off.  **Session 18: region 1 now holds a bootable Linux root** (32 MiB ext4 at raw `0x29000000`), written through the pre-OS `0xF7` loop (2055 frames) and read back byte-exactly (QNX `dd` and Linux `blk sumb`); it mounts read-only via a loop and its `/init` runs (report 140). |
 | USB device + gadget | **working, but not a bulk transport** | enumerates `0fca:8010`, CDC-ACM, product string "PlayBook (Linux bring-up)"; `/dev/ttyACM0` ↔ `/dev/ttyGS0`; High Speed (480 Mbps), 512-byte bulk packets.  **Drains at only ~134 KB/s and drops bytes when the host blasts** (report 136 §3.3), so it is a control/debug channel: do not send multi-MB images through `recv`.  Report 114, 136 |
-| **WL1283 (MMC5)** | **WORKING — enumerates, `wlcore` boots the firmware, `wlan0` up (session 50)** | **Root cause (report 230): the TWL6030 `CLK32KG` 32.768 kHz SLOW_CLK was OFF.**  Physical `0xBC`–`0xBE` (module-relative `0x8C` + the `PM_RECEIVER` base `0x30`); Linux booted `07/01/00`, the reference `07/05/55`.  Writing `0xBE = 0xE1` on a fresh boot enumerates the card; the fix is `CONFIG_CLK_TWL=y` + enable `clk32kg` in `clk-twl`'s probe (~1.9 s, before MMC5 at ~3.0 s).  **WLAN (report 231):** `wlcore`/`wl12xx`/`mac80211`/`cfg80211` + `wl128x-fw-5-sr.bin`/`wl128x-nvs.bin`, the `ti,wl1283` child (`reg = <2>`, WL_IRQ gpio 53), `cap-power-off-card`, and an `mmc-pwrseq-simple` pulsing `WL_EN` (low → 50 ms → high → 120 ms) → `wlcore: firmware booted (Rev 7.3.10.0.142)`, `wlan0` `UP`, MAC `14:74:11:8f:9c:c3` (the assigned address, patched into the NVS; the calibration is still the generic default).  **Negative session-50 tests:** the BT probe with `BT_EN` driven (report 228) and the 400/300/200/100 kHz sweep (report 229).  Remaining (not blocking): the `hd5` calibration NVS, a supplicant, `regulatory.db`, and a BT bring-up.  **Session 49 (reports 216/217):** the reference driver, loaded as `wifi.sh` does (`-o nvram`, firmware staged in `/var/ti1283`, then `ifconfig ti0 up`), **enumerates and runs the chip live on the oracle** (`Send commands sequence: 0, 5, 3, 7`, firmware `Rev 7.1.4.10.77`, `ti0` RUNNING with MAC `14:74:11:8f:9c:c3`, `GPIO2_DATAIN` bit 21 = 1).  The same unit under our Linux image is register-identical apart from that bit (WL_EN high, pads `0x0118`/`0x0003`, `OE = 0xCE2ECDFF`) and the chip stays down.  Replaying the reference's whole MMCHS5 program and its driver-owned WL_EN power-on order changed nothing.  The BT half's enable is `BT_EN` = gpio 55 = `GPIO2_23`, driven by `btp-btmgr` and **low** while the WLAN works (report 216), so it is unrelated.  Earlier: session 37's 1917-truth `&mmc5` (`0x0DC36A11`) probes but returns `attach_sdio no` (report 196); pads/WL_EN/IRQ/rails/CM all matched QNX; H1 (QNX's CMD0→CMD5 sequence at 24 MHz, `0x29784F48`) negative.  **Closes when** the chip enumerates under Linux and `wl12xx` probes with the `hd5` NVS.  Remaining: a board line the reference's *boot* asserts (stock-TabletOS capture at `ti0`-up time) or the chip-side pins (trap 165) |
+| **WL1283 (MMC5)** | **WORKING — enumerates, firmware `Rev 7.3.5.0.98`, `wlan0` stable, and it SCANS (session 51)** | **Session 51 (report 232): the recovery loop was the firmware's ELP sleep.**  The failing transfer is the **FW-status read** — CMD53 to `0x1efc0`, 84 bytes, byte mode, 256-byte block — from the WL_IRQ thread right after `firmware booted`; it fails only once the chip has slept, and the identical read succeeds when it is awake.  Fix: `wl12xx_default_conf.conn.sta_sleep_auth = WL1271_PSM_CAM` (was `ILLEGAL` → ELP).  Verified after a real region-1 flash + reboot: one firmware boot, zero failures, `wlan0` `UP`, debugfs `sleep_auth` 0.  `wl128x-fw-4-sr.bin` is the **shipped** SR firmware (report 235): 5-sr (7.3.10.0.142) boots but panics on the first scan, so `wl12xx`'s floor is lowered to 7.3.5.0 and `WL128X_FW_NAME_SINGLE` names the 4-sr file; both files stay installed.  **WLAN (report 231):** `wlcore`/`wl12xx`/`mac80211`/`cfg80211` + `wl128x-nvs.bin`, the `ti,wl1283` child (`reg = <2>`, WL_IRQ gpio 53), `cap-power-off-card`, and an `mmc-pwrseq-simple` pulsing `WL_EN` (low → 50 ms → high → 120 ms) → firmware `Rev 7.3.5.0.98`, MAC `14:74:11:8f:9c:c3` (the assigned address, patched into the generic NVS; the radio calibration is still default).  **Enumeration (report 230):** the TWL6030 `CLK32KG` 32.768 kHz SLOW_CLK is physical `0xBC`–`0xBE` and was OFF; `CONFIG_CLK_TWL=y` + an enable in `clk-twl`'s probe (~1.9 s, before MMC5 at ~3.0 s) fixes it.  **Remaining (report 235):** the WLAN **scans** (17–21 BSS per scan, both bands) — next is **association** (station config with `wpa_passphrase`/`wpa_supplicant`, both in the image), then the per-unit **NVS** (found: the 468-byte NVRAM record at raw `0x152cc`; matters for TX power), the BT bring-up, and two open questions: *why* the 5-sr firmware panics on scan (235 §3) and *why* the ELP wake is not honoured (232 §6).  **Session-49/50 negatives (do not repeat):** the reference's MMCHS5 program and WL_EN ordering replayed, the stock-TabletOS diff, the boot-path RE, the clock sweep (reports 217/218/221–229).  The BT half's enable is `BT_EN` = gpio 55 = `GPIO2_23`, held low while the WLAN works (report 216). |
 | **GPIO1 pads / board lines** | **fixed (session 49): three pads were driving GPMC alternate functions** | `0x4A100050` (`gpmc_ad0/1`) and `0x4A100074` (`gpmc_ncs0/1`) were left at mode 0, so pad logic drove GPMC bus lines on a board with no GPMC device while gpiolib could not touch them (trap 228); `0x4A31E058` (GPIO1_31) was unmuxed with its input buffer off.  The DTS now sets mode 3 + pull-down and hogs GPIO1 0/18/28/31 low, so `GPIO1_OE = 0x6FFB1FBA` against the reference's `0x6FFB1FAA` (the missing bit 4 is pad `0x058`'s low half = GPIO2_4, owned by `bridge_pins`, trap 229) and `GPIO1_DATAOUT` is identical.  Image `0x0114FFD3`.  **Not** the WL1283 blocker (card still silent).  Report 220 |
 | **Munin touch (CY8CTMA3)** | **working — calibrated, IRQ wired (session 38)** | I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c` boots the app and maps the 12-bit report through the 1917 `scaling.conf` calib (raw x 172→1108 → 102→922, y 110→658 → 60→540) to 1024×600.  IRQ gpio 35 = GPIO2_3 pad `0x056` = `0x410B`, `EDGE_FALLING`, `irq 110`; the ~330–380/s rate is the chip's report rate.  Power/reset GPIO1_14/GPIO4_8 are not driven.  Report 198, DECISIONS §47 |
 | **WM8994 audio** | **WORKING — stereo 440 Hz on headphones AND speakers at 48 kHz; diagnostics retired and re-verified (session 48)** | I²C4 `0x1a` (`0x8994`, revision D); the board machine driver makes `0 [WM8994]: PlayBook_WM8994`.  **Data path (session 46):** the codec's AIF1 is on McBSP3 (the oracle's routing log `AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3`, the live `PCR0 = 0x3`, the PDM pads `0x106/0x108/0x10a/0x10c` = `0x0109/0x0009/0x0109/0x0109`); the card is two ASoC links (`40124000.mcbsp + wm8994-aif1` clocks, `CBC_CFC`; `40126000.mcbsp + wm8994-aif2` data, `CBP_CFP`); the codec is the AIF1 slave, FLL1 locks from our BCLK (`R0x302 = 0x0000`, `R0x732 = 0x6020`, `R0x200 = 0x0011`), no MCLK1; the `omap-mcbsp` channel-layout guard keeps `XCR2 = 0x8041`.  **Speaker (session 47, report 215):** the speakers are on the codec's **line outputs**, so the output stage follows the jack: headphones → HPOUT1 + charge pump (`R0x060 = 0xcc`); jack out → LINEOUT1P/2P (PM3 `0x3cf0`, `R0x01e = 0`, `R0x034/0x035 = 1`, `R0x036 = 0`, `R0x038 = 0x80`, `R0x04c = 0x1f25`, `R0x060 = 0`) with **`spk` (GPIO2_12) driven low** and **GPIO1_15 (the `audio_boost` enable) high**.  **Session 48** removed the `pcm:` ring readback and the `live N:` FIFO dump and re-verified both outputs at DAC1 volume 40: `jack out (speaker)` / `jack in (headphone)`, "done, FLL1 locked", both PCMs `RUNNING`, the full byte count written, `spk` low during the speaker route and high on the headphone route, `boost` high.  Reports 214/215, DECISIONS §59/§60. |
@@ -173,7 +112,7 @@ the durable record is the CRC and what it demonstrated, not the file.
 
 | image | base | role |
 |---|---|---|
-| `0x9712A086` | 7.3.3 | **current region 0** (session 50: the CLK32KG fix + the `ti,wl1283` child, `cap-power-off-card` and the pwrseq; kernel `#60`, `0x939A74` B) |
+| `0x9712A086` | 7.3.3 | **current region 0** (built session 50: the CLK32KG fix + the `ti,wl1283` child, `cap-power-off-card` and the pwrseq; kernel `#60`, `0x939A74` B).  Unchanged in session 51 — that session's work is module-only (region 1) |
 | `0xF64A680D` | 7.3.3 | session-50 intermediate (`+cap-power-off-card`; the second firmware boot still failed) |
 | `0x53F7F97B` | 7.3.3 | session-50 intermediate (`+ti,wl1283` child) |
 | `0x69CDAC94` | 7.3.3 | session-50 first fix (`CONFIG_CLK_TWL=y` + `clk32kg` enable; the card enumerates) |
@@ -219,7 +158,7 @@ Do not boot `0x5E40C5C1` or `0xB9A1BC4F` (two lanes), or `0x3B04298E`
 | UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
 | `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it last ran during the session-35 S3/S2 TabletOS bench and topped `BOOTCTR_FCTRY` back to `0x32` |
 | `BOOTCTR_FCTRY` | **self-replenishing** — the Linux `/init` tops it up at ≤`0x1e` and a TabletOS boot writes `0x32`; read it as a health check (`SAFETY.md` §2) |
-| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`88084b78…`** (`local/images/rootfs-region1-wl1283.ext4`), **34 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus **`cfg80211`, `mac80211`, `wlcore`, `wlcore_sdio`, `wl12xx`, `libarc4`, `crc7`**), `pbplay`, `pbmix`, **dropbear**, and **`/lib/firmware/ti-connectivity/{wl128x-fw-5-sr.bin,wl128x-nvs.bin}`**; `rcS` loads the wireless stack in order.  Earlier images: `a4e76b18…` (sessions 48–49, 27 modules), `…-audio-oss-linout.ext4` (`af5a0a20…`, session 48) and `0342ab06…` (session 47).  The modules in any of them can be checked by extracting them with `debugfs` (trap 163) |
+| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`f159a221…`** (`local/images/rootfs-region1-wl1283-scan.ext4`, session 51: the CAM + 4-sr `wl12xx.ko` and the WLAN client tooling), **34 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus **`cfg80211`, `mac80211`, `wlcore`, `wlcore_sdio`, `wl12xx`, `libarc4`, `crc7`**), `pbplay`, `pbmix`, **dropbear**, **`/usr/bin/iw`**, **`/usr/sbin/wpa_{supplicant,cli,passphrase}`**, and **`/lib/firmware/ti-connectivity/{wl128x-fw-4-sr.bin,wl128x-fw-5-sr.bin,wl128x-nvs.bin}`** plus the signed **`/lib/firmware/regulatory.db`/`.p7s`**; `rcS` loads the wireless stack in order.  Earlier images: `a148c362…`, `7e067560…` and `88084b78…` (session 51/50), `a4e76b18…` (sessions 48–49, 27 modules), `…-audio-oss-linout.ext4` (`af5a0a20…`, session 48) and `0342ab06…` (session 47).  The modules in any of them can be checked by extracting them with `debugfs` (trap 163) |
 | TabletOS / OS | **NOT running** — the unit is on our Linux image `0x9712A086` (`0fca:8010`, console `pb> `, **ssh on `169.254.0.1`**).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
 | device-side files | **persistent on the UFS**: `/accounts/devuser/startup.sh` and our `.ssh/authorized_keys` (root ssh); **session 49 added `/var/ti1283/{firmware.bin,tiwlan.ini}`** on `hd3` — the reference WLAN's own staging directory (report 217 §2.3; delete it for a clean oracle).  `memdump3`/`memw32`/`pbi2c` are **not** on the UFS: push them to `/tmp` after every reboot (trap 177) |
 
@@ -247,28 +186,26 @@ enable) **high** — all three in the driver/DTS.  **Remaining audio items: none
 required** — the optional **MCLK1 probe** (trap 165) stays optional, and the
 `audio_boost` net is behaviourally confirmed but not schematic-confirmed.
 
-**The WL1283 WLAN is WORKING (session 50, reports 230/231) — the blocker was the
-TWL6030 `CLK32KG` 32.768 kHz SLOW_CLK being OFF, not the host program.**  The
-reference's own driver, loaded the way `/base/scripts/wifi.sh` loads it,
-enumerates and runs the chip live on this unit (report 217).  Under Linux the
-previous five independent surfaces were negative (the reference's MMCHS5
-program, its WL_EN ordering, the readable board state, the boot path, the clock
-domains), and session 50's two tests were negative too (the BT probe with
-`BT_EN` driven, and the 400/300/200/100 kHz sweep) — but the missing piece was
-the **32 kHz clock**, never read because the docs had the wrong address.  It is
-physical `0xBC`–`0xBE`; Linux booted it OFF and the reference runs it ON.
-Enabling it (`CONFIG_CLK_TWL=y` + `clk32kg` in `clk-twl`'s probe) makes the card
-enumerate, and the mainline `wlcore` stack with the `ti,wl1283` child,
-`cap-power-off-card` and the WL_EN pwrseq boots firmware and brings up `wlan0`.
-Remaining (not blocking): the per-unit `hd5` NVS / assigned MAC, a supplicant,
-`regulatory.db`.  The BT half's enable (`BT_EN` = gpio 55) is separate and is
-held low while the WLAN works (report 216); a Linux BT bring-up has not been
-done.
+**The WL1283 WLAN is WORKING and stable (session 51, report 232).**  The session-50
+recovery loop was the chip's **ELP** sleep, not a firmware/chip mismatch, the
+block size or the calibration: the FW-status read (CMD53 to `0x1efc0`, 84 bytes,
+byte mode) times out only after the chip has slept, and
+`sta_sleep_auth = WL1271_PSM_CAM` in `wl12xx_default_conf` keeps it awake —
+`wlan0` now comes up and stays up across a real flash and reboot.  The
+enumeration blocker was the TWL6030 `CLK32KG` 32.768 kHz SLOW_CLK being OFF
+(report 230); the reference's own driver, loaded as `/base/scripts/wifi.sh`
+loads it, runs the chip live on this unit (report 217), so the chip and its
+rails were never in doubt.  **Remaining (the WLAN is up but not yet useful):** a
+userspace supplicant (`iw`/`wpa_supplicant`) + `regulatory.db` for
+scan/associate, the per-unit calibration NVS from `hd5` (report 197), and the
+BT half (`BT_EN` = gpio 55, held low while the WLAN works — report 216).
+**Open:** why the ELP wake is not honoured (report 232 §6).
 
-**Found this session: the per-unit WLAN calibration is in the QNX `hd5`
-partition** (report 197) — a TI WL128x radio-parameters INI + a binary blob, and
-the assigned MAC is in NVRAM `deviceinfo` (`14:74:11:8f:9c:c3`).  It is the
-source for `wl128x-nvs.bin` **after** enumeration; it cannot fix CMD5.
+**The per-unit WLAN calibration is in the QNX `hd5`
+partition** (report 197, session 50) — a TI WL128x radio-parameters INI + a
+binary blob, and the assigned MAC is in NVRAM `deviceinfo`
+(`14:74:11:8f:9c:c3`, patched into the generic NVS).  It is the source for
+`wl128x-nvs.bin` **after** enumeration; it was never the `-110`.
 
 **The touch is finished** (I²C2 `0x48072000` = `i2c-1` at `0x65`,
 `playbook-munin.c`, `input0`/`event0`; reports 193/194/198, traps 138–141).
@@ -278,9 +215,11 @@ by the driver.  It survived this session's warm boot; only cold boots need the
 GPIO pulse.
 
 **Media state: region 0 = `0x9712A086`** (kernel `7.3.3` **#60**,
-`0x939A74` B, the CLK32KG fix + the wl1283 DT child and pwrseq); region 1 =
-the wireless rootfs `88084b78…` (67,108,864 B, 34 modules + `wl128x` firmware;
-`local/images/rootfs-region1-wl1283.ext4`).  The unit is on Linux,
+`0x939A74` B, the CLK32KG fix + the wl1283 DT child and pwrseq — unchanged in
+session 51); region 1 = the WLAN rootfs **`f159a221…`** (67,108,864 B, 34
+modules + **both** `wl128x` SR firmware files + the CAM/4-sr `wl12xx.ko` + `iw`/
+`wpa_supplicant`/`wpa_cli`/`passphrase` + the signed `regulatory.db`;
+`local/images/rootfs-region1-wl1283-scan.ext4`).  The unit is on Linux,
 not TabletOS.  The way back to TabletOS is the 1917 IFS
 (`local/work/ifs-shim-sealed.ifs`, block `0x825`); the previous Linux images
 `0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`, `0x17C2E119`, `0xBAFD9B3B`,
@@ -293,27 +232,28 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 ## What is next
 
-1. **WL1283 — the chip enumerates and `wlcore` boots the firmware, but `wlan0`
-   is not stable (session 50, reports 230/231).**  The enumeration blocker was
-   `CLK32KG`; the remaining issue is the WL_IRQ status read timing out (`-110`)
-   and wlcore recovery-looping.  **Next, in order:**
-   (a) find the `-110` cause — the firmware/chip revision match (try
-   `wl128x-fw-4-sr.bin` vs the 5-sr), the SDIO block size/byte-mode after the
-   firmware boot, or the ELP/status path (report 231 §6); capture the failing
-   CMD53 with `wlcore_sdio dump=1`;
-   (b) the per-unit **calibration** NVS from the `hd5` data (report 197) — the
-   MAC is already the assigned `14:74:11:8f:9c:c3`, patched into the generic
-   NVS; the radio calibration is still the default;
-   (c) a **userspace supplicant** (`iw`/`wpa_supplicant`) and `regulatory.db` for
-   scan/associate;
-   (d) **BT** is untouched: `HCI_Reset` is silent even with `BT_EN` driven
-   (report 228).
-   **Do not** re-run the session-49/50 negatives, and do **not** use
-   `IRQ_TYPE_LEVEL_LOW` for WL_IRQ (trap 238).
+1. **WL1283 — the WLAN WORKS: it scans (session 51, reports 232–235).**  Two
+   blockers closed: the `-110` loop was the chip's ELP sleep (now CAM), and the
+   never-completing scan was the **5-sr firmware** — `wl128x-fw-4-sr.bin`
+   (`Rev 7.3.5.0.98`) scans (17–21 BSS, both bands), so the floor is 7.3.5.0
+   and `WL128X_FW_NAME_SINGLE` names 4-sr.  **Next, in order:**
+   (a) **association** — station config via `wpa_passphrase`/`wpa_supplicant`
+   (both in the image), then `wpa_cli status`; that is also where real
+   throughput gets measured;
+   (b) the per-unit **NVS** (the 468-byte NVRAM record at raw `0x152cc`) for TX
+   power — `local/work/wl128x-nvs-perunit.bin`, spliced but not yet shipped;
+   (c) the **BT** bring-up (`BT_EN` = gpio 55, UART2, linux-firmware's
+   `TIInit_7.2.31.bts`; mainline 7.3.3 has no `btwilink`/`ti-st`);
+   (d) open questions, neither blocking use: *why* 5-sr panics on scan (235 §3)
+   and *why* the ELP wake is not honoured (232 §6).
+   **Do not** re-run the session-49/50 negatives, do **not** use
+   `IRQ_TYPE_LEVEL_LOW` for WL_IRQ (trap 238), do **not** use
+   `wlcore_sdio dump=1` to measure a timing fault (trap 239), and do **not**
+   switch back to 5-sr without reproducing the panic (trap 243).
 2. **The WM8994 audio — DONE and the diagnostics retired (sessions 47/48,
    reports 214/215).**  Stereo 440 Hz at 48 kHz on headphones and speakers,
    re-verified at DAC1 volume 40 after the cleanup; image `0x9712A086` +
-   rootfs `88084b78…`.  The only items left are optional: the **MCLK1 probe**
+   rootfs `f159a221…`.  The only items left are optional: the **MCLK1 probe**
    (trap 165) and identifying what the GPIO1_15 `audio_boost` enable supplies if
    a schematic appears.  The ABE is not needed (DECISIONS §58/§59).
 3. **Touch: DONE (session 38, report 198) but down after a cold boot.**  The
@@ -322,13 +262,15 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    (GPIO1_14/GPIO4_8) are pulsed, which the driver still does not drive.  A
    warm reset keeps it up (session 42).
 4. **The `wlcore@2` child is in the DTS** (`ti,wl1283`, `reg = <2>`, WL_IRQ,
-   26 MHz ref/TCXO) and the stack probes; only the **per-unit `wl128x-nvs.bin`
-   from the `hd5` calibration** (report 197) remains, to replace the generic NVS
-   and its fuse-derived MAC (item 1a).
-5. **The unit is on Linux `0x9712A086`** (region 0, kernel #60) + the wireless
-   rootfs (`88084b78…`, region 1), reachable over **ssh on `169.254.0.1`** as
-   well as the ACM console.  To return to TabletOS, flash the
-   1917 IFS at block `0x825`; the previous Linux images remain.
+   26 MHz ref/TCXO), the stack probes, and the firmware stays up; the only
+   remaining node-level item is the **per-unit `wl128x-nvs.bin`** from the `hd5`
+   calibration (report 197), to replace the generic NVS.
+5. **The unit is on Linux `0x9712A086`** (region 0, kernel #60) + the WLAN
+   rootfs (`f159a221…`, region 1), reachable over **ssh on `169.254.0.1`** as
+   well as the ACM console.  `rcS` loads the wireless stack but does **not**
+   raise the link: bring `wlan0` up with `ip link set wlan0 up`.  To return to
+   TabletOS, flash the 1917 IFS at block `0x825`; the previous Linux images
+   remain.
 6. **Use ssh, not the console, for anything substantial.**  `tools/pbssh.sh
    'cmd'` (root, key-only) runs at 2.3 MB/s and does not drop bytes; the ACM
    console is for recovery and for when the network stack is broken.  The same

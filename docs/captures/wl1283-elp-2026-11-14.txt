@@ -1,0 +1,103 @@
+# WL1283 ELP failure — the -110 status read, and the CAM workaround (session 51)
+# image 0x9712A086 (kernel #60) + rootfs 7e067560 (wl12xx CAM default)
+#
+# METHOD.  wlan0 is up and stable with the driver's CAM default.  ELP is then
+# re-enabled at runtime only, with nothing else changed:
+#   echo 2 > /sys/kernel/debug/ieee80211/phyN/wlcore/sleep_auth
+# The first FW-status read after the chip has slept times out (-110) and
+# wlcore recovery-loops; `echo 0` (or a module reload) makes it stable again.
+# This is the same failure that made every `ip link up` fail in session 50.
+#
+# The failing transfer was identified with a one-off instrumented wlcore_sdio
+# (dev_err on the error path only; nothing printed on success), since building
+# the module with `dump=1` perturbs the timing enough to hide the failure:
+#
+#   [ 1093.034545] wl1271_sdio mmc4:0001:2: PBRD addr 0x1efc0 len 84 fixed 0 blksz 256: sdio read failed (-110)
+#
+# i.e. the 84-byte (0x54) FW-status block at 0x1efc0, held in CMD53 byte mode
+# (fixed=0) with a 256-byte block size, read from the WL_IRQ thread
+# (irq/132-wl12xx) immediately after `wlcore: firmware booted`.  Instrumented
+# module described in report 232; source reverted to pristine afterwards
+# (cmp: byte-identical).
+#
+# Raw dmesg follows (PBSIO/PBC/PBINI/PBX board traces filtered out).
+
+[   50.909698] wl1271_sdio mmc4:0001:2: sdio read failed (-110)
+[   50.911285] ------------[ cut here ]------------
+[   50.912811] WARNING: drivers/net/wireless/ti/wlcore/main.c:880 at wl12xx_queue_recovery_work.part.0+0x58/0x60 [wlcore], CPU#0: irq/132-wl12xx/122
+[   50.916625] Modules linked in: wlcore_sdio wl12xx wlcore mac80211 libarc4 cfg80211 snd_pcm_oss snd_mixer_oss snd_soc_playbook_wm8994 snd_soc_omap_mcbsp snd_soc_ti_sdma snd_soc_wm8994 snd_soc_wm_hubs wm8994 twl6030_charger twl6030_gpadc cm3217(O) leds_fan5702 bq27xxx_battery_i2c bq27xxx_battery tmp103 hwmon mpu3050 i2c_mux hmc5843_i2c hmc5843_core industrialio_triggered_buffer kfifo_buf industrialio bma150 evdev
+[   50.926239] CPU: 0 UID: 0 PID: 122 Comm: irq/132-wl12xx Tainted: G        W  O        7.3.3 #60 VOLUNTARY 
+[   50.926239] Tainted: [W]=WARN, [O]=OOT_MODULE
+[   50.931488] Hardware name: Generic OMAP4 (Flattened Device Tree)
+[   50.934173] Call trace: 
+[   50.934173]  unwind_backtrace from show_stack+0x10/0x14
+[   50.934204]  show_stack from dump_stack_lvl+0x38/0x48
+[   50.942382]  dump_stack_lvl from __warn+0x94/0x16c
+[   50.942382]  __warn from warn_slowpath_fmt+0x6c/0xcc
+[   50.942382]  warn_slowpath_fmt from wl12xx_queue_recovery_work.part.0+0x58/0x60 [wlcore]
+[   50.948120]  wl12xx_queue_recovery_work.part.0 [wlcore] from wlcore_irq+0x18c/0x1a4 [wlcore]
+[   50.948120]  wlcore_irq [wlcore] from irq_thread_fn+0x1c/0x78
+[   50.958129]  irq_thread_fn from irq_thread+0x158/0x29c
+[   50.958129]  irq_thread from kthread+0x110/0x148
+[   50.964447]  kthread from ret_from_fork+0x14/0x40
+[   50.964447] Exception stack(0xf0591fb0 to 0xf0591ff8)
+[   50.964447] 1fa0:                                     00000000 00000000 00000000 00000000
+[   50.964447] 1fc0: 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[   50.964447] 1fe0: 00000000 00000000 00000000 00000000 00000013 00000000
+[   50.981079] ---[ end trace 0000000000000000 ]---
+[   50.984649] wlcore: WARNING Enable for recovery failed
+[   50.988098] wlcore: Hardware recovery in progress. FW ver: Rev 7.3.10.0.142
+[   50.991485] wlcore: down
+[   50.995422] wl12xx_driver wl12xx.1.auto: Runtime PM usage count underflow!
+[   50.999114] ieee80211 phy0: Hardware restart was requested
+[   51.630157] wlcore: firmware booted (Rev 7.3.10.0.142)
+[   51.631561] ------------[ cut here ]------------
+[   51.632781] WARNING: net/mac80211/util.c:2012 at ieee80211_reconfig+0x240/0x2168 [mac80211], CPU#0: kworker/0:8/45
+[   51.635925] Modules linked in: wlcore_sdio wl12xx wlcore mac80211 libarc4 cfg80211 snd_pcm_oss snd_mixer_oss snd_soc_playbook_wm8994 snd_soc_omap_mcbsp snd_soc_ti_sdma snd_soc_wm8994 snd_soc_wm_hubs wm8994 twl6030_charger twl6030_gpadc cm3217(O) leds_fan5702 bq27xxx_battery_i2c bq27xxx_battery tmp103 hwmon mpu3050 i2c_mux hmc5843_i2c hmc5843_core industrialio_triggered_buffer kfifo_buf industrialio bma150 evdev
+[   51.643310] CPU: 0 UID: 0 PID: 45 Comm: kworker/0:8 Tainted: G        W  O        7.3.3 #60 VOLUNTARY 
+[   51.644287] Tainted: [W]=WARN, [O]=OOT_MODULE
+[   51.648834] Hardware name: Generic OMAP4 (Flattened Device Tree)
+[   51.648834] Workqueue: events_freezable ieee80211_restart_work [mac80211]
+[   51.652008] Call trace: 
+[   51.654479]  unwind_backtrace from show_stack+0x10/0x14
+[   51.654479]  show_stack from dump_stack_lvl+0x38/0x48
+[   51.661956]  dump_stack_lvl from __warn+0x94/0x16c
+[   51.661956]  __warn from warn_slowpath_fmt+0x6c/0xcc
+[   51.661956]  warn_slowpath_fmt from ieee80211_reconfig+0x240/0x2168 [mac80211]
+[   51.661956]  ieee80211_reconfig [mac80211] from ieee80211_restart_work+0xe8/0x148 [mac80211]
+[   51.661956]  ieee80211_restart_work [mac80211] from process_one_work+0x174/0x424
+[   51.661956]  process_one_work from worker_thread+0x168/0x2f4
+[   51.682067]  worker_thread from kthread+0x110/0x148
+[   51.682067]  kthread from ret_from_fork+0x14/0x40
+[   51.682067] Exception stack(0xf020dfb0 to 0xf020dff8)
+[   51.682067] dfa0:                                     00000000 00000000 00000000 00000000
+[   51.690979] dfc0: 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[   51.697448] dfe0: 00000000 00000000 00000000 00000000 00000013 00000000
+[   51.700714] ---[ end trace 0000000000000000 ]---
+[   51.703796] ------------[ cut here ]------------
+[   51.703796] WARNING: drivers/net/wireless/ti/wlcore/main.c:880 at wl12xx_queue_recovery_work.part.0+0x58/0x60 [wlcore], CPU#0: irq/132-wl12xx/122
+[   51.714050] Modules linked in: wlcore_sdio wl12xx wlcore mac80211 libarc4 cfg80211 snd_pcm_oss snd_mixer_oss snd_soc_playbook_wm8994 snd_soc_omap_mcbsp snd_soc_ti_sdma snd_soc_wm8994 snd_soc_wm_hubs wm8994 twl6030_charger twl6030_gpadc cm3217(O) leds_fan5702 bq27xxx_battery_i2c bq27xxx_battery tmp103 hwmon mpu3050 i2c_mux hmc5843_i2c hmc5843_core industrialio_triggered_buffer kfifo_buf industrialio bma150 evdev
+[   51.729675] CPU: 0 UID: 0 PID: 122 Comm: irq/132-wl12xx Tainted: G        W  O        7.3.3 #60 VOLUNTARY 
+[   51.729675] Tainted: [W]=WARN, [O]=OOT_MODULE
+[   51.729675] Hardware name: Generic OMAP4 (Flattened Device Tree)
+[   51.729675] Call trace: 
+[   51.729675]  unwind_backtrace from show_stack+0x10/0x14
+[   51.729675]  show_stack from dump_stack_lvl+0x38/0x48
+[   51.752960]  dump_stack_lvl from __warn+0x94/0x16c
+[   51.752960]  __warn from warn_slowpath_fmt+0x6c/0xcc
+[   51.752960]  warn_slowpath_fmt from wl12xx_queue_recovery_work.part.0+0x58/0x60 [wlcore]
+[   51.752960]  wl12xx_queue_recovery_work.part.0 [wlcore] from wlcore_irq+0x18c/0x1a4 [wlcore]
+[   51.752960]  wlcore_irq [wlcore] from irq_thread_fn+0x1c/0x78
+[   51.767700]  irq_thread_fn from irq_thread+0x158/0x29c
+[   51.767700]  irq_thread from kthread+0x110/0x148
+[   51.767700]  kthread from ret_from_fork+0x14/0x40
+[   51.778686] Exception stack(0xf0591fb0 to 0xf0591ff8)
+[   51.778686] 1fa0:                                     00000000 00000000 00000000 00000000
+[   51.778686] 1fc0: 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[   51.792816] 1fe0: 00000000 00000000 00000000 00000000 00000013 00000000
+[   51.796356] ---[ end trace 0000000000000000 ]---
+[   51.799957] wlcore: WARNING Enable for recovery failed
+[   51.803344] wlcore: Hardware recovery in progress. FW ver: Rev 7.3.10.0.142
+[   51.807922] wlcore: pc: 0x0, hint_sts: 0x00000020 count: 1
+[   51.812194] wl12xx_driver wl12xx.1.auto: Runtime PM usage count underflow!
+[   51.815856] ieee80211 phy0: Hardware restart was requested

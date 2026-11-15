@@ -8656,3 +8656,58 @@
  config CM3232
  	depends on I2C
  	tristate "CM3232 ambient light sensor"
+--- a/drivers/net/wireless/ti/wl12xx/main.c
++++ b/drivers/net/wireless/ti/wl12xx/main.c
+@@ -234,7 +234,14 @@
+ 		.forced_ps                   = false,
+ 		.keep_alive_interval         = 55000,
+ 		.max_listen_interval         = 20,
+-		.sta_sleep_auth              = WL1271_PSM_ILLEGAL,
++		/*
++		 * PlayBook/WL1283: ELP is unusable on this board.  When the
++		 * chip is allowed to enter ELP the first FW-status read after
++		 * wake times out (CMD53 to 0x1efc0, 84 bytes, byte mode) and
++		 * wlcore recovery-loops.  Keep the chip in CAM (always awake);
++		 * dynamic PS while associated is unaffected.
++		 */
++		.sta_sleep_auth              = WL1271_PSM_CAM,
+ 		.suspend_rx_ba_activity      = 0,
+ 	},
+ 	.itrim = {
+@@ -590,7 +597,13 @@
+ #define WL127X_PLT_FW_NAME	"ti-connectivity/wl127x-fw-5-plt.bin"
+ 
+ #define WL128X_FW_NAME_MULTI	"ti-connectivity/wl128x-fw-5-mr.bin"
+-#define WL128X_FW_NAME_SINGLE	"ti-connectivity/wl128x-fw-5-sr.bin"
++/*
++ * PlayBook/WL1283: the 5-sr service pack boots but panics on the first scan,
++ * so the single-role firmware is the older 4-sr one (report 235).  The floor
++ * in wl12xx.h is lowered to match; keep both files installed so the choice is
++ * a one-line change.
++ */
++#define WL128X_FW_NAME_SINGLE	"ti-connectivity/wl128x-fw-4-sr.bin"
+ #define WL128X_PLT_FW_NAME	"ti-connectivity/wl128x-fw-5-plt.bin"
+ 
+ static int wl127x_prepare_read(struct wl1271 *wl, u32 rx_desc, u32 len)
+--- a/drivers/net/wireless/ti/wl12xx/wl12xx.h
++++ b/drivers/net/wireless/ti/wl12xx/wl12xx.h
+@@ -33,9 +33,17 @@
+ #define WL128X_CHIP_VER		7
+ /* minimum single-role FW version for wl128x */
+ #define WL128X_IFTYPE_SR_VER	3
+-#define WL128X_MAJOR_SR_VER	10
++/*
++ * PlayBook/WL1283: the SR firmware floor is 7.3.5.0, not upstream's
++ * 7.3.10.133, because the newer service pack does not work on this board:
++ * wl128x-fw-5-sr.bin (7.3.10.0.142) boots but PANICS on the first scan
++ * (no scan-complete event, then WL1271_SCAN_TIMEOUT and an unintended
++ * recovery), whereas wl128x-fw-4-sr.bin (7.3.5.0.98) scans normally
++ * (~20 BSS per scan, no errors).  Report 235.
++ */
++#define WL128X_MAJOR_SR_VER	5
+ #define WL128X_SUBTYPE_SR_VER	WLCORE_FW_VER_IGNORE
+-#define WL128X_MINOR_SR_VER	133
++#define WL128X_MINOR_SR_VER	0
+ /* minimum multi-role FW version for wl128x */
+ #define WL128X_IFTYPE_MR_VER	5
+ #define WL128X_MAJOR_MR_VER	7

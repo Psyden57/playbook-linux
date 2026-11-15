@@ -299,6 +299,23 @@ BusyBox init, `/etc/inittab` (a `sysinit` rcS and `ttyGS0::respawn:/bin/sh -l`),
 `/bin/pbconsole` (the hardware console), `/bin/pbrpmb`, and the `.ko` files
 under `/lib/modules/<uname -r>` with a host-generated `modules.dep`.
 
+**Prebuilt tools ride along with `--extras <dir>`** (session 51).  Anything this
+script does not build — static ARM binaries such as `iw`, `wpa_supplicant`,
+`wpa_cli` — is copied into the image root with its layout and modes preserved:
+
+```bash
+# stage them as the device should see them
+local/work/rootfs-extras/usr/bin/iw
+local/work/rootfs-extras/usr/sbin/wpa_supplicant
+...
+python3 tools/build_rootfs.py ... --extras local/work/rootfs-extras
+#   -> "extras   : N file(s) from local/work/rootfs-extras"
+```
+
+Firmware blobs (including `regulatory.db` + its `.p7s`) go through
+`--firmware`, which copies a whole tree into `/lib/firmware/`.  Build recipes for
+the WLAN tools are in report 233 §6.
+
 **The hand-off.**  `initramfs/init.c`'s `rootfs_boot()` mounts the region-1
 ext4 **read-write** (the loop's backing `/dev/mmcblk1` must be opened `O_RDWR`,
 trap 92), bind-mounts `/dev` `/proc` `/sys` into it, `chroot`s and `exec`s

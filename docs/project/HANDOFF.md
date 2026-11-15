@@ -1,22 +1,18 @@
-# Handoff — session 50 (absolute)
+# Handoff — session 51 (absolute)
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§7).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — this handoff is for **absolute 51 = Linux-era 45**, written at the
-session-50 close.  See `docs/sessions/NUMBERING.md`.
+`N+6` — this handoff is for **absolute 52 = Linux-era 46**, written at the
+session-51 close.  See `docs/sessions/NUMBERING.md`.
 
-> **Session-50 result, in one line:** the **WL1283 enumerates and `wlcore`
-> boots the firmware, but the `wlan0` interface is not stable yet.**  The
-> enumeration blocker was the TWL6030 **`CLK32KG`** (the 32.768 kHz SLOW_CLK,
-> physical `0xBC`–`0xBE`) being OFF under Linux; enabling it makes the card
-> enumerate (`0x0097:0x4076`).  The mainline `wlcore` stack then boots firmware
-> (`Rev 7.3.10.0.142`) once three board properties are in place (the
-> `ti,wl1283` child, `cap-power-off-card`, and an `mmc-pwrseq-simple` pulsing
-> `WL_EN`) — but the IP `WL_IRQ` status read then times out (`-110`) and
-> wlcore recovery-loops, so `wlan0` comes up and goes down.  Both of session
-> 49's tests were also run and are negative (BT is not a liveness oracle; the
-> card is not timing-limited).  Image `0x9712A086` (kernel #60) + wireless
-> rootfs `88084b78…`; patch **57 files / 8 658 lines**, sha256 `e7cf9628…`.
+> **Session-51 result, in one line:** **the WL1283 WLAN works — it scans.**  Two
+> blockers fell: the `-110` recovery loop was the chip's **ELP** sleep (the
+> driver now keeps it in **CAM**), and the never-completing scan was the
+> **5-sr firmware** — with `wl128x-fw-4-sr.bin` (`Rev 7.3.5.0.98`) `wlan0` is
+> stable **and** `iw dev wlan0 scan` returns real results (17–21 BSS, both
+> bands).  The floor is lowered to 7.3.5.0 and the SR firmware name points at
+> 4-sr.  Region 0 is **unchanged** (`0x9712A086`); region 1 is the new
+> **`f159a221…`**; patch **59 files / 8 713 lines**, sha256 `2be9e99c…`.
 
 ## 0. The job, and where it stands
 
@@ -30,28 +26,33 @@ gadget/console **and its RNDIS network link with ssh**, the whole display chain,
 the 64 MiB ext4 BusyBox root in region 1, the peripherals (I²C4 motion sensors,
 TMP103, BQ27541, FAN5702, CM3217, ISL9519 charger), the **Munin touch**
 (calibrated, IRQ wired), the **WM8994 audio** (headphones + both speakers,
-48 kHz), and the **WL1283** (enumerates, firmware boots; **the `wlan0`
-interface is not stable yet** — see §0b).  **ssh over USB is the bench default**
-(`tools/pbssh.sh`, 2.3 MB/s).
+48 kHz), and the **WL1283 WLAN** (enumerates, firmware `Rev 7.3.10.0.142`
+boots, `wlan0` **stable**; MAC `14:74:11:8f:9c:c3`).  **ssh over USB is the
+bench default** (`tools/pbssh.sh`, 2.3 MB/s).
 
-**Remaining WL1283 work:** the **`-110` status-read recovery loop** first, then
-the per-unit calibration NVS from the `hd5` data (the MAC is already the
-assigned one), a userspace supplicant (`iw`/`wpa_supplicant`) + `regulatory.db`,
-and a Linux **BT** bring-up (untouched — `HCI_Reset` is silent even with `BT_EN`
-driven).
+**Remaining WLAN work:** **association** — the WLAN scans (17–21 BSS, both
+bands), and the client side is shipped (`iw`, `wpa_supplicant`, `wpa_cli`,
+`wpa_passphrase`, signed `regulatory.db`), so a station config is the next step
+and the point where real throughput can be measured.  Then the per-unit
+**calibration NVS** (located in NVRAM; matters for TX power) and a Linux **BT**
+bring-up.  Two open questions, neither blocking: *why* the 5-sr firmware panics
+on scan (report 235 §3) and *why* the ELP wake is not honoured (232 §6).
 
 ## 0a. The media, and the way back
 
-* **region 0 = the session-50 image** (`boot/chainloader/kernel.img`,
-  CRC **`0x9712A086`**, `0x939A74` bytes; kernel `7.3.3` **#60**).  It is the
-  reverted session-49 tree plus the `CLK32KG` fix (`clk-twl`), the `ti,wl1283`
-  child, `cap-power-off-card` and the WL_EN pwrseq.
-* **region 1 = the wireless rootfs** `88084b78…`
-  (`local/images/rootfs-region1-wl1283.ext4`, 34 modules incl. `cfg80211`,
-  `mac80211`, `wlcore`, `wlcore_sdio`, `wl12xx`, `libarc4`, `crc7`; the
-  `wl128x` firmware; dropbear).
+* **region 0 = the session-50 image** (`boot/chainloader/kernel.img`, CRC
+  **`0x9712A086`**, `0x939A74` bytes; kernel `7.3.3` **#60**).  **Unchanged in
+  session 51** — session 51 is module-only, so only region 1 was flashed.
+* **region 1 = the WLAN rootfs** `f159a221…`
+  (`local/images/rootfs-region1-wl1283-scan.ext4`, 67 108 864 B, 34 modules,
+  **both** `wl128x` SR firmware files, dropbear; the changed module is
+  `wl12xx.ko` md5 `2fb86c4d…`, built **in-tree** so it carries no `(O)`),
+  **plus the client tooling**: `/usr/bin/iw` (6.17), `/usr/sbin/wpa_supplicant`
+  + `wpa_cli` + `wpa_passphrase` (2.12) and the signed
+  `/lib/firmware/regulatory.db` + `.p7s` (wireless-regdb 2026.09.03).
 * The unit is **on our Linux image** (`0fca:8010`, console `pb> `, **ssh on
-  `169.254.0.1`**).
+  `169.254.0.1`**).  `rcS` loads the wireless stack but does **not** raise the
+  link — `ip link set wlan0 up` is a manual step.
 * **To boot the ORACLE:** flash `local/work/ifs-shim-sealed.ifs` at block
   `0x825`, then reboot.  It enumerates `0fca:8012`; qconn
   `169.254.0.1:9090`, root ssh — use **`PB_LINK=door tools/pbssh.sh`**.  The
@@ -63,84 +64,97 @@ driven).
   `wayback.signed` does **not** boot this armed unit (trap 226).  **Do not
   restore `local/images/ifs0.sealed.bin`** (2.0.0.4869, trap 84).
 
-## 0b. The WL1283 — how it works now, and what is left
+## 0b. The WL1283 — it works now, and why
 
-### The root cause (report 230)
+### The `-110` was ELP (report 232)
 
-The WL1283's 32.768 kHz `SLOW_CLK` is the TWL6030 **`CLK32KG`**: group /
-transition / state at **physical `0xBC`/`0xBD`/`0xBE`** (module-relative
-`0x8C`/`0x8D`/`0x8E`; `twl_i2c` adds the `PM_RECEIVER` base `0x30`).  Linux
-booted it `07`/`01`/`00` — **state OFF** — and the reference runs `07`/`05`/`55`
-(ON).  On a fresh boot, writing `0xBE = 0xE1` (what `clk-twl`'s prepare computes)
-turns `mmc4: Failed to initialize a non-removable card` into `mmc4: new high
-speed SDIO card at address 0001`.
+The recovery loop is **not** a firmware/chip mismatch, the block size or the
+calibration.  It is the firmware's **ELP** (its own sleep):
 
-The permanent fix: **`CONFIG_CLK_TWL=y`** (it was `=m` and nothing loaded it)
-plus `clk_prepare_enable("clk32kg")` in `clk-twl`'s probe.  It runs at ~1.9 s,
-before the MMC5 probe at ~3.0 s.
+* The failing transfer is the **FW-status read**: CMD53 to **`0x1efc0`, 84
+  bytes (`0x54`), byte mode** (`fixed = 0`), block size **256**, from the
+  WL_IRQ thread right after `firmware booted`; it then times out (~1.5 s after
+  the boot line, with no `mmc_ios` change in between).
+* The same read **succeeds** whenever the chip is awake, so the transfer is
+  legal and the *state* was the fault.
+* Measured causally: `power/control = on` (no runtime PM) is stable;
+  `power/control = auto` + `sleep_auth = 0` (CAM) is stable; and
+  `echo 2 > /sys/kernel/debug/ieee80211/phyN/wlcore/sleep_auth` on that working
+  system reproduces the `-110` and the loop within seconds.
 
-**Do not** use physical `0x8C` (VAUX3) or `0x60` (VCORE3) for this resource —
-both were cited in older docs and are wrong (KNOWN-ISSUES 3.31, trap 236).
+**The fix:** `wl12xx_default_conf.conn.sta_sleep_auth = WL1271_PSM_CAM`
+(`drivers/net/wireless/ti/wl12xx/main.c`, was `WL1271_PSM_ILLEGAL` → ELP).
+Dynamic PS is untouched; only the host-driven ELP is off.
 
-### The wireless stack (report 231)
+**How the address was found, and the trap in the old recipe:** `wlcore_sdio
+dump=1` prints **per transfer**, and on this board that changes the timing
+enough to hide the failure (trap 52) — the prescribed "read the last READ before
+the `-110`" does not work.  What worked was a temporary `dev_err` **on the error
+path only** in `wl12xx_sdio_raw_read()` (`addr`, `len`, `fixed`,
+`func->cur_blksize`); it prints nothing on success, so it does not perturb.  It
+was reverted (`wlcore/sdio.c` is `cmp`-identical to pristine).
 
-`CONFIG_WL12XX=m`, `CONFIG_WLCORE=m`, `CONFIG_WLCORE_SDIO=m`,
-`CONFIG_MAC80211=m`, `CONFIG_CFG80211=m` built; the stripped modules (~2.5 MB)
-+ `libarc4` + `crc7` are in the region-1 rootfs, and `rcS` loads them in order
-(`cfg80211 mac80211 wlcore wl12xx wlcore_sdio`) — the recorded dependency of
-`wlcore_sdio` is incomplete.  Firmware: the mainline `wl128x-fw-5-sr.bin` +
-`wl128x-nvs.bin` (host linux-firmware, decompressed) under
-`local/work/firmware/ti-connectivity/`, installed by
-`tools/build_rootfs.py --firmware`.
-
-Three DTS pieces (trap 237):
-
-* **`ti,wl1283` child under `&mmc5`** — `reg = <2>` (SDIO function 2 = WLAN;
-  function 1 is BT and the driver rejects it), `interrupt-parent = <&gpio2>`,
-  `interrupts = <21 IRQ_TYPE_EDGE_FALLING>` (WL_IRQ), `ref-clock-frequency` and
-  `tcxo-clock-frequency` 26 MHz.  **Without the node the probe returns
-  `-ENODEV` silently.**
-* **`cap-power-off-card;`** on `&mmc5` — without it `mmc_attach_sdio()` does not
-  enable card runtime PM and wlcore logs `failed to get_sync(-13)`.
-* **`mmc-pwrseq-simple`** owning `WL_EN` (gpio 54 = GPIO2_22):
-  `reset-gpios = <&gpio2 22 GPIO_ACTIVE_LOW>`, `reset-delay-us = <50000>`,
-  `post-power-on-delay-ms = <120>` — the reference's low → 50 ms → high →
-  120 ms on **every** power cycle.  `omap_hsmmc` has no `card_hw_reset`, so
-  wlcore's "brute force HW reset" is a no-op; without the pwrseq the first
-  firmware boot works and later ones time out (`sdio write failed (-110)`).
-  The pwrseq replaced the `wl1283-en-hog`; the two cannot own the line.
-
-Result: `wlcore: firmware booted (Rev 7.3.10.0.142)`, `wlan0` appears with
-MAC `14:74:11:8f:9c:c3` (the assigned address, patched into the NVS) — **but
-the interface does not stay up**: the WL_IRQ status read times out (`-110`) and
-wlcore recovery-loops (report 231 §6).  `NO-CARRIER` is normal before
-association; the recovery loop is not.
+**The scan was the firmware (report 235).**  `wl128x-fw-5-sr.bin`
+(`Rev 7.3.10.0.142`, the newest wl128x blob in linux-firmware *and* in TI's own
+firmware tree — nothing newer exists) boots and keeps the interface up but
+**panics on the first scan** (no scan-complete event → the driver's 30 s
+`WL1271_SCAN_TIMEOUT` → unintended recovery; the panic-log read proved the
+crash, trap 241).  `wl128x-fw-4-sr.bin` (`Rev 7.3.5.0.98`) **scans** on the same
+driver, NVS and board: 17, 20 and 21 BSS on three runs, both bands, no errors —
+and the same from flashed media after a reboot.  The port therefore lowers
+`wl12xx`'s SR floor to **7.3.5.0** (`WL128X_MAJOR_SR_VER 5`,
+`WL128X_MINOR_SR_VER 0`) and sets `WL128X_FW_NAME_SINGLE` to the 4-sr file; both
+files stay installed so going back is one `#define` (trap 243).  The board
+itself was exonerated on the way: stock TabletOS on this unit runs `ti0`
+UP/RUNNING and **associated** on the vendor `Rev 7.1.4.10.77` with
+`IPC_EVENT_SCAN_COMPLETE` 6 s after boot (report 234).
 
 ### Left to do
 
-1. **THE ONE EXPERIMENT: find the `-110` in the WL_IRQ status read.**  After
-   `wlcore: firmware booted`, the threaded IRQ's CMD53 status read times out and
-   wlcore recovery-loops.
-   * **Inputs.** The booted unit (`0x9712A086` + rootfs `88084b78…`), the
-     modules loaded in order, `wlcore_sdio dump=1` to print the transfer
-     address/length, and the host's `/lib/firmware/ti-connectivity/`
-     (`wl128x-fw-4-sr.bin` and `-5-sr.bin`, `wl128x-nvs.bin`).
-   * **Run:** `modprobe ... wlcore_sdio dump=1`, `ip link set wlan0 up`, then
-     read the **unfiltered** dmesg tail: the last `READ` before
-     `sdio read failed (-110)` is the failing address/length.
-   * **Results mean:** a read in the FW-status/CPU space with a size that
-     matches the module's block size points at the block-size/byte-mode path; a
-     read that succeeds with the 4-sr firmware points at the firmware/chip
-     revision match; a read that fails only after ELP points at the ELP wake.
-   * Then, in order: the per-unit calibration NVS from `hd5` (report 197; the
-     MAC is already `14:74:11:8f:9c:c3`), a supplicant + `regulatory.db`, and
-     the Linux BT bring-up.
-2. **Do not** use `IRQ_TYPE_LEVEL_LOW` for WL_IRQ (trap 238) — the line idles
-   low before firmware and the level IRQ wedges the unit.
+**THE ONE EXPERIMENT: associate to a real AP.**  Everything is in place — the
+radio scans (17–21 BSS) and the client tooling is in the image.
+
+* **Inputs:** one SSID + passphrase (ask the operator; the bench saw
+  `MovistarFibra`, `Peperina`, `MovistarFibra-5GHz-…`), a free IP subnet, and
+  the unit on our image with `wlan0` up.
+* **Steps (not yet run — this is the experiment):**
+  `wpa_passphrase '<SSID>' '<psk>' > /tmp/wpa.conf`;
+  `wpa_supplicant -B -i wlan0 -D nl80211 -c /tmp/wpa.conf
+  -C /var/run/wpa_supplicant`; watch `wpa_cli -p /var/run/wpa_supplicant -i
+  wlan0 status` and `dmesg` unfiltered; then `udhcpc -i wlan0` (BusyBox) and a
+  throughput measurement (e.g. `nc`/`wget` against a host on the same AP).
+  What *was* run this session: `wpa_supplicant -B -i wlan0 -D nl80211 -C
+  /var/run/wpa_supplicant` (initializes), `wpa_cli scan` (`OK`), `wpa_cli
+  status`, `wpa_cli scan_results` — all with no `-c` config and no credentials.
+* **Results mean:**
+  * `wpa_state=COMPLETED` + a DHCP lease ⇒ the WLAN is finished; record the
+    real throughput and move to the per-unit NVS / BT.
+  * Scan works but association times out / deauths ⇒ RF/TX side: try the
+    per-unit NVS (`local/work/wl128x-nvs-perunit.bin`) and watch the driver
+    log; that is the next fork.
+  * `4-way handshake` failures only ⇒ config/PSK, not the driver.
+  * Any `-110`/recovery again ⇒ back to traps 239/243 before touching anything.
+
+1. **The per-unit calibration NVS** — located (the 468-byte NVRAM record at raw
+   `0x152cc`, `local/work/wl128x-nvs-perunit.bin`); media ships the generic
+   file.  Now that the radio transmits, measure with/without it (TX power).
+2. **BT** (untouched): `BT_EN` = gpio 55 = `GPIO2_23`, UART2 `/dev/ttyS1`.  Use
+   linux-firmware's **`TIInit_7.2.31.bts`** ("ORCA-Trio BTIP 2.0"), not the
+   reference's `WL1283.bts` (a 6.0.15 "Quattro L" script, `TI_P6_15.51`).
+   **Mainline 7.3.3 has no `btwilink.c` and no `drivers/misc/ti-st/`** — both
+   were removed upstream, so plan on H4 over UART2 plus a userspace `.bts`
+   loader, unless the reference turns out to use TI-ST (report 216 argues it
+   does not: `devc-seromap-winbt` + `btp-btmgr`).
+3. **Open:** *why* the ELP wake is not honoured (report 232 §6).  CAM is a
+   workaround that costs battery; a finer instrument (the DRAM ring, not
+   printk) is what would separate "wake latency" from "`WL_IRQ` around the
+   sleep transition".  Only worth it if the WLAN must run on battery.
 
 Do **not** re-run the session-49/50 negatives: the readable-state diff (218),
 the two replays (217), the boot-path RE (221–226), the domain test (225), the BT
-probe (228) or the clock sweep (229).
+probe (228) or the clock sweep (229).  Do **not** use `IRQ_TYPE_LEVEL_LOW` for
+WL_IRQ (trap 238), and do **not** use `dump=1` to measure a timing fault (trap
+239).
 
 ## 0c. WM8994 audio — closed
 
@@ -176,15 +190,19 @@ so `ifconfig ti0 up` is manual.  Tools are not on the UFS — push
 
 * `local/work/1917/base/`, `ifs/`, `calib/` — the 1917 `/base`, IFS tree and the
   WLAN calibration (`hd5`).
-* `local/work/1917/base/scripts/wifi.sh` — the reference's WLAN load path.
-* `local/work/firmware/ti-connectivity/` — the mainline `wl128x` firmware.
-* `local/work/modules-7.3.3/` — the staged modules (34, incl. the wireless set).
-* `local/images/rootfs-region1-wl1283.ext4` — the wireless rootfs.
+* `local/work/1917/base/lib/firmware/bluetooth/WL1283.bts` — the reference's BT
+  firmware (6.0.15 "Quattro L", `TI_P6_15.51`, Jan 2012) for comparison;
+  linux-firmware's `TIInit_7.2.31.bts` is the newer one to use.
+* `local/work/firmware/ti-connectivity/` — **both** SR firmware files
+  (`wl128x-fw-4-sr.bin` is the shipped one, `wl128x-fw-5-sr.bin` the spare that
+  panics — §0b) and `wl128x-nvs.bin`.
+* `local/work/modules-7.3.3/` — the staged modules (34); source of truth for
+  region 1.
+* `local/images/rootfs-region1-wl1283-scan.ext4` — the current region-1 image.
 * `tools/build_minimal_qnx.py`, `local/work/minimal/` — the oracle.
-* Captures: `wlan-oracle-up-…`, `wl1283-enumerate-…`, `wl1283-wlan-up-…`,
-  `wl1283-{bt-probe,slow-clock}-…`.
-* `docs/reference/qnx-hwio/{pad,gpio}-table-winchester.csv`.
-* Reports **230/231** (current), **216–229**; `hardware/twl6030.pdf`,
+* Captures: `wl1283-elp-…` (new), `wl1283-wlan-up-…`, `wl1283-enumerate-…`,
+  `wlan-oracle-up-…`, `wl1283-{bt-probe,slow-clock}-…`.
+* Reports **232** (current), **230/231**, **216–229**; `hardware/twl6030.pdf`,
   `hardware/WM8994.PDF` (gitignored), `hardware/swpu231ap.pdf.txt`.
 
 ## 2. Build and flash (7.3.3)
@@ -207,6 +225,14 @@ ZIMAGE=$K/arch/arm/boot/zImage DTB=$K/arch/arm/boot/dts/ti/omap/omap4-winchester
 identifies an image but cannot prove a source revert — compare files against
 `local/pristine/linux-7.3.3` + the patch.
 
+**Build modules IN-TREE, not with `M=`.**  `make -C $K … M=drivers/net/...` marks
+the module out-of-tree, prints `(O)` in every later dmesg and taints the kernel;
+it also leaves a partial `Module.symvers` that breaks the next in-tree build.
+Use the full `make … modules` (it is incremental), then strip with
+**`--strip-debug`**, never `strip -s` (a fully stripped module is rejected with
+"module has no symbols").  Session 51 confirmed a full in-tree rebuild
+reproduces every other module **byte-identically**.
+
 **The wireless modules and firmware live in region 1**, not the kernel image.  A
 module/firmware-only change keeps the region-0 CRC (trap 190) and needs a
 **region-1-only flash** at block `0x2915`:
@@ -216,60 +242,83 @@ python3 tools/build_rootfs.py --size-mb 64 \
   --busybox local/work/src/busybox-1.36.1/busybox \
   --busybox-links local/work/src/busybox-1.36.1/busybox.links \
   --modules local/work/modules-7.3.3 --firmware local/work/firmware \
-  --krel 7.3.3 --out local/images/rootfs-region1-wl1283.ext4
+  --krel 7.3.3 --out local/images/rootfs-region1-wl1283-elpcam.ext4
 ```
 
-(`build_rootfs.py --firmware` was silently ignored until session 50; it now
-installs the tree and prints `firmware : N file(s)`.)
+`build_rootfs.py --out` **overwrites** (trap 213) — build to a new
+purpose-named path and retire the old file deliberately.  Check the module
+inside the built image with `debugfs -R "dump /lib/modules/7.3.3/kernel/X.ko …"`.
 
 **Patch export** (traps 161/211): drive the file list from the tree walk, apply
-it to a staged pristine copy and compare every file.  Current export: **57 files
-/ 8 658 lines**, sha256 `e7cf9628…`, 0 rejects / 57/57.  The walk recipe must
+it to a staged pristine copy and compare every file.  Current export: **59 files
+/ 8 713 lines**, sha256 `2be9e99c…`, 0 rejects / 59/59.  The walk recipe must
 filter `Kconfig.*` (not just `Kconfig`), or it drops `arch/arm/Kconfig.debug`.
 
 ## 3. Bench
 
 * **`tools/pbssh.sh 'cmd'`** (root, key-only, `169.254.0.1`, 2.3 MB/s);
   `PB_LINK=usb|door`; the host profile must bind the net interface of whichever
-  OS is booted (trap 214).
-* **Reboot:** `tools/pbcon.py 'reboot -f'` or `tools/pbssh.sh 'reboot -f'`; if it
-  hangs (trap 224) use `echo b > /proc/sysrq-trigger`.  Arm the flasher first.
+  OS is booted (trap 214).  Dropbear has **no `scp`** — move files with
+  `ssh … 'cat > /path' < file` (a `scp -O` still needs a remote `scp`).
+* **Reboot:** `tools/pbssh.sh 'reboot -f'`; if it hangs (trap 224) use
+  `echo b > /proc/sysrq-trigger`.  Arm the flasher first.
 * **Never `slay` by name on the oracle** (trap 221); kill by pid.
 * Device password `0000`, once.  An agent never writes RPMB; NVRAM read-only.
   `/dev/rpmb/` exists only on TabletOS; our `pbrpmb` tops up raw at boot.
 * **WL1283 checks:**
-  * `i2ctransfer -f -y 0 w1@0x48 0xbc r3` → `07 01 55` (CLK32KG ON; `-f`
-    bypasses the twl driver's `EBUSY`).
+  * `i2ctransfer -f -y 0 w1@0x48 0xbc r3` → `07 01 55` (CLK32KG ON).
   * `ls /sys/bus/sdio/devices/` → `mmc4:0001:1` and `:2`.
-  * `ip link set wlan0 up` → `wlcore: firmware booted`; `wlan0` UP, no carrier.
-  * `wlcore` needs the pwrseq for every firmware re-boot; removing the hog or
-    the pwrseq makes the second boot time out.
+  * `ip link set wlan0 up` → `wlcore: firmware booted`, `wlan0` UP, no carrier.
+  * **Stability check:** `dmesg | grep -cE "sdio read failed|wlcore: down"` stays
+    **0**; the platform device may sit `suspended` (that is fine — CAM is about
+    the chip, not the host).
+  * `mount -t debugfs debugfs /sys/kernel/debug` is needed for
+    `…/ieee80211/phyN/wlcore/sleep_auth` (rcS does not mount debugfs).
+  * **To reproduce the `-110`**: `echo 2 > …/wlcore/sleep_auth` (ELP) on a
+    working system; restore by `echo 0` or a module reload.
+  * **`iw` and `wpa_supplicant` are in the image** (report 233 §5):
+    `/usr/bin/iw`, `/usr/sbin/wpa_{supplicant,cli,passphrase}`, and the signed
+    `/lib/firmware/regulatory.db`(+`.p7s`) — `iw reg get` shows the world
+    domain with 2.4 GHz active.  **`iw dev wlan0 scan` works** (17–21 BSS on
+    firmware 7.3.5.0.98, report 235); `wpa_supplicant -B -i wlan0 -D nl80211
+    -c /tmp/wpa.conf -C /var/run/wpa_supplicant` is the association path
+    (`rfkill: Cannot open RFKILL control device` is expected).  To change one of
+    these tools: put it under
+    `local/work/rootfs-extras/<path>`, rebuild with `--extras
+    local/work/rootfs-extras`, and flash region 1.
 * WM8994: `i2ctransfer` args are DECIMAL (trap 166); bus 4, addr `0x1a`; the
   regmap debugfs is a cache (trap 207) and debugfs is not mounted by `rcS`.
 * QNX device tools build `-static`; `/tmp` is wiped by a reboot.
 
-## 4. Traps added last session (full list 14–237 in `KNOWN-ISSUES.md` §2)
+## 4. Traps added last session (full list 14–243 in `KNOWN-ISSUES.md` §2)
 
-* **234.** `BT_EN` driven is necessary but not sufficient: the BT core answers
-  no `HCI_Reset` even with the pad and UART verified.  Session 29's probe is
-  superseded; do not use BT silence to exonerate the SDIO controller.
-* **235.** Lowering `f_min` does not lower the initial clock; it opens
-  `mmc_rescan`'s 400/300/200/100 kHz ladder (which stops at `freqs[i] <= f_min`).
-* **236.** The WL1283 `SLOW_CLK` is `CLK32KG` at physical `0xBC`–`0xBE`; Linux
-  boots it OFF.  `0xBE = 0xE1` enables it; the permanent fix is `CONFIG_CLK_TWL=y`
-  + `clk-twl`'s probe.  Physical `0x8C` is VAUX3; `0x60` is VCORE3.
-* **237.** wlcore on `omap_hsmmc` needs the `ti,wl1283` child (`reg = <2>`),
-  `cap-power-off-card`, and an `mmc-pwrseq-simple` WL_EN power cycle; load the
-  module stack in order.
-* Still current: **227** (the measurement flaw / `CON=0x85`), **231**
-  (`WL_IRQ` is not liveness), **232** (`CTO` = 64 clocks), **224** (`reboot -f`
-  wedge), **221** (`slay` kills `rndis0`), **219** (`BT_EN` = gpio 55), **220**
-  (`-o nvram`), **225** (GPIO register blocks; `memw32` pre-masked), **226**
-  (two-component way back), **228/229** (pads), **190** (module-only CRC),
-  **200** (native doc edits), **207** (regmap cache), **208** (clock link first),
-  **211** (tree walk + `Kconfig.*`), **212** (bare `pbplay` plays), **213**
-  (`build_rootfs --out` overwrites), **214** (composite net iface), **215** (two
-  ssh servers), **216** (no tty), **217** (`$TERM`), **218** (`devpts`).
+* **239.** The WL1283's `-110` is the chip's **ELP**; keep it in **CAM**
+  (`sta_sleep_auth` in `wl12xx_default_conf`).  The failing transfer is the
+  FW-status read (CMD53, `0x1efc0`, 84 B, byte mode, 256-byte block) from the
+  IRQ thread.  `wlcore_sdio dump=1` **hides** it — instrument the error path
+  instead.
+* **240.** A `wlcore` scan that logs `Scan completed due to error.` after ~30 s
+  is the driver's own `WL1271_SCAN_TIMEOUT`, not a hang: `wlcore_scan()` assumes
+  failure and only the firmware's scan-complete event clears it.  Count the
+  `wl12xx` IRQs in the window (~13 = the firmware never reported the scan).
+* **241.** `wlcore fwlog=continuous` **oopses** on wl12xx: the panic-log reader
+  parses the block with the wl18xx layout, the FW address goes out of range and
+  `wl12xx_copy_fwlog` memcpys unmapped memory (`Oops: 5`; then `ip link show`
+  blocks until a reboot).  It does prove the firmware panics.
+* **242.** On a stock TabletOS boot the door's `sshd` may be down while `qconn`
+  9090 answers — use `tools/QCL.py` (`exec /bin/<cmd>`; `sh -c '…'` does not
+  survive its argument handling), kill a stale `door-hold` by pid, and rebind
+  `pb-rndis` to the plain `enp8s0f3u1`.
+* **243.** The WL1283 must run **4-sr** (`7.3.5.0.98`): **5-sr** (`7.3.10.0.142`)
+  boots but **panics on the first scan**.  The floor is 7.3.5.0 and
+  `WL128X_FW_NAME_SINGLE` names the 4-sr file; both stay installed.
+* Still current: **238** (`LEVEL_LOW` WL_IRQ storms), **237** (the three wlcore
+  board properties), **236** (`CLK32KG` at `0xBC`), **235** (`f_min`/ladder),
+  **234** (BT silence is not a liveness oracle), **231** (`WL_IRQ` is not
+  liveness), **227** (the measurement flaw), **224** (`reboot -f` wedge), **221**
+  (`slay` kills `rndis0`), **214** (composite net iface), **212** (bare `pbplay`
+  plays), **211** (tree walk + `Kconfig.*`), **200** (native doc edits), **190**
+  (module-only CRC), **165** (chip-side pins unmeasurable).
 
 ## 5. Where things are
 
@@ -282,17 +331,20 @@ filter `Kconfig.*` (not just `Kconfig`), or it drops `arch/arm/Kconfig.debug`.
 | board DTS + patched drivers | `kernel/source/`, `local/kernel-tree/` |
 | kernel delta + config | `kernel/patches/`, `kernel/winchester-7.3.3.config` |
 | TWL6030 datasheet / TRM | `hardware/twl6030.pdf`, `hardware/swpu231ap.pdf.txt` |
-| captures | `docs/captures/wl1283-{enumerate,wlan-up,bt-probe,slow-clock}-2026-11-14.txt` |
+| captures | `docs/captures/wl1283-elp-2026-11-14.txt` (new) and the session-50 set |
 | audio machine driver | `local/kernel-tree/sound/soc/ti/playbook-wm8994.c` |
 | OSS player / mixer / BT probe | `rootfs/pbplay.c`, `rootfs/pbmix.c`, `rootfs/hci.c` |
 | qconn / ssh | `tools/QCL.py`, `tools/pbssh.sh` |
-| reports | `docs/reports/` (**230** root cause, **231** WLAN, **228/229** negatives) |
-| sessions | `docs/sessions/session-50.md` |
+| reports | `docs/reports/` (**232** current for the WLAN) |
+| sessions | `docs/sessions/session-51.md` |
 
 ## 6. Working rules
 
 * After every console command, dump the log tail and read it.  Read
   `dmesg`/`sloginfo` **unfiltered** after a reboot or structural change.
+* **Don't clear `dmesg` under the operator** without saying so — experiments
+  here start with `dmesg -c`, and the console then looks like it "lost" the
+  message they just saw.  Say what you are about to clear, or capture first.
 * Write the durable fact into the repository in the same turn.
 * **One variable per boot.**  **A test boot is not a budget concern.**
 * **Never present a guess as a fact.**  Prefer a fresh read.
@@ -304,70 +356,86 @@ filter `Kconfig.*` (not just `Kconfig`), or it drops `arch/arm/Kconfig.debug`.
 ## 7. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 51 (absolute; Linux-era 45)
+PlayBook (OMAP4430 "winchester") — session 52 (absolute; Linux-era 46)
 
 Workspace: this repository — a git checkout.  Map: docs/README.md.  The earlier
 work tree $HOME/rea-work is READ-ONLY.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 9, KNOWN-ISSUES.md §2 (traps 14-237, especially 190-237)
-and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md (60-67),
-docs/reports/INDEX.md, reports 230 and 231, and sessions/session-50.md.
+file), ROADMAP.md item 9, KNOWN-ISSUES.md §2 (traps 14-243, especially 232-243)
+and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md (63-69),
+docs/reports/INDEX.md, reports 232-235, and sessions/session-51.md.
 
 WHERE IT STANDS: audio (headphones + both speakers, 48 kHz), the touch, the
-sensors/charger, ssh over USB and the display are all working.  THE WL1283
-ENUMERATES (session 50): the card was silent because the TWL6030 CLK32KG (the
-32.768 kHz SLOW_CLK, physical 0xBC-0xBE, module-relative 0x8C) was OFF; enabling
-it (CONFIG_CLK_TWL=y + clk32kg in clk-twl's probe) makes the card enumerate
-(0x0097:0x4076), and the mainline wlcore stack with the ti,wl1283 child
-(reg = <2>), cap-power-off-card and an mmc-pwrseq-simple pulsing WL_EN boots
-firmware (Rev 7.3.10.0.142) and brings up wlan0.  BUT THE INTERFACE IS NOT
-STABLE: the WL_IRQ status read times out (-110) and wlcore recovery-loops
-(report 231 section 6).  Both of session-49's tests are run and negative: the BT
-core is silent even with BT_EN driven, and the card answers at none of
-400/300/200/100 kHz.
+sensors/charger, ssh over USB and the display are all working.  **THE WL1283
+WLAN WORKS — it scans (session 51).**  Two blockers fell: the -110 recovery loop
+was the chip's ELP sleep (the driver now sets sta_sleep_auth = WL1271_PSM_CAM),
+and the never-completing scan was the 5-sr firmware — wl128x-fw-5-sr.bin
+(Rev 7.3.10.0.142) boots but panics on the first scan, while
+wl128x-fw-4-sr.bin (Rev 7.3.5.0.98) scans normally (17-21 BSS per scan, both
+bands, no errors).  The port lowers wl12xx's SR floor to 7.3.5.0 and points
+WL128X_FW_NAME_SINGLE at 4-sr; both files stay installed.  The board itself was
+exonerated: stock TabletOS on this unit runs ti0 UP/RUNNING, associated, on
+vendor firmware Rev 7.1.4.10.77 with IPC_EVENT_SCAN_COMPLETE 6 s after boot.
+There is NO newer wl128x firmware anywhere (linux-firmware and TI's own tree
+carry the same ten files; 5-sr is the last).
 
 WHAT IS LEFT (WL1283, in order):
-(a) THE ONE EXPERIMENT: find the -110.  Reload the stack with `wlcore_sdio
-    dump=1`, `ip link set wlan0 up`, read the unfiltered dmesg, and identify the
-    last READ before `sdio read failed (-110)`.  Try wl128x-fw-4-sr.bin (copy it
-    over the 5-sr name in local/work/firmware), and compare the failing
-    address/length with the block size.  Do NOT use IRQ_TYPE_LEVEL_LOW for WL_IRQ
-    (trap 238 — it storms at boot and wedges the unit).
-(b) the per-unit CALIBRATION NVS from the QNX hd5 data (report 197); the MAC is
-    already the assigned 14:74:11:8f:9c:c3 (patched into the generic NVS), but
-    the radio calibration is still the default.
-(c) a userspace supplicant (iw / wpa_supplicant) and regulatory.db, for
-    scan/associate; the BusyBox root has neither.
-(d) BT: a Linux bring-up (BT_EN = gpio 55 = GPIO2_23, UART2 /dev/ttyS1) — the
-    HCI probe is silent (report 228) and the reference's BT half has never been
-    shown live.
+(a) ASSOCIATION — the client side is shipped (iw 6.17, wpa_supplicant 2.12,
+    wpa_cli, wpa_passphrase, signed regulatory.db; the world regdomain loads
+    with 2.4 GHz active).  wpa_passphrase SSID pass > /tmp/wpa.conf, then
+    wpa_supplicant -B -i wlan0 -D nl80211 -c /tmp/wpa.conf
+    -C /var/run/wpa_supplicant, then wpa_cli -p ... -i wlan0 status.  This is
+    also where real throughput gets measured (HT20/MCS0-7, 72 Mbps PHY; the
+    old 4-5 MB/s was the reference's USB RNDIS path, not a Wi-Fi limit);
+(b) the per-unit CALIBRATION NVS — located: the 468-byte NVRAM record at raw
+    0x152cc (local/work/wl128x-nvs-perunit.bin); media ships the generic file;
+    now that the radio transmits, measure with/without it;
+(c) BT: BT_EN = gpio 55 = GPIO2_23, UART2 /dev/ttyS1.  Use linux-firmware's
+    TIInit_7.2.31.bts (ORCA-Trio BTIP 2.0), NOT the reference's WL1283.bts (a
+    6.0.15 "Quattro L" script).  Mainline 7.3.3 has no btiwlink/ti-st, so plan
+    on H4 over UART2 + a userspace .bts loader unless the reference turns out
+    to be TI-ST based;
+(d) open, neither blocking: why 5-sr panics on scan (report 235 §3 — fix the
+    fwlog parse first, trap 241) and why the ELP wake is not honoured
+    (report 232 §6).
 Do NOT re-run the session-49/50 negatives (readable diff 218, replays 217,
-boot-path RE 221-226, domain test 225, BT probe 228, clock sweep 229).
+boot-path RE 221-226, domain test 225, BT probe 228, clock sweep 229).  Do NOT
+use IRQ_TYPE_LEVEL_LOW for WL_IRQ (trap 238), do NOT use wlcore_sdio dump=1
+to measure a timing fault (trap 239), and do NOT switch back to 5-sr without
+expecting the scan panic (trap 243).
 
-PHYSICAL STATE: REGION 0 HOLDS OUR LINUX IMAGE 0x9712A086 (0x939A74, kernel
-7.3.3 #60 — the CLK32KG fix + the ti,wl1283 child, cap-power-off-card and the
-pwrseq).  REGION 1 holds the wireless rootfs 1008d021... (67,108,864 B, 34
-modules incl. wlcore/wl12xx, the wl128x firmware, dropbear).  The unit is on
-LINUX (0fca:8010, console `pb> `, ssh on 169.254.0.1).  To boot the ORACLE:
-flash local/work/ifs-shim-sealed.ifs at 0x825 (the RCFS slot holds the FULL 1917
-RCFS, trap 227; the pruned oracle pair is local/work/minimal/setB.signed at
-0x8D5).  /tmp is wiped by a reboot.  To stock TabletOS: ifs-shim-sealed.ifs at
-0x825 + rcfs-1917.rcfs at 0x8D5 (NOT wayback.signed, trap 226).  Do NOT restore
+PHYSICAL STATE: REGION 0 IS UNCHANGED — our Linux image 0x9712A086 (0x939A74,
+kernel 7.3.3 #60).  REGION 1 is now f159a221... (67,108,864 B, 34 modules incl.
+wlcore/wl12xx, BOTH wl128x SR firmware files, dropbear, the CAM+4-sr wl12xx.ko,
+iw 6.17, wpa_supplicant/wpa_cli/wpa_passphrase 2.12 and the signed
+regulatory.db+.p7s) — local/images/rootfs-region1-wl1283-scan.ext4.  Kernel
+patch 59 files / 8 713 lines, sha256 2be9e99c...  The unit is on LINUX
+(0fca:8010, console
+`pb> `, ssh on 169.254.0.1); rcS loads the wireless stack but does not raise the
+link — `ip link set wlan0 up`.  To boot the ORACLE: flash
+local/work/ifs-shim-sealed.ifs at 0x825 (the RCFS slot holds the FULL 1917 RCFS,
+trap 227; the pruned oracle pair is local/work/minimal/setB.signed at 0x8D5).
+/tmp is wiped by a reboot.  To stock TabletOS: ifs-shim-sealed.ifs at 0x825 +
+rcfs-1917.rcfs at 0x8D5 (NOT wayback.signed, trap 226).  Do NOT restore
 local/images/ifs0.sealed.bin (2.0.0.4869, trap 84).
 
 BENCH: `tools/pbssh.sh 'cmd'` is the DEFAULT ACCESS.  The HOST's pb-rndis
 profile must bind the net interface of the booted OS — enp8s0f3u1i2 for our
-composite gadget, enp8s0f3u1 for the oracle's plain RNDIS (trap 214).  REBOOT:
+composite gadget, enp8s0f3u1 for the oracle's plain RNDIS (trap 214).
+Dropbear has no scp: move files with `ssh ... 'cat > /path' < file`.  REBOOT:
 if `reboot -f` hangs (trap 224) use `echo b > /proc/sysrq-trigger`.  NEVER
 `slay` by name on the oracle (trap 221).  Dropbear is key-only, root, on
 169.254.0.1; key local/secrets/rsa.  Device password 0000, once.  An agent
-NEVER writes RPMB; NVRAM read-only.  Read dmesg/sloginfo UNFILTERED.
+NEVER writes RPMB; NVRAM read-only.  Read dmesg/sloginfo UNFILTERED.  Do not
+clear dmesg under the operator without saying so.
 WL1283 checks: `i2ctransfer -f -y 0 w1@0x48 0xbc r3` -> 07 01 55 (CLK32KG ON);
 `ls /sys/bus/sdio/devices/` -> mmc4:0001:1/:2; `ip link set wlan0 up` ->
-`wlcore: firmware booted`.  WM8994: i2ctransfer args DECIMAL, bus 4 addr 0x1a;
-debugfs is not mounted by rcS.  On the oracle use pbi2c rd16/wr16; push
-memdump3/memw32/pbi2c to /tmp after every boot.
+`wlcore: firmware booted`; stability = zero `sdio read failed`/`wlcore: down`
+lines.  To reproduce the -110: `echo 2 > .../wlcore/sleep_auth` (ELP) on a
+working system; `echo 0` restores.  WM8994: i2ctransfer args DECIMAL, bus 4
+addr 0x1a; debugfs is not mounted by rcS.  On the oracle use pbi2c rd16/wr16;
+push memdump3/memw32/pbi2c to /tmp after every boot.
 
 LISTENING TESTS ARE QUIET AND SHORT: lower `pbmix set "DAC1 Volume" 40` ONCE, run
 every test, restore 96 ONCE at the end; a bare `pbplay` plays a 2 s tone (trap
@@ -378,6 +446,9 @@ with ntoarmv7-readelf/objdump.  QNX device tools build -static.  USE THE
 REFERENCE FIRST, and put static RE in subagents (file-only, trap 109).  The TI
 TRM is local (hardware/swpu231ap.pdf.txt); the TWL6030 datasheet is
 hardware/twl6030.pdf; the WM8994 one hardware/WM8994.PDF (gitignored).
+
+BUILD: modules IN-TREE (`make ... modules`), never `M=` (it marks them (O) and
+taints the kernel); strip with `--strip-debug`, never `strip -s`.
 
 SAFETY: read SAFETY.md first.  One variable per boot.  Flash region 0 only when
 only it changed; both regions in one bootrom session only when both changed; a

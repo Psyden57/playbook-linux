@@ -2362,6 +2362,95 @@ read timeout (report 231 §6).
 
 ---
 
+## 68. The WL1283 runs in CAM, not ELP: the `-110` was the chip's sleep (session 51)
+
+**Decision.**  Set `wl12xx_default_conf.conn.sta_sleep_auth = WL1271_PSM_CAM`
+so the WL1283's firmware **never enters ELP**.  This is the port's answer to the
+`-110` recovery loop: the failing transfer is the FW-status read (CMD53 to
+`0x1efc0`, 84 bytes, byte mode, 256-byte block), issued from the WL_IRQ thread
+right after `firmware booted`, and it fails only once the chip has slept.  ELP
+is a power optimization; CAM costs battery and nothing else.
+
+**Why.**  Session 50 left three suspects (the firmware/chip match, the SDIO
+block size, the ELP/status path) and no way to separate them, because the
+prescribed instrument (`wlcore_sdio dump=1`) prints per transfer and thereby
+changes the timing of the thing it measures (trap 52): under `dump=1` the
+failure did not reproduce.  A temporary `dev_err` on the **error path** — which
+prints nothing on success — gave the address and length above, and three
+one-variable tests then separated the candidates: pinning the platform device
+active (`power/control = on`) is stable; runtime PM *on* with `sleep_auth = 0`
+(CAM) is stable; and re-enabling ELP at runtime on that working system
+reproduces the `-110` and the loop within seconds.  The same 84-byte read
+succeeds whenever the chip is awake, so the transfer is legal and the state is
+the fault.  `wl128x-fw-4-sr.bin` could not be a control *at that point*: wlcore's
+floor was `7.3.10.*.133` and 4-sr is `7.3.5.0.98` ("firmware boot failed despite
+3 retries"), so that test was never about the `-110`.  **§69 later lowers the**
+**floor and finds 4-sr is the firmware that works** — the 5-sr image panics on
+scan, so 4-sr is not merely "a control" but the shipped one.
+
+**Constraint.**  Dynamic PS while associated is separate and unaffected; only
+the host-driven ELP is disabled.  A userspace `echo 2 > …/wlcore/sleep_auth`
+still re-enables ELP for an experiment (that is the reproduction), and a module
+reload returns to the compiled default.  The diagnostic `dev_err` is **not**
+kept: `wlcore/sdio.c` is `cmp`-identical to pristine, and only
+`drivers/net/wireless/ti/wl12xx/main.c` is added to the patch (58 files /
+8 676 lines).  Module-only change → region-1 flash, region-0 CRC unchanged
+(trap 190).  Build modules **in-tree** (`make … modules`): an `M=` build marks
+them `(O)`/out-of-tree, which taints the kernel and pollutes every later dmesg;
+`--strip-debug`, never `strip -s` (a fully stripped module is rejected with
+"module has no symbols").
+
+**Open.**  *Why* the wake is not honoured is not settled: `wlcore_runtime_resume`
+writes `ELPCTRL_WAKE_UP` and skips the completion wait when it is running in the
+IRQ thread, and on this chip/firmware the first read after that wake is not
+answered.  It needs a non-printk instrument (the DRAM ring) to separate "wake
+latency" from "`WL_IRQ` around the sleep transition".  Revisit if the WLAN must
+run on battery.
+
+**Evidence.**  Report **232** and capture
+`docs/captures/wl1283-elp-2026-11-14.txt`; image `0x9712A086` + rootfs
+`7e067560…`; patch sha256 `1c57e575…`; `wl12xx.ko` md5 `1ff6daa7…`; trap 239.
+
+---
+
+## 69. The WL1283 runs the 4-sr firmware; 5-sr panics on scan (session 51)
+
+**Decision.**  Ship `wl128x-fw-4-sr.bin` (`Rev 7.3.5.0.98`) as the single-role
+firmware and lower `wl12xx`'s SR floor to **7.3.5.0**:
+`WL128X_MAJOR_SR_VER 5`, `WL128X_MINOR_SR_VER 0` in `wl12xx.h`, and
+`WL128X_FW_NAME_SINGLE = "ti-connectivity/wl128x-fw-4-sr.bin"` in
+`wl12xx/main.c`.  Both firmware files stay installed, so returning to 5-sr is
+one `#define`.
+
+**Why.**  With `5-sr` (`Rev 7.3.10.0.142`) every scan died inside the firmware:
+no scan-complete event, the driver's 30 s `WL1271_SCAN_TIMEOUT`, then an
+unintended recovery, and with `fwlog=continuous` the recovery's panic-log read
+proved the FW had actually crashed (reports 233/241).  Everything else had been
+excluded first — the transport (report 232), the client tooling and the
+regulatory database (233 §5), the per-unit NVS (233 §2), and the board itself:
+stock TabletOS on this unit runs `ti0` UP/RUNNING and **associated** on vendor
+firmware `Rev 7.1.4.10.77` with `IPC_EVENT_SCAN_COMPLETE` six seconds after boot
+(234).  With the floor lowered, `4-sr` boots the same driver and **scans**: 17,
+20 and 21 BSS on three consecutive runs, both bands, no errors — and the same
+after a real region-1 flash and reboot.  So the newest wl128x service pack is
+broken for scanning on this chip, and the newest build below the break is the
+right one here.
+
+**Constraint.**  The override says "this board runs 7.3.5", not "any firmware is
+fine": older service packs are still rejected, and the comment in `wl12xx.h`
+records why.  The cost is an older service pack (fewer fixes than 5-sr); if
+coexistence or BLE work later needs 5-sr, the panic is the thing to fix — reports
+233/241 are the reproduction, and the 5-sr file is still on the image.  This
+changes the firmware name, so the shipped rootfs carries **both** files and the
+module is rebuilt whenever the choice changes (region-1 flash; module-only, trap
+190).
+
+**Evidence.**  Report **235**; region-1 image `f159a221…` (`rootfs-region1-
+wl1283-scan.ext4`, `wl12xx.ko` md5 `2fb86c4d…`); patch **59 files / 8 713 lines**,
+sha256 `2be9e99c…`; traps 233/241/243.
+
+---
+
 The repository licence and visibility are decided below; the remaining
 policy questions (publication of the proprietary corpus) stay open and are
 recorded here so nobody assumes a policy exists.
