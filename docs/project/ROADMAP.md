@@ -4,14 +4,13 @@ Open work only.  Closed and parked item history is archived in
 [`docs/history/ROADMAP-CLOSED.md`](../history/ROADMAP-CLOSED.md).  Each open
 item states the evidence that would close it.
 
-Current focus: **item 9** (peripherals).  The audio goal is closed (reports 214
-and 215: headphones and both speakers), its session-45 diagnostics are retired
-and the outputs re-verified (session 48), the bench has **ssh over USB**
-(RNDIS + dropbear) with the gadget's DMA now working (session 52), and the
-**WL1283's WLAN associates and passes traffic**.  The next work on the same
-chip is its **other cores — BT, then FM and GPS** (operator's order), with the
-reference-first method (DECISIONS §61).  Item 7 (packaging) is untouched; item 8
-(BB10) is parked by the operator.
+Current focus: **item 7a** — a real root on hd3, then SGX540 (operator, session
+53), with **item 9** (peripherals) still active.  The audio goal is closed
+(reports 214 and 215), the bench has **ssh over USB** (RNDIS + dropbear) with the
+gadget's DMA now working (session 52), and the **WL1283's WLAN associates and
+passes traffic**.  On the same chip, **BT's core works** (real inquiry; `hci0`
+registers with mgmt) with the controller-open blocked on a stray byte, then FM
+and GPS.
 
 ## 7. Packaging (postmarketOS-style)
 
@@ -24,6 +23,108 @@ Nothing about tooling, licence or distribution has been decided
 **Closes when:** a clean checkout plus documented host prerequisites reproduces
 the image byte-for-byte (same CRC) and installs it on a unit without manual
 steps.
+
+## 7a. A real root on hd3, then SGX540 — **active (operator, session 53)**
+
+**Goal, in the operator's order:** move off the 64 MiB BusyBox root in region 1
+onto **hd3 (62.86 GiB)**, then get **SGX540 / OpenGL ES 2.0** hardware
+acceleration working so a real DE (Catacomb or Sxmo-dwm) can run.  This is item
+7's intent made concrete, and it reopens what `## Out of scope` used to list.
+
+**Established by measurement (session 53):**
+
+* **No large transfer is needed.**  hd3 is MCT type `0x1C`, blocks
+  `0x4905–0xFFFFF` = **62.86 GiB**; a 2 GiB seed image is 3.18 % of it.  The
+  pre-OS loader's allow-list already includes `0x1C`, and `bbusb.py` encodes the
+  extent (`'0x1C FS Fixed': (0x4905, 0xFFFFF)`), so both routes below use paths
+  the project already trusts.
+* **hd3's contents, read live:** a DOS MBR at `0x49000000` carrying a QNX v1.2b
+  boot sector, and the QNX6 superblock at **`0x49002000`** — matching report
+  138's corrected offset.
+* **In-place filesystem creation works on the device now.**  Rehearsed
+  non-destructively: `losetup -f -o OFS` → `mkfs.ext2 -F -b 4096` → mount →
+  write → unmount.  `losetup -o` exists, and `initramfs/init.c` already mounts
+  region 1 through `LOOP_SET_STATUS64` + `lo_offset`.
+* **Device tool gap:** busybox has `mke2fs` but **no `offset=`** and **no
+  `resize2fs`**.  The first is covered by `losetup -o`; the second is why the
+  image is built on the host rather than grown on the device.
+
+**The design decision (operator, session 53): hd3 holds a flasher-restorable
+ext4 image, not an in-place mkfs.**  A known-good Linux image that the bootrom
+flasher can put back is worth more than an in-place filesystem, because it is
+what makes a broken root recoverable without needing a working Linux on the
+device.  So the primary route is **(B) build the image on the host, flash it
+with `bbusb.py`** — the same loop the project already trusts — and treat
+image size as a policy choice rather than a constraint.
+
+**Size is a policy choice, and the transfer is what sets it.**  `analyze_blocks()`
+skips runs of **`0xFF`**, not `0x00`, so a sparse (zero-filled) ext4 does **not**
+have its holes skipped: a fully expanded 62.86 GiB image would send all 62.86 GiB
+over the bootrom link.  Practical sizes therefore:
+
+| seed | flasher sends | covers |
+|---|---|---|
+| 1 GiB | 1 GiB | 1.59 % of hd3 |
+| 2 GiB | 2 GiB | 3.18 % |
+| 4 GiB | 4 GiB | 6.36 % |
+
+Grow by building a larger image and flashing it over the seed (the gate accepts
+any run inside `0x1C`), rather than by `resize2fs` — which busybox does not have.
+The invariant is that hd3 **always** holds a flasher-restorable ext4 image.
+
+The in-place mkfs route (A) is **not** preferred for that reason, though it is
+proven to work on the device (`losetup -f -o OFS` → `mkfs.ext2` → mount) and
+remains useful for the *populate* step, and as a way to test a filesystem
+without touching the media.  There is no `resize2fs` on the device, which is the
+other reason to prefer building images on the host.
+
+**Mechanism change is one constant.**  `initramfs/init.c`'s
+`ROOTFS_RAW_OFF` moves from `0x29000000` (region 1) to `0x49000000` (hd3); the
+initramfs already falls back to the bring-up console when the root will not
+mount, so a bad hd3 costs a boot, not a brick.  **Region 1 stays intact as the
+fallback** through every step.
+
+**SGX.**  Mainline 7.3.3 has **no** SGX/PVR driver (`ti,omap4430-gpu` /
+`img,powervr-sgx540` are bound by nothing), though the DTS target-module, the
+GFX power domain and the L3_GFX clock all exist upstream.  The route is
+`gitlab.com/pvrports/pvrports`: `linux-openpvrsgx` (kernel driver, its
+`config-openpvrsgx.armv7` sets `CONFIG_SGX=y`, `CONFIG_SGX_OMAP=m`,
+`CONFIG_SGX_DRM=y`) plus `non-free/sgx-ddk-um` (TI userspace,
+**licence=proprietary**).  Its reference devices are the Samsung espresso
+(OMAP4430, TWL6030) — the same SoC family as this unit.  Its driver targets
+6.1, so a rebase to 7.3.3 is expected work.  **Blobs stay gitignored in
+`local/`**, like the QNX dumps and the TI TRM.
+
+**Safety.**  The operator has the UFS images, so **no hd3 backup is required** —
+a reflash restores TabletOS.  Writing hd3 destroys the QNX userland on media
+until then; region 1 and the sealed IFS are the way back, and the MCT/NVRAM/RPMB
+are untouched throughout (`SAFETY.md` §6).
+
+**Open decision that gates the writes:** which userspace goes on hd3 —
+**postmarketOS (a pmaports device port)** or **our own minimal root, grown**?
+pmOS is the operator's target and is what the SGX port assumes, so it is
+recommended; it also means building an OMAP4430/PlayBook device port.
+
+**Sequence** — each step independently verifiable, and hd3 stays in a state the
+flasher can replace at every point:
+
+1. **Settle the userspace choice** (above).  *No writes.*
+2. **Build the ext4 image on the host** from that rootfs (`mkfs.ext4`, populate,
+   `e2fsck`, record sha256).  Verify by loop-mounting it on the host first.
+3. **Flash it to hd3** with `bbusb.py --component … --dest-block 0x4905`;
+   dry-run first and require that the plan line shows a run inside `0x1C` and
+   `gate_runs` passes.  Verify by `dd`-ing the superblock at `0x49000000` and by
+   mounting it from the running Linux (`losetup -o 0x49000000`) and comparing a
+   checksum with the host image.
+4. **Re-point `ROOTFS_RAW_OFF`**, rebuild the kernel image, flash region 0, boot.
+   Region 1 stays intact throughout as the fallback.
+5. **Only then** SGX.
+
+Step 3 is reversible at any time by re-flashing the same block range — which is
+the whole reason it beats an in-place mkfs.
+
+**Closes when:** the unit boots a real rootfs from hd3 unattended, and a trivial
+EGL/GLES 2.0 program runs on SGX540.
 
 ## 8. A BB10 image on the PlayBook — **PARKED (operator, session 25)**
 
@@ -143,10 +244,11 @@ terminal (trap 216).
 
 ## Out of scope for now
 
-SGX/GPU, IVA-HD, camera and the secure-world (TrustZone) path are all disabled
-or untouched in the board DTS.  They are not blocked on the panel.  Audio,
-touch, the sensors and WiFi/BT/GPS are **no longer out of scope**: they are
-item 9 (report 176).
+IVA-HD, camera and the secure-world (TrustZone) path are still disabled or
+untouched in the board DTS.  They are not blocked on the panel.  Audio, touch,
+the sensors, WiFi/BT/GPS and **SGX/GPU** are **no longer out of scope**: the
+peripherals are item 9 (report 176), and the GPU is item 7a (operator, session
+53, with the hd3 rootfs).
 
 ## Working rules that apply to every item
 
