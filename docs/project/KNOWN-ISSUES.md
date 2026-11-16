@@ -2439,9 +2439,16 @@ report 121 §3/§11/§12.
       by the initrc, session user in the `input` group) watches
       `/dev/input/event0` for `BTN_TOUCH` down and runs `catacomb msg dpms on`
       when `bl_power != 0` — measured `4 → 0` on one tap; the daemon persists
-      across reboot.  With it, swayidle may stay; kill it only for SSH-only
-      benches with no touch.  (Sessions 58/59, reports 248/250; corrects
-      session 57's "any touch restores it".)
+      across reboot.  **But repeated DPMS resume is unsafe on this kernel:**
+      a later auto-blank + tap left a black panel with the backlight on — the
+      DSI link wedged (`Failed to set dsi_if_enable`, `NO PACKET_SENT`, `VC(1)
+      error`) while catacomb/tabula/wvkbd were alive; only `reboot -f` clears
+      it (traps 289/301).  With swayidle's `resume` removed so pb-touchwake was
+      the sole DPMS-on caller, two cycles were clean but the third wedged.
+      **Policy: swayidle removed from the initrc — the panel stays lit**;
+      pb-touchwake handles only a manual `catacomb msg dpms off`.
+      (Sessions 58/59, reports 248/250; corrects session 57's "any touch
+      restores it".)
 
 299. **FIXED (session 59): the repeat was squeekboard's action-key repeat, not the
       touch driver.**  One tap produces one clean evdev contact (`down=01` →

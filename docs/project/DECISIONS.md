@@ -2962,13 +2962,17 @@ the keyboard renders and types well, and forced DPMS-off + one tap restored the
 panel.  All persisted across two reboots.  The cache premise was wrong: the
 "249"/"33" were EXT_CSD byte indices, not values.
 
-**Constraint.**  The live root is read-write and persistent (§84), so the
-install and initrc edit need no hd3 flash — but the flasher-restorable base
-`f7858110…` still carries squeekboard and no DejaVu/daemon; reflashing it would
-reintroduce the repeat until these are redone (an hd3-only bake is the
-follow-up).  One combining-mark OSK label (`⌨͔`/`⌨͕`) still renders oddly —
-cosmetic.  For SSH-only benches with no touch, `pkill -x swayidle` is still the
-simplest way to keep the panel lit; with touch present, pb-touchwake wakes it.
+**Constraint.**  A flasher-restorable hd3 image with all the OSK/icon/daemon
+fixes and the swayidle-free initrc was baked as
+`blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`, e2fsck clean) — not
+flashed; reflashing the old `f7858110…` would lose them.  One combining-mark
+OSK label (`⌨͔`/`⌨͕`) still renders oddly — cosmetic.  `pb-touchwake.py` wakes a
+*manual* DPMS-off, but repeated DPMS resume wedges the DSI link (black panel,
+only a reboot clears it); with swayidle's `resume` removed, two cycles were
+clean but the third wedged.  **So swayidle is removed — the panel stays lit**
+(traps 289/298/301); the reference OS's robust DSI resume is unported.
+`epitaph` (the panel) still segfaults in EGL setup on the PVR GLES2 driver —
+the remaining reason the boot UI is bare (a patched Rust rebuild is open).
 
 **Evidence.**  Report 250 §1–§2a; session-59 note; cached
 `catacomb-v1.5.0.tar.gz` (`src/catacomb.rs:303`, `input.rs:33`); Alpine

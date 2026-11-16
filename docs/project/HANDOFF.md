@@ -138,11 +138,26 @@ installed by hand (the package's `encodings`/`mkfontscale` deps are absent) and
 `fc-cache -f` run.  One BackSpace tap now yields one `0x7f`.  Report 250 §2/§2a,
 DECISIONS §85.  Do not fix the repeat in the touch driver (trap 299).
 
-**Touch wakes DPMS (done):** `tools/bench/pb-touchwake.py` is installed at
-`/usr/bin/pb-touchwake` and started by the initrc; the session user is in the
-`input` group (gid 23).  It watches `/dev/input/event0` for `BTN_TOUCH` down
-and calls `catacomb msg dpms on` when `bl_power != 0`.  For SSH-only bench
-sessions with no touch, still `pkill -x swayidle` to keep the panel lit.
+**DPMS / touch-wake (measured, policy changed):** `tools/bench/pb-touchwake.py`
+is installed at `/usr/bin/pb-touchwake`, started by the initrc, and the session
+user is in the `input` group (gid 23).  It watches `/dev/input/event0` for
+`BTN_TOUCH` down and calls `catacomb msg dpms on` when `bl_power != 0`.  A
+single forced blank + tap woke cleanly.  But a later auto-blank left a black
+panel with the backlight on: the DSI link wedged (`NO PACKET_SENT`, `VC error`);
+catacomb/tabula/wvkbd were alive, so only a reboot clears it (traps 289/301).
+With swayidle's `resume` removed (single DPMS-on caller), two cycles were clean
+but the third wedged again.  **So swayidle is removed from the initrc — the
+panel stays lit**; pb-touchwake remains for a manual `catacomb msg dpms off`.
+
+**App drawer icons (fixed):** `/usr/share/icons/default/index.theme` was
+missing, so tzompantli never reached `hicolor` and every app icon was
+"NotFound".  Created it, installed `adwaita-icon-theme` + `glycin-svg`, and
+converted netsurf's XPM to a hicolor PNG.  **`epitaph` (the panel) still
+segfaults** after EGL setup on the PVR GLES2 driver (a patched Rust rebuild or
+a working panel is open); `calls`/`chatty` are not installed (heavy recommends).
+A flasher-restorable hd3 image with all these fixes was baked:
+`local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`,
+e2fsck clean), **not flashed** — hd3-only at `0x4915` if wanted.
 
 ## 0f. Apps, the schema, and known breakage
 
@@ -236,12 +251,12 @@ reboot.
 * **Pace bulk host→device pushes:** 8 KiB chunks with a 5 ms pause (trap 302).
   The device side is `nc -l -p <port> > /tmp/f`; the host sends.  An unpaced
   burst is truncated.
-* **After every boot, `pkill -x swayidle`** for an SSH-only bench where no
-  touch will occur (its 180 s DPMS-off leaves the panel dark). <!-- audit-ok: the initrc's timer value, not a session count -->
-  With a touch user present this is optional: `pb-touchwake.py` now wakes a
-  DPMS-off panel on contact (trap 298 updated).  Restore a dark panel with
+* **No need to kill swayidle: it is removed from the initrc** (session 59) —
+  the panel stays lit because repeated DPMS resume wedges the DSI link.
+  pb-touchwake wakes a panel after a *manual* `catacomb msg dpms off`; do not
+  rely on repeated auto-blank cycles (trap 298 updated).  Restore manually with
   `XDG_RUNTIME_DIR=/run/user/10000 WAYLAND_DISPLAY=wayland-1 catacomb msg dpms
-  on`.
+  on`; a wedged black panel needs `reboot -f`.
 * **Injecting a command into foot's shell:** `TIOCSTI` on `/dev/pts/0` works
   (`tools/bench/inj.py <cmd>`); writing `/proc/<foot>/fd/7` (the pty master) does
   **not** feed the terminal.  `tools/bench/keylog.py` on foot's stdin logs the
@@ -271,10 +286,10 @@ reboot.
   until the card cache is disabled.
 * **301.** One `DSI … Failed to set dsi_if_enable to 0` at boot recovered.
 * **302.** An unpaced host→device RNDIS burst loses data; pace it.
-* **298.** DPMS off cannot be woken by touch; kill `swayidle` after every boot.
-* **299.** The backspace/enter repeat is squeekboard's action-key repeat (one
-  contact → three `0x7f`; a letter never repeats); upstream catacomb 1.7.x uses
-  wvkbd.
+* **298.** Updated: pb-touchwake wakes a *manual* DPMS-off, but repeated resume
+  wedges the DSI link (black panel), so auto-blank/swayidle is removed.
+* **299.** Fixed: the repeat was squeekboard's; wvkbd on catacomb 1.5.0 gives
+  one `0x7f` per tap (no 1.7.x move needed).
 * **296** is fixed (kernel `#74`): the position ghost and the lost burst taps.
 * Still current: 292–295, 285–291, 266, 267, 268/274, 269, 270, 271, 275–284,
   **265**, 264, 261, 260, 259, 253–258, **250**, **248**, **247**, **244**,
@@ -356,18 +371,19 @@ report 250.
 WHERE IT STANDS: the touch position ghost is FIXED (kernel #74) and the
 backspace/enter repeat is FIXED by installing wvkbd on catacomb 1.5.0 — one tap
 is one key, no UI upgrade needed (report 250).  DejaVu Sans gives the OSK its
-glyphs and pb-touchwake.py wakes a DPMS-blanked panel on touch.  The root is
+glyphs.  The panel stays lit (auto-blank removed: repeated DPMS resume wedges DSI).  The root is
 WRITABLE and grown to 56.5 G, SSH is back (kernel #77, region 0 0x294F8E36;
 PB_LINK=usb tools/pbssh.sh).  The eMMC "cache flush" item is closed by
 measurement: the card has no cache (CACHE_SIZE=0/CACHE_CTRL=0), and the stall
 is a plain WRITE, not a flush (trap 300 corrected).  The upload-path profile
 build is staged (PBGL_PROFILE) but not built.
 
-THE ACTIVE ITEM: the upload-path profile (PBGL_PROFILE).  Optionally bake the
-OSK stack (wvkbd + DejaVu + pb-touchwake) into the flasher-restorable hd3 base.
-Do not fix the repeat in playbook-munin.c (trap 299 — it is fixed in the OSK).
-For SSH-only benches with no touch, kill swayidle (trap 298 updated: touch does
-wake DPMS now).
+THE ACTIVE ITEM: fix the `epitaph` panel segfault (EGL/PVR on GLES2) and flash
+the baked hd3 image `blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`,
+hd3-only at `0x4915`) if media should match the live root; then the upload-path
+profile (PBGL_PROFILE).  Do not fix the repeat in playbook-munin.c (trap 299 —
+fixed in the OSK).  No auto-blank: repeated DPMS resume wedges the DSI link
+(trap 298 updated); a wedged black panel needs `reboot -f`.
 
 THE FACTS: region 0 = 0x294F8E36 (0x9E0980 B, sha256 f0738625..., kernel #77);
 hd3 media = the same root grown in place to 56.5 G, read-write (the
@@ -396,7 +412,7 @@ One command at a time.
 TOUCH/INPUT: trace via /sys/module/playbook_munin/parameters/trace; PBTS lines
 in dmesg (down=/line= added); evcap.py/keylog.py/inj.py are /tmp tools.  Inject
 into foot with TIOCSTI on /dev/pts/0 (writing /proc/<foot>/fd/7 does not work).
-DPMS off cannot be woken by touch — kill swayidle after every boot (trap 298).
+No auto-blank (swayidle removed): repeated DPMS resume wedges DSI; a wedged black panel needs `reboot -f` (trap 298).
 A both-edge IRQ request kills touch (trap 297).
 
 BT: BT_EN pad 0x4A10007C mux 3 + GPIO2_DATAOUT bit 23; UART2 pads

@@ -58,6 +58,23 @@ the whole UI to catacomb 1.7.x.
   `/usr/bin/pb-touchwake`, started by the initrc.  [report 250 §2a]
 * **The whole stack survives a second reboot.**  wvkbd (DejaVu), pb-touchwake,
   swayidle and the `input` group all came back.  [report 250 §2a]
+* **DPMS retest corrected the policy: no auto-blank.**  A forced blank + tap
+  woke cleanly, but a later auto-blank left a black panel with the backlight on
+  (DSI link wedged — `NO PACKET_SENT`/`VC error`; catacomb/tabula/wvkbd alive,
+  only `reboot -f` clears it).  With swayidle's `resume` removed (single
+  pb-touchwake caller), cycles 1 and 2 were clean but cycle 3 wedged again.
+  Swayidle was removed from the initrc so the panel stays lit.  [report 250 §2a]
+* **App-drawer icons fixed.**  `/usr/share/icons/default/index.theme` was
+  missing, so tzompantli never reached `hicolor`; created it, installed
+  `adwaita-icon-theme` + `glycin-svg`, converted netsurf's XPM.  All app icons
+  render now.  [report 250 §2b]
+* **`epitaph` still segfaults** ~0.3 s after start, after font/EGL setup on the
+  PVR GLES2 driver (the zbus `GetAll` warning is benign).  Fix needs a Rust
+  rebuild or a working panel.  `calls`/`chatty` not installed (heavy recommends).
+  [report 250 §2b]
+* **A flasher-restorable hd3 image was baked** with all fixes:
+  `blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`, 625 999 872 B,
+  e2fsck clean) — not flashed.  [report 250 §2b]
 * Region 0, the kernel patch and the DTB are **unchanged** — no export needed.
 
 ## Inferred (reasoning from evidence, not directly measured)
@@ -87,8 +104,11 @@ the whole UI to catacomb 1.7.x.
 * **Does wvkbd's `--auto` work with catacomb's input-method implementation?**
   Not tried; the image starts wvkbd always-visible like the old squeekboard.
 * **The upload-path profile** (`PBGL_PROFILE`) is still unbuilt.
-* **Bake wvkbd into the flasher-restorable hd3 base?**  Not done; the live
-  persistent root has it, but reflashing `f7858110…` would lose it.
+* **Flash the baked hd3 image?**  Baked as `07555bde…` but not flashed; the
+  live persistent root already has the fixes.
+* **Fix `epitaph`'s segfault** — a patched Rust rebuild (long build) or a
+  replacement panel; the reason the boot UI is bare.
+* **Port the reference OS's DSI resume** if DPMS auto-blank is ever wanted back.
 
 ## Superseded / uncertain
 

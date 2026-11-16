@@ -141,18 +141,50 @@ would reintroduce the repeat until wvkbd is reinstalled.
   layout/symbol switch icons render.  One combining-mark label (`⌨͔`/`⌨͕`,
   U+0354/U+0355) still renders oddly — cosmetic.  The pmaport APKBUILD now
   depends on `font-dejavu`.
-* **Touch-to-wake DPMS (trap 298) — fixed with a small daemon.**  The panel
-  still blanks after ~3 min (swayidle), but touch no longer leaves it dark:
+* **Touch-to-wake DPMS (trap 298) — daemon works, but auto-blank is unsafe.**
   `tools/bench/pb-touchwake.py` watches `/dev/input/event0` for `BTN_TOUCH`
-  down and runs `catacomb msg dpms on` when `bl_power != 0`.  The session user
-  was added to the `input` group (gid 23) so it can read the evdev node.  Test:
-  forced `bl_power=4`, tapped once, `bl_power` returned to `0` with no manual
-  command.  The daemon is installed at `/usr/bin/pb-touchwake` and launched by
-  the initrc.  `swayidle` may stay; for SSH-only bench sessions where there is
-  no touch, killing it is still the simplest way to avoid a blank panel.
+  down and runs `catacomb msg dpms on` when `bl_power != 0`; the session user
+  was added to the `input` group (gid 23).  A single forced DPMS-off + tap woke
+  the panel cleanly.  But a later auto-blank cycle left a **black screen with
+  the backlight on**: the DSI link wedged (`Failed to set dsi_if_enable`,
+  `NO PACKET_SENT`, `VC(1) error`); catacomb/tabula/wvkbd were all alive, so
+  this is the DSI link, not a dead DE — a reboot clears it (traps 289/301).
+  Controlled retest: with swayidle's `resume` removed so pb-touchwake was the
+  sole DPMS-on caller, cycles 1 and 2 (one forced, one auto-blank) were clean,
+  but cycle 3 wedged again.  So both a double-call race *and* repeated DPMS
+  resume on this kernel are implicated; the reference OS's robust DSI resume
+  is unported.  **Policy: no auto-blank** — swayidle is removed from the
+  initrc so the panel stays lit; pb-touchwake remains for a manual
+  `catacomb msg dpms off`.  Only a reboot recovers a wedged link.
 
 Both were verified across a second `reboot -f`: wvkbd (with the DejaVu font),
 pb-touchwake, swayidle and the `input` group membership all came back.
+
+## 2b. App-drawer icons, the baked image, and the remaining panel crash
+
+* **App drawer (tzompantli) icons were all "NotFound".**  tzompantli starts its
+  icon-theme chain at `default` and follows `Inherits`, but
+  `/usr/share/icons/default/index.theme` was missing, so it never reached
+  `hicolor` where the app icons live.  Created it (`Inherits=Adwaita,hicolor`),
+  installed `adwaita-icon-theme` 51.0-r0 + `glycin-svg` 2.2.5-r1, and converted
+  netsurf's `/usr/share/pixmaps/netsurf.xpm` to a 128×128 PNG in hicolor.
+  `tzompantli` now renders every app icon; the drawer is launched on boot for
+  the bench (normally it is bound to a power-button long-press).
+* **`epitaph` (the panel) still segfaults** ~0.3 s after start.  It is *not*
+  the UPower warning in trap 292 (the zbus `GetAll` on `/` is a `NetworkManager
+  AccessPoint` proxy with a null path — a WARN); with `EGL_LOG_LEVEL=debug` the
+  crash follows font loading and EGL config selection on the PVR GLES2 driver.
+  A fix likely needs a patched Rust rebuild of epitaph (long build) or a
+  driver-level change; neither was done this session.  The missing panel is
+  why the boot shows only the wallpaper, the drawer on demand, and the OSK.
+* **`calls`/`chatty` are not installed** (heavy GTK4/GStreamer recommends
+  skipped with `--no-recommends`); their initrc lines only print "not found".
+* **A flasher-restorable hd3 image was baked** with all of the above:
+  `local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img`
+  (625 999 872 B, sha256 `07555bde…`, `e2fsck -fn` clean).  It adds wvkbd +
+  DejaVu, pb-touchwake, the icon fixes and the swayidle-free initrc on the
+  `f7858110…` base.  It was **not flashed** — the live rw root already has the
+  fixes, so the flash is left to the operator; hd3-only at `0x4915`.
 
 ## 3. State and counter
 
@@ -164,10 +196,13 @@ write).  `swayidle` was killed after both the pre- and post-reboot boots
 
 ## 4. Next
 
-1. The upload-path profile (`PBGL_PROFILE` catacomb build) — still the
-   remaining performance item.
-2. Bake wvkbd + DejaVu + pb-touchwake into the flasher-restorable hd3 base
-   (`f7858110…`) so a reflash does not lose the OSK fix; the live root already
-   persists it.
-3. Keep watching the intermittent WRITE-busy stall; the `barrier=0` +
-   write-through mount remains the mitigation.
+1. Flash the baked hd3 image (`07555bde…`) at `0x4915` if the operator wants
+   media to match the live root (hd3-only; initramfs re-installs SSH and
+   re-grows).  Not done this session.
+2. Fix `epitaph` (patched Rust rebuild or a working panel) — the reason the
+   boot UI is bare; and optionally install `calls`/`chatty`.
+3. The upload-path profile (`PBGL_PROFILE` catacomb build) — still the
+   remaining performance item; port the reference OS's DSI resume if DPMS is
+   wanted back.
+4. Keep watching the intermittent WRITE-busy stall; `barrier=0` +
+   write-through remain the mitigation.
