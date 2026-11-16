@@ -132,6 +132,11 @@ transfer side, not the driver: the same file arrives byte-exact paced.)
 
 ## 5. Full dmesg review (kernel `#77`, 694 lines)
 
+The dump is preserved as
+`docs/captures/playbook-boot-2026-11-16-rw-writethrough-dmesg.txt`; the first
+working read-write boot (`#76`, with the grow) is
+`docs/captures/playbook-boot-2026-11-16-rw-barrier0-grow-dmesg.txt`.
+
 **Real:** the flush stall (§3) and one `DSI: omapdss DSI error: Failed to set
 dsi_if_enable to 0` at 52.7 s, followed by a successful PLL re-lock and
 hs-clock packets at 54 s — a modeset that recovered (catacomb running,

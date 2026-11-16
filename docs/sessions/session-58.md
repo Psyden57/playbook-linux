@@ -177,7 +177,11 @@ path.  After the ghost was fixed the operator added two requests: a clean shell
 * Reports `docs/reports/248-touch-ghost-fixed-repeat-squeekboard-2026-11-16.md`
   and `docs/reports/249-writable-grown-root-emmc-flush-2026-11-16.md`.
 * Capture `docs/captures/touch-munin-2026-11-16-session58.txt` (evdev, PBTS,
-  keylog, DPMS).
+  keylog, DPMS), and the two full boot logs
+  `docs/captures/playbook-boot-2026-11-16-rw-barrier0-grow-dmesg.txt` (`#76`)
+  and `…-rw-writethrough-dmesg.txt` (`#77`).
+* `tools/bench/{acm,evcap,keylog,inj}.py` + `README.md` — the session's bench
+  scripts, previously only in `/tmp`.
 * Initramfs `initramfs/init.c` (read-write mount, `barrier=0`,
   write-through, `install_bench_tools`, `pb-ssh.start`, `pb-grow.start`,
   `sysfs_write`); `.gitignore` for the embedded kit.

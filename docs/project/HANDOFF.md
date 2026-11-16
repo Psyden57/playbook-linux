@@ -245,13 +245,16 @@ reboot.
   `XDG_RUNTIME_DIR=/run/user/10000 WAYLAND_DISPLAY=wayland-1 catacomb msg dpms
   on`.
 * **Injecting a command into foot's shell:** `TIOCSTI` on `/dev/pts/0` works
-  (`scratchpad/inj.py <cmd>`); writing `/proc/<foot>/fd/7` (the pty master) does
-  **not** feed the terminal.  `keylog.py` on foot's stdin logs the bytes the app
-  receives — the decisive tool for input bugs.
+  (`tools/bench/inj.py <cmd>`); writing `/proc/<foot>/fd/7` (the pty master) does
+  **not** feed the terminal.  `tools/bench/keylog.py` on foot's stdin logs the
+  bytes the app receives — the decisive tool for input bugs.
 * **The touch trace:** `echo 1 > /sys/module/playbook_munin/parameters/trace`,
   then `dmesg | grep PBTS`; `PBTS` shows `st/x17/b3/x/y/reads/torn/down/line`
   and the 18 raw bytes on a slot-0 transition or a jump > 40.
-* `evdev`: `evcap.py <secs> <file>`; characters with `keylog.py`.
+* `evdev`: `tools/bench/evcap.py <secs> <file>`; characters with
+  `tools/bench/keylog.py`.  `tools/bench/acm.py '<cmd>'` drives the ACM;
+  `tools/bench/inj.py` injects into foot's pty (`TIOCSTI` on `/dev/pts/0`).
+  Push the device-side ones to `/tmp` paced (trap 302).
 * **The compositor:** `md5sum /usr/bin/catacomb` (r10000 `7418d9ea…`);
   `pgrep -a catacomb`; `tail -20 /home/playbook/.local/state/tinydm.log`;
   `catacomb msg dpms on|off`; a restart over a wedged DSI does not recover
