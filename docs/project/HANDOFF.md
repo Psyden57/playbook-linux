@@ -288,26 +288,118 @@ PlayBook (OMAP4430 "winchester") — session 61 (absolute; Linux-era 55)
 Workspace: this repository — a git checkout.  Map: docs/README.md.  The earlier
 work tree $HOME/rea-work is READ-ONLY.
 
-READ FIRST: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this file),
-ROADMAP.md 7a, KNOWN-ISSUES.md §2 (especially 303-314) and §3,
-DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md §84-87, reports/INDEX.md, reports
-253/252/251/250/249, sessions/session-60.md.
+READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
+file), ROADMAP.md items 7a and 9, KNOWN-ISSUES.md §2 (traps 14-314, especially
+303-314) and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md (84-87),
+docs/reports/INDEX.md, reports 253, 252, 251, 250 and 249,
+docs/captures/touch-munin-2026-11-16-session58.txt and
+sessions/session-60.md.
 
-WHERE IT STANDS: the epitaph panel is fixed (r10006; report 251), the panel's
-permissions are installed, gorm/Wi-Fi work (report 252), and software GL
-clients use llvmpipe (report 253).  Region 0 = 0x294F8E36 (kernel #77), hd3 =
-the grown rw root, region 1 = 49e318bf…, BOOTCTR_FCTRY = 0x27.  The unit is on
-Linux, SSH via PB_LINK=usb tools/pbssh.sh.
+WHERE IT STANDS: the epitaph panel is FIXED (r10006; report 251).  Its
+brightness and Wi-Fi/cellular controls work (group catacomb + the udev/polkit
+rules); gorm lists the Wi-Fi APs after `nmcli radio wifi on` (report 252);
+touch reaches xdg clients (tools/bench/uitap.py over uinput.ko).  Software GL
+clients use llvmpipe (report 253): the drawer render is 2.7-6 ms, but the
+remaining swap is 420-550 ms per full-screen frame and the first draw pays the
+LLVM JIT.  The root is WRITABLE, grown to 56.5 G, SSH is back (kernel #77,
+region 0 0x294F8E36; PB_LINK=usb tools/pbssh.sh).  The GPU compositor is on the
+SGX (pvr_dri); GL clients are software (trap 314).
 
 THE ACTIVE ITEM: the CPU.  The unit runs ONE core at 400 MHz: the kernel is
-built CONFIG_SMP=n, the DTS sets maxcpus=1, and there is no cpufreq/OPP.  The
-next experiment (two boots): build CONFIG_SMP=y + CONFIG_NR_CPUS=2 with
-maxcpus=1 still set, rebuild ALL modules (the vermagic changes, including the
-vendored pvrsrvkm), install them in /lib/modules/7.3.3, flash region 0 only,
-boot and verify; then remove maxcpus=1, rebuild/flash and boot cpu1.  See
-HANDOFF §0a for the exact commands and the result meanings.
+built CONFIG_SMP=n, the DTS sets maxcpus=1 (line 88), dpll_mpu_ck = 400 MHz,
+and there is no cpufreq/OPP (CONFIG_CPU_FREQ/PM_OPP are on).  The reference
+programs DPLL_MPU/PRM_VC (report 223) and runs 1.0 GHz dual-core.  THE NEXT
+EXPERIMENT (HANDOFF §0a, two boots): build CONFIG_SMP=y + CONFIG_NR_CPUS=2 with
+maxcpus=1 still set, rebuild ALL modules (the vermagic gains SMP, including the
+vendored pvrsrvkm), install them in /lib/modules/7.3.3, save the revert image,
+flash region 0 only, boot and verify; then remove maxcpus=1, rebuild/flash and
+boot cpu1.  Then the MPU OPP/voltage (measure the reference on the oracle
+first) and the GL-client path.  Do NOT take screenshots; ask the operator to
+look at the screen.
 
-THEN: the MPU OPP (measure the reference's DPLL_MPU/PRM_VC on the oracle
-first), the drawer swap/pre-warm, and a hardware GL path for clients (trap 314).
-Do not take screenshots; ask the operator to look.
+THE FACTS: region 0 = 0x294F8E36 (0x9E0980 B, sha256 f0738625..., kernel #77);
+hd3 media = the same root grown in place to 56.5 G, read-write (the
+flasher-restorable base is f7858110..., 625999872 B); region 1 = 49e318bf...
+(fallback, not booted); BOOTCTR_FCTRY = 0x27 (self-maintaining, threshold 0x1e).
+The kernel/module vermagic is currently 7.3.3 mod_unload modversions ARMv6
+p2v8; CONFIG_SMP changes it (verify with modinfo) — every module, including
+pvrsrvkm, must match.
+
+PHYSICAL STATE: the unit runs the Nura root read-write (0fca:8010, SSH dropbear
+on 169.254.0.1:22, PB_LINK=usb tools/pbssh.sh; the ACM playbook:~# getty is the
+recovery console).  The root carries this session's live fixes: epitaph r10006,
+catacomb r10001, group catacomb (gid 111) + playbook, the 66-epitaph
+udev/polkit rules, 10-gorm.rules, and the llvmpipe install (swrast_dri.so,
+libLLVM-13.so, libdrm_amdgpu/nouveau; the softpipe backup is
+swrast_dri.so.amber).  usb0 is brought up by /etc/local.d/pb-ssh.start.  PACE
+bulk host->device pushes (8 KiB chunks / 5 ms; trap 302) — an unpaced burst
+truncates.  To boot the ORACLE: flash local/work/ifs-shim-sealed.ifs at 0x825.
+To stock TabletOS: that IFS at 0x825 + local/work/rcfs-1917.rcfs at 0x8D5 (+
+the vendor UFS if hd3 was repurposed).  Do NOT restore
+local/images/ifs0.sealed.bin (trap 84).
+
+BENCH: SSH is the primary shell; the ttyGS0 prompt is playbook:~#, NOT pb> —
+pbcon.py does not drive it (trap 274).  REBOOT: reboot -f (over SSH or the raw
+ACM).  THE FLASH: start the flasher first, then the reboot; one bootrom
+session; the 60 s window; --from-bootrom UPLOADS THE RAMLOADER, so the unit
+must be BOOTED (trap 266), unless it is already in the bootrom after a WDT
+reset.  ttyACM0 is 0666.  An agent NEVER writes RPMB; NVRAM read-only.  Read
+dmesg UNFILTERED.  One command at a time.  The root is /dev/loop0 on the hd3
+ext4, rw, barrier=0 + write-through; an explicit sync can still stall (trap
+300).
+
+TOUCH/INPUT: trace via /sys/module/playbook_munin/parameters/trace; PBTS lines
+in dmesg (down=/line= added).  Inject a tap/drag with tools/bench/uitap.py
+(X Y, or X1 Y1 X2 Y2 [steps] [ms]) — it needs uinput.ko loaded (built from the
+tree; trap 306).  evcap.py/keylog.py/inj.py are /tmp tools; inject into foot
+with TIOCSTI on /dev/pts/0 (writing /proc/<foot>/fd/7 does not work).  No
+auto-blank (swayidle removed): repeated DPMS resume wedges DSI; a wedged black
+panel needs reboot -f (trap 298).  A both-edge IRQ request kills touch (trap
+297).  A stale/tiny xdg window can ignore touch (trap 307): relaunch it in a
+clean workspace.
+
+BT: BT_EN pad 0x4A10007C mux 3 + GPIO2_DATAOUT bit 23; UART2 pads
+0x4118/0x411A; /dev/ttyS1.  After a cold boot EXPORT gpio535 first and pulse
+low 2 s (trap 252).  ALWAYS check `cat /proc/tty/ldiscs`; swap a module with
+`rmmod btbcm` THEN `hci_uart`, verify by content (trap 251).  WL1283 checks:
+`i2ctransfer -f -y 0 w1@0x48 0xbc r3` -> 07 01 55; `lsmod` must show ccm/ctr.
+WM8994: i2ctransfer args DECIMAL, bus 4 addr 0x1a.  On the oracle use
+pbi2c rd16/wr16; push memdump3/memw32/pbi2c to /tmp after every boot.
+
+PARKED: BT controller open (trap 250), LE, FM (forward-port
+drivers/media/radio/wl128x), GPS (2024 LKML patch, else RE the reference),
+Kumo/WPEWebKit (needs a build; netsurf is the CPU interim).
+
+LISTENING TESTS: lower `pbmix set "DAC1 Volume" 40` ONCE, restore 96 ONCE; a
+bare `pbplay` plays a 2 s tone (trap 212); state what is playing (trap 191).
+
+BUILDS: modules IN-TREE, strip --strip-debug.  The initramfs carries the SSH
+kit (copy dropbear + host keys + authorized_keys into initramfs/root before the
+build; gitignored).  The hd3 image edits are debugfs/apk on a copy, then
+e2fsck -fn.  The pack coordinate is the loader block minus 0x815.  The kernel
+export: apply the patch + extract the vendored driver, apply-and-compare, tree
+walk after `make clean`, excluding pvrsgx and scripts (traps 161/211).  A
+CONFIG_SMP build changes the module vermagic: rebuild and install every module
+before the region-0 flash.  For a LONG build, give the operator the command
+(with sudo) and STOP THE TURN; do not poll.
+
+SAFETY: read SAFETY.md first.  The root is mounted READ-WRITE by design
+(operator, session 58): the hd3 image is the way back (reflash f7858110... at
+0x4915), and the ttyGS0 getty is the recovery console; keep it until SSH is
+proven on any new image.  One variable per boot.  Flash region 0 only when only
+it changed; both in one bootrom session only when both changed; a
+module/firmware-only change needs an hd3/region-1-only flash (trap 190).  The
+hard hazards (0 / >0x32 / failed write / flat pack) remain.  Operator's call
+when to stop / wrap up.
+
+UPDATE THE DOCS as you go and commit: STATE.md, HANDOFF.md, ROADMAP.md,
+KNOWN-ISSUES.md, DECISIONS.md and the session note.  Re-export the kernel patch
+whenever the DTS/config or a driver changes (trap 161); verify apply-and-compare
+and run the TREE WALK (trap 211).
+
+WRAP-UP: only the operator decides when the session stops.  Record the bench
+state, write the session note, update the canonical docs, verify with
+tools/docs_audit.py and tools/tests/test_offline.py, then commit privately and
+publish the snapshot (docs/project/REPO-MANAGEMENT.md).  No IFS restore is
+required.
 ```
