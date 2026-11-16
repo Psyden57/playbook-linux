@@ -9,9 +9,10 @@ Unit state at the end: the Nura root **read-write** from hd3, region 0
 **`0x294F8E36`** (`0x9E0980` B, `boot/chainloader/kernel.img` sha256
 `f0738625…`, kernel `7.3.3 #77`), grown to 56.5 G with SSH.  Region 1
 `49e318bf…` (fallback, not booted).  `PB_LINK=usb tools/pbssh.sh` is the
-shell; the ttyGS0 getty is the recovery console.  `BOOTCTR_FCTRY` = `0x2d` at
-the last boot (top-up threshold `0x1e`, no write needed).  The root now has
-wvkbd 0.21 installed and catacomb's initrc starts it instead of squeekboard.
+shell; the ttyGS0 getty is the recovery console.  `BOOTCTR_FCTRY` = `0x27` at
+wrap-up (top-up threshold `0x1e`, no write needed; drained from `0x2d` by the
+session's reboots).  The root now has wvkbd 0.21 installed, catacomb's initrc
+starts it instead of squeekboard, and the panel stays lit (no auto-blank).
 
 ## Goal of this session
 

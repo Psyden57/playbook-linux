@@ -712,4 +712,18 @@ its line and for 200 ms after it, and a new down that repeats the slot's
 previous coordinates within 300 ms is held back one sample and reported with
 the fresh position.  Typing is correct.  The remaining backspace/enter repeat
 is squeekboard's action-key repeat, not the driver (trap 299, report 248).
-Reports 247 and 248.
+Reports 247 and 248.  That repeat was then closed in session 59 (below).
+
+## OSK repeat and the eMMC cache item — closed session 59
+
+The backspace/enter repeat was fixed by **installing wvkbd on catacomb 1.5.0**
+(no 1.7.x move or GLES2-shim rebase): catacomb 1.5.0 already implements
+`zwp_virtual_keyboard_v1`, so `wvkbd-mobintl` plus DejaVu Sans replaced
+squeekboard in the UI initrc; one tap is now one `0x7f`.  The missing OSK glyphs
+were a font fallback issue; the app-drawer icons were a missing
+`default/index.theme` chain.  The eMMC "cache flush" item was closed by
+measurement: the card has no cache (`CACHE_SIZE = 0`, `CACHE_CTRL = 0` from CMD8
+and the kernel's debugfs EXT_CSD), so no `FLUSH_CACHE` is issued, and the
+session-58 stall is a plain WRITE (`flags 0x900000`).  DPMS auto-blank was
+removed because repeated resume wedges the DSI link.  Report 250 §1–§2b,
+DECISIONS §85, traps 298/299/300.

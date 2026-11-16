@@ -81,9 +81,9 @@ and catacomb's `EGLContext::new()` is **not shared**, so the upload path does
   session-56 compositor image + the app set + the rebuilt audio modules +
   `gsettings-desktop-schemas` + the no-suspend initrc.
 * **region 1 = `49e318bf…`** (the BusyBox fallback, not booted).
-* **`BOOTCTR_FCTRY` = `0x2b`** at the last boot (top-up threshold `0x1e`, so
-  no write needed; the session's reboots drained `0x2d → 0x2b`).  Read it with
-  `dmesg | grep pbrpmb`.
+* **`BOOTCTR_FCTRY` = `0x27`** at the session-59 wrap-up (top-up threshold
+  `0x1e`, so no write needed; the session's reboots drained it from `0x2d`).
+  Read it with `dmesg | grep pbrpmb`.
 * **The unit runs the Nura root read-write** (`0fca:8010`, `169.254.0.1:22`
   dropbear, `PB_LINK=usb tools/pbssh.sh`; the ACM `playbook:~#` getty is the
   fallback).  `usb0` is brought up by `/etc/local.d/pb-ssh.start`; **pace bulk
@@ -388,7 +388,7 @@ fixed in the OSK).  No auto-blank: repeated DPMS resume wedges the DSI link
 THE FACTS: region 0 = 0x294F8E36 (0x9E0980 B, sha256 f0738625..., kernel #77);
 hd3 media = the same root grown in place to 56.5 G, read-write (the
 flasher-restorable base is f7858110..., 625999872 B); region 1 = 49e318bf...
-(fallback, not booted); BOOTCTR_FCTRY = 0x2b at session-59 end (self-maintaining,
+(fallback, not booted); BOOTCTR_FCTRY = 0x27 at session-59 end (self-maintaining,
 threshold 0x1e).  The kernel/module vermagic is 7.3.3 mod_unload modversions
 ARMv6 p2v8.
 

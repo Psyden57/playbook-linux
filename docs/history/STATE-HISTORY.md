@@ -14,6 +14,12 @@ duplicated here because the commit preserves it verbatim.
 `docs/project/STATE.md`; it was replaced by the session-43 state and is not
 duplicated here because the commit preserves it verbatim.
 
+**The session-58 state snapshot** (2026-11-16 — writable grown root, SSH back,
+region 0 `0x294F8E36`, kernel `#77`, `BOOTCTR_FCTRY` `0x1B → 0x32`) is at git
+commit `00228e4` in `docs/project/STATE.md`; it was replaced by the session-59
+state and is not duplicated here because the commit preserves it verbatim.
+The full session-58 record is `docs/sessions/session-58.md`.
+
 ## Previous state — 2026-11-16 (session 57)
 
 **THE UI HAS CONTENT AND THE TOUCH MERGE IS FIXED; a position ghost remained.**

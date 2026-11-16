@@ -262,3 +262,19 @@ coordinates within 300 ms is held back one sample and reported with the fresh
 position.  `b3` is only a down flag (the vendor's `get_contact_id` returns the
 digit index), so there is no contact id to track.  The touch driver is built in
 (`CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`), so these were region-0 changes.
+
+## Trap 299 — backspace/enter repeat (resolved session 59 by the OSK, not the driver)
+
+**Was:** one clean evdev contact produced three `0x7f` bytes at the application
+(+0/+194/+234 ms); letters never repeated, even a 1.3 s hold.  The driver was
+clean (one down, one release), so the repeats were squeekboard 1.43.1's
+action-key repeat, not `playbook-munin.c` (trap 299).
+
+**Resolved (session 59):** catacomb 1.5.0 already implements
+`zwp_virtual_keyboard_v1`, the protocol wvkbd speaks, so `wvkbd-mobintl` 0.21
+was installed with DejaVu Sans and the UI initrc switched from squeekboard to
+wvkbd — no catacomb 1.7.x move or GLES2-shim rebase.  One BackSpace tap now
+yields one `0x7f` (keylog).  Report 250 §2, DECISIONS §85.  Trap 300 (the eMMC
+"cache flush") was likewise closed by measurement — the card has no cache
+(`CACHE_SIZE = 0`, `CACHE_CTRL = 0`), and the stall is a plain WRITE (report
+250 §1).
