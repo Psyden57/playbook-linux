@@ -6,11 +6,13 @@ item states the evidence that would close it.
 
 Current focus: **item 7a** — the SGX540 is **working** (kernel driver + pvrports
 userspace; EGL/GLES 2.0 on `PowerVR SGX 540`) and catacomb composites on it with
-a GLES2 fallback; the stack and the app set are baked into hd3.  Session 58 made
-the root **writable and grown to 56.5 G** with **SSH back** (report 249).  What
-remains: the **eMMC cache-flush** fault (trap 300), the **OSK move to wvkbd**
-(trap 299) and the **upload profile**.  hd3 holds the Nura root and it boots
-unattended; the region-1 BusyBox root stays the fallback.  The audio goal is
+a GLES2 fallback; the stack and the app set are baked into hd3.  The root is
+**writable and grown to 56.5 G** with **SSH back** (report 249).  Session 59
+closed the **eMMC cache-flush** item by measurement (the card has no cache, so
+no `FLUSH_CACHE`; trap 300 corrected) and fixed the **OSK repeat** by installing
+wvkbd on catacomb 1.5.0, plus touch-to-wake DPMS (report 250).  What remains:
+the **upload profile**.  hd3 holds the Nura root and it boots unattended; the
+region-1 BusyBox root stays the fallback.  The audio goal is
 closed (reports 214/215), and the **WL1283's WLAN associates and passes
 traffic**.  On the same chip, **BT's core works** (real inquiry; `hci0`
 registers with mgmt) with the controller-open blocked on a stray byte, then FM
@@ -237,17 +239,16 @@ flasher can replace at every point:
    wallpaper, `foot`, `netsurf`, `xournalpp`, `tzompantli`, `gorm`, `grim`,
    `slurp`, `tremor`, `swayidle`) and `gsettings-desktop-schemas` are baked into
    hd3 (`f7858110…`); region 0 is `0x294F8E36` (kernel `#77`).  **Done:** the
-   touch position ghost is fixed (report 248), and the root is **writable,
-   grown to 56.5 G, with SSH back** (report 249; `barrier=0` + write-through,
-   dropbear/`local.d` installed by the initramfs).  **Next:** (a) clear the
-   eMMC cache capability so no flush is issued (report 249 §3, trap 300) — the
-   one remaining hardware fault; (b) move the OSK to wvkbd (catacomb 1.7.x) —
-   the backspace/enter repeat is squeekboard's (trap 299); (c) profile the
-   upload path — the `PBGL_PROFILE` catacomb build is staged
-   (`local/work/nura/pmaports/main/catacomb/`, `pkgrel=10001`).  The measured
-   input latency is 8–33 ms, so the jank is redraw/upload.  `epitaph` aborts
-   (trap 292), so there is no panel; Kumo needs a WPEWebKit build (report 247
-   §4).
+   touch position ghost is fixed (report 248), the root is **writable, grown to
+   56.5 G, with SSH back** (report 249), and session 59 closed the eMMC-cache
+   item by measurement (no cache → no flush), fixed the OSK repeat by installing
+   wvkbd on catacomb 1.5.0 (no UI upgrade), and made touch wake a DPMS-blanked
+   panel (report 250).  **Next:** (a) profile the upload path — the
+   `PBGL_PROFILE` catacomb build is staged
+   (`local/work/nura/pmaports/main/catacomb/`, `pkgrel=10001`); the measured
+   input latency is 8–33 ms, so the jank is redraw/upload; (b) optionally bake
+   the OSK stack into the restorable hd3 base.  `epitaph` aborts (trap 292), so
+   there is no panel; Kumo needs a WPEWebKit build (report 247 §4).
 
 Step 3 is reversible at any time by re-flashing the same block range — which is
 the whole reason it beats an in-place mkfs.
@@ -256,8 +257,11 @@ the whole reason it beats an in-place mkfs.
 EGL/GLES 2.0 program runs on SGX540.  **Both are met** — Nura boots from the
 read-only hd3 (sessions 54/55), the EGL/GLES2 probe reports `PowerVR SGX 540`
 (session 55, report 245), and **catacomb now composites on it** (session 56,
-report 246).  The remaining work (apps/content and the upload-path performance)
-is tracked under step 5 and does not reopen the GPU result.
+report 246).  Session 59 added a persistent, writable root with SSH (report
+249), fixed the touch position ghost (report 248), closed the eMMC-cache item
+by measurement and fixed the OSK repeat with wvkbd + touch-wake (report 250).
+The remaining work (upload-path performance) is tracked under step 5 and does
+not reopen the GPU result.
 
 ## 8. A BB10 image on the PlayBook — **PARKED (operator, session 25)**
 
@@ -304,13 +308,14 @@ terminal (trap 216).
 
 **Open.**
 
-* **The eMMC cache flush hangs the card.**  A journalled read-write root hits
-  `mmc1: Card stuck being busy! __mmc_poll_for_busy` on the first commit and
-  aborts the journal; the block layer reports it at sector 0 because it is a
-  flush.  `barrier=0` + `write_cache=write through` keep the root writable and
-  let the one-shot grow complete, but an explicit `sync` still stalls.  Clear
-  the card's cache capability (`CACHE_CTRL = 0` and/or a `cache_size = 0` quirk
-  in `mmc`) so no flush is issued.  [report 249 §3, trap 300]
+* **The eMMC WRITE-busy stall (the "cache flush" item, closed as a flush).**
+  Session 59 measured `CACHE_SIZE = 0` and `CACHE_CTRL = 0` (CMD8 read + kernel
+  debugfs), so the MMC core never issues `FLUSH_CACHE` — no change is needed.
+  The session-58 error is a plain WRITE (`flags 0x900000` =
+  `REQ_BACKGROUND|REQ_ALLOC_CACHE`, op `0x1`, no `PREFLUSH`/`FUA`), not a flush;
+  a traced `sync` showed no CMD6 and did not stall.  The intermittent
+  busy-after-WRITE cause is open; `barrier=0` + write-through keep the root
+  usable.  [report 250 §1, trap 300 corrected]
 * **The WM8994 audio has nothing required left**, only two optional items: the
   **MCLK1 probe** (trap 165 — the working design does not need it) and
   identifying the GPIO1_15 `audio_boost` net if a schematic appears.

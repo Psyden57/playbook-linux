@@ -2423,7 +2423,8 @@ report 121 §3/§11/§12.
       fallback while `using_irq` is true, so touch dies completely.  Use
       falling-edge plus a poll-on-touch watchdog instead.  (Session 57.)
 
-298. **DPMS off is a one-way trip under touch; kill `swayidle` on the bench.**
+298. **DPMS off is not woken by swayidle's resume on touch; use
+       `pb-touchwake.py` (or kill `swayidle`).**
       The image's initrc runs `swayidle -w timeout 180 "catacomb msg dpms off"
       resume "catacomb msg dpms on"`, and after 3 idle minutes `bl_power`
       becomes 4 (`FB_BLANK_POWERDOWN`).  **Touching the screen does not restore
@@ -2432,38 +2433,44 @@ report 121 §3/§11/§12.
       delivered them) but `bl_power` stayed 4.  Typing on the ACM console is
       not input activity, so a bench session goes dark while it works.  Restore
       with `XDG_RUNTIME_DIR=/run/user/10000 WAYLAND_DISPLAY=wayland-1 catacomb
-      msg dpms on`, and after every boot `pkill -f swayidle` before a long
-      bench.  (Session 58, report 248; corrects session 57's "any touch
-      restores it".)
+      msg dpms on`, and after every boot `pkill -x swayidle` before an
+      SSH-only bench.  **Session 59 fixed the touch case:**
+      `tools/bench/pb-touchwake.py` (installed `/usr/bin/pb-touchwake`, launched
+      by the initrc, session user in the `input` group) watches
+      `/dev/input/event0` for `BTN_TOUCH` down and runs `catacomb msg dpms on`
+      when `bl_power != 0` — measured `4 → 0` on one tap; the daemon persists
+      across reboot.  With it, swayidle may stay; kill it only for SSH-only
+      benches with no touch.  (Sessions 58/59, reports 248/250; corrects
+      session 57's "any touch restores it".)
 
-299. **The backspace/enter repeat is squeekboard's action-key repeat, not the
+299. **FIXED (session 59): the repeat was squeekboard's action-key repeat, not the
       touch driver.**  One tap produces one clean evdev contact (`down=01` →
       `down=00`, `MT_TRACKING_ID -1`), but squeekboard 1.43.1 sends **three**
       `0x7f` bytes for it (+0/+194/+234 ms; measured with `keylog.py` on the
       terminal's stdin).  Letters never repeat (one `a` tap = one `0x61`, and
       an `a` held 1.3 s = one `0x61`).  So do not "fix" this in
-      `playbook-munin.c`, and do not read it as a lost release.  Upstream
-      **catacomb 1.7.0 replaced squeekboard with wvkbd** (verified 2026-11-16,
-      squeekboard is unmaintained); the image's `postmarketos-ui-catacomb`
-      still depends on squeekboard, and moving to wvkbd needs the catacomb
-      GLES2 shim rebased onto the newer catacomb/smithay.  (Session 58, report
-      248.)
+      `playbook-munin.c`, and do not read it as a lost release.  **Fix
+      (session 59): install wvkbd on the existing catacomb 1.5.0.**  catacomb
+      1.5.0 already implements `zwp_virtual_keyboard_v1`, the protocol wvkbd
+      speaks; no UI upgrade or GLES2-shim rebase is needed.  `wvkbd-mobintl` 0.21
+      was installed with DejaVu Sans for the glyphs; one BackSpace tap now
+      delivers one `0x7f`.  The pmaport APKBUILD/initrc are updated
+      (`postmarketos-ui-catacomb` depends on `wvkbd-mobintl` + `font-dejavu`,
+      `pkgrel=3`).  (Sessions 58/59, reports 248/250, DECISIONS §85.)
 
-300. **The eMMC's cache flush hangs the card (`Card stuck being busy!`), and the
-      block layer reports it at sector 0.**  A journalled read-write root
-      reproduces it on the first commit (`I/O error, dev mmcblk1, sector 0 op
-      0x1:(WRITE)`, `Aborting journal on device loop0-8`, remount read-only).
-      A flush carries no data, hence sector 0.  Mount the root with
-      `barrier=0` **and** set `/sys/block/{mmcblk1,loopN}/queue/write_cache` to
-      `write through` before the mount (the initramfs does both): the journal
-      stops issuing the flush, the FS stays writable and `resize2fs` completes.
-      **An explicit `sync` still stalls** (measured: `sector 0 … flags
-      0x900000`, a lost async page write), because the MMC core issues
-      `FLUSH_CACHE` whenever `EXT_CSD.CACHE_SIZE != 0` — the queue flag does not
-      gate it.  The clean fix is to clear the card's cache capability
-      (`EXT_CSD.CACHE_CTRL` = 0 and/or a `cache_size = 0` quirk in `mmc`), so
-      no flush is issued.  Data writes are fine (a 16 KiB `O_DIRECT` probe and
-      the 15-million-block resize both succeeded).  (Session 58, report 249 §3.)
+300. **CORRECTED (session 59): the eMMC stall is a plain WRITE, not a cache
+      flush — the card has no cache.**  `EXT_CSD.CACHE_SIZE = 0` and
+      `CACHE_CTRL = 0` (CMD8 read via `tools/bench/mmccache.c` and the kernel's
+      `/sys/kernel/debug/mmc1/mmc1:0001/ext_csd` agree), so the MMC core never
+      issues `FLUSH_CACHE`; `_mmc_cache_enabled()` requires `cache_size > 0`.
+      The "CACHE_SIZE = 249" in the session-58 handoff was the byte *index*.
+      The error (`I/O error, dev mmcblk1, sector 0 op 0x1:(WRITE) flags
+      0x900000`) is `REQ_BACKGROUND|REQ_ALLOC_CACHE` with no `REQ_PREFLUSH`/
+      `REQ_FUA` (a flush would be op `0x2`); a traced `sync` showed only
+      CMD25/CMD13, no CMD6, and did not stall.  Keep `barrier=0` +
+      `write_cache=write through` (the initramfs sets both) — the journal stays
+      writable and resize completes.  The intermittent busy-after-WRITE cause
+      is open.  (Sessions 58/59, reports 249 §3 / 250 §1.)
 
 301. **One `DSI: omapdss DSI error: Failed to set dsi_if_enable to 0` at boot
       can recover.**  Measured at 52.7 s on the read-write boot, followed by a

@@ -1,6 +1,6 @@
 # Current state
 
-## Current state — 2026-11-16 (session 58)
+## Current state — 2026-11-16 (session 59)
 
 **THE ROOT IS WRITABLE AND GROWN, AND SSH IS BACK (kernel `#77`, region 0
 `0x294F8E36`).**  The initramfs mounts hd3 read-write (no overlay) and a
@@ -11,14 +11,15 @@ brings `usb0` to `169.254.0.1/16` and starts dropbear on `:22`, so
 `PB_LINK=usb tools/pbssh.sh` is a clean shell.  The ttyGS0 getty stays as the
 recovery console.  [report 249 §1–§2]
 
-**The eMMC cache flush is the one hardware fault.**  A journalled write hangs
-the card (`mmc1: Card stuck being busy!`) and aborts the journal; the block
-layer reports it at sector 0 because it is a flush.  `barrier=0` plus
-`write_cache=write through` (set by the initramfs before the mount) keeps the
-FS writable and lets the grow complete, but an **explicit `sync` still stalls**
-— the MMC core sends `FLUSH_CACHE` whenever `EXT_CSD.CACHE_SIZE != 0`.  The
-clean fix is to clear the card's cache capability; that is the next item.
-[report 249 §3; trap 300]
+**The eMMC "cache flush" item is closed by measurement — the card has no
+cache.**  `EXT_CSD.CACHE_SIZE = 0` and `CACHE_CTRL = 0` (direct CMD8 read and
+the kernel's debugfs EXT_CSD agree), so the MMC core never issues
+`FLUSH_CACHE`; the handoff's "CACHE_SIZE = 249" was the byte *index*, not the
+value.  The session-58 error (`sector 0 … flags 0x900000`) is a plain WRITE
+(`REQ_BACKGROUND|REQ_ALLOC_CACHE`, no `PREFLUSH`/`FUA`), not a flush; a traced
+`sync` showed only CMD25/CMD13 and no CMD6.  The intermittent
+busy-after-WRITE remains unexplained, with `barrier=0` + write-through as the
+mitigation.  [report 250 §1; traps 300 corrected]
 
 **THE TOUCH POSITION GHOST IS FIXED.**  Fast typing is correct: the driver
 keeps sampling while the controller asserts its IRQ line and for a 200 ms grace
@@ -28,14 +29,15 @@ position.  The same change fixes the lost taps in a fast burst (a fast `hello`
 had arrived as `h,e,o`).  [report 248; capture
 `touch-munin-2026-11-16-session58.txt`; trap 296]
 
-**The backspace/enter repeat is downstream of the driver.**  One tap is one
-clean evdev contact (`down=01` → `down=00`, `MT_TRACKING_ID -1`), but
-squeekboard 1.43.1 sends **three** `0x7f` for it (+0/+194/+234 ms); a letter
-never repeats, even held 1.3 s.  So it is squeekboard's action-key repeat, not
-`playbook-munin.c`.  Upstream **catacomb 1.7.0 replaced squeekboard with
-wvkbd** (verified 2026-11-16); the image's `postmarketos-ui-catacomb` still
-depends on squeekboard, and moving to wvkbd needs the catacomb GLES2 shim
-rebased.  [trap 299]
+**The backspace/enter repeat is FIXED — by installing wvkbd on catacomb 1.5.0,
+no UI upgrade.**  catacomb 1.5.0 already implements `zwp_virtual_keyboard_v1`
+(`VirtualKeyboardManagerState`), which wvkbd speaks; only the OSK package and
+initrc changed.  One BackSpace tap now delivers one `0x7f` (was three from
+squeekboard).  `wvkbd-mobintl` 0.21 is installed, DejaVu Sans was added for the
+glyphs (`--fn "DejaVu Sans 16"`), and `pb-touchwake.py` makes touch wake a
+DPMS-blanked panel (trap 298).  All persist across reboot.  The pmaport
+APKBUILD/initrc are updated; the flasher-restorable hd3 base still has
+squeekboard.  [report 250 §2/§2a; trap 299 fixed; DECISIONS §85]
 
 **DPMS off cannot be woken by touch on this image.**  After 3 idle minutes the
 initrc's `swayidle` sets `bl_power = 4`; the kernel still receives the taps but
@@ -55,8 +57,9 @@ the panel stays dark, and `catacomb msg dpms on` restores it.  **Kill
   (8 KiB/5 ms; trap 302).
 * **`BOOTCTR_FCTRY` = `0x32`** (this boot read `0x1B` and `/init` wrote
   `0x32`, RPMB counter 12049; the session's reboots drained `0x25 → 0x1B`).
-* **Next:** clear the eMMC cache capability so no flush is issued; then the OSK
-  repeat (wvkbd) and the upload profile.
+* **OSK:** wvkbd on catacomb 1.5.0 — one tap = one key; touch wakes DPMS.
+* **Next:** the upload-path profile (`PBGL_PROFILE`); optionally bake the OSK
+  stack into the restorable hd3 base; the intermittent WRITE-busy stall.
 
 ## Previous states
 
@@ -115,7 +118,7 @@ The per-session snapshots are in
 | **WL1283 (MMC5)** | **WORKING — associates, leases and passes traffic (session 52); scans (session 51)** | **Session 52 (report 236): the association blocker was the missing `ccm`/`ctr` crypto modules.**  `ieee80211_key_alloc()` allocates a `ccm(aes)` AEAD for every CCMP key; without it the PTK install returns `-ENOENT` and wpa_supplicant mislabels it `WRONG_KEY` (the handshake itself is fine — message 3 decrypts).  `ccm.ko`/`ctr.ko` ship in region 1 and `rcS` modprobes them before the stack: `wpa_state=COMPLETED`, WPA2-CCMP on 5785 MHz at −41 dBm, MCS7/65 Mbit/s, DHCP **192.168.0.212**, gateway and 1.1.1.1 reachable.  A 5 GHz AP needs `iw reg set <CC>` (the world domain marks 5735–5835 MHz `PASSIVE-SCAN`).  The **per-unit NVS** is shipped (`wl128x-nvs-perunit.bin`).  **Session 51 (report 232): the recovery loop was the firmware's ELP sleep.**  The failing transfer is the **FW-status read** — CMD53 to `0x1efc0`, 84 bytes, byte mode, 256-byte block — from the WL_IRQ thread right after `firmware booted`; it fails only once the chip has slept, and the identical read succeeds when it is awake.  Fix: `wl12xx_default_conf.conn.sta_sleep_auth = WL1271_PSM_CAM` (was `ILLEGAL` → ELP).  Verified after a real region-1 flash + reboot: one firmware boot, zero failures, `wlan0` `UP`, debugfs `sleep_auth` 0.  `wl128x-fw-4-sr.bin` is the **shipped** SR firmware (report 235): 5-sr (7.3.10.0.142) boots but panics on the first scan, so `wl12xx`'s floor is lowered to 7.3.5.0 and `WL128X_FW_NAME_SINGLE` names the 4-sr file; both files stay installed.  **WLAN (report 231):** `wlcore`/`wl12xx`/`mac80211`/`cfg80211` + `wl128x-nvs.bin`, the `ti,wl1283` child (`reg = <2>`, WL_IRQ gpio 53), `cap-power-off-card`, and an `mmc-pwrseq-simple` pulsing `WL_EN` (low → 50 ms → high → 120 ms) → firmware `Rev 7.3.5.0.98`, MAC `14:74:11:8f:9c:c3` (the assigned address, patched into the generic NVS; the radio calibration is still default).  **Enumeration (report 230):** the TWL6030 `CLK32KG` 32.768 kHz SLOW_CLK is physical `0xBC`–`0xBE` and was OFF; `CONFIG_CLK_TWL=y` + an enable in `clk-twl`'s probe (~1.9 s, before MMC5 at ~3.0 s) fixes it.  **Remaining (report 235):** the WLAN **associates** and passes traffic (session 52); open and not blocking use are *why* the 5-sr firmware panics on scan (235 §3) and *why* the ELP wake is not honoured (232 §6).  **Session-49/50 negatives (do not repeat):** the reference's MMCHS5 program and WL_EN ordering replayed, the stock-TabletOS diff, the boot-path RE, the clock sweep (reports 217/218/221–229).  The BT half's enable is `BT_EN` = gpio 55 = `GPIO2_23`, held low while the WLAN works (report 216). |
 | **WL1283 BT** | **the CORE WORKS — real inquiry; `hci0` now registers with mgmt (session 53)** | UART2 `0x4806C000` = `/dev/ttyS1`, H4 at 115200 8N1; `BT_EN` = gpio 55 = `GPIO2_23` (pad `0x4A10007C` mux 3), pulsed low → 50 ms → high.  **Measured (report 238):** the core answers `HCI_Reset`, reports `hci ver 6` / `lmp ver 6` / `mfr 0x002b` (TI, BT 4.0), and **runs a full BR/EDR inquiry that finds a peer** (`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.  **The reference's `WL1283.bts` loads 315/315** and moves LMP subversion `0x2b0f` → `0x2b33`; loaded **before** the attach it makes `hci0` **register with mgmt** (0 → 1 controller, negative control both ways) by fixing the `0x201c` reply length.  **Left:** opening the controller — a stray `0x30` byte arrives ~200 ms after the last init reply and the kernel's H4 receiver correctly rejects it as not-an-H4-type (`-EILSEQ` → `Frame reassembly failed (-84)` → `SET_POWERED` `0x05`); the instrumented `h4_recv()` shows it in 6 of 6 runs, but **which side emits it is open** (it never appears from userspace).  Then ship `l2cap`/`sco`/`rfcomm`/`hidp` (not in region 1 yet) and a stack.  **LE is refused by the controller**, though the chip reports BT 4.0 with the LE-supported bit — no known sequence, and impossibility not demonstrated.  The pack survives `HCI_Reset` but not a `BT_EN` power cycle.  Tools in `rootfs/bt/`.  Reports 216/237/238, traps 248–252, DECISIONS §72/§73 |
 | **GPIO1 pads / board lines** | **fixed (session 49): three pads were driving GPMC alternate functions** | `0x4A100050` (`gpmc_ad0/1`) and `0x4A100074` (`gpmc_ncs0/1`) were left at mode 0, so pad logic drove GPMC bus lines on a board with no GPMC device while gpiolib could not touch them (trap 228); `0x4A31E058` (GPIO1_31) was unmuxed with its input buffer off.  The DTS now sets mode 3 + pull-down and hogs GPIO1 0/18/28/31 low, so `GPIO1_OE = 0x6FFB1FBA` against the reference's `0x6FFB1FAA` (the missing bit 4 is pad `0x058`'s low half = GPIO2_4, owned by `bridge_pins`, trap 229) and `GPIO1_DATAOUT` is identical.  Image `0x0114FFD3`.  **Not** the WL1283 blocker (card still silent).  Report 220 |
-| **Munin touch (CY8CTMA3)** | **FIXED — the position ghost and the lost burst taps are gone (session 58, kernel `#74`)** | I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c` boots the app and maps the 12-bit report through the 1917 `scaling.conf` calib (raw x 172→1108 → 102→922, y 110→658 → 60→540) to 1024×600; IRQ gpio 35 = GPIO2_3 pad `0x056` = `0x410B`, edge-falling, `irq 110` (~174/s idle).  The controller asserts its line for the whole gesture and reuses slots, so the driver re-reads a torn report until the counter parity matches, **keeps polling while the line is asserted (and for 200 ms after the last contact)**, and **holds a new down back one sample when it repeats the slot's previous coordinates within 300 ms**; `irq-gpios` gives it the line level (traps 296/298).  Contacts are separate and fast typing is correct (report 248).  **Remaining:** the backspace/enter repeat is squeekboard's action-key repeat, not the driver (trap 299); power/reset GPIO1_14/GPIO4_8 are not driven.  Reports 198/247/248, DECISIONS §47/§82/§83 |
+| **Munin touch (CY8CTMA3)** | **FIXED — the position ghost and the lost burst taps are gone (session 58, kernel `#74`)** | I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c` boots the app and maps the 12-bit report through the 1917 `scaling.conf` calib (raw x 172→1108 → 102→922, y 110→658 → 60→540) to 1024×600; IRQ gpio 35 = GPIO2_3 pad `0x056` = `0x410B`, edge-falling, `irq 110` (~174/s idle).  The controller asserts its line for the whole gesture and reuses slots, so the driver re-reads a torn report until the counter parity matches, **keeps polling while the line is asserted (and for 200 ms after the last contact)**, and **holds a new down back one sample when it repeats the slot's previous coordinates within 300 ms**; `irq-gpios` gives it the line level (traps 296/298).  Contacts are separate and fast typing is correct (report 248).  The backspace/enter repeat was squeekboard's, now fixed by wvkbd (trap 299); power/reset GPIO1_14/GPIO4_8 are not driven.  Touch wakes DPMS via `pb-touchwake.py` (session 59).  Reports 198/247/248/250, DECISIONS §47/§82/§83/§85 |
 | **WM8994 audio** | **WORKING — stereo 440 Hz on headphones AND speakers at 48 kHz; diagnostics `dev_dbg` (session 57)** | I²C4 `0x1a` (`0x8994`, revision D); the board machine driver makes `0 [WM8994]: PlayBook_WM8994`.  **Data path (session 46):** the codec's AIF1 is on McBSP3 (the oracle's routing log `AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3`, the live `PCR0 = 0x3`, the PDM pads `0x106/0x108/0x10a/0x10c` = `0x0109/0x0009/0x0109/0x0109`); the card is two ASoC links (`40124000.mcbsp + wm8994-aif1` clocks, `CBC_CFC`; `40126000.mcbsp + wm8994-aif2` data, `CBP_CFP`); the codec is the AIF1 slave, FLL1 locks from our BCLK (`R0x302 = 0x0000`, `R0x732 = 0x6020`, `R0x200 = 0x0011`), no MCLK1; the `omap-mcbsp` channel-layout guard keeps `XCR2 = 0x8041`.  **Speaker (session 47, report 215):** the speakers are on the codec's **line outputs**, so the output stage follows the jack: headphones → HPOUT1 + charge pump (`R0x060 = 0xcc`); jack out → LINEOUT1P/2P (PM3 `0x3cf0`, `R0x01e = 0`, `R0x034/0x035 = 1`, `R0x036 = 0`, `R0x038 = 0x80`, `R0x04c = 0x1f25`, `R0x060 = 0`) with **`spk` (GPIO2_12) driven low** and **GPIO1_15 (the `audio_boost` enable) high**.  **Session 48** removed the `pcm:` ring readback and the `live N:` FIFO dump and re-verified both outputs at DAC1 volume 40: `jack out (speaker)` / `jack in (headphone)`, "done, FLL1 locked", both PCMs `RUNNING`, the full byte count written, `spk` low during the speaker route and high on the headphone route, `boost` high.  Reports 214/215, DECISIONS §59/§60.  **Session 57:** the remaining info-level diagnostics (`omap_mcbsp_dump_reg`, the per-stream `rate/AIF1CLK` and `repair:` lines) are `dev_dbg`, and the PM-QoS remove is guarded, so a failed 48 kHz `hw_params` no longer taints the kernel (trap 294); the 48 kHz rejection itself is open. |
 | Userspace (initramfs) | **working, minimal** | `/init` = PID 1, mounts, creates the configfs gadget (**ACM console + RNDIS**, session 48), forks `/console` in the fallback path.  **No auto-reboot since session 15** — PID 1 reboots only on request (the timer spent a `BOOTCTR_FCTRY` unit per iteration).  **Session 28:** after the gadget and the boot-time top-up, `/init` mounts the region-1 ext4 root **read-write**, bind-mounts /dev//proc//sys, chroots and execs `/sbin/init`; with no `/sbin/init` it falls back to the console.  Report 176, session-28 note |
 | **USB network + ssh** | **working — commands and interactive sessions (session 48); 2.3 MB/s is the ssh bound, not the USB one** | The gadget carries an **RNDIS** function next to ACM, so the host sees four interfaces and a net device (`enp8s0f3u1i2`, MAC `02:1a:11:00:00:02`); the region-1 `rcS` brings `usb0` up at **`169.254.0.1/16`** and starts **dropbear** listening on `169.254.0.1:22` only.  Key-only auth, host keys shipped, password/PAM/shadow off.  **`tools/pbssh.sh 'cmd'` works**; measured before session 52 at 2.3 MB/s, which is dropbear's cost — the raw path is **6.3 MB/s (host→device) / 4.1 (device→host)** after the session-52 DMA fix, so use raw `nc`/`socat` for bulk copies and ssh for command access.  An **interactive** session works under a real terminal (`script -qec` from this side); an agent's own shell has no tty, so an apparent "closes with no output" is a harness artefact (trap 216).  DECISIONS §62. |
@@ -223,17 +226,18 @@ and a failed/half-formed write or a flat pack is still a brick risk.
 
 ## Blockers in play
 
-**Session 58 — the open blockers are:** (1) the **backspace/enter repeat** —
-the touch driver is clean (one contact, one clean release) but squeekboard
-repeats action keys, so one tap deletes several characters; upstream catacomb
-1.7.0 replaced squeekboard with wvkbd, which is the planned fix (trap 299);
-(2) the **upload-path performance** — the OSK key-press jank and the glitchy
-top-left cursor are the partial shim uploads, instrumented but not measured;
-(3) **`epitaph` aborts** (rc 139, trap 292), so there is no panel; (4) **Kumo**
-needs a WPEWebKit/WebKit-fork build (not packaged, report 247 §4).  **Closed
-this session:** the touch position ghost and the lost taps in a fast burst
-(kernel `#74`, report 248).  **Bench note:** DPMS-off cannot be woken by touch,
-so kill `swayidle` after every boot (trap 298).
+**Session 59 — the open blockers are:** (1) the **upload-path performance** —
+the OSK key-press jank and the glitchy top-left cursor are the partial shim
+uploads, instrumented but not measured; (2) **`epitaph` aborts** (rc 139, trap
+292), so there is no panel; (3) **Kumo** needs a WPEWebKit/WebKit-fork build
+(not packaged, report 247 §4); (4) the **intermittent WRITE-busy stall** — not
+a cache flush (report 250 §1), mitigated by `barrier=0` + write-through.
+**Closed:** the touch position ghost and lost burst taps (kernel `#74`, report
+248); the backspace/enter repeat (wvkbd on catacomb 1.5.0, report 250 §2);
+DPMS-off wake-by-touch (`pb-touchwake.py`, report 250 §2a); the eMMC cache item
+(closed by measurement — no cache, report 250 §1).  **Bench note:** touch now
+wakes DPMS; for SSH-only sessions where no touch occurs, `swayidle` can still
+be killed to keep the panel lit (trap 298 updated).
 
 **The audio blocker is closed, speakers included, and the diagnostics are
 retired (sessions 47/48, reports 214/215).**
@@ -301,14 +305,14 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 ## What is next
 
-0. **THE ACTIVE ITEM — the OSK repeat, then the upload profile (session 58,
-   report 248, ROADMAP items 7a/9).**  The touch position ghost is fixed
-   (kernel `#74`, region 0 `0xED58EF36`) and typing is correct.
-   * **The repeat is squeekboard, not the driver** (trap 299): one contact
-     becomes three `0x7f` bytes; letters never repeat.  Upstream catacomb 1.7.x
-     uses **wvkbd**.  Moving the image to `postmarketos-ui-catacomb` 1.7.x is
-     the clean fix and needs the GLES2 shim rebased onto the newer
-     catacomb/smithay.
+0. **THE ACTIVE ITEM — the upload-path profile (session 59, report 250,
+   ROADMAP items 7a/9).**  The touch position ghost is fixed (kernel `#74`,
+   region 0 `0xED58EF36`) and the OSK repeat is fixed by installing wvkbd
+   on catacomb 1.5.0 (no UI upgrade), so fast typing is fully correct.
+   * **What was done:** `wvkbd-mobintl` 0.21 installed, DejaVu Sans added for
+     the glyphs, `pb-touchwake.py` wakes a DPMS-blanked panel on touch, the
+     UI APKBUILD/initrc updated (`pkgrel=3`); all live-persistent on the rw
+     root and verified across two reboots (report 250 §2/§2a, DECISIONS §85).
    * **then profile the upload path**: the `PBGL_PROFILE` catacomb is staged
      (`local/work/nura/pmaports/main/catacomb/`, `pkgrel=10001`, the profile
      patch); building it needs the pmbootstrap command in HANDOFF §0e.  The

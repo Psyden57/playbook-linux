@@ -13,51 +13,35 @@ is fixed** (kernel `#74`) and **the root is writable, grown to 56.5 G, with SSH
 back** (kernel `#77`, region 0 `0x294F8E36`).  `PB_LINK=usb tools/pbssh.sh` is
 the clean shell; the ttyGS0 getty is the fallback.
 
-**THE NEXT ITEM: clear the eMMC cache capability so no flush is issued.**  The
-root is writable with `barrier=0` + `write_cache=write through`, but an explicit
-`sync` still hits `mmc1: Card stuck being busy!` (`sector 0`, a flush) because
-the MMC core sends `FLUSH_CACHE` whenever `EXT_CSD.CACHE_SIZE != 0`.  Set
-`CACHE_CTRL = 0` (mmc-utils or a tiny `MMC_IOC_CMD` tool) and/or quirk
-`cache_size = 0` in `mmc`.  Report 249 §3, trap 300.
+**THE NEXT ITEM: the upload-path profile (§0b).**  The eMMC "cache" item is
+closed by measurement: the card has no cache (`CACHE_SIZE = 0`, `CACHE_CTRL =
+0`, read two ways), so no `FLUSH_CACHE` is issued; the "CACHE_SIZE = 249" in
+the last handoff was the EXT_CSD byte *index*.  The session-58 stall is a
+plain WRITE (`flags 0x900000`, op `0x1`), not a flush.  Report 250 §1, trap 300
+corrected.
 
-**Then:** the backspace/enter repeat (squeekboard; wvkbd in catacomb 1.7.x —
-trap 299) and the upload profile (§0b).
+**Then:** optionally bake the OSK stack (wvkbd + DejaVu + pb-touchwake) into
+the flasher-restorable hd3 base so a reflash does not lose it.  The backspace/
+enter repeat is fixed by installing wvkbd on catacomb 1.5.0 (no UI upgrade),
+and touch now wakes a DPMS-blanked panel.  Report 250 §2/§2a, trap 299 fixed.
 
-## 0a. THE ONE EXPERIMENT (do this first)
+## 0a. THE CACHE EXPERIMENT — DONE, NO CHANGE NEEDED (do not repeat)
 
-**Question:** can the eMMC's cache be disabled so no `FLUSH_CACHE` is issued,
-removing the last stall?
+The session-59 measurement (report 250 §1) closed this: a small
+`tools/bench/mmccache.c` (`MMC_IOC_CMD` CMD8 reader) and the kernel's own
+`/sys/kernel/debug/mmc1/mmc1:0001/ext_csd` both read
+`CACHE_SIZE = 0`, `CACHE_CTRL = 0`, `REV = 0x5`.  The card (Samsung MCGAFA,
+manfid `0x15`, quirk `0x400 = SEC_ERASE_TRIM_BROKEN`) has no cache, so the MMC
+core never issues `FLUSH_CACHE`.  The "249" and "33" in the last handoff were
+the EXT_CSD byte **indices** (CACHE_SIZE = byte 249, CACHE_CTRL = byte 33),
+not values; mmc-utils was never installed and the read was never done.
 
-**Inputs:** the running read-write root (region 0 `0x294F8E36`); `mmc-utils` is
-**not installed**, so either build a static `mmc` and push it (paced; trap 302)
-or use a tiny `MMC_IOC_CMD` tool.  The card is `/dev/mmcblk1` (MCGAFA).  The two
-EXT_CSD bytes are **CACHE_SIZE = 249** (read it; non-zero means the kernel will
-flush) and **CACHE_CTRL = 33** (0 = cache off, 1 = on).
-
-1. Read: `mmc extcsd read /dev/mmcblk1 | grep -E 'CACHE_SIZE|CACHE_CTRL'`.
-2. Disable: `mmc cacheoff /dev/mmcblk1` (CMD6 `WRITE_BYTE` index 33 = 0).
-3. Verify the read-back is `CACHE_CTRL = 0x00`.
-4. `sync` and check `dmesg | tail` for `Card stuck being busy` / `I/O error`.
-
-**These commands are untested here** (`mmc-utils` is not installed; building a
-static `mmc` or a tiny `MMC_IOC_CMD` tool is part of the experiment).
-
-**What each result means:**
-
-* **No stall; `sync` clean** → the flush was the only failing command.  Record
-  it; keep `barrier=0` + write-through; consider a one-line kernel quirk to
-  clear `card->ext_csd.cache_size` so ext4 never asks either.
-* **Still stalls** → the MMC core still issues the flush because `CACHE_SIZE`
-  is non-zero regardless of `CACHE_CTRL`.  Add the quirk (clear
-  `cache_size` in `mmc` for this card) and re-test; the card command itself is
-  then not sent.
-* **The write is refused or the card resets** → abort, keep the current
-  workaround (`barrier=0` + write-through; do not call `sync`), and record the
-  refusal.  The card is the boot media; `CACHE_CTRL` is standard and reversible
-  (set it back to 1), but do not retry a refused EXT_CSD write.
-
-The touch experiment from earlier this session is done: see report 248 and
-§0d; do not repeat it.
+The stall error is a plain WRITE: `blk-mq.c:883` prints
+`flags = req->cmd_flags & ~REQ_OP_MASK`, so `0x900000` is
+`REQ_BACKGROUND|REQ_ALLOC_CACHE` (no `REQ_PREFLUSH`/`REQ_FUA`, op `0x1` not
+`0x2`).  A traced `sync` (`omap_hsmmc` `trace=Y`) produced only CMD25/CMD13 and
+no CMD6, and did not stall.  Keep `barrier=0` + write-through; the
+busy-after-WRITE cause is open.  No kernel change, no re-export, no flash.
 
 ## 0b. The upload-path profile (next performance item)
 
@@ -97,8 +81,9 @@ and catacomb's `EGLContext::new()` is **not shared**, so the upload path does
   session-56 compositor image + the app set + the rebuilt audio modules +
   `gsettings-desktop-schemas` + the no-suspend initrc.
 * **region 1 = `49e318bf…`** (the BusyBox fallback, not booted).
-* **`BOOTCTR_FCTRY` = `0x32`** (this boot read `0x1B` and `/init` wrote `0x32`;
-  the reboots had drained `0x25 → 0x1B`).  Read it with `dmesg | grep pbrpmb`.
+* **`BOOTCTR_FCTRY` = `0x2b`** at the last boot (top-up threshold `0x1e`, so
+  no write needed; the session's reboots drained `0x2d → 0x2b`).  Read it with
+  `dmesg | grep pbrpmb`.
 * **The unit runs the Nura root read-write** (`0fca:8010`, `169.254.0.1:22`
   dropbear, `PB_LINK=usb tools/pbssh.sh`; the ACM `playbook:~#` getty is the
   fallback).  `usb0` is brought up by `/etc/local.d/pb-ssh.start`; **pace bulk
@@ -141,12 +126,23 @@ sudo env HOME=$HOME XDG_CONFIG_HOME=$PWD/../config PYTHONPATH=$PWD \
 armv7 chroot's 1.99.1; `--no-ccache` because `sccache` is absent.  Artifact:
 `local/work/nura/work/packages/edge/armv7/catacomb-1.5.0-r10001.apk`.
 
-**The OSK move:** upstream catacomb 1.7.0 depends on **wvkbd** instead of
-squeekboard.  Moving `postmarketos-ui-catacomb` to 1.7.x is the fix for the
-backspace/enter repeat; it needs the GLES2 shim patch rebased onto the newer
-catacomb/smithay, and the `postmarketos-ui-catacomb` APKBUILD's dependency
-changed from `squeekboard` to `wvkbd`.  Do not try to fix this in the touch
-driver.
+**The OSK fix (done, session 59):** no catacomb 1.7.x move is needed.
+catacomb 1.5.0 already implements `zwp_virtual_keyboard_v1`
+(`VirtualKeyboardManagerState`, `src/catacomb.rs:303`), the protocol wvkbd
+speaks.  `wvkbd-mobintl` 0.21 (Alpine edge/community armv7) was installed with
+`apk add --no-network` (all runtime libs present); the UI APKBUILD now depends
+on `wvkbd-mobintl` + `font-dejavu` (`pkgrel=3`) and the initrc spawns
+`wvkbd-mobintl -L 260 --fn "DejaVu Sans 16"` instead of squeekboard, with the
+OSK keys rebound to `pkill -USR2/-USR1 -x wvkbd-mobintl`.  DejaVu Sans was
+installed by hand (the package's `encodings`/`mkfontscale` deps are absent) and
+`fc-cache -f` run.  One BackSpace tap now yields one `0x7f`.  Report 250 §2/§2a,
+DECISIONS §85.  Do not fix the repeat in the touch driver (trap 299).
+
+**Touch wakes DPMS (done):** `tools/bench/pb-touchwake.py` is installed at
+`/usr/bin/pb-touchwake` and started by the initrc; the session user is in the
+`input` group (gid 23).  It watches `/dev/input/event0` for `BTN_TOUCH` down
+and calls `catacomb msg dpms on` when `bl_power != 0`.  For SSH-only bench
+sessions with no touch, still `pkill -x swayidle` to keep the panel lit.
 
 ## 0f. Apps, the schema, and known breakage
 
@@ -240,8 +236,10 @@ reboot.
 * **Pace bulk host→device pushes:** 8 KiB chunks with a 5 ms pause (trap 302).
   The device side is `nc -l -p <port> > /tmp/f`; the host sends.  An unpaced
   burst is truncated.
-* **After every boot, `pkill -f swayidle`** before a long bench: its 180 s <!-- audit-ok: the initrc's timer value, not a session count -->
-  DPMS-off is a one-way trip under touch (trap 298).  Restore a dark panel with
+* **After every boot, `pkill -x swayidle`** for an SSH-only bench where no
+  touch will occur (its 180 s DPMS-off leaves the panel dark). <!-- audit-ok: the initrc's timer value, not a session count -->
+  With a touch user present this is optional: `pb-touchwake.py` now wakes a
+  DPMS-off panel on contact (trap 298 updated).  Restore a dark panel with
   `XDG_RUNTIME_DIR=/run/user/10000 WAYLAND_DISPLAY=wayland-1 catacomb msg dpms
   on`.
 * **Injecting a command into foot's shell:** `TIOCSTI` on `/dev/pts/0` works
@@ -343,7 +341,7 @@ reboot.
 ## 7. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 59 (absolute; Linux-era 53)
+PlayBook (OMAP4430 "winchester") — session 60 (absolute; Linux-era 54)
 
 Workspace: this repository — a git checkout.  Map: docs/README.md.  The earlier
 work tree $HOME/rea-work is READ-ONLY.
@@ -352,27 +350,31 @@ READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
 file), ROADMAP.md items 7a AND 9, KNOWN-ISSUES.md §2 (traps 14-302, especially
 296-302) and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md (61-83),
 docs/reports/INDEX.md, reports 249 and 248,
-docs/captures/touch-munin-2026-11-16-session58.txt and sessions/session-58.md.
+docs/captures/touch-munin-2026-11-16-session58.txt and sessions/session-{58,59}.md,
+report 250.
 
-WHERE IT STANDS: the touch position ghost is FIXED and fast typing is correct
-(kernel #74).  The root is WRITABLE and grown to 56.5 G, and SSH is back (kernel
-#77, region 0 0x294F8E36; PB_LINK=usb tools/pbssh.sh).  The one hardware fault is
-the eMMC cache flush: barrier=0 + write_cache=write through keep the root
-writable, but an explicit sync still stalls the card (trap 300).  The
-backspace/enter repeat is squeekboard's (trap 299); upstream catacomb 1.7.0 uses
-wvkbd.  The upload-path profile build is staged (PBGL_PROFILE) but not built.
+WHERE IT STANDS: the touch position ghost is FIXED (kernel #74) and the
+backspace/enter repeat is FIXED by installing wvkbd on catacomb 1.5.0 — one tap
+is one key, no UI upgrade needed (report 250).  DejaVu Sans gives the OSK its
+glyphs and pb-touchwake.py wakes a DPMS-blanked panel on touch.  The root is
+WRITABLE and grown to 56.5 G, SSH is back (kernel #77, region 0 0x294F8E36;
+PB_LINK=usb tools/pbssh.sh).  The eMMC "cache flush" item is closed by
+measurement: the card has no cache (CACHE_SIZE=0/CACHE_CTRL=0), and the stall
+is a plain WRITE, not a flush (trap 300 corrected).  The upload-path profile
+build is staged (PBGL_PROFILE) but not built.
 
-THE ACTIVE ITEM: clear the eMMC cache capability (CACHE_CTRL=0 and/or a
-cache_size=0 quirk in mmc) so no FLUSH is issued.  Then the OSK (wvkbd) and the
-upload profile.  Do not try to fix the repeat in playbook-munin.c (trap 299).
-After every boot, kill swayidle (trap 298).
+THE ACTIVE ITEM: the upload-path profile (PBGL_PROFILE).  Optionally bake the
+OSK stack (wvkbd + DejaVu + pb-touchwake) into the flasher-restorable hd3 base.
+Do not fix the repeat in playbook-munin.c (trap 299 — it is fixed in the OSK).
+For SSH-only benches with no touch, kill swayidle (trap 298 updated: touch does
+wake DPMS now).
 
 THE FACTS: region 0 = 0x294F8E36 (0x9E0980 B, sha256 f0738625..., kernel #77);
 hd3 media = the same root grown in place to 56.5 G, read-write (the
 flasher-restorable base is f7858110..., 625999872 B); region 1 = 49e318bf...
-(fallback, not booted); BOOTCTR_FCTRY = 0x32 (this boot read 0x1B and /init
-wrote 0x32).  The kernel/module vermagic is 7.3.3 mod_unload modversions ARMv6
-p2v8.
+(fallback, not booted); BOOTCTR_FCTRY = 0x2b at session-59 end (self-maintaining,
+threshold 0x1e).  The kernel/module vermagic is 7.3.3 mod_unload modversions
+ARMv6 p2v8.
 
 PHYSICAL STATE: the unit runs the Nura root read-write (0fca:8010, SSH dropbear
 on 169.254.0.1:22, PB_LINK=usb tools/pbssh.sh; the ACM playbook:~# getty is the

@@ -2926,15 +2926,54 @@ avoid the journal flush, and the emmc accepted the data writes (a 16 KiB
 O_DIRECT probe and a 15-million-block resize both succeeded).  The ttyGS0
 getty remains as the recovery console.
 
-**Constraint.**  An **explicit** flush (`sync`) still hangs the card: the MMC
-core gates `FLUSH_CACHE` on `EXT_CSD.CACHE_SIZE`, not on the queue's
-write-cache flag.  The clean fix is to clear the card's cache capability
-(`CACHE_CTRL = 0` and/or a `cache_size = 0` quirk in `mmc`).  The way back is
-reflashing the `f7858110…` hd3 image at `0x4915`; the media FS is no longer
-that image.
+**Constraint.**  An **explicit** flush (`sync`) was seen to stall in session
+58, but session 59 measured the card has **no cache** (`CACHE_SIZE = 0`,
+`CACHE_CTRL = 0`), so it is not a `FLUSH_CACHE`; the "clear the cache" fix is
+moot (report 250 §1, §85).  The stall is an intermittent busy-after-WRITE;
+`barrier=0` + write-through keep the FS usable.  The way back is reflashing the
+`f7858110…` hd3 image at `0x4915`; the media FS is no longer that image.
 
 **Evidence.**  Report 249 §2–§3; trap 300; kernel `#77`, region 0
 `0x294F8E36`; `/dev/loop0 56.5G, 53.9G free`, `PERSIST_1820` survives a reboot.
+
+## 85. Fix the OSK repeat by installing wvkbd on catacomb 1.5.0, not by moving to 1.7.x (session 59)
+
+**Decision.**  Replace squeekboard with **wvkbd** on the existing catacomb
+1.5.0 image: install `wvkbd-mobintl` 0.21, add DejaVu Sans and start wvkbd with
+`--fn "DejaVu Sans 16"`, edit the UI initrc (`wvkbd-mobintl -L 260 …` instead
+of `squeekboard &`, OSK keys rebound to `pkill -USR2/-USR1 -x wvkbd-mobintl`),
+and add `tools/bench/pb-touchwake.py` (at `/usr/bin/pb-touchwake`) so touch
+wakes a DPMS-blanked panel.  The pmaport APKBUILD depends on `wvkbd-mobintl` +
+`font-dejavu` (`pkgrel=3`).  **No catacomb 1.7.x move, no GLES2-shim rebase, no
+Rust build, no kernel rebuild and no region-0 flash.**  Also: the session-58
+"clear the eMMC cache" item is closed by measurement — the card has no cache
+(`CACHE_SIZE = 0`, `CACHE_CTRL = 0`), so no `FLUSH_CACHE` is issued; the stall
+is a plain WRITE (report 250 §1).
+
+**Why.**  The operator observed that catacomb 1.5.0 and 1.7.0 differ little in
+their changelogs and asked whether wvkbd could simply be installed.  Primary
+sources confirmed it: catacomb 1.5.0 already initialises
+`VirtualKeyboardManagerState` (`zwp_virtual_keyboard_v1`, `src/catacomb.rs:303`),
+the protocol wvkbd speaks, and its OSK state control (`VkActions`) only executes
+a program, so the initrc's `sm.puri.OSK0` D-Bus calls were squeekboard-specific,
+not a catacomb requirement.  wvkbd has no squeekboard action-key repeat.  A
+one-tap BackSpace test delivered one `0x7f` (was three), the operator confirmed
+the keyboard renders and types well, and forced DPMS-off + one tap restored the
+panel.  All persisted across two reboots.  The cache premise was wrong: the
+"249"/"33" were EXT_CSD byte indices, not values.
+
+**Constraint.**  The live root is read-write and persistent (§84), so the
+install and initrc edit need no hd3 flash — but the flasher-restorable base
+`f7858110…` still carries squeekboard and no DejaVu/daemon; reflashing it would
+reintroduce the repeat until these are redone (an hd3-only bake is the
+follow-up).  One combining-mark OSK label (`⌨͔`/`⌨͕`) still renders oddly —
+cosmetic.  For SSH-only benches with no touch, `pkill -x swayidle` is still the
+simplest way to keep the panel lit; with touch present, pb-touchwake wakes it.
+
+**Evidence.**  Report 250 §1–§2a; session-59 note; cached
+`catacomb-v1.5.0.tar.gz` (`src/catacomb.rs:303`, `input.rs:33`); Alpine
+edge/community armv7 `wvkbd-0.21-r0` (sha256 `7a9be1a3…`); `keylog.py` capture
+(one `0x7f`); the pmaport `postmarketos-ui-catacomb` APKBUILD/initrc.
 
 ### Repository license
 
