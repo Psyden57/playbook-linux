@@ -2368,8 +2368,16 @@ report 121 §3/§11/§12.
       from the session env (`XDG_RUNTIME_DIR=/run/user/10000
       WAYLAND_DISPLAY=wayland-1`).  `tabula`, `swayidle`, `foot`, `netsurf`
       and `xournalpp` all run; only epitaph dies.  Do not read the empty bar as
-      "the panel is not installed" — it is installed and crashing.  (Session
-      57.)
+      "the panel is not installed" — it is installed and crashing.  **Session
+      59 localised the fault:** a `tools/bench/segvtrap.c` `LD_PRELOAD` tracer
+      puts it at a null deref in Mesa `swrast_dri.so` (offset `0x3da8d0`,
+      `vldr [r5]`, r5=0) during the first draw — not the zbus warning, the
+      modules, or the text shader's `GL_EXT_blend_func_extended` requirement.
+      `tzompantli` works on the same EGL/swrast stack (it uses `glDrawArrays`
+      and no VAOs; epitaph uses `GL_OES_vertex_array_object` VAOs and
+      `glDrawElements(NULL)`), suggesting the VAO/draw path.  A fix needs a
+      source patch and a Rust rebuild (no local pmaport yet).  (Sessions
+      57/59, report 250 §2b.)
 
 293. **The audio bring-up diagnostics are still at info/error level and fire on
       every stream start.**  `omap_mcbsp_start()` calls

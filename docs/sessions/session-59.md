@@ -68,10 +68,12 @@ the whole UI to catacomb 1.7.x.
   missing, so tzompantli never reached `hicolor`; created it, installed
   `adwaita-icon-theme` + `glycin-svg`, converted netsurf's XPM.  All app icons
   render now.  [report 250 §2b]
-* **`epitaph` still segfaults** ~0.3 s after start, after font/EGL setup on the
-  PVR GLES2 driver (the zbus `GetAll` warning is benign).  Fix needs a Rust
-  rebuild or a working panel.  `calls`/`chatty` not installed (heavy recommends).
-  [report 250 §2b]
+* **`epitaph` still segfaults** ~0.3 s after start.  An `LD_PRELOAD` SIGSEGV
+  tracer pinned it to a null deref in Mesa `swrast_dri.so` (`vldr [r5]`, r5=0)
+  during the first draw; not the zbus warning, the modules, or the shader
+  extension.  `tzompantli` works on the same EGL/swrast stack (simpler GL path:
+  `glDrawArrays`, no VAOs).  Fix needs a source patch + Rust rebuild.
+  `calls`/`chatty` not installed (heavy recommends).  [report 250 §2b]
 * **A flasher-restorable hd3 image was baked** with all fixes:
   `blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`, 625 999 872 B,
   e2fsck clean) — not flashed.  [report 250 §2b]

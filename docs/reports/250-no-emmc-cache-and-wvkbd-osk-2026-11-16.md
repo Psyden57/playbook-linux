@@ -170,13 +170,24 @@ pb-touchwake, swayidle and the `input` group membership all came back.
   netsurf's `/usr/share/pixmaps/netsurf.xpm` to a 128×128 PNG in hicolor.
   `tzompantli` now renders every app icon; the drawer is launched on boot for
   the bench (normally it is bound to a power-button long-press).
-* **`epitaph` (the panel) still segfaults** ~0.3 s after start.  It is *not*
-  the UPower warning in trap 292 (the zbus `GetAll` on `/` is a `NetworkManager
-  AccessPoint` proxy with a null path — a WARN); with `EGL_LOG_LEVEL=debug` the
-  crash follows font loading and EGL config selection on the PVR GLES2 driver.
-  A fix likely needs a patched Rust rebuild of epitaph (long build) or a
-  driver-level change; neither was done this session.  The missing panel is
-  why the boot shows only the wallpaper, the drawer on demand, and the OSK.
+* **`epitaph` (the panel) still segfaults** ~0.3 s after start.  A
+  `tools/bench/segvtrap.c` `LD_PRELOAD` SIGSEGV tracer pinned it to a null
+  dereference in **Mesa's `swrast_dri.so`**, offset `0x3da8d0` — instruction
+  `vldr s15, [r5]` with `r5 = 0` — in a vertex/float loop during the first
+  draw.  Ruled out: the UPower/NetworkManager zbus warning in trap 292 (a
+  benign WARN), the modules (crashes with only Date/Clock), the text shader's
+  `GL_EXT_blend_func_extended: require` (patching the embedded shader strings
+  to drop it did not help), and the GL-driver selection (`tzompantli` uses the
+  same glutin 0.32 / EGL / GLES2 / swrast stack and works; its GL path is
+  simpler — `glDrawArrays`, no VAOs — while epitaph creates VAOs via
+  `GL_OES_vertex_array_object` and draws with `glDrawElements(NULL)` against an
+  EBO).  `MESA_LOADER_DRIVER_OVERRIDE=pvr` is ignored for Wayland EGL clients
+  here (Mesa dlopens swrast anyway); `GALLIUM_DRIVER=llvmpipe` turns it into a
+  clean Rust panic `state setup: EGL_NOT_INITIALIZED (0x3001)`, softpipe
+  segfaults the same way.  A fix needs a source-level change (avoid the VAO
+  path / the swrast quirk) and a Rust rebuild of epitaph — no local pmaport
+  exists yet and the installed binary is stripped.  The missing panel is why
+  the boot shows only the wallpaper, the drawer on demand, and the OSK.
 * **`calls`/`chatty` are not installed** (heavy GTK4/GStreamer recommends
   skipped with `--no-recommends`); their initrc lines only print "not found".
 * **A flasher-restorable hd3 image was baked** with all of the above:
