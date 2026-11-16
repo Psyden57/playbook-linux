@@ -2626,8 +2626,93 @@ report 121 §3/§11/§12.
       are software-rendered and pay the full-surface cost; `wvkbd` (cairo),
       `foot` (pixman) and `netsurf` (CPU) are unaffected.  A hardware path
       would need a pvr Wayland EGL platform (`wl_drm`/linux-dmabuf), a client
-      rendering via GBM+dmabuf, or an X/Wayland bridge — not started.  (Session
-      60, report 253.)
+       rendering via GBM+dmabuf, or an X/Wayland bridge — not started.  (Session
+       60, report 253.)
+
+315. **`CONFIG_SMP=y` boots and stops at ~0.000 s right after the RCU geometry
+      print — it is not an entry or SCU failure.**  Measured with the ring capture of trap 316:
+      the SMP kernel (`0x202E9F38`, `NR_CPUS=2`, `maxcpus=1`) prints up to
+      `rcu: RCU calculated value of scheduler-enlistment delay is 10 jiffies.`
+      (`adjust_jiffies_till_sched_qs()`, `kernel/rcu/tree.c:474`, called from
+      `rcu_init_geometry()` inside `rcu_init()`) and then stops with **no oops
+      text** — a silent hang, then the loader's WDT2 resets it.  `SLUB: … CPUs=2`
+      proves the SMP kernel is running.  The finer
+      localization is **not** established: the first three `PBDBG` marker builds
+      were made while the tree DTS had `earlyprintk` removed (so they were silent
+      — always `grep -ac earlyprintk <image>` before trusting a marker run), and
+      the one with `earlyprintk` (`0x4F6CC563`) left a *shorter* trace
+      (`mem auto-init`) than the plain SMP image — which is impossible for a
+      linear log, so the `+0x1000` printk window has a writer that is not yet
+      identified (trap 317a).  Identify that writer first.  Everything the platform SMP path touches is
+      readable/writable from non-secure Linux (`SCU_CONFIG = 0x1` = 2 cores,
+      `SCU_CTRL = 0x531` enabled, `0x4824380c` = 0, `0x48281800/4` = 0, PL310 ID
+      `0x410000C4`), so the SCU/firewall and ROM-SMC hypotheses are dead.  Next:
+      bracket `rcu_init()`'s own statements.  (Session 61, report 254.)
+
+316. **A DEBUG_LL ring can only be read by the boot that immediately follows the
+      failure — and `dd if=/dev/mem` cannot read it.**  Three writers exist:
+      the **chainloader** `clear_ring 0x88000000` (plus breadcrumbs at
+      `+0x00..+0x7c`), the **decompressor** (`busyuart` mirrors every char into
+      *all three* rings via `ring_put`: count `+0x80`, index `+0x84`, chars
+      `+0x100`), and **pbmon**, which mirrors printk into a small window at
+      `+0x1000` **without** touching count/index — that window is what carries a
+      failed boot's tail.  The ring pages are `no-map` reserved, so
+      `dd if=/dev/mem` returns `Bad address`; use `mmap` (`tools/bench/ringdump.c`)
+      or busybox `devmem` one word at a time, and note that `mmap` needs a
+      page-aligned offset.  A read-back kernel must be silent: `earlyprintk`
+      removed from the bootargs (`/init`'s ring logger is a separate writer —
+      disable it) and `CONFIG_DEBUG_LL=n` if the *decompressor* line must also be
+      preserved; root it at region 1 for a shell.  Zero the rings first with
+      `tools/bench/memzero.c`.  (Session 61, report 254 §2.)
+
+317. **QNX fills free RAM with `0xAA`, so a QNX boot destroys the ring.**  On the
+      oracle `0x88000000`, `0x90000000` and the pbmon shadow `0x90200000` all read
+      back as `0xAA` fill (no printable run in 64 KiB) while the IFS load address
+      `0x80000000` keeps real data — procnto initialises the RAM it considers
+      free, and the ring pages are free RAM to it.  **Open:** earlier sessions
+      read full rings through the QNX door, so some image/config preserved them;
+      do not present "QNX always wipes it" as settled.  (Session 61, report 254.)
+
+317a. **The `+0x1000` printk window in the DEBUG_LL ring has an unidentified
+      writer.**  It is not `ring_put` (count/index stay at the decompressor's
+      `0x32`) and `drivers/misc/pbmon.c` has no printk hook, yet a small printk
+      window appears at ring `+0x1000` whose content varies per boot.  After the
+      17:05 SMP image it held `SLUB … CPUs=2` + the RCU lines; after a marked SMP
+      image that should print *more* it held only `mem auto-init` — i.e. a
+      *shorter* log, which a linear boot log cannot produce.  Consequence: a
+      marker run cannot be trusted to describe the boot under test until the
+      writer is known.  Cheap probe: add a unique boot-time printk to the
+      read-back kernel and see whether it appears there.  (Session 61.)
+
+318. **The host's RNDIS interface name flaps, so a NetworkManager profile bound
+      by name silently stops activating.**  The PlayBook enumerates as
+      `enp8s0f3u1` or `enp8s0f3u1i2` depending on USB interface numbering; the
+      `pb-rndis` profile (manual `169.254.0.2/16`) then shows `disconnected` and
+      `169.254.0.1` is unreachable ("No route to host" / ARP fails) even though
+      `lsusb` shows `0fca:8010`/`8012`.  Bind by MAC
+      (`802-3-ethernet.mac-address 02:1a:11:00:00:02`) rather than
+      `connection.interface-name`, and do not add the address by hand —
+      `nmcli con mod … ; nmcli con up pb-rndis` is the mechanism.  (Session 61.)
+
+319. **`SMC` from a QNX user process is `SIGILL` — it is not evidence about the
+      ROM.**  `tools/bench/smcprobe.c` calls services `0x102`–`0x105` with the
+      `omap-smc.S` convention (`r12` = service) and every one dies with `SIGILL`,
+      **including `0x102`**, which our own non-SMP kernel uses successfully to
+      program the PL310 through `omap4_l2c310_write_sec()`.  `SMC` is a
+      privileged instruction: a user process gets an undefined-instruction trap
+      on any OS that does not emulate it, so the ROM public API demonstrably
+      exists here and `omap-smp.c`'s services are not the leading suspect.
+      (Session 61, report 254 §4.)
+
+320. **The region-1 root's modules no longer match the current kernel config.**
+      Every `insmod` on the region-1 busybox root now fails with
+      `module X: .gnu.linkonce.this_module section size must match the kernel's
+      built struct module size at run time` — the module set predates the
+      current config, so `struct module` differs.  Harmless for `devmem`/
+      `ringdump` work, but the region-1 image needs its modules rebuilt (and its
+      `/lib/modules/7.3.3` re-staged) before it is a useful bench root again.
+      When pushing SMP-built modules to a root, remember the vermagic gains
+      `SMP` (trap 313).  (Session 61.)
 
 ## 3. Corrections to older reports
 

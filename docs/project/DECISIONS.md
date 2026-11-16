@@ -3044,6 +3044,44 @@ softpipe (`/tmp/epi6.log`) and llvmpipe (`/tmp/epi7.log`); `/proc/<pid>/stat`
 CPU sums; the `PBGL` lines; `/proc/<catacomb>/maps` (`pvr_dri`) vs
 `/proc/<epitaph>/maps` (`swrast_dri`, `libLLVM-13`).
 
+## 88. The kernel bench is the region-1 root; the CPU work is instrumented, not guessed (session 61)
+
+**Decision.**  For kernel experiments the unit boots
+`local/work/kernel-region1.img` (CRC `0x433232F1`): the **non-SMP** kernel with
+`ROOTFS_RAW_OFF = 0x29000000`, i.e. the busybox root **on region 1**, so a failed
+kernel still leaves a shell (`pb> ` on the ACM, dropbear on `169.254.0.1:22`).
+hd3 stays the **1917 vendor UFS** (flashed to obtain a live QNX oracle); the Nura
+root is not restored at wrap-up.  Post-mortem evidence for a hanging kernel comes
+from the DEBUG_LL ring through the **zero + silent-read-back** procedure and
+`tools/bench/{memzero,ringdump}.c` — not from booting the reference OS.
+
+**Why.**  A kernel that hangs at `~0.000 s` (the SMP build does) never creates the
+USB gadget, so the only console is the ring; and a region-1 root gives that ring
+back without depending on hd3 or on the Nura services.  The oracle route was tried
+first because that is how earlier sessions read the ring, but on this image a QNX
+boot leaves `0xAA` fill in the ring pages (contradiction file
+`docs/contradictions/ring-survives-a-qnx-boot.md`), and hd3 had to be given up to
+get the oracle at all.  The read-back kernel must be silent: `earlyprintk`
+removed (`/init`'s `rlog` is a second writer) and `CONFIG_DEBUG_LL=n` if the
+decompressor's line matters.
+
+**Constraint.**  The ring's `+0x1000` printk window has an **unidentified
+writer** (trap 317a), so marker runs cannot be trusted until it is identified —
+three marker builds this session were also invalid because they were made while
+the tree DTS had `earlyprintk` removed; every marker/read-back image must be
+checked with `grep -ac earlyprintk`.  Region 1 was mounted read-write, so its
+media hash is no longer the baked `49e318bf…` (now
+`a3277272…`), and its module set no longer matches the kernel config (trap 320).
+hd3's Nura root is recoverable only by flashing
+`local/work/nura/images/blackberry-playbook-root-apps-audio.img`
+(`f7858110…`, 625 999 872 B) at `0x4915` and re-applying the session-59/60 live
+fixes.
+
+**Evidence.**  Report 254 (SMP trace, ring method, oracle measurements); traps
+315–320; the verified media reads in `STATE.md` (region 0 sha256
+`bbee7beb…`, trailer magic `0xD7C82D1F` + CRC `0x433232F1`; region 1 sha256
+`a3277272…`; `BOOTCTR_FCTRY = 0x31`).
+
 ### Repository license
 
 **Decided (session 23): GPL-3.0-or-later.**  The project's own code and

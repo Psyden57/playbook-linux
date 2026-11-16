@@ -138,6 +138,7 @@ These pairs are byte-identical; keep one of each when pruning.
 
 | file | duplicate of |
 |---|---|
+| `oracle-live-2026-11-16-ring-and-cpu.txt` | session 61: the DEBUG_LL ring read *after* a QNX boot (both rings and the pbmon shadow are `0xAA` fill, no printable run in 64 KiB, while the IFS region keeps data); `pidin info` from the live oracle (`Processor1` **and** `Processor2`, both `Cortex A9 MPCore 1008MHz`); the user-space `mmap_device_memory` accessibility table for the SCU/WUGEN/SAR/DPLL/PRM ranges; the SMC probe (`SIGILL` for `0x102`–`0x105`); and the SMP kernel's own tail from the zero + silent-read-back capture (`SLUB … CPUs=2`, then the RCU geometry line).  Report 254 |
 | `playbook-live-spare-2026-10-26-clean-mmc2-noidle-ring2.txt` | `…-clean-mmc2-noidle-ring.txt` |
 | `docs/reports/data/live-info-2026-11-01/dsp_os_metrics.bin` | `…/installer_metrics.bin` (the DSP metrics read is a stub; both are zero) |
 | `playbook-live-2026-10-21-after-0x2004.txt` | `playbook-live-2026-10-21-nv-0x2004.txt` |

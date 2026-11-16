@@ -1,5 +1,74 @@
 # Current state
 
+## Current state — 2026-11-16 (session 61, IN PROGRESS)
+
+**THE CPU ITEM IS OPEN AND THE FAILURE IS LOCALISED TO ~0.000 s: `CONFIG_SMP=y`
+boots and stops right after the RCU geometry print (`rcu_init()`).**  The SMP kernel (`0x202E9F38`,
+`NR_CPUS=2`, `maxcpus=1`) runs (`SLUB: … CPUs=2`) and prints the RCU init lines,
+then stops at `rcu: RCU calculated value of scheduler-enlistment delay is 10
+jiffies.` (`adjust_jiffies_till_sched_qs()` from `rcu_init_geometry()` inside
+`rcu_init()`) with no oops text; the loader's WDT2 then resets it.  The finer
+localization is **not** established: three `PBDBG` marker builds were silent
+(built while the DTS had `earlyprintk` removed — always
+`grep -ac earlyprintk <image>` before trusting a marker run) and the one with
+`earlyprintk` left a *shorter* trace than the plain SMP image, so the `+0x1000`
+printk window has an unidentified writer (trap 317a).  **Identify that writer
+first.**  **The SCU, the register
+firewall and the ROM public API are all excluded**: `SCU_CONFIG = 0x1` (2 cores),
+`SCU_CTRL = 0x531` (enabled), `0x4824380c = 0`, WUGEN `AUX_CORE_BOOT_0/1 = 0`,
+PL310 ID `0x410000C4` all read from non-secure Linux, and SMC is a privileged
+instruction (a QNX user probe gets `SIGILL` even for `0x102`, which our own
+kernel uses).  [report **254**; traps 315–320]
+
+* **The reference is measured dual-core at 1008 MHz** — `pidin info` on the live
+  oracle: `Processor1` and `Processor2`, both `Cortex A9 MPCore 1008MHz`, on
+  `/procnto-smp-instr`.  That is the MPU OPP target (handoff §0b, trap 312).
+* **The ring can only be read by the boot that immediately follows the failure.**
+  Three writers: the chainloader (`clear_ring 0x88000000` + breadcrumbs), the
+  decompressor (`busyuart` mirrors chars into all three rings), and pbmon (a
+  printk window at `+0x1000` that does **not** touch count/index — it is what
+  carries a failed boot's tail).  QNX fills free RAM with `0xAA`, so an oracle
+  boot destroys it.  `dd if=/dev/mem` fails on the `no-map` pages; use
+  `tools/bench/ringdump.c` (`mmap`).  [trap 316/317]
+* **Bench at the wrap-up (all values read off the media, `/dev/mmcblk1`, on the
+  unit):** region 0 = **the region-1 image, CRC `0x433232F1`**; its
+  10 355 592 bytes at raw `0x8100000` hash to
+  `bbee7bebb61eeaa4167a6bcfef83b6df6e858beb4b902a29846dcea57d91156d`, equal to
+  `local/work/kernel-region1.img`, with the trailer `1f2dc8d7 f1323243` =
+  magic `0xD7C82D1F` + CRC `0x433232F1` at that offset.  Region 1 = the busybox
+  root at raw `0x29000000`, 64 MiB, now
+  `a32772720e30d2aad53dc88cc7c7125d81b9cdf339448dff8d27d625c8a05f55` (the baked
+  image was `49e318bf…`; the root was mounted read-write).  Linux `7.3.3 #79`,
+  `online = 0`, root `/dev/loop0` (58.7 M, `rw,nobarrier`), 43 modules in
+  `/lib/modules/7.3.3` (the mismatched set — trap 320), `pb> ` on the ACM,
+  dropbear on `169.254.0.1:22` (`PB_LINK=usb tools/pbssh.sh`).
+  **`BOOTCTR_FCTRY = 0x31`** at the last boot (`31000000`, ≥ `0x1e`, no write).
+  No device-side files are deployed (`/tmp` is tmpfs and was wiped by the
+  reboot).  **hd3 = the 1917 vendor UFS** (the Nura root is gone; see below).
+* **The region-1 root's modules no longer match the config** —
+  `.gnu.linkonce.this_module section size must match` on every `insmod`; rebuild
+  them before using region 1 as a real bench root.  [trap 320]
+* **Host:** the RNDIS interface name flaps (`enp8s0f3u1` / `enp8s0f3u1i2`), so the
+  `pb-rndis` NM profile must be bound by MAC (`02:1a:11:00:00:02`), not by name.
+  [trap 318]
+* **How the media got here:** to read the ring a live QNX was needed, which
+  needed a UFS on hd3.  In order: the shim IFS at `0x825`
+  (`ifs-shim-sealed.ifs`, `b52195bb…`); a patched minimal RCFS
+  (`minimal/rcfs-noufs.rcfs`, `9b67cbdb…`) — **no network**; the session-43
+  `setB.signed` (`d22eab3b…`) — **no network**; the full modified 1917 RCFS
+  (`rcfs-1917.rcfs`, `c4ab6e34…`, packed `rcfs1917-flash.signed`) — **USB +
+  qconn work**; and the 1917 vendor UFS with the devuser injection
+  (`ufs-1917-devuser.ufs`, `482e0473…`, packed `371b09a1…`).  **The Nura root on
+  hd3 is gone.**  The way back is `local/work/nura/images/
+  blackberry-playbook-root-apps-audio.img` (`f7858110…`, 625 999 872 B) at
+  `0x4915`; `/init` regrows it, but the session-59/60 live fixes (llvmpipe,
+  `epitaph` r10006, the udev/polkit/gorm rules) must be re-applied.
+* **Next:** identify the `+0x1000` window's writer, then bracket `rcu_init()`'s
+  own statements (`rcu_init_one`, the three
+  `rcutree_*_cpu` calls, the two `alloc_workqueue`s,
+  `start_poll_synchronize_rcu_expedited`) with markers and re-run the capture —
+  one build, two flashes.  Then the MPU OPP (1008 MHz is the reference's value).
+
 ## Current state — 2026-11-16 (session 60)
 
 **THE `epitaph` PANEL IS FIXED — IT STARTS, STAYS UP, AND RENDERS ITS TEXT AND

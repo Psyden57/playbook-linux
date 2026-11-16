@@ -261,11 +261,22 @@ flasher can replace at every point:
    deferred `swap` and its first-draw JIT.  **The unit runs one core at
    400 MHz** (`maxcpus=1` in the DTS, `dpll_mpu_ck = 400 MHz`, no cpufreq/OPP),
    while the reference programs `DPLL_MPU`/`PRM_VC` for 1.0 GHz dual-core
-   (report 223) — the biggest remaining lever.  **Next:** (a) build
-   `CONFIG_SMP=y` (`CONFIG_NR_CPUS=2`) with `maxcpus=1` still set, rebuild all
-   modules (the vermagic changes) and flash region 0; (b) remove `maxcpus=1`
-   and boot cpu1 (trap 313); (c) measure the reference's MPU OPP/voltage on the
-   oracle, then add an OPP table + `vdd_mpu`/ABB (trap 312); (d) shrink/pre-warm
+   (report 223) — the biggest remaining lever.  **Session 61 built (a) and
+   measured it:** the SMP kernel (`0x202E9F38`, `CONFIG_SMP=y`,
+   `CONFIG_NR_CPUS=2`, `maxcpus=1`, all 44 modules rebuilt with the `SMP`
+   vermagic) **boots and stops right after the RCU geometry print**
+   (`rcu: RCU calculated value of scheduler-enlistment delay is 10 jiffies.`,
+   `kernel/rcu/tree.c:474`) with no oops text, then WDT2 resets it.  The SCU and
+   every register the SMP path touches are accessible from non-secure Linux
+   (`SCU_CONFIG = 1` = 2 cores, `SCU_CTRL = 0x531`), and SMC is merely
+   privileged, so no hardware blocks it; the reference is measured
+   **dual-core at 1008 MHz**.  The finer localization is open — the ring's
+   `+0x1000` printk window has an unidentified writer (trap 317a) and the
+   marker builds were invalid (trap 315).  **Next:** identify that writer, then
+   bracket `rcu_init()` (report 254, HANDOFF §0a–§0c); (b) remove `maxcpus=1`
+   and boot cpu1 (trap 313); (c) read the reference's `PRM_VC_*`/voltage from a
+   *Linux* `devmem` (they read there; they die in QNX user space) — the rate is
+   measured at 1008 MHz — then add an OPP table + `vdd_mpu`/ABB (trap 312); (d) shrink/pre-warm
    the drawer; (e) pursue hardware GL for Wayland clients (trap 314); (f) rebake
    the restorable hd3 base with `epitaph` r10005+, the llvmpipe files and the
    rules.  Kumo needs a WPEWebKit build (report 247 §4).

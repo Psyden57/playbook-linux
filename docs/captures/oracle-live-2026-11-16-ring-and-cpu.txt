@@ -1,0 +1,166 @@
+# Oracle live — the DRAM ring after a QNX boot, and the reference's own CPU state
+
+Date: 2026-11-16 (absolute session 61).  Unit: the **minimal/full 1917 QNX oracle**
+on region 0 (`local/work/ifs-shim-sealed.ifs` at `0x825` + the full modified
+1917 RCFS at `0x8D5`), hd3 = the 1917 vendor UFS (`local/work/ufs-1917-devuser.*`).
+Shell: `python3 tools/QCL.py …` (qconn on `169.254.0.1:9090`, no auth).
+`memdump3` = `local/work/minimal/memdump3` (pushed to `/tmp`, chmod 0755).
+
+## 1. The DEBUG_LL ring does not survive a QNX boot (measured, negative)
+
+The plan "boot the reference OS, then read the DRAM ring the failed SMP kernel
+left behind" does **not** work: procnto fills free RAM with `0xAA`.
+
+```
+$ QCL.py exec /tmp/memdump3 88000000 8000      # ring1, kernel DEBUG_LL
+88000000: abaaeaaa
+88000004: aaaaaaaa
+...
+$ QCL.py exec /tmp/memdump3 90000000 8000      # ring2, decompressor
+90000000: aaaa9aaa
+...
+$ QCL.py exec /tmp/memdump3 90200000 100       # pbmon shadow
+90200000: aaaa9aaa
+```
+
+Both 32 KiB rings (`0x88000000`, `0x90000000`) and the pbmon shadow
+(`0x90200000`) are `0xAA` fill with isolated bit-set words; a byte-level scan of
+the 65 512 dumped bytes found **zero printable runs** ≥ 6 chars.  The boot
+breadcrumbs at ring `+0x00..0x7C` are gone too.
+
+**Consequence:** the SMP failure's trace can only be read by a boot that does
+**not** write ring1 — i.e. our own kernel with `earlyprintk` removed from the
+DTS `bootargs` — run as the *first* boot after the failing one.
+
+## 2. The reference's CPU state (measured)
+
+`pidin info` (through qconn `exec`, captured to a file and read back):
+
+```
+CPU:ARM Release:6.6.0  FreeMem:617Mb/1024Mb BootTime:Nov 16 21:39:15 GMT 2026
+Processes: 153, Threads: 587
+Processor1: 1092599954 Cortex A9 MPCore 1008MHz FPU
+```
+
+* **`1008 MHz`** — confirms report 223 / trap 312: the reference is *not* the
+  400 MHz our boot chain leaves the MPU at.  This is the MPU OPP target for
+  handoff §0b.
+* The kernel is `/procnto-smp-instr` (SMP build).  `pidin info` lists only
+  `Processor1` in the captured output; the qconn `exec` reply truncates long
+  output, so the second processor line was not captured — do not read the
+  single line as "one core".
+
+## 3. What user-space mmap can and cannot read on the reference
+
+`memdump3` uses `mmap_device_memory(MAP_PHYS)` from a user process.  Results
+(each a separate invocation):
+
+| address | what | result |
+|---|---|---|
+| `0x48240000` | SCU_CONFIG (Cortex-A9 MPU) | **process dies, no output** |
+| `0x48281800` | WUGEN `AUX_CORE_BOOT_0` | **dies** |
+| `0x4824380c` | `cpu1_rstctrl` | **dies** |
+| `0x4a004160` | `CM_CLKMODE_DPLL_MPU` | **dies** |
+| `0x4a326000` | SAR RAM base | one word read, then dies (`c80e2693`) |
+| `0x4a307ba0` | `PRM_VC_*` block | three words, then dies: `00405b12`, `001f1f1f`, `00000008` |
+
+So the SCU, the clock-manager and most of the PRM block are **not readable from
+a QNX user process** on this unit while `SAR RAM`, the top of the PMIC/PRM range
+and DRAM are.  This says nothing directly about the *kernel's* (procnto's) or
+non-secure-Linux's access rights — only that these ranges are privileged in a way
+a user-space `mmap_device_memory` does not satisfy.  Do not quote it as "the SCU
+is firewalled".
+
+## 3a. The ROM public API cannot be probed from QNX user space (measured)
+
+`tools/bench/smcprobe.c` (built with the QNX 6.6 toolchain, `-marm`, the SMC
+encoded as `.word 0xe1600070`) calls services `0x102`, `0x103`, `0x104`, `0x105`
+from a forked child, each with the same `r12 = service id` convention as
+`arch/arm/mach-omap2/omap-smc.S`:
+
+```
+Process 9383957 (smcprobe) terminated SIGILL code=1 fltno=1 ip=08048e18
+svc 0x102 arg 0x00000000 -> child died
+svc 0x103 arg 0x00000000 -> child died
+svc 0x104 arg 0x00000000 -> child died
+svc 0x105 arg 0x00000000 -> child died
+```
+
+All four are `SIGILL`.  **This says nothing about the ROM**: `SMC` is a
+privileged instruction, so a user process gets an undefined-instruction trap on
+any OS that does not emulate it (Linux would trap it the same way).  In
+particular `0x102` fails here too, yet our non-SMP Linux image **does** program
+the PL310 through `omap4_l2c310_write_sec()` (SMC `0x102`/`0x109`/`0x113`) and
+the L2 works — so the monitor/public-API path exists on this unit.  The
+services `omap-smp.c` needs are therefore *not* the leading suspect.
+
+## 3b. Both cores, both at 1008 MHz (measured)
+
+`pidin info` captured through a qconn shell to a file, then `QCL.py get`:
+
+```
+CPU:ARM Release:6.6.0  FreeMem:617Mb/1024Mb BootTime:Nov 16 21:39:15 GMT 2026
+Processes: 154, Threads: 588
+Processor1: 1092599954 Cortex A9 MPCore 1008MHz FPU
+Processor2: 1092599954 Cortex A9 MPCore 1008MHz FPU
+```
+
+(The earlier read that showed only `Processor1` was the qconn `exec` reply
+truncating the long output; the file capture shows both.)
+
+## 3c. What "the ring is 0xAA" actually is (measured)
+
+After one SMP boot (the `0x202E9F38` image, looping on WDT2) followed by a shim
+IFS boot, 0x88000000 holds only three loader breadcrumb words
+(`4c424b43`, `00000003`, `4b45524e`) and `0xAA` elsewhere; the decompressor ring
+at 0x90000000 holds the same first word.  The **IFS load address** `0x80000000`
+still holds real data (`0e40009c`), so this is not a global DRAM wipe: QNX fills
+only memory it considers *free*, and both ring addresses are in free RAM.
+Consequence: the ring must be read by the boot that follows the failure, never
+by QNX.
+
+
+## 3d. The SMP kernel's own tail, captured with the zero + silent-read-back method
+
+Sequence (report 254 §2): zero `0x88000000`/`0x90000000`/`0x94000000` from a
+running region-1 image (`tools/bench/memzero.c`), boot the SMP image
+(`0x202E9F38`) and let it hang, then boot a *silent* read-back kernel
+(`0x11D29723`: non-SMP, `earlyprintk` removed, `CONFIG_DEBUG_LL=n`, `/init`'s
+`rlog` disabled, region-1 root) and read DRAM with `tools/bench/ringdump.c`.
+
+```
+$ ringdump 90000000 8000 /tmp/r2.bin     # pbmon printk window at +0x1000
+on.  Total pages: 261632
+[    0.000000] mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+[    0.000000] SLUB: HWalign=32, Order=0-3, MinObjects=0, CPUs=2, Nodes=1
+[    0.000000] rcu: Hierarchical RCU implementation.
+[    0.000000] rcu: RCU event tracing is enabled.
+[    0.000000] rcu: RCU calculated value of scheduler-enlistment delay is 10 jiffies.
+```
+
+`CPUs=2` is the SMP build; the RCU line comes from
+`adjust_jiffies_till_sched_qs()` (`kernel/rcu/tree.c:474`) inside
+`rcu_init()`.  Two marker builds (`PBDBG:` around `rcu_init`,
+`kvfree_rcu_init`, `trace_init`, `context_tracking_init`, `early_irq_init`,
+`init_IRQ`, `timers_init`, `timekeeping_init`, `time_init`, `random_init`)
+produced **no marker at all**, so the hang is inside `rcu_init()` after
+`rcu_init_geometry()`.
+
+Also measured on the read-back boot (session 61, region-1 root):
+`SCU_CONFIG 0x48240000 = 0x00000001` (2 cores), `SCU_CTRL = 0x00000531`
+(enabled), `0x4824380c = 0`, `0x48281800/4 = 0`, PL310 ID `0x410000C4`,
+SAR `0x4a326000 = 0xC80E2E93`, `CM_CLKSEL_DPLL_MPU 0x00800000`,
+`CM_CLKMODE_DPLL_MPU 0x00000005`.
+
+## 4. Bench notes
+
+* `sshd` came up on the first boot (`PB_LINK=door tools/pbssh.sh 'uname -a'`
+  returned `QNX localhost 6.6.0 2014/03/19-01:28:41EDT
+  OMAP4430_ES2.2_HS_Winchester_Rev:07 armle`) and had **died** by the next
+  attempt (`Connection refused`).  `qconn` kept working throughout; use it.
+* The keys injected from `local/backups/verify` are 2.0.0.4869-era and are not
+  expected to be the format 2.1.0.1917 wants (operator, session 61) — irrelevant
+  for qconn, and a working key can be pushed from qconn later.
+* `QCL.py exec` truncates long replies and does not pass shell metacharacters;
+  `exec -- /bin/ls -l path` needs the `--`, and compound commands want
+  `QCL.py shell` (interactive) instead.

@@ -37,6 +37,7 @@ note after it is what a reader needs before opening the file.
 | `mclk1-locks-vs-not-under-linux.md` | **open (updated session 42)** — report 204/203 say MCLK1 never clocks under our image; session 41 measured FLL1 **locked** from MCLK1 once (`0x732 = 0x6020`) and then failing on later boots and a cold boot with an identical register file; session 42's discriminator — AIF1CLK sourced **directly** from MCLK1 with the FLL bypassed — also died on its boot.  Not settled; a meter on MCLK1, or the direct test repeated across boots, would close it.  Since E1 the codec is AIF1 master (DECISIONS §53) so this file is now the single audio blocker (report 206) |
 | `open-dispc-dsi-timing-fields.md` | **resolved (falsified) 2026-10-28** — all four fields and the QNX PHY words were forced and read back identical; the panel stayed black (report 124), so the split was not the blocker.  The display was later fixed by the DISPC core clock (report 133) |
 | `rpmb-key-kek-vs-fallback-literal.md` | **resolved (session 18), key pinned (session 19)** — the monitor is handed the key bytes by pointer; the live page gives the CID-derived seed and the frame key `dfeec0ce…2274` (report 143).  The Linux consequence is **conditional on the block seal** (report 144), not on the key; the seal caller is solved (147), the transform is not (148/156) |
+| `ring-survives-a-qnx-boot.md` | **open** — earlier sessions read the `0x88000000` DEBUG_LL ring *from QNX* with real content in it (`docs/captures/playbook-live-spare-2026-10-26-clean-ring-88000000.txt`, captured with the stock 1917 RCFS days before the session-43 prune); session 61 measured `0xAA` fill in `0x88000000`, `0x90000000` and the pbmon shadow after booting the full modified 1917 RCFS, while `0x80000000` keeps real data.  Unresolved: which image/which boot each capture shows, and who writes the fill.  *Would settle it:* the stock RCFS read at the earliest moment, two consecutive oracle boots compared, or the fill's writer found in `startup`/`procnto`.  Report 254 §2 |
 | `rpmb-page-rodata-contents.md` | **open (mechanism); contents measured** — report 92 says `page+0x20/+0x40` hold the `.rodata` constants, report 141 says nothing writes them; the live page measures the constants, but who writes them is unknown (session 19) |
 | `safety-no-emmc-mount-vs-readonly-root.md` | **resolved (session 17), extended (session 18)** — read-only eMMC/QNX6 mounts are allowed; the operator has now dropped the blanket writable-eMMC prohibition **for our own data** (NVRAM, the MCT, and dangerous RPMB still forbidden).  Rule in `SAFETY.md` §4/§6, decisions `DECISIONS.md` §17/§18; `hd3` to be repurposed (report 141) |
 | `touch-bus-i2c2-vs-i2c3.md` | **resolved 2026-11-08 (session 36, report 193)** — the board selects `driver = munin`, and `libmtouch-munin` opens QNX `/dev/i2c1` (I²C2 `0x48072000`, live Linux `i2c-1`) at `0x65`; the Pegasus `/dev/i2c2` string was the other driver.  Linux also needed the i2c2 pads muxed (`0x4A100126`/`0x4A100128` were `0x011F` = safe mode; `0x0110` made `0x65` ACK) |
@@ -44,9 +45,14 @@ note after it is what a reader needs before opening the file.
 
 ## Still open — keep these in mind
 
-Seven files have a genuinely open question left; none of them blocks the
+Eight files have a genuinely open question left; none of them blocks the
 IFS rebuild, but each changes how a result should be read:
 
+1. **`ring-survives-a-qnx-boot.md`** — whether a QNX boot preserves or fills the
+   DEBUG_LL ring is undecided: session 61 measured `0xAA` fill where earlier
+   captures show real text, and the two were taken with different QNX images.
+   Read it before trusting any post-QNX ring read.  *Would settle it:* a stock
+   RCFS read at the earliest moment, or two consecutive boots compared.
 1. **`expired-counter-nuke-vs-retry-halt.md`** — what an out-of-range
    `BOOTCTR_FCTRY` does at boot (normal-path nuke vs retry-branch halt) is still
    untested.  The two 32 GB units in that state cannot be read without an OS, and
