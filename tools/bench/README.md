@@ -14,6 +14,7 @@ because the captures they produced are evidence; earlier sessions kept copies in
 | `mmccache.c` | host→device | build a static ARM `MMC_IOC_CMD` reader with `arm-linux-gcc -static -O2 -Wall`; `mmccache read\|off\|on\|dump` reads EXT_CSD (CMD8) and sets `CACHE_CTRL` (CMD6).  Session 59 used it to measure `CACHE_SIZE = 0` — the card has no cache (report 250). |
 | `segvtrap.c` | device | build as an `LD_PRELOAD` shared library with `arm-linux-gcc -shared -fPIC`; on SIGSEGV/SIGBUS/SIGILL it prints the faulting PC and `/proc/self/maps`. Session 59 pinned epitaph's crash to Mesa `swrast_dri.so`. An `execve` wrapper does **not** work — exec resets handlers. |
 | `pb-touchwake.py` | device | watches `/dev/input/event0` for `BTN_TOUCH` down and runs `catacomb msg dpms on` when `bl_power != 0` (session 59; trap 298).  Installed at `/usr/bin/pb-touchwake` and launched by catacomb's initrc; needs the session user in the `input` group. |
+| `uitap.py` | device (root) | inject a touchscreen tap through a `uinput` device (`uitap.py <x> <y>`).  Needs `uinput.ko` loaded (trap 306); udev tags the device `ID_INPUT_TOUCHSCREEN=1` and catacomb hotplugs it.  Session 60 used it to prove touch reaches xdg clients: a tap on tzompantli's Foot icon launched `foot`. |
 
 The device-side scripts go to `/tmp` on the unit.  **Push them paced**
 (8 KiB chunks / 5 ms; trap 302) — an unpaced RNDIS burst truncates.  The device

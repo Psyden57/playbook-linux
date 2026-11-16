@@ -2360,24 +2360,27 @@ report 121 §3/§11/§12.
       8765 > /tmp/f`, host pushes the bytes) at ~10 MB/s.  Do not add a UFW
       inbound rule just for a transfer.  (Session 56.)
 
-292. **`epitaph` 1.4.0 segfaults on this root (rc=139), so the panel never
-      appears.**  It logs `Started Epitaph`, then a zbus warning
-      `Failed to populate properties cache via GetAll:
-      org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path
-      "/"` (upowerd *is* running), then `Segmentation fault`.  Reproducible
-      from the session env (`XDG_RUNTIME_DIR=/run/user/10000
-      WAYLAND_DISPLAY=wayland-1`).  `tabula`, `swayidle`, `foot`, `netsurf`
-      and `xournalpp` all run; only epitaph dies.  Do not read the empty bar as
-      "the panel is not installed" — it is installed and crashing.  **Session
-      59 localised the fault:** a `tools/bench/segvtrap.c` `LD_PRELOAD` tracer
-      puts it at a null deref in Mesa `swrast_dri.so` (offset `0x3da8d0`,
-      `vldr [r5]`, r5=0) during the first draw — not the zbus warning, the
-      modules, or the text shader's `GL_EXT_blend_func_extended` requirement.
-      `tzompantli` works on the same EGL/swrast stack (it uses `glDrawArrays`
-      and no VAOs; epitaph uses `GL_OES_vertex_array_object` VAOs and
-      `glDrawElements(NULL)`), suggesting the VAO/draw path.  A fix needs a
-      source patch and a Rust rebuild (no local pmaport yet).  (Sessions
-      57/59, report 250 §2b.)
+292. **Fixed (session 60, report 251): `epitaph` segfaulted, so the panel never
+      appeared.**  It logged `Started Epitaph`, the benign UPower
+      `GetAll`-on-`/` warning, then `Segmentation fault`.  Two independent
+      causes, both fixed in the local `epitaph` 1.4.0 package
+      (`local/work/nura/pmaports/main/epitaph/`, `pkgrel=10005`, patch
+      `fix-renderer-init.patch`, sha512 `f035f4c5…`):
+      (1) the lazy renderer created the 4096×4096 glyph-atlas texture in
+      `Renderer::new`, **before any EGL context existed** — the GL calls were
+      silent no-ops, so the first `glTexSubImage2D` failed with
+      `GL_INVALID_OPERATION (invalid texture level 0)` and sampling the
+      undefined texture crashed softpipe; create the rasterizer in
+      `SizedRenderer::new` after `create_surface`, and cap the atlas to
+      `GL_MAX_TEXTURE_SIZE` (the SGX540 is 2048);
+      (2) the text shader's `GL_EXT_blend_func_extended` /
+      `gl_SecondaryFragColorEXT` draw segfaults softpipe *even though the
+      extension is advertised and the shader links* (trap 303) — use the
+      single-output premultiplied shader with `ONE`/`ONE_MINUS_SRC_ALPHA`.
+      Verified: `timeout 6 epitaph` → `RC=143`, and the bar renders
+      `Thu. 1` / `03:20` / signal / Wi-Fi / battery.  The panel also needed
+      its permissions (trap 305).  (Sessions 57/59 localised the fault;
+      session 60 fixed it.  Reports 250 §2b, **251**.)
 
 293. **The audio bring-up diagnostics are still at info/error level and fire on
       every stream start.**  `omap_mcbsp_start()` calls
@@ -2502,6 +2505,129 @@ report 121 §3/§11/§12.
       The link itself is fast (session 52: RX 6.3 / TX 4.1 MB/s), so this is a
       burst/queue effect, not the DMA alignment bug.  (Session 58, report
       249 §4.)
+
+303. **Mesa softpipe advertises `GL_EXT_blend_func_extended` but drawing with
+      it segfaults.**  The extension is in `GL_EXTENSIONS`
+      (`libGLESv2`/surfaceless says so) and `epitaph`'s dual-source text
+      shader compiles and links, but the first `glDrawElements` with it dies
+      at `swrast_dri.so+0x3da8d0` (`vldr [r5]`, `r5=0`, `fault_addr=0`).
+      `MESA_EXTENSION_OVERRIDE=-GL_EXT_blend_func_extended` makes the shader
+      fail and the app survive (`RC=143`), so it is the draw, not the
+      extension probe.  Use a single-output premultiplied shader
+      (`ONE`/`ONE_MINUS_SRC_ALPHA`).  (Session 60, report 251 §3.)
+
+304. **A GL call made before an EGL context is current is a silent no-op.**
+      `glGenTextures` leaves the name unchanged, `glTexImage2D` returns no
+      error and defines nothing; once the context exists,
+      `glTexSubImage2D(TEXTURE_2D, 0, …)` returns `GL_INVALID_OPERATION`
+      (`invalid texture level 0`).  Construct GL resources only after
+      `eglMakeCurrent`.  Measured with a ctypes probe on the unit.  (Session
+      60, report 251 §2.)
+
+305. **`epitaph` ships udev/polkit permission files that Alpine's APKBUILD does
+      not install.**  Without them the brightness slider writes a `0644
+      root:root` sysfs file (no effect) and the Wi-Fi/cellular toggles get
+      `org.freedesktop.NetworkManager.PermissionDenied` (the user is not in
+      group `catacomb`).  Install `rules/66-epitaph.rules.udev` to
+      `/etc/udev/rules.d/` and `…polkit` to `/etc/polkit-1/rules.d/`, create
+      the `catacomb` group and add the session user.  The device backlight
+      must then be re-chgrp'd (or `udevadm trigger --subsystem-match=backlight`
+      run).  (Session 60, report 251 §6.)
+
+306. **`uinput` is not in the Nura module set, but the kernel has
+      `CONFIG_INPUT_UINPUT=m`.**  Build it from the tree and load it for touch
+      injection: `make -C local/kernel-tree ARCH=arm CROSS_COMPILE=arm-linux-
+      M=drivers/input/misc uinput.ko`, push it paced, `insmod`.  It taints the
+      kernel ("loading out-of-tree module") but works: udev tags the device
+      `ID_INPUT_TOUCHSCREEN=1` and catacomb hotplugs it (`/dev/input/eventN`
+      opens in the compositor's fd table).  `tools/bench/uitap.py <x> <y>`
+      emits one tap; the `UI_SET_*` ioctls take the bit **value**, not a
+      pointer (a struct-pack argument is `EINVAL`).  (Session 60.)
+
+307. **An xdg window launched while the compositor is not in a clean workspace
+      can render tiny/stale and receive no touch.**  Measured: the first
+      `tzompantli` (launched from SSH alongside other windows) stayed alive but
+      ignored taps, while a fresh fullscreen launch accepted an injected tap
+      (Foot launched) and `gorm` accepted taps after the radio was on.  The
+      same binary rendered a 3-column grid (scale 2) once and a 6-column grid
+      (scale 1) later, so the surface scale/configure can vary.  Return to the
+      workspace and relaunch the app before concluding touch is broken; check
+      `/proc/<catacomb>/fd` for the `eventN` and the app's own log.  (Session
+      60; the exact trigger is unconfirmed.)
+
+308. **Wi-Fi is off in NetworkManager on the Nura root.**  `wlan0` is present
+      (`permaddr 14:74:11:8f:9c:c3`), the `wl128x` firmware boots
+      (`firmware booted (Rev 7.3.5.0.98)`), but `nmcli radio wifi` says
+      **disabled** and `nmcli dev status` shows `wlan0: wifi unavailable`.
+      `nmcli radio wifi on` fixes it: `wlan0: disconnected`, and
+      `nmcli dev wifi list --rescan yes` returns the APs.  `gorm` (the Wi-Fi
+      settings GUI) also needs its own rule, `10-gorm.rules` (scan /
+      network-control / settings.modify.system / enable-disable-wifi for
+      group `catacomb`), installed at `/etc/polkit-1/rules.d/`.  (Session 60.)
+
+309. **The amber Mesa has no llvmpipe; its software client path is softpipe,
+      which is ~50× too slow for a full-screen client.**  A Wayland EGL client
+      gets `swrast_dri.so` (softpipe) and cannot use `pvr_dri` (GBM/DRM only);
+      `epitaph`'s 1024×585 drawer draw measured 1.6–2.3 s.  Fix: install
+      **Alpine 3.16's Mesa 21.3.9 `mesa-dri-gallium` `swrast_dri.so`** (15.8 MB,
+      contains llvmpipe) over `/usr/lib/xorg/modules/dri/swrast_dri.so`, with
+      `libLLVM-13.so` (llvm13-libs 13.0.1-r2) and `libdrm_amdgpu.so.1` /
+      `libdrm_nouveau.so.2` (edge libdrm 2.4.134, matching the root) in
+      `/usr/lib/`.  Back up the original (`swrast_dri.so.amber`).  Result:
+      `GL renderer "llvmpipe (LLVM 13.0.1, 128 bits)"`, drawer `render`
+      2.7–6 ms; the compositor still maps `pvr_dri`.  (Session 60, report 253.)
+
+310. **llvmpipe's first draw pays the LLVM JIT, and its `swap_buffers()` waits
+      for the deferred rasterization.**  Measured: first panel draw 1.75 s,
+      first drawer draw 4.15 s, then 2.7–6 ms of command submission with
+      **420–550 ms in `swap`** for a 1024×585 frame.  Pre-warm the shaders at
+      start if the hitch matters; shrinking the drawer surface to its visible
+      height (or damaging only the slider row) roughly halves the swap.
+      llvmpipe is single-threaded because the kernel boots `maxcpus=1`.
+      (Session 60, report 253.)
+
+311. **The `PBGL_PROFILE` byte counter wraps.**  `KiB/s` prints huge values
+      (`8589936748`) while `import/s`, `texsub/s`, `rects/s`, `avg_us` and
+      `max_us` are valid.  The unpack branch multiplies `region.size.w as u64 *
+      region.size.h as u64 * bpp` without clamping negative dimensions.  Fix
+      the profile patch (`w.max(0)`/`h.max(0)` + saturating arithmetic) before
+      trusting the byte rate.  (Session 60.)
+
+312. **The MPU runs at 400 MHz with no cpufreq/OPP.**  Measured: the debugfs
+      `clk_summary` shows `dpll_mpu_ck = 400000000` (BogoMIPS 795.44); there is
+      no `/sys/devices/system/cpu/cpu0/cpufreq/`, and the DTS has no
+      `operating-points`/`cpu-supply`.  The reference OS programs the MPU DPLL
+      and voltage (`CM_CLKMODE_DPLL_MPU 0x4A004160` idle-bypass→lock,
+      `CM_CLKSEL_DPLL_MPU 0x4A00416C`, `PRM_VC_* 0x4A307BA0–0xBF8`; report 223
+      Q6/§9), so our boot chain simply leaves the loader's 400 MHz.  This is the
+      biggest performance lever (the OMAP4430's nominal is 1.0 GHz): measure the
+      reference's exact OPP/voltage on the oracle first, then add an OPP table +
+      `vdd_mpu` + ABB (or a boot-time write), and check the thermal zone
+      (`cpu_thermal` read 65.0 °C idle at 400 MHz).  (Session 60, report 253.)
+
+313. **Only CPU0 is online: the kernel is built `CONFIG_SMP=n`, and the DTS
+      also sets `maxcpus=1`.**  `dmesg` reports `Unknown kernel command line
+      parameters "maxcpus=1"` and `DT /cpu 2 nodes greater than max cores 1,
+      capping them`; `online=0`, `nproc=1`.  Enabling the second core needs
+      **`CONFIG_SMP=y` (+ `CONFIG_NR_CPUS=2`)** *and* removing `maxcpus=1`
+      from `kernel/source/omap4-winchester.dts:88`.  `CONFIG_SMP` changes the
+      module vermagic, so **all** modules (the in-tree set and the vendored
+      `pvrsrvkm_omap4_sgx540_120.ko`) must be rebuilt and installed before the
+      region-0 flash.  Do it in two boots: (a) SMP with `maxcpus=1` still set
+      (proves the SMP kernel comes up on one CPU), (b) remove `maxcpus=1` and
+      boot cpu1.  Check `online`, dmesg, WDT2, thermal and a llvmpipe drag; a
+      cpu1 hang is a revert with dmesg captured.  (Session 60.)
+
+314. **A Wayland GL client cannot use the SGX.**  The amber Mesa Wayland
+      platform gives clients `swrast` (softpipe, or llvmpipe after trap 309);
+      only the compositor's GBM/DRM path selects `pvr_dri`, and the
+      `sgx-ddk-um-ti443x` package ships `libGLESv2_PVR_MESA` but **no
+      `libEGL`**.  Consequence: `epitaph`, `tzompantli`, `gorm` and `tabula`
+      are software-rendered and pay the full-surface cost; `wvkbd` (cairo),
+      `foot` (pixman) and `netsurf` (CPU) are unaffected.  A hardware path
+      would need a pvr Wayland EGL platform (`wl_drm`/linux-dmabuf), a client
+      rendering via GBM+dmabuf, or an X/Wayland bridge — not started.  (Session
+      60, report 253.)
 
 ## 3. Corrections to older reports
 

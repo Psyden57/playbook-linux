@@ -1,6 +1,81 @@
 # Current state
 
-## Current state — 2026-11-16 (session 59)
+## Current state — 2026-11-16 (session 60)
+
+**THE `epitaph` PANEL IS FIXED — IT STARTS, STAYS UP, AND RENDERS ITS TEXT AND
+ICONS (r10005).**  Two client bugs, both measured: the lazy renderer built the
+4096×4096 glyph atlas before any EGL context existed (GL calls are silent
+no-ops, so the texture was undefined; the first `TexSubImage2D` failed with
+`GL_INVALID_OPERATION`, invalid texture level 0, and sampling it crashed
+softpipe), and the text shader's dual-source
+(`GL_EXT_blend_func_extended`/`gl_SecondaryFragColorEXT`) draw segfaults
+softpipe even though the extension is advertised and the shader links.  The
+local `epitaph` 1.4.0 package (`pkgrel=10005`) creates the rasterizer with the
+EGL context, caps the atlas at `GL_MAX_TEXTURE_SIZE`, and uses a single-output
+premultiplied shader.  `timeout 6 epitaph` → `RC=143`; the bar shows `Thu. 1`,
+`03:20` and the signal/Wi-Fi/battery icons.  [report 251; trap 292 fixed,
+traps 303–305; DECISIONS §86]
+
+* **Region 0 = `0x294F8E36`** (unchanged; kernel `7.3.3 #77`).
+* **hd3 (media)** = the grown read-write root with the SSH kit (unchanged);
+  the flasher-restorable base is still `f7858110…` (625 999 872 B).  The baked
+  `blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`) still carries the old
+  `epitaph` and does **not** have the udev/polkit rules — rebake before
+  flashing if media should match.
+* **Region 1 = `49e318bf…`** (fallback, not booted).
+* **Bench:** `PB_LINK=usb tools/pbssh.sh`; pace bulk pushes (8 KiB/5 ms).
+  `BOOTCTR_FCTRY` read `0x27` at boot (`27000000`, above the `0x1e` threshold,
+  no write).
+* **Panel:** r10005 installed.  `catacomb` group (gid 111) with `playbook`;
+  `/etc/udev/rules.d/66-epitaph.rules` (backlight) and
+  `/etc/polkit-1/rules.d/66-epitaph.rules` (Wi-Fi/cellular).  The backlight is
+  `root:catacomb`, `-rw-rw-r--`; a write as `playbook` succeeded
+  (`BACKLIGHT_WRITE_OK`).
+* **Drawer:** 3 sliders (brightness, DPI scale, flashlight) + 4 toggles
+  (cellular, Wi-Fi, GPS, orientation).  Volume is not in the 1.4.0 drawer.
+* **Apps / Wi-Fi:** `nmcli radio wifi on` (the radio was disabled) makes
+  `wlan0` scan ~10 APs; `gorm` with its `10-gorm.rules` lists them (not
+  connected).  tzompantli (1.2.0) launches apps — a tap on Foot runs `foot`;
+  launch it into a clean workspace (trap 307).  `uinput.ko` is loaded and
+  `tools/bench/uitap.py` injects taps (trap 306).
+* **Latency:** the ~2 s slider/button delay was the clients' **softpipe**
+  rasterizer (2 s drag: epitaph 3.16 s CPU, catacomb 0.16 s; drawer draw
+  1.6–2.3 s).  Replaced `/usr/lib/xorg/modules/dri/swrast_dri.so` with Alpine
+  3.16's Mesa 21.3.9 gallium build (**llvmpipe**) + `libLLVM-13.so` + the
+  `libdrm_amdgpu`/`libdrm_nouveau` sub-libraries; the original is backed up as
+  `swrast_dri.so.amber`.  Drawer `render` is now 2.7–6 ms (~4× overall); the
+  remaining 420–550 ms is llvmpipe's deferred `swap` (and the first draw pays
+  the LLVM JIT).  The compositor still maps `pvr_dri`.  [report 253, traps
+  309–311]
+* **CPU: one core at 400 MHz.**  The kernel is built **`# CONFIG_SMP is not
+  set`** (so `maxcpus=1` is an unknown parameter and the DT's two CPUs are
+  capped), and the DTS bootargs also set `maxcpus=1`
+  (`kernel/source/omap4-winchester.dts:88`);
+  `/sys/devices/system/cpu/online` = `0`, `nproc` = 1.  The debugfs
+  `clk_summary` shows `dpll_mpu_ck = 400000000` (BogoMIPS 795.44); there is no
+  cpufreq directory and no OPP table (CONFIG_CPU_FREQ/PM_OPP are on).  Thermal:
+  `cpu_thermal` 65.0 °C, `bq27541-0` 34.5 °C.  The reference programs
+  `DPLL_MPU` and `PRM_VC_*` (report 223), so this is the biggest remaining
+  performance lever.  [traps 312/313]
+* **GL clients are software.**  `epitaph`/`tzompantli`/`gorm`/`tabula` use
+  glutin/EGL and map `swrast_dri` (llvmpipe); only the compositor maps
+  `pvr_dri`.  `wvkbd` (cairo), `foot` (pixman) and `netsurf` (CPU) are
+  responsive.  A hardware path for Wayland clients is not started.  [trap 314]
+* **Local package:** `local/work/nura/pmaports/main/epitaph/` (`pkgrel=10006`,
+  `fix-renderer-init.patch`, sha512 `b149772a…`); APK
+  `epitaph-1.4.0-r10006.apk`.  The APKBUILD sets a persistent
+  `CARGO_TARGET_DIR` for faster rebuilds.  r10006 carries the draw-phase
+  timing logs; build without them for the final image.
+* **Next:** enable the second core — build **`CONFIG_SMP=y`** (`CONFIG_NR_CPUS=2`)
+  and keep `maxcpus=1` for the first boot; the vermagic changes (`SMP`), so
+  rebuild **all** modules including `pvrsrvkm_omap4_sgx540_120.ko` and install
+  them in `/lib/modules/7.3.3` before the region-0 flash.  Then remove
+  `maxcpus=1` and boot the second core.  After that: the MPU OPP/voltage
+  (measure the reference's `DPLL_MPU`/`PRM_VC` on the oracle first), then
+  shrink/pre-warm the drawer and pursue a hardware GL path for clients.
+  Remove the r10006 draw timing and rebake the hd3 image with the fixes.
+
+## Previous state — 2026-11-16 (session 59)
 
 **THE ROOT IS WRITABLE AND GROWN, AND SSH IS BACK (kernel `#77`, region 0
 `0x294F8E36`).**  The initramfs mounts hd3 read-write (no overlay) and a
@@ -237,19 +312,25 @@ and a failed/half-formed write or a flat pack is still a brick risk.
 
 ## Blockers in play
 
-**Session 59 — the open blockers are:** (1) the **upload-path performance** —
-the OSK key-press jank and the glitchy top-left cursor are the partial shim
-uploads, instrumented but not measured; (2) **`epitaph` aborts** (rc 139, trap
-292), so there is no panel; (3) **Kumo** needs a WPEWebKit/WebKit-fork build
-(not packaged, report 247 §4); (4) the **intermittent WRITE-busy stall** — not
+**Session 60 — the open blockers are:** (1) the remaining **UI performance** —
+the client's softpipe rasterizer was replaced with llvmpipe (report 253), so a
+slider draw is now 2.7–6 ms instead of 1.6–2.3 s; what is left is llvmpipe's
+deferred `swap` (420–550 ms per full-screen drawer frame), its first-draw LLVM
+JIT, and above all the **CPU: one core at 400 MHz** — the kernel is built
+`# CONFIG_SMP is not set`, the DTS adds `maxcpus=1`, and there is no
+cpufreq/OPP (traps 312/313); (2) **Kumo** needs a WPEWebKit/WebKit-fork build
+(not packaged, report 247 §4); (3) the **intermittent WRITE-busy stall** — not
 a cache flush (report 250 §1), mitigated by `barrier=0` + write-through.
-**Closed:** the touch position ghost and lost burst taps (kernel `#74`, report
-248); the backspace/enter repeat (wvkbd on catacomb 1.5.0, report 250 §2);
-the app-drawer icons (missing `default` theme chain, report 250 §2b); the eMMC
-cache item (closed by measurement — no cache, report 250 §1).  **Bench note:**
-DPMS wake-by-touch works with pb-touchwake, but repeated DPMS resume wedges the
-DSI link (black panel — only a reboot clears it), so auto-blank was removed
-and the panel stays lit (report 250 §2a/§2b, traps 289/298/301).
+**Closed:** the **`epitaph` panel** (two client bugs fixed in r10005 —
+report 251; trap 292); the panel's **permissions** (group `catacomb` + the
+udev/polkit rules — brightness and the Wi-Fi/cellular toggles); the touch
+position ghost and lost burst taps (kernel `#74`, report 248); the
+backspace/enter repeat (wvkbd on catacomb 1.5.0, report 250 §2); the
+app-drawer icons (report 250 §2b); the eMMC cache item (closed by measurement,
+report 250 §1).  **Bench note:** DPMS wake-by-touch works with pb-touchwake,
+but repeated DPMS resume wedges the DSI link (black panel — only a reboot
+clears it), so auto-blank was removed and the panel stays lit (report 250
+§2a/§2b, traps 289/298/301).
 
 **The audio blocker is closed, speakers included, and the diagnostics are
 retired (sessions 47/48, reports 214/215).**
@@ -317,22 +398,43 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 ## What is next
 
-0. **THE ACTIVE ITEM — the upload-path profile (session 59, report 250,
-   ROADMAP items 7a/9).**  The touch position ghost is fixed (kernel `#74`,
-   region 0 `0xED58EF36`) and the OSK repeat is fixed by installing wvkbd
-   on catacomb 1.5.0 (no UI upgrade), so fast typing is fully correct.
-   * **What was done:** `wvkbd-mobintl` 0.21 installed, DejaVu Sans added for
-     the glyphs, `pb-touchwake.py` wakes a DPMS-blanked panel on touch, the
-     UI APKBUILD/initrc updated (`pkgrel=3`); all live-persistent on the rw
-     root and verified across two reboots (report 250 §2/§2a, DECISIONS §85).
-   * **then profile the upload path**: the `PBGL_PROFILE` catacomb is staged
-     (`local/work/nura/pmaports/main/catacomb/`, `pkgrel=10001`, the profile
-     patch); building it needs the pmbootstrap command in HANDOFF §0e.  The
-     measured input latency is 8–33 ms, so the jank is redraw/upload, not
-     input; `EGL_KHR_fence_sync` is present but `GL_OES_EGL_sync` is not and
-     the context is not shared, so there is no `glFinish` to remove.
+0. **THE ACTIVE ITEM — the CPU: cpu1, then the MPU OPP (session 60, report
+   253, ROADMAP 7a).**  The UI latency was the client's software rasterizer
+   and the CPU: the unit runs **one core at 400 MHz** (`maxcpus=1` in the DTS;
+   `dpll_mpu_ck = 400 MHz`; no cpufreq/OPP), while the reference runs 1.0 GHz
+   dual-core and programs `DPLL_MPU`/`PRM_VC` (report 223).  llvmpipe (report
+   253) fixed the 2 s draw (render 2.7–6 ms), but the remaining 420–550 ms per
+   full-screen frame, and all CPU work, will improve with the cores and the
+   OPP.
+   * **First experiment (one variable):** build **`CONFIG_SMP=y`**
+     (`CONFIG_NR_CPUS=2`) and keep `maxcpus=1`.  The vermagic gains `SMP`, so
+     rebuild **all** modules (in-tree + the vendored `pvrsrvkm_omap4_sgx540_120.ko`)
+     and install them in `/lib/modules/7.3.3` **before** flashing region 0.
+     The first boot proves the SMP kernel still comes up on one CPU.  Then a
+     second build removes `maxcpus=1` from `omap4-winchester.dts:88` and boots
+     the second core.  Verify `online=0-1`, dmesg, WDT2, thermal, a llvmpipe
+     drag.  A cpu1 hang is a revert with dmesg captured (trap 313).
+   * **Then the MPU OPP:** measure the reference's `DPLL_MPU`/`PRM_VC` on the
+     oracle, then add an OPP table + `vdd_mpu`/ABB (or a boot-time write) and
+     thermal-check 1.0 GHz (trap 312).
+   * **Then:** shrink/pre-warm the drawer (the swap) and pursue a hardware GL
+     path for Wayland clients (trap 314).  Remove the r10006 draw timing and
+     the `PBGL_PROFILE` env before the final image.
+   * **Durable:** the llvmpipe files live on the live root only; the
+     flasher-restorable hd3 image must be rebaked with them
+     (`swrast_dri.so` + `libLLVM-13.so` + `libdrm_amdgpu`/`nouveau`) and with
+     `epitaph` r10005+ and the udev/polkit/gorm rules.  The softpipe backup is
+     `/usr/lib/xorg/modules/dri/swrast_dri.so.amber`.
+   * **Apps / Wi-Fi are up:** `nmcli radio wifi on` (the radio was disabled)
+     gives `wlan0` a scan; `gorm` with `10-gorm.rules` lists ~10 APs (joining
+     an AP is untried), and a cleanly launched `tzompantli` runs apps (an
+     injected tap on Foot ran `foot`).  Traps 306–308.
    * the **export is current**: 64 files / 8 981 lines (`ca17a057…`) with the
      pvr driver vendored; re-run the copy step on the next kernel change.
+   * **Build speed:** the armv7 package builds under qemu-user (`--no-cross`)
+     and abuild wipes `$srcdir`; the local APKBUILD now sets a persistent
+     `CARGO_TARGET_DIR`.  The native `--cross` path is blocked by a
+     host/chroot rustc version mismatch — matching them is the real speedup.
 1. **WL1283 — the WLAN ASSOCIATES (session 52, report 236).**  Session 51 fixed
    stability (CAM) and the scan (4-sr); session 52 found the association
    blocker — the **missing `ccm`/`ctr` modules** — and the link now reaches

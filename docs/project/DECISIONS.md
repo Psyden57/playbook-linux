@@ -2979,6 +2979,71 @@ the remaining reason the boot UI is bare (a patched Rust rebuild is open).
 edge/community armv7 `wvkbd-0.21-r0` (sha256 `7a9be1a3…`); `keylog.py` capture
 (one `0x7f`); the pmaport `postmarketos-ui-catacomb` APKBUILD/initrc.
 
+## 86. Fix `epitaph` in its own package; do not change catacomb or Mesa (session 60)
+
+**Decision.**  Keep catacomb 1.5.0 and Amber Mesa 21.3.9 unchanged and patch
+`epitaph` 1.4.0 in a local pmaport (`main/epitaph`, `pkgrel=10005`): create the
+GL rasterizer **after** the EGL context is current, cap the glyph atlas at
+`GL_MAX_TEXTURE_SIZE`, and replace the dual-source text shader with an
+equivalent single-output premultiplied shader (`ONE`/`ONE_MINUS_SRC_ALPHA`).
+Install the panel's own udev/polkit rules (`rules/`) and put the session user
+in group `catacomb`.  No kernel, DTB, initramfs or compositor change.
+
+**Why.**  The panel crash had two measured causes in the client, not the
+system: the lazy renderer builds the atlas texture before any context exists
+(GL calls are silent no-ops, so the texture is undefined), and softpipe
+advertises `GL_EXT_blend_func_extended` but segfaults when the text shader
+draws with it.  Both are fixed by the smallest change inside `epitaph`; the
+driver advertises the extension honestly enough that disabling it at runtime
+is only a diagnostic (`MESA_EXTENSION_OVERRIDE`).  The compositor's PVR path is
+unaffected — a Wayland window client gets softpipe regardless of
+`MESA_LOADER_DRIVER_OVERRIDE=pvr`, so waiting for PVR was never the fix.
+
+**Constraint.**  The binary is a rebuild, so it lives in the gitignored
+`local/work/nura/pmaports/main/epitaph/` with the patch
+(`fix-renderer-init.patch`, sha512 `f035f4c5…`); the restorable hd3 image still
+carries the old binary unless it is rebaked.  The APKBUILD sets
+`CARGO_TARGET_DIR` outside `$srcdir` to keep dependency builds across rebuilds.
+The panel is a `Layer::Bottom` surface, so a fullscreen toplevel covers it.
+The ~2 s slider/button latency is still open (the upload-path item), and volume
+is not in the 1.4.0 drawer.
+
+**Evidence.**  Report 251; session-60 note; the pre-context/no-op and
+`GL_MAX_TEXTURE_SIZE` probes (`local/work/src/glprobe*.py`,
+`glshader2.py`); `RC=143` on a 6 s run; the `grim` screenshot with
+`Thu. 1`/`03:20`/signal/Wi-Fi/battery; `BACKLIGHT_WRITE_OK` as `playbook`;
+traps 303–305.
+
+## 87. Software clients use llvmpipe, not softpipe; the compositor keeps PVR (session 60)
+
+**Decision.**  Replace `/usr/lib/xorg/modules/dri/swrast_dri.so` with Alpine
+3.16's Mesa 21.3.9 `mesa-dri-gallium` build (llvmpipe), and install
+`libLLVM-13.so` plus the `libdrm_amdgpu`/`libdrm_nouveau` sub-libraries from
+the matching libdrm.  Keep the original as `swrast_dri.so.amber`.  The
+compositor is untouched: it continues to use `pvr_dri` through GBM/DRM.
+
+**Why.**  The ~2 s UI latency measured as the client, not the compositor:
+during a 2 s slider drag `epitaph` used 3.16 s CPU vs catacomb's 0.16 s, and
+the 1024×585 drawer draw took 1.6–2.3 s in the client.  The amber Mesa's
+Wayland platform gives clients softpipe, Mesa's reference rasterizer; a
+Wayland client cannot select `pvr_dri`, and the DDK has no EGL.  Alpine 3.16
+ships the same Mesa 21.3.9 with llvmpipe in `swrast_dri.so`; the DRI interface
+matches and it loads (`GL renderer "llvmpipe (LLVM 13.0.1, 128 bits)"`).
+Measured result: the drawer `render` drops to 2.7–6 ms and the drag CPU to
+1.65 s (~4×); the remaining 420–550 ms is llvmpipe's deferred `swap`.
+
+**Constraint.**  The replacement changes every software EGL client (intended);
+keep the `.amber` backup and re-copy it to roll back.  The files live on the
+live root only; the flasher-restorable hd3 image does not have them.  The
+first draw after startup pays the LLVM JIT (1.75 s panel / 4.15 s drawer).
+`maxcpus=1` means llvmpipe runs one thread, and the MPU is at 400 MHz — the
+next levers (traps 312/313).  GL clients remain software (trap 314).
+
+**Evidence.**  Report 253; session-60 note; the `epitaph: draw …` lines for
+softpipe (`/tmp/epi6.log`) and llvmpipe (`/tmp/epi7.log`); `/proc/<pid>/stat`
+CPU sums; the `PBGL` lines; `/proc/<catacomb>/maps` (`pvr_dri`) vs
+`/proc/<epitaph>/maps` (`swrast_dri`, `libLLVM-13`).
+
 ### Repository license
 
 **Decided (session 23): GPL-3.0-or-later.**  The project's own code and

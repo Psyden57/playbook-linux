@@ -10,13 +10,18 @@ a GLES2 fallback; the stack and the app set are baked into hd3.  The root is
 **writable and grown to 56.5 G** with **SSH back** (report 249).  Session 59
 closed the **eMMC cache-flush** item by measurement (the card has no cache, so
 no `FLUSH_CACHE`; trap 300 corrected) and fixed the **OSK repeat** by installing
-wvkbd on catacomb 1.5.0, plus touch-to-wake DPMS (report 250).  What remains:
-the **upload profile**.  hd3 holds the Nura root and it boots unattended; the
-region-1 BusyBox root stays the fallback.  The audio goal is
-closed (reports 214/215), and the **WL1283's WLAN associates and passes
-traffic**.  On the same chip, **BT's core works** (real inquiry; `hci0`
-registers with mgmt) with the controller-open blocked on a stray byte, then FM
-and GPS.
+wvkbd on catacomb 1.5.0, plus touch-to-wake DPMS (report 250).  Session 60
+fixed the **`epitaph` panel** — the glyph atlas was built before the EGL
+context, and softpipe's advertised dual-source text draw segfaults; r10005
+starts, renders its text/icons, and has its udev/polkit permissions installed
+(report 251).  What remains: the **CPU** — one core at 400 MHz (`maxcpus=1`,
+no cpufreq/OPP; the reference runs 1.0 GHz dual-core) — and the **software GL
+clients** (llvmpipe; trap 314).  hd3 holds the Nura root and it boots
+unattended; the region-1 BusyBox root stays the fallback.
+The audio goal is closed (reports 214/215), and the **WL1283's WLAN associates
+and passes traffic**.  On the same chip, **BT's core works** (real inquiry;
+`hci0` registers with mgmt) with the controller-open blocked on a stray byte,
+then FM and GPS.
 
 ## 7. Packaging (postmarketOS-style)
 
@@ -243,12 +248,27 @@ flasher can replace at every point:
    56.5 G, with SSH back** (report 249), and session 59 closed the eMMC-cache
    item by measurement (no cache → no flush), fixed the OSK repeat by installing
    wvkbd on catacomb 1.5.0 (no UI upgrade), and made touch wake a DPMS-blanked
-   panel (report 250).  **Next:** (a) profile the upload path — the
-   `PBGL_PROFILE` catacomb build is staged
-   (`local/work/nura/pmaports/main/catacomb/`, `pkgrel=10001`); the measured
-   input latency is 8–33 ms, so the jank is redraw/upload; (b) optionally bake
-   the OSK stack into the restorable hd3 base.  `epitaph` aborts (trap 292), so
-   there is no panel; Kumo needs a WPEWebKit build (report 247 §4).
+   panel (report 250).  **Session 60 fixed the `epitaph` panel** (report 251):
+   the lazy renderer built the glyph atlas before the EGL context, and
+   softpipe's advertised dual-source text draw segfaults; r10005 creates the
+   rasterizer with the context, caps the atlas, and uses a single-output
+   premultiplied shader — the bar renders its text and icons, and the panel's
+   udev/polkit rules + `catacomb` group are installed.  **The ~2 s interaction
+   latency was the client's softpipe rasterizer** (a 2 s drag: epitaph 3.16 s
+   CPU vs catacomb 0.16 s).  Replacing `swrast_dri.so` with Alpine's Mesa
+   21.3.9 llvmpipe build (+ `libLLVM-13`, libdrm sub-libs) drops the drawer
+   `render` to 2.7–6 ms (report 253); the remaining 420–550 ms is llvmpipe's
+   deferred `swap` and its first-draw JIT.  **The unit runs one core at
+   400 MHz** (`maxcpus=1` in the DTS, `dpll_mpu_ck = 400 MHz`, no cpufreq/OPP),
+   while the reference programs `DPLL_MPU`/`PRM_VC` for 1.0 GHz dual-core
+   (report 223) — the biggest remaining lever.  **Next:** (a) build
+   `CONFIG_SMP=y` (`CONFIG_NR_CPUS=2`) with `maxcpus=1` still set, rebuild all
+   modules (the vermagic changes) and flash region 0; (b) remove `maxcpus=1`
+   and boot cpu1 (trap 313); (c) measure the reference's MPU OPP/voltage on the
+   oracle, then add an OPP table + `vdd_mpu`/ABB (trap 312); (d) shrink/pre-warm
+   the drawer; (e) pursue hardware GL for Wayland clients (trap 314); (f) rebake
+   the restorable hd3 base with `epitaph` r10005+, the llvmpipe files and the
+   rules.  Kumo needs a WPEWebKit build (report 247 §4).
 
 Step 3 is reversible at any time by re-flashing the same block range — which is
 the whole reason it beats an in-place mkfs.

@@ -1,15 +1,15 @@
 # Session numbering
 
-The project spans **fifty-nine sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **sixty sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-59`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-60`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
-* **Linux-era** ("session 1…53") — used inside the reports and handoffs, because
+* **Linux-era** ("session 1…54") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
   started.  **Linux session N = absolute session N + 6.**
 
@@ -70,6 +70,7 @@ So:
 | **56** | **50** | **The SGX540 compositor works: catacomb 1.5.0 runs on it with a smithay GLES2 fallback (relax `GL_EXT_unpack_subimage`; per-row/full-row uploads), and the touch Y inversion is fixed** (report 246).  Region 0 **`0xAB899C49`** (#69) and hd3 **`89399744…`** (catacomb r10000) were baked and flashed (region 0 + hd3 v1 in one bootrom session, then hd3-only v2).  `squeekboard` composites and the touch cursor tracks; the OSK key-press performance is open.  The kernel export is **64 files / 8 800 lines** (sha256 `014eb8a8…`), with the **362-file SGX driver vendored** at `kernel/vendor/pvrsgx-1.17.4948957-101c687a.tar.xz` (sha256 `a9d04d3c…`; 362/362 verified).  Traps 285–291; DECISIONS §79/§80. |
 | **57** | **51** | **Apps and background are in; the touch release/merge bug is fixed and a position ghost remains** (report 247).  `tabula` + the wallpaper, `foot`, `netsurf`, `xournalpp`, the Catacomb companions and `gsettings-desktop-schemas` are baked into hd3 **`f7858110…`**; the audio diagnostics are `dev_dbg` and the PM-QoS remove is guarded; the idle suspend (which reset the unit twice) is removed.  The repeated-key bug was the **lost release**: the controller holds its line through the contact, so a falling-edge IRQ never read the lift (2 reads across a 480 ms contact); the fix is falling edge + a 10 ms poll-on-touch (kernel `#73`, `0xB9DD91E3`).  A both-edge request delivers no interrupts (trap 297).  Fast taps still ghost the previous position.  Export **64 files / 8 862 lines** (`be2ca8ba…`).  Traps 292–297; DECISIONS §81/§82. |
 | **59** | **53** | **The eMMC cache item is closed by measurement (no cache); the OSK repeat is fixed by installing wvkbd on catacomb 1.5.0; touch wakes DPMS** (report 250).  `CACHE_SIZE = 0`/`CACHE_CTRL = 0` from CMD8 + kernel debugfs, so no `FLUSH_CACHE`; the "CACHE_SIZE = 249" was the byte index, and the stall is a plain WRITE (`flags 0x900000`).  catacomb 1.5.0 already implements `zwp_virtual_keyboard_v1`, so `wvkbd-mobintl` 0.21 + DejaVu Sans replaced squeekboard with no UI upgrade or GLES2-shim rebase; one BackSpace tap = one `0x7f`.  `pb-touchwake.py` wakes a DPMS-off panel on touch; the UI APKBUILD (`pkgrel=3`) and initrc are updated.  All live-persistent on the rw root, verified across two reboots.  Region 0 unchanged (`0x294F8E36`, kernel `#77`), so no export/flash.  Traps 298/299 fixed, 300 corrected; DECISIONS §85. |
+| **60** | **54** | **The `epitaph` panel is fixed: the glyph atlas was built before the EGL context, and softpipe's advertised dual-source text draw segfaults** (report 251).  The lazy renderer created the 4096×4096 atlas in `Renderer::new` (GL calls without a context are silent no-ops; the first `TexSubImage2D` gave `GL_INVALID_OPERATION`, invalid texture level 0).  Local `epitaph` 1.4.0 `pkgrel=10005`: create the rasterizer in `SizedRenderer::new` after `create_surface`, cap the atlas at `GL_MAX_TEXTURE_SIZE` (SGX540 2048, softpipe 16384), and use a single-output premultiplied shader with `ONE`/`ONE_MINUS_SRC_ALPHA`.  `timeout 6 epitaph` → `RC=143`; the bar renders `Thu. 1`/`03:20`/signal/Wi-Fi/battery, and the `catacomb` group + udev/polkit rules are installed (brightness, Wi-Fi/cellular).  Region 0 unchanged (`0x294F8E36`, kernel `#77`), so no export/flash.  Traps 292 fixed, 303–308 added; DECISIONS §86.  Also (report 252): an injected `uinput` touchscreen (`tools/bench/uitap.py`, trap 306) proves catacomb forwards touch to xdg clients — a tap launched `foot` from tzompantli; the earlier dead taps were a stale/tiny window state (trap 307).  Wi-Fi was disabled in NetworkManager (`nmcli radio wifi on`), gorm's `10-gorm.rules` was installed, and `gorm` then lists the APs (trap 308).  The ~2 s UI latency was the client's **softpipe** software rasterizer (3.16 s CPU vs catacomb's 0.16 s); replacing `swrast_dri.so` with Alpine's Mesa 21.3.9 llvmpipe build (+ `libLLVM-13`, libdrm sub-libs) drops the drawer render to 2.7–6 ms, ~4× overall (report 253, traps 309–311). |
 | **58** | **52** | **The touch position ghost is fixed; the backspace/enter repeat is squeekboard's** (report 248).  The driver keeps sampling while the controller asserts its IRQ line (plus a 200 ms grace) and confirms a new down on a fresh sample when a slot's position repeats within 300 ms; fast typing is correct (kernel `#74`, region 0 **`0xED58EF36`**).  The vendor's `b3` is only a down flag (`get_contact_id` returns the digit index), so there is no contact id to track.  One backspace tap is one clean evdev contact but **three `0x7f` bytes** at the app, and a letter never repeats — squeekboard 1.43.1's action-key repeat; upstream catacomb 1.7.0 replaced it with **wvkbd**.  DPMS off cannot be woken by touch (kill `swayidle`).  Export **64 files / 8 981 lines** (`ca17a057…`).  Then: the root was switched to **read-write and grown to 56.5 G**, **SSH came back** (a static dropbear installed by the initramfs, `PB_LINK=usb tools/pbssh.sh`), and the eMMC **cache-flush** fault was isolated (`barrier=0` + write-through; an explicit `sync` still stalls).  Region 0 **`0x294F8E36`** (kernel `#77`).  Traps 298–302; DECISIONS §83/§84; reports 248/249. |
 
 ## Anchors (evidence for the mapping)
@@ -115,7 +116,7 @@ and each session knows its own position:
 Reports `10`…`102` are the pre-Linux phase's output (boot media, monitor
 security, IRAM tables, the ROM API, `hd0`, NVRAM records `0x2801`, RPMB, the CRC
 recipe, the loader audit, the pre-OS IFS reflash).
-`103`…`248` are the Linux-era sessions (and continuing).
+`103`…`253` are the Linux-era sessions (and continuing).
 
 ## Why the two schemes are kept
 
