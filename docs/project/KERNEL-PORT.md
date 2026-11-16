@@ -1,16 +1,17 @@
 # Kernel base — 7.3.3 (port complete; the SGX driver vendored)
 
 The port is **done**: `local/kernel-tree` is upstream **Linux 7.3.3**, the unit
-boots it to the hd3 Nura root (read-only + overlayfs) and to the region-1
-BusyBox userland.
+boots it to the hd3 Nura root (now read-write and grown; report 249) and to the
+region-1 BusyBox userland.
 
 * Base: **upstream 7.3.3** (not the pmOS package, which is still `!armhf`).
 * Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **64 files /
-  8 862 lines**, sha256 `be2ca8ba…`, verified 0 rejects / 64/64 byte-identical
-  against pristine 7.3.3 targets (session 57).  It includes the SGX integration
+  8 981 lines**, sha256 `ca17a057…`, verified 0 rejects / 64/64 byte-identical
+  against pristine 7.3.3 targets (session 58).  It includes the SGX integration
   (`drivers/gpu/drm/{Kconfig,Makefile}`, `mm/vmalloc.c`, the DTS, the config),
-  the session-56 Munin Y fix and the session-57 touch input model and audio
-  print levels; the **362-file SGX driver itself is vendored**
+  the session-56 Munin Y fix, the session-57 touch input model and audio
+  print levels, and the session-58 position-ghost fix (`playbook-munin.c` +
+  `irq-gpios` in the board DTS); the **362-file SGX driver itself is vendored**
   at `kernel/vendor/pvrsgx-1.17.4948957-101c687a.tar.xz` (sha256 `a9d04d3c…`;
   extract it into `drivers/gpu/drm/` after applying the patch — see
   `kernel/vendor/README.md`).  A build from the patch alone is missing the

@@ -90,6 +90,10 @@ bench/*.orig-*
 initramfs/root/init
 initramfs/root/console
 initramfs/root/pbrpmb
+# the bench SSH kit the initramfs installs into the writable root (session 58)
+initramfs/root/dropbear
+initramfs/root/dropbear_*_host_key
+initramfs/root/authorized_keys
 
 # --- third-party QNX documentation kept for reference, not redistributable ---
 

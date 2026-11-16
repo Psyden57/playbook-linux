@@ -699,3 +699,17 @@ history: reports 199–214 and
 
 Still open (not the audio goal): the speaker path (`SPKMIX`), retiring the
 `pcm:`/`live N:` diagnostics, and the optional MCLK1 probe.
+
+## Touch — closed session 58 (kernels `#70`/`#73`/`#74`)
+
+The Munin touch is finished.  The release/merge bug was the lost release: the
+controller holds its IRQ line through the whole contact, so a falling-edge IRQ
+never read the lift; the fix is falling edge plus a poll while a contact is
+down (kernel `#73`), and a both-edge request delivers no interrupts (trap 297).
+The position ghost (a fast tap reported at the previous contact's coordinates)
+was fixed on kernel `#74`: the poll stays armed while the controller asserts
+its line and for 200 ms after it, and a new down that repeats the slot's
+previous coordinates within 300 ms is held back one sample and reported with
+the fresh position.  Typing is correct.  The remaining backspace/enter repeat
+is squeekboard's action-key repeat, not the driver (trap 299, report 248).
+Reports 247 and 248.

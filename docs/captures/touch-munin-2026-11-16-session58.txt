@@ -1,0 +1,103 @@
+# Munin touch — session 58 evidence (ghost fixed; the repeat is squeekboard)
+
+Date: 2026-11-16 (absolute session 58).  Unit: the Nura overlay root, region 0
+**`0xED58EF36`** (kernel `7.3.3 #74`, the down-confirm + poll-while-asserted
+touch fix), hd3 `f7858110…`.  These are the measurements behind report 248 and
+traps 298/299.  They are evidence; do not edit them.
+
+Tools (device-side, `/tmp`, wiped by a reboot): `evcap.py` reads
+`/dev/input/event0` (16-byte `input_event`, 32-bit ARM) and prints every event
+with an absolute monotonic timestamp; `keylog.py` runs on the terminal's stdin,
+sets raw mode and logs every delivered byte; `inj.py` injects a command line into
+foot's pty with `TIOCSTI` (the shell is on `/dev/pts/0`, foot's master is
+`/proc/<foot>/fd/7`, and writing that fd does **not** feed the terminal).
+
+## 1. The raw report is unchanged; the driver now confirms a down
+
+`PBTS` format after kernel `#74`:
+`PBTS <down|up> st= x17= b3= x= y= reads= torn= down=<mask> line=<level> raw=<18 bytes>`.
+`down=` is the bitmask of slots the driver currently reports down; `line=` is the
+`irq-gpios` level (1 = asserted).
+
+Slow `hello` (driver trace, kernel `#74`) — every contact separate and in the
+right place:
+
+```
+PBTS down x=162 y=215 ... down=01 raw=00a2d70001ffffff02ffffff00ffffff0016   -> a-key row
+```
+
+(Example from the a/b/c run below; the slow-hello capture in session 57 is
+unchanged in shape.)
+
+## 2. The position ghost is gone (fast hello)
+
+Fast `h-e-l-l-o` on kernel `#74`: the operator reports the text is correct
+(previously `h,e,h,h,e` / `heo`).  Every contact is one down and one up, and a
+new contact in a different slot is delivered at its own position.  The fix is
+the down-confirm: a slot whose new down carries exactly the coordinates of that
+slot's previous contact within 300 ms is held back one sample and reported with
+the fresh position (the chip updates its report register after the IRQ).
+
+## 3. One clean run: a, b, c, one backspace
+
+`evcap.py` (t0 = 326.730063) and `PBTS` (kernel uptime), interleaved:
+
+| contact | evdev (x,y) | hold | PBTS raw slot 0 | level |
+|---|---|---|---|---|
+| a | 93,447 | 120 ms | `a2 d7 00 01` → (162,215) | down=01 |
+| b | 611,492 | 100 ms | `f1 a4 02 01` → (753,164) | down=01 |
+| c | 398,503 | 120 ms | `fe 97 01 02` → (510,151) | down=01 |
+| BackSpace | 969,519 | 120 ms | `8a 85 04 01` → (1162,133) | down=01 |
+
+Each contact releases: evdev `MT_TRACKING_ID -1` then `BTN_TOUCH 0`, PBTS
+`up … down=00`.  **The driver reports exactly one contact per tap.**
+
+## 4. The repeat is downstream: one contact, three `0x7f`
+
+`keylog.py` running on the terminal's stdin (so it receives exactly what the
+shell would), one backspace tap:
+
+```
+6.8401 7f      <- the tap
+7.0342 7f      <- +194 ms
+7.0742 7f      <- +234 ms
+```
+
+One physical contact produced **three** backspaces.  The PBTS contact for that
+tap is a single 131 ms contact (`571.331` down → `571.462` up, `down=01` →
+`down=00`), so the release is clean at the driver.
+
+Controls in the same session:
+
+* one `a` tap → `9.3744 61` — exactly one byte;
+* an `a` held ~1.3 s (PBTS contact `707.343`→`708.662`) → `15.0085 61` — still
+  one byte.
+
+So the driver does not repeat any key; letters never repeat; **BackSpace and
+Return repeat**, which is squeekboard 1.43.1's action-key repeat (~200 ms delay,
+~40 ms interval).  The repeats continue ~100 ms past the driver's release,
+i.e. the key-release event reaches squeekboard after the repeat timer has
+already fired.  Upstream catacomb 1.7.0 replaced squeekboard with wvkbd
+(verified 2026-11-16), which is the natural fix; the image's
+`postmarketos-ui-catacomb` still depends on `squeekboard`.
+
+## 5. DPMS-off is a one-way trip under touch
+
+On the session-57/58 image the initrc's
+`swayidle -w timeout 180 "catacomb msg dpms off" resume "catacomb msg dpms on"`
+blanks the panel after 3 idle minutes.  **Touch does not bring it back**: with
+`bl_power = 4` the kernel still reported the taps (`/proc/interrupts` for
+`1-0065` advanced, `PBTS` logged them, evdev delivered them), but `bl_power`
+stayed 4 and the panel stayed dark.  `catacomb msg dpms on` restores it
+(`bl_power = 0`), and so does a reboot.  **Kill `swayidle` after every boot on
+the bench** (`pkill -f swayidle`); typing on the ACM is not input activity.
+
+## 6. Kernel `#74` and the image
+
+* image `0xED58EF36`, `0x967CE0` B, `boot/chainloader/kernel.img`
+  sha256 `c67b75c5…`, kernel `7.3.3 #74`.
+* flash: `--component boot/chainloader/kernel.img --dest-block 0x825
+  --from-bootrom --password 0000 --apply`, region 0 only (the touch driver is
+  built-in); `COMPLETE 0x40C0 -> cmd 0x4006`, `done`.
+* the boot resolved `irq-gpios` (`using DT …/touchscreen@65 for 'irq' GPIO
+  lookup`) and `Munin touchscreen ready (irq 110)`.

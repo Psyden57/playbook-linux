@@ -2869,6 +2869,73 @@ module parameter is off by default.
 **Evidence.**  Report 247 §1; capture `touch-munin-2026-11-16.txt` §2/§3;
 traps 296/297; kernels `#70`/`#73` (region 0 `0xB9DD91E3`).
 
+## 83. The Munin sampling policy: poll while the line is asserted, confirm a new down (session 58)
+
+**Decision.**  (a) Keep the 10 ms poll armed while any contact is down, while a
+down is pending confirmation, while the controller's **IRQ line reads asserted**
+(the optional `irq-gpios`), and for a 200 ms grace period after the last
+contact.  (b) When a slot goes up→down and its coordinates equal that slot's
+previous contact exactly, and that contact lifted within 300 ms, hold the down
+back one sample and report it with the next sample's position.  (c) Keep the
+falling-edge IRQ and the parity re-read (decision §82); do not request both
+edges.
+
+**Why.**  Two measured failures, one report register:
+
+* The line is asserted for a whole gesture and the chip reuses contact slots
+  across a burst.  The old poll stopped at the first all-up sample, so an
+  all-up sample *between* two contacts of a fast burst ended the gesture: a fast
+  `hello` arrived as `h,e,o` because the two `l` taps were never read.
+* The first sample of a new contact can still carry the slot's **previous**
+  coordinates, because the chip updates the report register *after* the IRQ.
+  Reporting it repeats the previous key — the position ghost, `h,e,h,h,e`
+  instead of `h,e,l,l,o`, and an in-contact move from the old position to the
+  new one.  The vendor's QNX driver has no contact-id filter to copy:
+  `is_contact_down` treats `b3` only as a down flag, and `get_contact_id`
+  returns the digit index.
+
+**Constraint.**  A genuine double tap on the same key is confirmed by the next
+sample, so the confirm costs at most one sample (~10–20 ms) and never drops the
+tap.  The `irq-gpios` descriptor is optional; without it the 200 ms grace window
+still covers a burst.  `line=` and `down=<mask>` were added to the `trace`
+output.
+
+**Evidence.**  Report 248; capture
+`touch-munin-2026-11-16-session58.txt` §2–§3; kernel `#74` (region 0
+`0xED58EF36`).  The remaining backspace/enter repeat is squeekboard's
+action-key repeat (one contact → three `0x7f`; a letter never repeats), not this
+driver — trap 299.
+
+## 84. The hd3 root is mounted read-write and grown once (session 58)
+
+**Decision.**  Mount hd3 (the Nura root) **read-write** and use it directly —
+no read-only lower, no tmpfs overlay.  The initramfs opens `/dev/mmcblk1`
+O_RDWR, creates the loop without `LO_FLAGS_READ_ONLY`, and mounts ext4 with
+`barrier=0`; before the mount it writes `write through` to
+`/sys/block/{mmcblk1,loopN}/queue/write_cache`.  A one-shot
+`/etc/local.d/pb-grow.start` runs `resize2fs` on the mounted root and leaves
+`/etc/pb-grown`, growing the 626 MB image to the whole region (56.5 G).  The
+same initramfs installs the bench SSH kit (static dropbear, host keys,
+authorized key, the two `local.d` scripts).
+
+**Why.**  The overlay's tmpfs upper discarded every write on reboot, and the
+operator wants a persistent root with room.  The earlier read-write attempt
+(session 54, report 241) failed because the first journalled write hit the
+eMMC's `FLUSH_CACHE` and aborted the journal; barriers off plus write-through
+avoid the journal flush, and the emmc accepted the data writes (a 16 KiB
+O_DIRECT probe and a 15-million-block resize both succeeded).  The ttyGS0
+getty remains as the recovery console.
+
+**Constraint.**  An **explicit** flush (`sync`) still hangs the card: the MMC
+core gates `FLUSH_CACHE` on `EXT_CSD.CACHE_SIZE`, not on the queue's
+write-cache flag.  The clean fix is to clear the card's cache capability
+(`CACHE_CTRL = 0` and/or a `cache_size = 0` quirk in `mmc`).  The way back is
+reflashing the `f7858110…` hd3 image at `0x4915`; the media FS is no longer
+that image.
+
+**Evidence.**  Report 249 §2–§3; trap 300; kernel `#77`, region 0
+`0x294F8E36`; `/dev/loop0 56.5G, 53.9G free`, `PERSIST_1820` survives a reboot.
+
 ### Repository license
 
 **Decided (session 23): GPL-3.0-or-later.**  The project's own code and

@@ -22,10 +22,12 @@
  */
 
 #include <linux/delay.h>
+#include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/input.h>
 #include <linux/input/mt.h>
 #include <linux/interrupt.h>
+#include <linux/jiffies.h>
 #include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -68,6 +70,29 @@ static int pb_prev_y = -1;
 #define MUNIN_BOOT_DELAY_MS	500
 
 /*
+ * Sampling policy.  The controller asserts its IRQ line for the whole
+ * gesture, not just for the touchdown, and it reuses contact slots across
+ * the taps of a burst.  A fast burst can therefore produce an all-up sample
+ * between two contacts while the line is still low; if the poll stops there
+ * the rest of the burst is never read (a fast "hello" arrived as h,e,o), and
+ * a tap's release can be missed the same way (a held backspace).  Keep
+ * sampling at 10 ms while the line is asserted and for a short grace period
+ * after the last contact.
+ */
+#define MUNIN_POLL_ACTIVE_MS	10
+#define MUNIN_POLL_GRACE_MS	200
+
+/*
+ * A contact that reappears in the same slot at exactly the position of the
+ * slot's previous contact within this window is held back one sample: the
+ * report register lags the IRQ, so that first sample still carries the old
+ * position.  Reporting it repeats the previous key instead of the new one
+ * (typing "hello" produced h,e,h,h,e).  A genuine double tap is confirmed by
+ * the next sample and only costs one sample of latency.
+ */
+#define MUNIN_REPEAT_MS		300
+
+/*
  * One axis of the vendor's four-point calibration (1917
  * etc/system/config/scaling.conf, the `1024x600:mode=calib` line): the raw
  * coordinate range [raw_min, raw_max] maps linearly onto the display range
@@ -81,17 +106,28 @@ struct munin_cal {
 	s32 disp_max;
 };
 
+struct munin_slot {
+	bool down;		/* down state last reported to input */
+	bool pending;		/* down held back for a fresh sample */
+	unsigned int x;		/* raw coords of the last down sample */
+	unsigned int y;
+	unsigned long up_at;	/* jiffies of the last reported lift */
+};
+
 struct munin_ts {
 	struct i2c_client *client;
 	struct input_dev *input;
+	struct gpio_desc *irq_gpio;
 	struct delayed_work boot_work;
 	struct delayed_work poll;
 	struct munin_cal cal_x;
 	struct munin_cal cal_y;
+	struct munin_slot slot[MUNIN_CONTACTS];
 	unsigned int panel_w;
 	unsigned int panel_h;
 	unsigned int poll_ms;
 	unsigned int boot_tries;
+	unsigned long active_at;
 	int irq;
 	bool booted;
 	bool using_irq;
@@ -228,16 +264,52 @@ static int munin_boot(struct munin_ts *ts)
 	return 0;
 }
 
+/*
+ * Keep sampling while the controller is still driving its line, and for a
+ * grace period after the last contact: a burst can contain an all-up sample
+ * between two taps without the line ever being released.
+ */
+static bool munin_active(struct munin_ts *ts)
+{
+	if (time_before(jiffies, ts->active_at +
+			msecs_to_jiffies(MUNIN_POLL_GRACE_MS)))
+		return true;
+	if (ts->irq_gpio && gpiod_get_value_cansleep(ts->irq_gpio))
+		return true;
+	return false;
+}
+
+static void munin_report_slot(struct munin_ts *ts, int i, bool down,
+			      unsigned int xr, unsigned int yr)
+{
+	struct input_dev *input = ts->input;
+
+	input_mt_slot(input, i);
+	input_mt_report_slot_state(input, MT_TOOL_FINGER, down);
+	if (!down)
+		return;
+
+	input_report_abs(input, ABS_MT_POSITION_X,
+			 munin_map(&ts->cal_x, xr, ts->panel_w - 1));
+	/*
+	 * The controller's raw Y increases upward, while the display and
+	 * Linux use Y down.  Measured on the bench: the physical top edge
+	 * reads about 580 and the bottom edge about 35.  Invert the calibrated
+	 * value so the compositor's touch position matches the display.
+	 */
+	input_report_abs(input, ABS_MT_POSITION_Y,
+			 ts->panel_h - 1 -
+			 munin_map(&ts->cal_y, yr, ts->panel_h - 1));
+}
+
 static void munin_report(struct munin_ts *ts)
 {
 	struct input_dev *input = ts->input;
 	u8 buf[MUNIN_REPORT_LEN];
 	int i, ret, tries;
 	bool fresh = false;
-	unsigned int s0_x = 0, s0_y = 0;
-	u8 s0_b3 = 0;
-	bool s0_down = false;
-	bool any_down = false;
+	bool any_down = false, any_pending = false;
+	u8 mask = 0;
 
 	/*
 	 * The report register is updated asynchronously with the IRQ: a read
@@ -264,63 +336,85 @@ static void munin_report(struct munin_ts *ts)
 		return;
 
 	for (i = 0; i < MUNIN_CONTACTS; i++) {
+		struct munin_slot *s = &ts->slot[i];
 		int o = 1 + i * 4;
 		unsigned int xr = buf[o] | ((buf[o + 2] & 0x0f) << 8);
 		unsigned int yr = buf[o + 1] | ((buf[o + 2] & 0xf0) << 4);
 		bool down = buf[o + 3] != 0 && yr != MUNIN_COORD_MAX;
 
-		any_down |= down;
-		if (i == 0) {
-			s0_down = down;
-			s0_x = xr;
-			s0_y = yr;
-			s0_b3 = buf[o + 3];
+		if (!down) {
+			if (s->down)
+				munin_report_slot(ts, i, false, 0, 0);
+			if (s->down || s->pending)
+				s->up_at = jiffies;
+			s->down = false;
+			s->pending = false;
+			continue;
 		}
 
-		input_mt_slot(input, i);
-		input_mt_report_slot_state(input, MT_TOOL_FINGER, down);
-		if (down) {
-			input_report_abs(input, ABS_MT_POSITION_X,
-					 munin_map(&ts->cal_x, xr,
-						   ts->panel_w - 1));
+		if (!s->down) {
 			/*
-			 * The controller's raw Y increases upward, while the
-			 * display and Linux use Y down.  Measured on the bench:
-			 * the physical top edge reads about 580 and the bottom
-			 * edge about 35.  Invert the calibrated value so the
-			 * compositor's touch position matches the display.
+			 * The first sample of a new contact can still hold the
+			 * slot's previous coordinates, because the chip
+			 * updates its report register after the IRQ.  Hold
+			 * that down back one sample and report the fresh
+			 * position instead of repeating the previous key.
 			 */
-			input_report_abs(input, ABS_MT_POSITION_Y,
-					 ts->panel_h - 1 -
-					 munin_map(&ts->cal_y, yr,
-						   ts->panel_h - 1));
+			if (!s->pending && xr == s->x && yr == s->y &&
+			    time_before(jiffies, s->up_at +
+					msecs_to_jiffies(MUNIN_REPEAT_MS))) {
+				s->pending = true;
+				any_pending = true;
+				continue;
+			}
+			s->pending = false;
+			s->down = true;
 		}
+
+		s->x = xr;
+		s->y = yr;
+		munin_report_slot(ts, i, true, xr, yr);
+		any_down = true;
 	}
 
 	input_mt_sync_frame(input);
 	input_sync(input);
 
 	ts->touching = any_down;
+	if (any_down || any_pending)
+		ts->active_at = jiffies;
 
 	/*
-	 * The controller asserts its line for the whole contact and only
-	 * releases it on the lift, which is a rising edge the irqchip will not
-	 * deliver.  While a contact is down, poll the report so the release is
-	 * seen within ~10 ms; otherwise two fast taps merge into one contact.
+	 * The controller asserts its line for the whole gesture and only
+	 * releases it on the lift, which is a rising edge the irqchip does
+	 * not deliver.  Keep sampling while there is a contact, a pending
+	 * confirm, or the line is still asserted, so the lift is seen within
+	 * ~10 ms and a later tap in the same burst is not lost.
 	 */
-	if (any_down && ts->using_irq && ts->poll_ms)
-		schedule_delayed_work(&ts->poll, msecs_to_jiffies(10));
+	if (ts->using_irq && ts->poll_ms &&
+	    (any_down || any_pending || munin_active(ts)))
+		schedule_delayed_work(&ts->poll,
+				      msecs_to_jiffies(MUNIN_POLL_ACTIVE_MS));
 
-	if (pb_trace && (s0_down != pb_prev_down ||
-			 (s0_down && (abs((int)s0_x - pb_prev_x) > 40 ||
-				      abs((int)s0_y - pb_prev_y) > 40))))
+	for (i = 0; i < MUNIN_CONTACTS; i++)
+		if (ts->slot[i].down)
+			mask |= BIT(i);
+
+	if (pb_trace && (ts->slot[0].down != pb_prev_down ||
+			 (ts->slot[0].down &&
+			  (abs((int)ts->slot[0].x - pb_prev_x) > 40 ||
+			   abs((int)ts->slot[0].y - pb_prev_y) > 40))))
 		dev_info(&ts->client->dev,
-			 "PBTS %s st=%02x x17=%02x b3=%02x x=%u y=%u reads=%u torn=%u raw=%*phN\n",
-			 s0_down ? "down" : "up", buf[0], buf[17], s0_b3,
-			 s0_x, s0_y, pb_reads, pb_torn, MUNIN_REPORT_LEN, buf);
-	pb_prev_down = s0_down;
-	pb_prev_x = s0_x;
-	pb_prev_y = s0_y;
+			 "PBTS %s st=%02x x17=%02x b3=%02x x=%u y=%u reads=%u torn=%u down=%02x line=%d raw=%*phN\n",
+			 ts->slot[0].down ? "down" : "up", buf[0], buf[17],
+			 buf[4], ts->slot[0].x, ts->slot[0].y,
+			 pb_reads, pb_torn, mask,
+			 ts->irq_gpio ?
+				gpiod_get_value_cansleep(ts->irq_gpio) : -1,
+			 MUNIN_REPORT_LEN, buf);
+	pb_prev_down = ts->slot[0].down;
+	pb_prev_x = ts->slot[0].x;
+	pb_prev_y = ts->slot[0].y;
 }
 
 static irqreturn_t munin_irq(int irq, void *data)
@@ -394,15 +488,25 @@ static void munin_poll(struct work_struct *work)
 {
 	struct munin_ts *ts = container_of(to_delayed_work(work),
 					   struct munin_ts, poll);
+	bool more = false;
 
 	mutex_lock(&ts->lock);
 	if (ts->booted) {
 		munin_report(ts);
-		if (ts->poll_ms && (ts->touching || !ts->using_irq))
-			schedule_delayed_work(&ts->poll,
-					      msecs_to_jiffies(ts->poll_ms));
+		if (!ts->poll_ms)
+			more = false;
+		else if (!ts->using_irq)
+			more = true;	/* no IRQ: keep the periodic poll */
+		else
+			more = ts->touching || munin_active(ts);
 	}
 	mutex_unlock(&ts->lock);
+
+	if (more)
+		schedule_delayed_work(&ts->poll,
+				      msecs_to_jiffies(ts->using_irq ?
+						MUNIN_POLL_ACTIVE_MS :
+						ts->poll_ms));
 }
 
 static int munin_probe(struct i2c_client *client)
@@ -422,6 +526,17 @@ static int munin_probe(struct i2c_client *client)
 	ts->client = client;
 	i2c_set_clientdata(client, ts);
 	mutex_init(&ts->lock);
+
+	/*
+	 * The interrupt line stays asserted for a whole gesture, so its level
+	 * says whether more samples are owed even when a report reads all-up.
+	 */
+	ts->irq_gpio = devm_gpiod_get_optional(&client->dev, "irq", GPIOD_IN);
+	if (IS_ERR(ts->irq_gpio)) {
+		dev_warn(&client->dev, "touch irq line unavailable: %ld\n",
+			 PTR_ERR(ts->irq_gpio));
+		ts->irq_gpio = NULL;
+	}
 
 	/* Defaults: the 1917 scaling.conf `1024x600:mode=calib` line. */
 	ts->cal_x = (struct munin_cal){ 172, 1108, 102, 922 };

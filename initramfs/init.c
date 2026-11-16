@@ -425,31 +425,129 @@ static void panel_tcon_init(void)
 		rlog("PB: tcon: Hitachi table sent (high byte first)");
 }
 
-/* ---- hd3 Linux root: read-only lower + tmpfs overlay, hand PID 1 to it ---
+/* ---- hd3 Linux root: mounted read-write, hand PID 1 to it ---------------
  * The real Linux root lives on hd3 (MCT type 0x1C), whose partition starts
  * at raw 0x49000000.  It is a bare ext4 image written by the pre-OS 0xF7
  * flasher at loader block 0x4915, so a broken root is recoverable from the
  * bootrom (the operator's design, ROADMAP item 7a).
  *
  * The image is Nura (formerly postmarketOS): /sbin/init is BusyBox init,
- * which runs OpenRC and starts the Catacomb session.  The first boot from hd3
- * showed that the first ext4 journal/udev write stalls the eMMC
- * (`mmc1: Card stuck being busy!`, report 241 §3): the bootrom wrote 597 MiB
- * sequentially, and the first kernel rewrite of those NAND blocks exceeds the
- * MMC busy poll.  So the root is mounted **read-only** (`MS_RDONLY` +
- * `noload`, and the loop itself `LO_FLAGS_READ_ONLY`) under a tmpfs upper via
- * overlayfs.  The lower stays pristine and the eMMC is never written to boot.
- * The region-1 no-journal root remains the fallback.
+ * which runs OpenRC and starts the Catacomb session.  The image is small
+ * (626 MB) on a ~62 GB partition; /etc/local.d/pb-grow.start grows it once
+ * (resize2fs on the mounted root) and leaves /etc/pb-grown.
  *
- * If there is no /sbin/init (no real userland on the media), the old
- * diagnostic /init is run and the function returns, so the initramfs console
- * comes up exactly as before: a missing or half-written root never costs a
- * debug channel.  If /sbin/init exists but fails to run, the unit is recovered
- * with the power button and the pre-OS flasher (the documented way back).
+ * Session 58: the root is mounted **read-write** and used directly.  The
+ * earlier read-only lower + tmpfs overlay kept the eMMC out of the boot path
+ * because the first ext4 write after the 597 MiB bootrom transfer stalled
+ * (`mmc1: Card stuck being busy!`, report 241 §3); a 16 KiB O_DIRECT write
+ * into unused hd3 space succeeded in session 58, so the writable root is the
+ * experiment now (report 248).  If the mount fails this function returns and
+ * the initramfs console comes up.
+ *
+ * The initramfs also installs the bench SSH kit on first boot: a static
+ * dropbear, its host keys, the authorized key and two /etc/local.d scripts
+ * (usb0 + dropbear, and the one-shot grow).  The ttyGS0 getty stays as the
+ * recovery console.
  */
 #define ROOTFS_RAW_OFF 0x49000000ULL
-#define OVERLAY_DIR "/overlay"
-#define NEW_ROOT "/newroot"
+#define NEW_ROOT "/rootfs"
+
+static int copy_file(const char *src, const char *dst, mode_t mode)
+{
+	char buf[65536];
+	ssize_t n;
+	int in, out;
+
+	in = open(src, O_RDONLY);
+	if (in < 0)
+		return -1;
+	out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode);
+	if (out < 0) {
+		close(in);
+		return -1;
+	}
+	while ((n = read(in, buf, sizeof(buf))) > 0) {
+		char *p = buf;
+		ssize_t left = n;
+
+		while (left > 0) {
+			ssize_t w = write(out, p, left);
+
+			if (w <= 0) {
+				close(in);
+				close(out);
+				return -1;
+			}
+			p += w;
+			left -= w;
+		}
+	}
+	close(in);
+	close(out);
+	chmod(dst, mode);
+	return 0;
+}
+
+static int write_text(const char *dst, const char *text, mode_t mode)
+{
+	int fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode);
+	ssize_t n = -1;
+
+	if (fd < 0)
+		return -1;
+	n = write(fd, text, strlen(text));
+	close(fd);
+	chmod(dst, mode);
+	return n == (ssize_t)strlen(text) ? 0 : -1;
+}
+
+static void sysfs_write(const char *path, const char *val)
+{
+	int fd = open(path, O_WRONLY);
+
+	if (fd < 0)
+		return;
+	write(fd, val, strlen(val));
+	close(fd);
+}
+
+static const char pb_ssh[] =
+	"#!/bin/sh\n"
+	"ip link set usb0 up 2>/dev/null\n"
+	"ip addr add 169.254.0.1/16 dev usb0 2>/dev/null\n"
+	"[ -x /usr/sbin/dropbear ] || exit 0\n"
+	"pgrep -x dropbear >/dev/null 2>&1 && exit 0\n"
+	"mkdir -p /run\n"
+	"/usr/sbin/dropbear -r /etc/dropbear/dropbear_ed25519_host_key \\\n"
+	"  -r /etc/dropbear/dropbear_rsa_host_key -p 169.254.0.1:22 \\\n"
+	"  -P /run/dropbear.pid\n";
+
+static const char pb_grow[] =
+	"#!/bin/sh\n"
+	"[ -e /etc/pb-grown ] && exit 0\n"
+	"dev=$(awk '$2==\"/\"{print $1}' /proc/mounts)\n"
+	"case \"$dev\" in /dev/loop*) ;; *) exit 0;; esac\n"
+	"resize2fs \"$dev\" >>/etc/pb-grow.log 2>&1 && touch /etc/pb-grown\n";
+
+static void install_bench_tools(void)
+{
+	mkdir(NEW_ROOT "/etc/dropbear", 0755);
+	mkdir(NEW_ROOT "/etc/local.d", 0755);
+	mkdir(NEW_ROOT "/root", 0700);
+	mkdir(NEW_ROOT "/root/.ssh", 0700);
+
+	if (access(NEW_ROOT "/usr/sbin/dropbear", X_OK) != 0) {
+		copy_file("/dropbear", NEW_ROOT "/usr/sbin/dropbear", 0755);
+		copy_file("/dropbear_ed25519_host_key",
+			  NEW_ROOT "/etc/dropbear/dropbear_ed25519_host_key", 0600);
+		copy_file("/dropbear_rsa_host_key",
+			  NEW_ROOT "/etc/dropbear/dropbear_rsa_host_key", 0600);
+		copy_file("/authorized_keys",
+			  NEW_ROOT "/root/.ssh/authorized_keys", 0600);
+	}
+	write_text(NEW_ROOT "/etc/local.d/pb-ssh.start", pb_ssh, 0755);
+	write_text(NEW_ROOT "/etc/local.d/pb-grow.start", pb_grow, 0755);
+}
 
 static int rootfs_mount(void)
 {
@@ -469,9 +567,8 @@ static int rootfs_mount(void)
 		return -1;
 	}
 	snprintf(loopdev, sizeof(loopdev), "/dev/loop%d", n);
-	/* O_RDONLY: the lower is never written.  Every write goes to the tmpfs
-	 * upper (overlay_mount), so the eMMC stays out of the boot path. */
-	bfd = open("/dev/mmcblk1", O_RDONLY);
+	/* O_RDWR: the root is mounted read-write and its files persist. */
+	bfd = open("/dev/mmcblk1", O_RDWR);
 	if (bfd < 0) {
 		snprintf(b, sizeof(b), "PB: rootfs: /dev/mmcblk1: %s", strerror(errno));
 		rlog(b);
@@ -491,15 +588,23 @@ static int rootfs_mount(void)
 	}
 	memset(&li, 0, sizeof(li));
 	li.lo_offset = (typeof(li.lo_offset))ROOTFS_RAW_OFF;
-	li.lo_flags = LO_FLAGS_READ_ONLY;	/* no writes reach the eMMC */
+	li.lo_flags = 0;			/* writable root */
 	if (ioctl(lfd, LOOP_SET_STATUS64, &li) < 0) {
 		snprintf(b, sizeof(b), "PB: rootfs: LOOP_SET_STATUS64: %s", strerror(errno));
 		rlog(b);
 		ioctl(lfd, LOOP_CLR_FD, 0);
 		goto err;
 	}
-	mkdir("/rootfs", 0755);
-	if (mount(loopdev, "/rootfs", "ext4", MS_RDONLY, "noload") < 0) {
+	mkdir(NEW_ROOT, 0755);
+	/* The eMMC's cache-flush stalls the card (`mmc1: Card stuck being busy!`
+	 * in __mmc_poll_for_busy; the block layer reports it at sector 0 because
+	 * it is a flush).  Mark the card and the loop write-through before the
+	 * root is mounted so no flush is ever issued; barrier=0 keeps ext4 from
+	 * asking for one either. */
+	sysfs_write("/sys/block/mmcblk1/queue/write_cache", "write through");
+	snprintf(b, sizeof(b), "/sys/block/loop%d/queue/write_cache", n);
+	sysfs_write(b, "write through");
+	if (mount(loopdev, NEW_ROOT, "ext4", 0, "barrier=0") < 0) {
 		snprintf(b, sizeof(b), "PB: rootfs: mount: %s", strerror(errno));
 		rlog(b);
 		kf("PLAYBOOK: rootfs: mount failed: %s\n", strerror(errno));
@@ -507,10 +612,10 @@ static int rootfs_mount(void)
 		goto err;
 	}
 	snprintf(b, sizeof(b),
-		 "PB: rootfs: ext4 at 0x%llx mounted read-only (noload) on /rootfs",
-		 (unsigned long long)ROOTFS_RAW_OFF);
+		 "PB: rootfs: ext4 at 0x%llx mounted read-write on %s",
+		 (unsigned long long)ROOTFS_RAW_OFF, NEW_ROOT);
 	rlog(b);
-	kf("PLAYBOOK: rootfs: mounted read-only at 0x%llx\n",
+	kf("PLAYBOOK: rootfs: mounted read-write at 0x%llx\n",
 	   (unsigned long long)ROOTFS_RAW_OFF);
 	/* The loop must survive the chroot/exec; leak these deliberately. */
 	(void)lfd;
@@ -522,31 +627,6 @@ err:
 	return -1;
 }
 
-static int overlay_mount(void)
-{
-	char b[192];
-
-	mkdir(OVERLAY_DIR, 0755);
-	if (mount("tmpfs", OVERLAY_DIR, "tmpfs", 0, "mode=0755,size=256M")) {
-		snprintf(b, sizeof(b), "PB: overlay: tmpfs: %s", strerror(errno));
-		rlog(b);
-		return -1;
-	}
-	mkdir(OVERLAY_DIR "/upper", 0755);
-	mkdir(OVERLAY_DIR "/work", 0755);
-	mkdir(NEW_ROOT, 0755);
-	if (mount("overlay", NEW_ROOT, "overlay", 0,
-		  "lowerdir=/rootfs,upperdir=" OVERLAY_DIR "/upper,workdir="
-		  OVERLAY_DIR "/work")) {
-		snprintf(b, sizeof(b), "PB: overlay: mount: %s", strerror(errno));
-		rlog(b);
-		return -1;
-	}
-	rlog("PB: overlay: read-only /rootfs + tmpfs upper on /newroot");
-	kf("PLAYBOOK: overlay: read-only hd3 lower, tmpfs upper\n");
-	return 0;
-}
-
 static void rootfs_boot(void)
 {
 	char b[160];
@@ -556,12 +636,9 @@ static void rootfs_boot(void)
 
 	if (rootfs_mount() < 0)
 		return;
-	if (overlay_mount() < 0)
-		return;
+	install_bench_tools();
 
-	/* The pseudo-filesystems must exist inside the overlay root before the
-	 * chroot.  They are mounted on the overlay, not the read-only lower, so
-	 * the lower stays pristine. */
+	/* The pseudo-filesystems must exist inside the root before the chroot. */
 	mkdir(NEW_ROOT "/dev", 0755);
 	mkdir(NEW_ROOT "/proc", 0555);
 	mkdir(NEW_ROOT "/sys", 0555);
@@ -604,7 +681,7 @@ static void rootfs_boot(void)
 		kf("PLAYBOOK: rootfs: chroot failed: %s\n", strerror(errno));
 		return;
 	}
-	out("<0>PLAYBOOK: handing PID 1 to /sbin/init on the hd3 root (read-only overlay)\n");
+	out("<0>PLAYBOOK: handing PID 1 to /sbin/init on the hd3 root (read-write)\n");
 	execle("/sbin/init", "init", (char *)NULL,
 	       (char *[]){ "HOME=/", "PATH=/sbin:/bin:/usr/sbin:/usr/bin", NULL });
 	kf("PLAYBOOK: rootfs: exec /sbin/init failed: %s\n", strerror(errno));

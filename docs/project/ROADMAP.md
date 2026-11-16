@@ -5,18 +5,16 @@ Open work only.  Closed and parked item history is archived in
 item states the evidence that would close it.
 
 Current focus: **item 7a** — the SGX540 is **working** (kernel driver + pvrports
-userspace; EGL/GLES 2.0 on `PowerVR SGX 540`, sessions 55, reports 243–245).
-What remains is to **bake the stack into hd3** (it was tested from the tmpfs
-overlay) and **pick a compositor that runs on this GLES2 driver** — catacomb
-needs `GL_EXT_unpack_subimage`, which the driver lacks.  The eMMC is out of the
-boot path and `elogind`/`tinydm`/`catacomb` start and get a seat.  hd3 holds the
-Nura root and it boots unattended; the region-1 BusyBox root stays the fallback.  The audio goal is
-closed (reports 214/215), the bench has **ssh over USB** (RNDIS + dropbear) with
-the gadget's DMA now working (session 52), and the **WL1283's WLAN associates and
-passes traffic** (on the region-1 root; the Nura root now carries its firmware
-and `wlcore` boots it).  On the same chip, **BT's core works** (real inquiry;
-`hci0` registers with mgmt) with the controller-open blocked on a stray byte,
-then FM and GPS.
+userspace; EGL/GLES 2.0 on `PowerVR SGX 540`) and catacomb composites on it with
+a GLES2 fallback; the stack and the app set are baked into hd3.  Session 58 made
+the root **writable and grown to 56.5 G** with **SSH back** (report 249).  What
+remains: the **eMMC cache-flush** fault (trap 300), the **OSK move to wvkbd**
+(trap 299) and the **upload profile**.  hd3 holds the Nura root and it boots
+unattended; the region-1 BusyBox root stays the fallback.  The audio goal is
+closed (reports 214/215), and the **WL1283's WLAN associates and passes
+traffic**.  On the same chip, **BT's core works** (real inquiry; `hci0`
+registers with mgmt) with the controller-open blocked on a stray byte, then FM
+and GPS.
 
 ## 7. Packaging (postmarketOS-style)
 
@@ -238,8 +236,13 @@ flasher can replace at every point:
    `pvr_dri.so`; `squeekboard` is composited.  The app set (`tabula` +
    wallpaper, `foot`, `netsurf`, `xournalpp`, `tzompantli`, `gorm`, `grim`,
    `slurp`, `tremor`, `swayidle`) and `gsettings-desktop-schemas` are baked into
-   hd3 (`f7858110…`); region 0 is `0xB9DD91E3` (kernel `#73`).  **Next:** (a)
-   fix the touch position ghost (report 247 §2, HANDOFF §0a); (b) profile the
+   hd3 (`f7858110…`); region 0 is `0x294F8E36` (kernel `#77`).  **Done:** the
+   touch position ghost is fixed (report 248), and the root is **writable,
+   grown to 56.5 G, with SSH back** (report 249; `barrier=0` + write-through,
+   dropbear/`local.d` installed by the initramfs).  **Next:** (a) clear the
+   eMMC cache capability so no flush is issued (report 249 §3, trap 300) — the
+   one remaining hardware fault; (b) move the OSK to wvkbd (catacomb 1.7.x) —
+   the backspace/enter repeat is squeekboard's (trap 299); (c) profile the
    upload path — the `PBGL_PROFILE` catacomb build is staged
    (`local/work/nura/pmaports/main/catacomb/`, `pkgrel=10001`).  The measured
    input latency is 8–33 ms, so the jank is redraw/upload.  `epitaph` aborts
@@ -301,6 +304,13 @@ terminal (trap 216).
 
 **Open.**
 
+* **The eMMC cache flush hangs the card.**  A journalled read-write root hits
+  `mmc1: Card stuck being busy! __mmc_poll_for_busy` on the first commit and
+  aborts the journal; the block layer reports it at sector 0 because it is a
+  flush.  `barrier=0` + `write_cache=write through` keep the root writable and
+  let the one-shot grow complete, but an explicit `sync` still stalls.  Clear
+  the card's cache capability (`CACHE_CTRL = 0` and/or a `cache_size = 0` quirk
+  in `mmc`) so no flush is issued.  [report 249 §3, trap 300]
 * **The WM8994 audio has nothing required left**, only two optional items: the
   **MCLK1 probe** (trap 165 — the working design does not need it) and
   identifying the GPIO1_15 `audio_boost` net if a schematic appears.
@@ -368,12 +378,14 @@ terminal (trap 216).
   **FM:** mainline carried `drivers/media/radio/wl128x` from 2.6.39 to 6.13 and
   removed it; bringing it back is a forward port.  **GPS:** no mainline driver;
   a 2024 LKML patch is the candidate, the reference's own path the fallback.
-* **Touch.**  The release/merge bug is fixed (kernel `#73`: falling edge plus a
-  10 ms poll while a contact is down); contacts are 36–158 ms and separate.
-  **Open:** a fast tap can be reported at the previous contact's coordinates
-  (the position ghost — report 247 §2, traps 296/297).  The remaining nicety is
-  driving power/reset (GPIO1_14 / GPIO4_8) for cold boots — a warm reset keeps
-  the controller up (session 42).
+* **Touch — closed (session 58).**  The release, the fast-tap merge and the
+  position ghost are fixed (kernels `#70`/`#73`/`#74`); typing is correct.  The
+  remaining backspace/enter repeat is squeekboard's action-key repeat (trap
+  299), not the touch driver.  The history is in
+  [`docs/history/ROADMAP-CLOSED.md`](../history/ROADMAP-CLOSED.md),
+  `## Touch — closed session 58`.  The one remaining nicety is driving
+  power/reset (GPIO1_14 / GPIO4_8) for cold boots — a warm reset keeps the
+  controller up (session 42).
 
 ## Out of scope for now
 

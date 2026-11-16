@@ -17,6 +17,8 @@
 
 /dts-v1/;
 
+#include <dt-bindings/gpio/gpio.h>
+
 #include "omap443x.dtsi"
 
 / {
@@ -280,6 +282,8 @@
 		reg = <0x65>;
 		interrupt-parent = <&gpio2>;
 		interrupts = <3 IRQ_TYPE_EDGE_FALLING>;
+		/* The line is asserted low for a whole gesture, not one edge. */
+		irq-gpios = <&gpio2 3 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&touch_irq_pins>;
 		poll-interval-ms = <20>;

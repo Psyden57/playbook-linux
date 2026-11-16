@@ -1,46 +1,70 @@
 # Current state
 
-## Current state — 2026-11-16 (session 57)
+## Current state — 2026-11-16 (session 58)
 
-**THE UI HAS CONTENT AND THE TOUCH MERGE IS FIXED; a position ghost remains.**
-`tabula` draws the wallpaper, `foot`/`netsurf`/`xournalpp` run, and the app set
-is baked into hd3.  The repeated-key bug was the driver losing the *release*:
-the controller asserts its line for the whole contact and the lift is a rising
-edge, so a falling-edge-only IRQ never read it; the fix is falling edge plus a
-10 ms poll while a contact is down (kernel `#73`).  Contacts are now 36–158 ms
-and separate; a slow `hello` types correctly at 8–33 ms end-to-end latency.  A
-fast burst still ghosts the *position* (h,e,h,h instead of h,e,l,l,o) — the
-controller supplies a later tap's coordinates from the previous contact; that
-is the next experiment.  [report 247; capture
-`touch-munin-2026-11-16.txt`; traps 296/297]
+**THE ROOT IS WRITABLE AND GROWN, AND SSH IS BACK (kernel `#77`, region 0
+`0x294F8E36`).**  The initramfs mounts hd3 read-write (no overlay) and a
+one-shot `resize2fs` grew it to the partition: **`/dev/loop0 56.5G, 53.9G
+free`**, and a file written before a reboot survives it.  A static dropbear and
+key are installed into the root on first boot; an OpenRC `local.d` script
+brings `usb0` to `169.254.0.1/16` and starts dropbear on `:22`, so
+`PB_LINK=usb tools/pbssh.sh` is a clean shell.  The ttyGS0 getty stays as the
+recovery console.  [report 249 §1–§2]
 
-**The audio log flood and the idle suspend are fixed.**  The McBSP register
-dump is `dev_dbg` again, the machine driver's per-stream prints are `dev_dbg`,
-and the PM-QoS remove is guarded (a failed 48 kHz `hw_params` no longer taints
-the kernel).  `dmesg` now has 0 McBSP/WM8994 clock lines where it had 14+ per
-stream open.  The initrc no longer suspends: `loginctl suspend` blanked the
-panel, dropped USB and WDT2-reset the unit (`BOOTCTR_FCTRY 0x2b → 0x2a`); DPMS
-off/resume stays.  [traps 293–295]
+**The eMMC cache flush is the one hardware fault.**  A journalled write hangs
+the card (`mmc1: Card stuck being busy!`) and aborts the journal; the block
+layer reports it at sector 0 because it is a flush.  `barrier=0` plus
+`write_cache=write through` (set by the initramfs before the mount) keeps the
+FS writable and lets the grow complete, but an **explicit `sync` still stalls**
+— the MMC core sends `FLUSH_CACHE` whenever `EXT_CSD.CACHE_SIZE != 0`.  The
+clean fix is to clear the card's cache capability; that is the next item.
+[report 249 §3; trap 300]
 
-**`epitaph` is broken and squeekboard's globe is fixed.**  `epitaph` aborts
-(rc 139) after a UPower `GetAll` failure, so the panel is absent.
-`gsettings-desktop-schemas` and a recompiled `gschemas.compiled` are in the
-image, so the layout switcher (`org.gnome.desktop.input-sources`) no longer
-kills squeekboard.  [trap 292]
+**THE TOUCH POSITION GHOST IS FIXED.**  Fast typing is correct: the driver
+keeps sampling while the controller asserts its IRQ line and for a 200 ms grace
+period after the last contact, and a new down that repeats its slot's previous
+coordinates within 300 ms is held back one sample and reported with the fresh
+position.  The same change fixes the lost taps in a fast burst (a fast `hello`
+had arrived as `h,e,o`).  [report 248; capture
+`touch-munin-2026-11-16-session58.txt`; trap 296]
 
-* **Region 0 = `0xB9DD91E3`** (`0x967398` B, `boot/chainloader/kernel.img`
-  sha256 `5ac47496…`, kernel `7.3.3 #73`).
-* **hd3 = `f7858110…`** (625 999 872 B; apps + the rebuilt audio modules +
-  `gsettings-desktop-schemas` + the no-suspend initrc), read-only lower.
+**The backspace/enter repeat is downstream of the driver.**  One tap is one
+clean evdev contact (`down=01` → `down=00`, `MT_TRACKING_ID -1`), but
+squeekboard 1.43.1 sends **three** `0x7f` for it (+0/+194/+234 ms); a letter
+never repeats, even held 1.3 s.  So it is squeekboard's action-key repeat, not
+`playbook-munin.c`.  Upstream **catacomb 1.7.0 replaced squeekboard with
+wvkbd** (verified 2026-11-16); the image's `postmarketos-ui-catacomb` still
+depends on squeekboard, and moving to wvkbd needs the catacomb GLES2 shim
+rebased.  [trap 299]
+
+**DPMS off cannot be woken by touch on this image.**  After 3 idle minutes the
+initrc's `swayidle` sets `bl_power = 4`; the kernel still receives the taps but
+the panel stays dark, and `catacomb msg dpms on` restores it.  **Kill
+`swayidle` after every boot on the bench.**  [trap 298]
+
+* **Region 0 = `0x294F8E36`** (`0x9E0980` B, `boot/chainloader/kernel.img`
+  sha256 `f0738625…`, kernel `7.3.3 #77`) — read-write root, SSH kit,
+  `barrier=0`, write-through.
+* **hd3 (media)** = the same image grown in place to **56.5 G** with the SSH
+  kit: **no longer byte-identical to `f7858110…`**.  The flasher-restorable
+  image is still `f7858110…` (625 999 872 B) and is the way back.
 * **Region 1 = `49e318bf…`** (the fallback, not booted).
-* **Bench:** ACM `0fca:8010`, `ttyACM0`, `playbook:~#`; **no sshd**; `usb0`
-  up by hand; `BOOTCTR_FCTRY = 0x25`.
-* **Next:** the touch position ghost (decode `b3`/slot ownership, then id
-  tracking or stale-slot filtering); then the upload-path profile with the
-  staged `PBGL_PROFILE` catacomb.
+* **Bench:** SSH works — `PB_LINK=usb tools/pbssh.sh 'cmd'` (root, key-only,
+  `169.254.0.1:22`); `usb0` is brought up by `local.d/pb-ssh.start`.  The ACM
+  `playbook:~#` getty is the fallback.  **Bulk pushes must be paced**
+  (8 KiB/5 ms; trap 302).
+* **`BOOTCTR_FCTRY` = `0x32`** (this boot read `0x1B` and `/init` wrote
+  `0x32`, RPMB counter 12049; the session's reboots drained `0x25 → 0x1B`).
+* **Next:** clear the eMMC cache capability so no flush is issued; then the OSK
+  repeat (wvkbd) and the upload profile.
 
 ## Previous states
 
+* **session 57** (2026-11-16) — apps/background, the touch release fix (kernel
+  `#73`), the audio diagnostics gated and the idle suspend removed; a position
+  ghost remained.  The full snapshot is in
+  [`docs/history/STATE-HISTORY.md`](../history/STATE-HISTORY.md)
+  (`## Previous state — 2026-11-16 (session 57)`).
 * **session 56** (2026-11-15) — catacomb runs on the SGX540 (the smithay GLES2
   fallback), the Munin Y axis is fixed, and the SGX driver is vendored; region
   0 `0xAB899C49`, hd3 `89399744…`.  The full snapshot is in
@@ -91,7 +115,7 @@ The per-session snapshots are in
 | **WL1283 (MMC5)** | **WORKING — associates, leases and passes traffic (session 52); scans (session 51)** | **Session 52 (report 236): the association blocker was the missing `ccm`/`ctr` crypto modules.**  `ieee80211_key_alloc()` allocates a `ccm(aes)` AEAD for every CCMP key; without it the PTK install returns `-ENOENT` and wpa_supplicant mislabels it `WRONG_KEY` (the handshake itself is fine — message 3 decrypts).  `ccm.ko`/`ctr.ko` ship in region 1 and `rcS` modprobes them before the stack: `wpa_state=COMPLETED`, WPA2-CCMP on 5785 MHz at −41 dBm, MCS7/65 Mbit/s, DHCP **192.168.0.212**, gateway and 1.1.1.1 reachable.  A 5 GHz AP needs `iw reg set <CC>` (the world domain marks 5735–5835 MHz `PASSIVE-SCAN`).  The **per-unit NVS** is shipped (`wl128x-nvs-perunit.bin`).  **Session 51 (report 232): the recovery loop was the firmware's ELP sleep.**  The failing transfer is the **FW-status read** — CMD53 to `0x1efc0`, 84 bytes, byte mode, 256-byte block — from the WL_IRQ thread right after `firmware booted`; it fails only once the chip has slept, and the identical read succeeds when it is awake.  Fix: `wl12xx_default_conf.conn.sta_sleep_auth = WL1271_PSM_CAM` (was `ILLEGAL` → ELP).  Verified after a real region-1 flash + reboot: one firmware boot, zero failures, `wlan0` `UP`, debugfs `sleep_auth` 0.  `wl128x-fw-4-sr.bin` is the **shipped** SR firmware (report 235): 5-sr (7.3.10.0.142) boots but panics on the first scan, so `wl12xx`'s floor is lowered to 7.3.5.0 and `WL128X_FW_NAME_SINGLE` names the 4-sr file; both files stay installed.  **WLAN (report 231):** `wlcore`/`wl12xx`/`mac80211`/`cfg80211` + `wl128x-nvs.bin`, the `ti,wl1283` child (`reg = <2>`, WL_IRQ gpio 53), `cap-power-off-card`, and an `mmc-pwrseq-simple` pulsing `WL_EN` (low → 50 ms → high → 120 ms) → firmware `Rev 7.3.5.0.98`, MAC `14:74:11:8f:9c:c3` (the assigned address, patched into the generic NVS; the radio calibration is still default).  **Enumeration (report 230):** the TWL6030 `CLK32KG` 32.768 kHz SLOW_CLK is physical `0xBC`–`0xBE` and was OFF; `CONFIG_CLK_TWL=y` + an enable in `clk-twl`'s probe (~1.9 s, before MMC5 at ~3.0 s) fixes it.  **Remaining (report 235):** the WLAN **associates** and passes traffic (session 52); open and not blocking use are *why* the 5-sr firmware panics on scan (235 §3) and *why* the ELP wake is not honoured (232 §6).  **Session-49/50 negatives (do not repeat):** the reference's MMCHS5 program and WL_EN ordering replayed, the stock-TabletOS diff, the boot-path RE, the clock sweep (reports 217/218/221–229).  The BT half's enable is `BT_EN` = gpio 55 = `GPIO2_23`, held low while the WLAN works (report 216). |
 | **WL1283 BT** | **the CORE WORKS — real inquiry; `hci0` now registers with mgmt (session 53)** | UART2 `0x4806C000` = `/dev/ttyS1`, H4 at 115200 8N1; `BT_EN` = gpio 55 = `GPIO2_23` (pad `0x4A10007C` mux 3), pulsed low → 50 ms → high.  **Measured (report 238):** the core answers `HCI_Reset`, reports `hci ver 6` / `lmp ver 6` / `mfr 0x002b` (TI, BT 4.0), and **runs a full BR/EDR inquiry that finds a peer** (`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.  **The reference's `WL1283.bts` loads 315/315** and moves LMP subversion `0x2b0f` → `0x2b33`; loaded **before** the attach it makes `hci0` **register with mgmt** (0 → 1 controller, negative control both ways) by fixing the `0x201c` reply length.  **Left:** opening the controller — a stray `0x30` byte arrives ~200 ms after the last init reply and the kernel's H4 receiver correctly rejects it as not-an-H4-type (`-EILSEQ` → `Frame reassembly failed (-84)` → `SET_POWERED` `0x05`); the instrumented `h4_recv()` shows it in 6 of 6 runs, but **which side emits it is open** (it never appears from userspace).  Then ship `l2cap`/`sco`/`rfcomm`/`hidp` (not in region 1 yet) and a stack.  **LE is refused by the controller**, though the chip reports BT 4.0 with the LE-supported bit — no known sequence, and impossibility not demonstrated.  The pack survives `HCI_Reset` but not a `BT_EN` power cycle.  Tools in `rootfs/bt/`.  Reports 216/237/238, traps 248–252, DECISIONS §72/§73 |
 | **GPIO1 pads / board lines** | **fixed (session 49): three pads were driving GPMC alternate functions** | `0x4A100050` (`gpmc_ad0/1`) and `0x4A100074` (`gpmc_ncs0/1`) were left at mode 0, so pad logic drove GPMC bus lines on a board with no GPMC device while gpiolib could not touch them (trap 228); `0x4A31E058` (GPIO1_31) was unmuxed with its input buffer off.  The DTS now sets mode 3 + pull-down and hogs GPIO1 0/18/28/31 low, so `GPIO1_OE = 0x6FFB1FBA` against the reference's `0x6FFB1FAA` (the missing bit 4 is pad `0x058`'s low half = GPIO2_4, owned by `bridge_pins`, trap 229) and `GPIO1_DATAOUT` is identical.  Image `0x0114FFD3`.  **Not** the WL1283 blocker (card still silent).  Report 220 |
-| **Munin touch (CY8CTMA3)** | **half fixed — releases correct, a position ghost remains (session 57, kernel #73)** | I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c` boots the app and maps the 12-bit report through the 1917 `scaling.conf` calib (raw x 172→1108 → 102→922, y 110→658 → 60→540) to 1024×600; IRQ gpio 35 = GPIO2_3 pad `0x056` = `0x410B`, edge-falling, `irq 110` (~174/s idle).  The controller asserts its line for the whole contact, so the driver re-reads a torn report until the counter parity matches and re-arms its poll work every 10 ms while a contact is down (traps 296/297); contacts are 36–158 ms and separate.  **Open:** a fast tap can be reported at the previous contact's coordinates (report 247 §2).  Power/reset GPIO1_14/GPIO4_8 are not driven.  Reports 198/247, DECISIONS §47/§82 |
+| **Munin touch (CY8CTMA3)** | **FIXED — the position ghost and the lost burst taps are gone (session 58, kernel `#74`)** | I²C2 `0x48072000` = `i2c-1` at `0x65`; `playbook-munin.c` boots the app and maps the 12-bit report through the 1917 `scaling.conf` calib (raw x 172→1108 → 102→922, y 110→658 → 60→540) to 1024×600; IRQ gpio 35 = GPIO2_3 pad `0x056` = `0x410B`, edge-falling, `irq 110` (~174/s idle).  The controller asserts its line for the whole gesture and reuses slots, so the driver re-reads a torn report until the counter parity matches, **keeps polling while the line is asserted (and for 200 ms after the last contact)**, and **holds a new down back one sample when it repeats the slot's previous coordinates within 300 ms**; `irq-gpios` gives it the line level (traps 296/298).  Contacts are separate and fast typing is correct (report 248).  **Remaining:** the backspace/enter repeat is squeekboard's action-key repeat, not the driver (trap 299); power/reset GPIO1_14/GPIO4_8 are not driven.  Reports 198/247/248, DECISIONS §47/§82/§83 |
 | **WM8994 audio** | **WORKING — stereo 440 Hz on headphones AND speakers at 48 kHz; diagnostics `dev_dbg` (session 57)** | I²C4 `0x1a` (`0x8994`, revision D); the board machine driver makes `0 [WM8994]: PlayBook_WM8994`.  **Data path (session 46):** the codec's AIF1 is on McBSP3 (the oracle's routing log `AIF 0 Downlink: MM_DL_PORT->MM_EXT_OUT_PORT->MCBSP3`, the live `PCR0 = 0x3`, the PDM pads `0x106/0x108/0x10a/0x10c` = `0x0109/0x0009/0x0109/0x0109`); the card is two ASoC links (`40124000.mcbsp + wm8994-aif1` clocks, `CBC_CFC`; `40126000.mcbsp + wm8994-aif2` data, `CBP_CFP`); the codec is the AIF1 slave, FLL1 locks from our BCLK (`R0x302 = 0x0000`, `R0x732 = 0x6020`, `R0x200 = 0x0011`), no MCLK1; the `omap-mcbsp` channel-layout guard keeps `XCR2 = 0x8041`.  **Speaker (session 47, report 215):** the speakers are on the codec's **line outputs**, so the output stage follows the jack: headphones → HPOUT1 + charge pump (`R0x060 = 0xcc`); jack out → LINEOUT1P/2P (PM3 `0x3cf0`, `R0x01e = 0`, `R0x034/0x035 = 1`, `R0x036 = 0`, `R0x038 = 0x80`, `R0x04c = 0x1f25`, `R0x060 = 0`) with **`spk` (GPIO2_12) driven low** and **GPIO1_15 (the `audio_boost` enable) high**.  **Session 48** removed the `pcm:` ring readback and the `live N:` FIFO dump and re-verified both outputs at DAC1 volume 40: `jack out (speaker)` / `jack in (headphone)`, "done, FLL1 locked", both PCMs `RUNNING`, the full byte count written, `spk` low during the speaker route and high on the headphone route, `boost` high.  Reports 214/215, DECISIONS §59/§60.  **Session 57:** the remaining info-level diagnostics (`omap_mcbsp_dump_reg`, the per-stream `rate/AIF1CLK` and `repair:` lines) are `dev_dbg`, and the PM-QoS remove is guarded, so a failed 48 kHz `hw_params` no longer taints the kernel (trap 294); the 48 kHz rejection itself is open. |
 | Userspace (initramfs) | **working, minimal** | `/init` = PID 1, mounts, creates the configfs gadget (**ACM console + RNDIS**, session 48), forks `/console` in the fallback path.  **No auto-reboot since session 15** — PID 1 reboots only on request (the timer spent a `BOOTCTR_FCTRY` unit per iteration).  **Session 28:** after the gadget and the boot-time top-up, `/init` mounts the region-1 ext4 root **read-write**, bind-mounts /dev//proc//sys, chroots and execs `/sbin/init`; with no `/sbin/init` it falls back to the console.  Report 176, session-28 note |
 | **USB network + ssh** | **working — commands and interactive sessions (session 48); 2.3 MB/s is the ssh bound, not the USB one** | The gadget carries an **RNDIS** function next to ACM, so the host sees four interfaces and a net device (`enp8s0f3u1i2`, MAC `02:1a:11:00:00:02`); the region-1 `rcS` brings `usb0` up at **`169.254.0.1/16`** and starts **dropbear** listening on `169.254.0.1:22` only.  Key-only auth, host keys shipped, password/PAM/shadow off.  **`tools/pbssh.sh 'cmd'` works**; measured before session 52 at 2.3 MB/s, which is dropbear's cost — the raw path is **6.3 MB/s (host→device) / 4.1 (device→host)** after the session-52 DMA fix, so use raw `nc`/`socat` for bulk copies and ssh for command access.  An **interactive** session works under a real terminal (`script -qec` from this side); an agent's own shell has no tty, so an apparent "closes with no output" is a harness artefact (trap 216).  DECISIONS §62. |
@@ -108,7 +132,7 @@ The per-session snapshots are in
 | Panel identity | **Hitachi (definitive)** | on TabletOS: `GPIO6_DATAIN = 0x00010800` (bit 16 = 1), slog `LCD is Hitachi`.  Report 127 §1 |
 | **Image on the panel** | **WORKING** | With `0x8C146805` (and the same source as `0x068C867F`) the panel shows a clean, stable image: solid white, solid red, and the kernel console as legible text.  The three necessary fixes were the bridge delivery (VC0/HS null packet), the LVDS porches + TCON table at bring-up, and the DISPC core clock. Report 133 |
 | QNX oracle tool | **`tools/qnx-dsiread.c` → `tools/pbdsi`** | Reads any TC358764 register over DSI from a TabletOS user process (generic read request `0x24` on hw VC1, BTA, RX FIFO pop; response is a generic long read, DT `0x1A`).  Read-only.  This is how the reference values in this document were obtained. Report 132 §2 |
-| Kernel patch + config | **7.3.3 (session 54 export)** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **8 998 lines / 63 files**, sha256 `48c14a41…`, 0 rejects / 0 mismatches.  Session 54 makes the `PB*` prints `pr_debug` (config `CONFIG_DYNAMIC_DEBUG=y`, `CONFIG_OVERLAY_FS=y`); the rebuilt image is `0xE84693A1` (built, not flashed).  Session 52 adds `drivers/usb/musb/musb_gadget.c` (the `quirk_avoids_skb_reserve` flag) and `drivers/usb/gadget/function/u_ether.c` (the TX realign); the 40 MHz experiment in `wl12xx/main.c` was reverted and is not in the patch.  Session 51 added `wl12xx/main.c` (CAM + the 4-sr firmware name) and `wl12xx.h` (the SR floor 7.3.5.0).  Session 49 added the report-220 board-DTS GPIO1 pad fix and `arch/arm/Kconfig.debug` (missing from every export since session 30 — the tree walk found it, trap 211 class).  Session 48 retires the two diagnostic blocks and adds `sound/soc/ti/omap-mcbsp-priv.h`, which every export since session 41 had omitted although `omap-mcbsp.c` reads the fields it declares (trap 211 — the patch could not compile from pristine until now).  Session 47 added the speaker path (line-output route, `spk`/`boost` GPIOs, the `disp-en-12-hog` removal); session 46 the `&l4_abe` ABE-refclk assignment, the E5 clock-role change, the McBSP3 two-link card and the `omap-mcbsp` channel-layout guard; session 39 the board machine driver (`sound/soc/ti/playbook-wm8994.c`, Kconfig/Makefile), the `wm8994-core.c` runtime-PM quirk and the board `sound` node/codec clocks, and it restored `drivers/input/touchscreen/{Kconfig,Makefile}`, which the 48-file export had silently omitted (trap 154).  Config: `kernel/winchester-7.3.3.config` (includes `CONFIG_CLK_TWL=y`, `CONFIG_CHARGER_ISL9519=y`, `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`, `CONFIG_KERNEL_XZ=y`, `CONFIG_SND_PCM_OSS=m`, `CONFIG_SND_MIXER_OSS=m`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
+| Kernel patch + config | **7.3.3 (session 58 export)** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **8 981 lines / 64 files**, sha256 `ca17a057…`, 0 rejects / 64/64 identical.  Session 58 fixes the Munin touch position ghost (`playbook-munin.c`: poll while the line is asserted + the fresh-down confirm; the board DTS gains `irq-gpios`; report 248).  Session 54 makes the `PB*` prints `pr_debug` (config `CONFIG_DYNAMIC_DEBUG=y`, `CONFIG_OVERLAY_FS=y`); the rebuilt image is `0xE84693A1` (built, not flashed).  Session 52 adds `drivers/usb/musb/musb_gadget.c` (the `quirk_avoids_skb_reserve` flag) and `drivers/usb/gadget/function/u_ether.c` (the TX realign); the 40 MHz experiment in `wl12xx/main.c` was reverted and is not in the patch.  Session 51 added `wl12xx/main.c` (CAM + the 4-sr firmware name) and `wl12xx.h` (the SR floor 7.3.5.0).  Session 49 added the report-220 board-DTS GPIO1 pad fix and `arch/arm/Kconfig.debug` (missing from every export since session 30 — the tree walk found it, trap 211 class).  Session 48 retires the two diagnostic blocks and adds `sound/soc/ti/omap-mcbsp-priv.h`, which every export since session 41 had omitted although `omap-mcbsp.c` reads the fields it declares (trap 211 — the patch could not compile from pristine until now).  Session 47 added the speaker path (line-output route, `spk`/`boost` GPIOs, the `disp-en-12-hog` removal); session 46 the `&l4_abe` ABE-refclk assignment, the E5 clock-role change, the McBSP3 two-link card and the `omap-mcbsp` channel-layout guard; session 39 the board machine driver (`sound/soc/ti/playbook-wm8994.c`, Kconfig/Makefile), the `wm8994-core.c` runtime-PM quirk and the board `sound` node/codec clocks, and it restored `drivers/input/touchscreen/{Kconfig,Makefile}`, which the 48-file export had silently omitted (trap 154).  Config: `kernel/winchester-7.3.3.config` (includes `CONFIG_CLK_TWL=y`, `CONFIG_CHARGER_ISL9519=y`, `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`, `CONFIG_KERNEL_XZ=y`, `CONFIG_SND_PCM_OSS=m`, `CONFIG_SND_MIXER_OSS=m`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
 | **ISL9519 charger** | **WORKING under Linux (session 31)** | I²C1 `0x48070000`, slave `0x09`; VendorID `0x0049`, DeviceID `0x0003`.  `isl9519.c` (built-in, DTS `charger@9`) sets the four registers in RIM's order with the masked fields and refreshes every 5 s.  Measured **+358 → +397 mA**, 3.775 → 3.794 V, capacity 8 → 9 %, `Charging`; still on at 197 s (watchdog).  Registers read back `0x14=0x0280`, `0x15=0x1070`, `0x3E=0x0D00`, `0x3F=0x0180`.  Report 183 |
 | TWL6030 BCI | **probes after the session-31 fix; NOT the board's charger** | `twl6030_charger` probes with the `simple-battery` profile and sets `CONTROLLER_CTRL1=0x10`, `VOREG=0x21`, `VICHRG=0x08`, `CINLIMIT=0x09`, but the stock OS leaves the whole block at bootloader reset values — it charges through the ISL9519.  The BCI node/modules are inert; `twl6030_usb` reports `ONLINE=1`, VBUS 4.81–4.91 V |
 
@@ -120,7 +144,9 @@ the durable record is the CRC and what it demonstrated, not the file.
 
 | image | base | role |
 |---|---|---|
-| `0xB9DD91E3` | 7.3.3 | **current region 0 — the touch poll-on-touch fix** (session 57: `0x967398` B, `boot/chainloader/kernel.img` sha256 `5ac47496…`, kernel `#73`) |
+| `0x294F8E36` | 7.3.3 | **current region 0 — read-write root + SSH + grown FS** (session 58: `0x9E0980` B, `boot/chainloader/kernel.img` sha256 `f0738625…`, kernel `#77`: mounts hd3 rw, installs dropbear, `barrier=0` + write-through, one-shot `resize2fs`) |
+| `0xED58EF36` | 7.3.3 | previous region 0 — the touch position-ghost fix (session 58: `0x967CE0` B, sha256 `c67b75c5…`, kernel `#74`) |
+| `0xB9DD91E3` | 7.3.3 | previous region 0 — the touch poll-on-touch fix (session 57: `0x967398` B, `boot/chainloader/kernel.img` sha256 `5ac47496…`, kernel `#73`) |
 | `0x23D88CBD` | 7.3.3 | session-57 experiment — both-edge IRQ (no interrupts, touch dead; trap 297; `0x967800` B) |
 | `0x373674A4` | 7.3.3 | session-57 experiment — the `PBTS` trace kernel (`0x967AA8` B) |
 | `0xA544A731` | 7.3.3 | session-57 first touch fix — the parity re-read (`0x967CB0` B) |
@@ -176,15 +202,15 @@ Do not boot `0x5E40C5C1` or `0xB9A1BC4F` (two lanes), or `0x3B04298E`
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **the session-57 touch image `0xB9DD91E3`** (`0x967398` B, `boot/chainloader/kernel.img` sha256 `5ac47496…`, kernel `7.3.3 #73`, the falling-edge + poll-on-touch Munin fix), region 0.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier images (the `0xAB899C49` compositor, `0xE85217E5` overlay, `0x060B25F2`, `0xDD66D8C3`, …) remain on the host.  Earlier Linux images (region 0 only, block `0x825`): `0x23D88CBD`, `0x373674A4`, `0xA544A731`, `0xAB899C49`, `0xA8F0F30C`, `0xE85217E5`, `0xE84693A1`, `0x8B709950`, `0x50CD2A48`, `0x5C37F181`, `0x5A7F15D8`, `0x9712A086`, `0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`, `0x17C2E119`, `0xBAFD9B3B`, `0x91E22899`, `0x12C8C320`, `0xAD85DF0F`, `0xF8BADFF3`, `0x36597040`, `0xB43F169B`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A`, and the touch `0x04AF1433` |
-| region-0 RCFS (`/base`) | **now the full 1917 RCFS at `0xC00000`** (`local/work/rcfs-1917.rcfs`, the modified one with the `/accounts/devuser/startup.sh` hook, sha256 `c4ab6e34…`): session 49 wrote it to recover root on a stock-TabletOS boot, and it sits **outside** the 7.3.3 test image (which ends at `0x967398`).  The pruned oracle RCFS is no longer on media — re-flash `local/work/minimal/setB.signed` for the minimal oracle (trap 227).  Not readable as `/base` without the 1917 IFS |
+| region-0 IFS on media | **the session-58 read-write/SSH image `0x294F8E36`** (`0x9E0980` B, `boot/chainloader/kernel.img` sha256 `f0738625…`, kernel `7.3.3 #77`, the read-write root, the dropbear/SSH install, `barrier=0` + write-through and the one-shot `resize2fs`), region 0.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier images (the `0xED58EF36`/`0xB9DD91E3` touch, `0xAB899C49` compositor, `0xE85217E5` overlay, `0x060B25F2`, `0xDD66D8C3`, …) remain on the host.  Earlier Linux images (region 0 only, block `0x825`): `0x23D88CBD`, `0x373674A4`, `0xA544A731`, `0xAB899C49`, `0xA8F0F30C`, `0xE85217E5`, `0xE84693A1`, `0x8B709950`, `0x50CD2A48`, `0x5C37F181`, `0x5A7F15D8`, `0x9712A086`, `0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`, `0x17C2E119`, `0xBAFD9B3B`, `0x91E22899`, `0x12C8C320`, `0xAD85DF0F`, `0xF8BADFF3`, `0x36597040`, `0xB43F169B`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A`, and the touch `0x04AF1433` |
+| region-0 RCFS (`/base`) | **now the full 1917 RCFS at `0xC00000`** (`local/work/rcfs-1917.rcfs`, the modified one with the `/accounts/devuser/startup.sh` hook, sha256 `c4ab6e34…`): session 49 wrote it to recover root on a stock-TabletOS boot, and it sits **outside** the 7.3.3 test image (which ends at `0x9E0980`).  The pruned oracle RCFS is no longer on media — re-flash `local/work/minimal/setB.signed` for the minimal oracle (trap 227).  Not readable as `/base` without the 1917 IFS |
 | UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
 | `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it last ran during the session-35 S3/S2 TabletOS bench and topped `BOOTCTR_FCTRY` back to `0x32` |
-| `BOOTCTR_FCTRY` | **`0x25`** (session 57: the session-56 boots read `0x2c`; four kernel/flash boots and two idle-suspend WDT resets brought it here; all `>= 0x1e`, so `/init` wrote nothing).  Block `0x3a` record@196.  **Read it on Linux with `dmesg \| grep pbrpmb`** (the top-up line carries the 4-byte LE record).  Self-replenishing: `/init` tops up at <`0x1e`, a TabletOS boot writes `0x32` (`SAFETY.md` §2, `DEVELOPMENT.md` §5) |
+| `BOOTCTR_FCTRY` | **`0x32`** (this boot read `1b000000` = `0x1B` and `/init` wrote `0x32`, RPMB write counter 12049; the session's many fast reboots drained `0x25 → 0x1B`).  Block `0x3a` record@196.  **Read it on Linux with `dmesg \| grep pbrpmb`** (the top-up line carries the 4-byte LE record).  Self-replenishing: `/init` tops up at <`0x1e`, a TabletOS boot writes `0x32` (`SAFETY.md` §2, `DEVELOPMENT.md` §5) |
 | region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`49e318bf…`** (`local/images/rootfs-region1-wl1283-bt.ext4`, session 52: the WLAN fixes, **`ccm`/`ctr`**, the per-unit NVS, the CAM+4-sr `wl12xx.ko` and the seven Bluetooth modules), **43 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus **`cfg80211`, `mac80211`, `wlcore`, `wlcore_sdio`, `wl12xx`, `libarc4`, `crc7`** and **`bluetooth`, `hci_uart`, `btbcm`, `crc-ccitt`, `ecdh_generic`, `ecc`, `kpp`**), `pbplay`, `pbmix`, **dropbear**, **`/usr/bin/iw`**, **`/usr/sbin/wpa_{supplicant,cli,passphrase}`**, and **`/lib/firmware/ti-connectivity/{wl128x-fw-4-sr.bin,wl128x-fw-5-sr.bin,wl128x-nvs.bin}`** plus the signed **`/lib/firmware/regulatory.db`/`.p7s`**; `rcS` loads the wireless stack and `bluetooth hci_uart`.  Earlier images: `…-wl1283-final.ext4` (`877c42c3…`), `…-wl1283-assoc.ext4` (`6c2cfb30…`), `a148c362…`, `7e067560…`, `88084b78…`, `a4e76b18…` and `0342ab06…`.  The modules in any of them can be checked by extracting them with `debugfs` (trap 163).  **Session 55: not booted.**  The region-0 image is the hd3-pointing `0xA8F0F30C`; it mounts hd3 (Nura) and never touches region 1.  This root remains the fallback; its `rcS`/dropbear/WLAN/BT are unchanged. |
-| TabletOS / OS | **NOT running** — the unit is on the **Nura root from hd3** (image `0xB9DD91E3`, `0fca:8010`, console `playbook:~#` on the USB ACM, no sshd; the root is the read-only hd3 + tmpfs overlay, `overlay / … rw`, the lower `ro without journal`, no `Card stuck`).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
-| hd3 (MCT `0x1C`, FS at loader block `0x4915` / raw `0x49000000`) | **the Nura overlay image + the Catacomb app set + the SGX pvr userspace + catacomb r10000** (625 999 872 B ext4; sha256 `f7858110…`), flashed with `--component --dest-block 0x4915`.  On top of the session-56 compositor image it adds `tabula` 1.0.2, `epitaph` 1.4.0, `tzompantli` 1.2.0, `gorm` 1.2.1, `swayidle` 1.9.1, `foot` 1.28.0, `grim` 1.5.0, `slurp` 1.5.0, `tremor` 1.1.0, `netsurf` 3.11, `xournalpp` 1.3.8; the rebuilt `snd-soc-omap-mcbsp.ko` / `snd-soc-playbook-wm8994.ko`; `gsettings-desktop-schemas` 51.0-r0 with a recompiled `gschemas.compiled`; and the no-suspend `/etc/catacomb/initrc`.  It still carries the session-54 overlay root + `/lib/modules/7.3.3/kernel/pvrsrvkm_omap4_sgx540_120.ko` + the pvrports stack (`libglvnd`, `mesa-pvr-dri-classic`, `sgx-ddk-um{,-ti443x,-openrc}`, `gcompat`, `wayland-libs-server`), with the module in `/etc/modules` and `modules.dep`, the `sgx-ddk-um` service in the default runlevel, and `MESA_LOADER_DRIVER_OVERRIDE=pvr` in a tinydm env file.  Mainline mesa 26.2.6 / llvm23 / spirv-tools were purged by the replacement.  It is mounted **read-only** at boot (`MS_RDONLY`+`noload`, a `LO_FLAGS_READ_ONLY` loop).  The base apps image is `blackberry-playbook-root-apps.img` (`711cd5ec…`); the pre-pvr images (`1fcf0cb0…`, `1f14915f…`) and the pristine `076bafcf…` remain on the host.  The QNX userland is no longer on media; the 1917 IFS + vendor UFS are the way back |
-| device-side files | **persistent on the UFS**: `/accounts/devuser/startup.sh` and our `.ssh/authorized_keys` (root ssh); session 49 added `/var/ti1283/{firmware.bin,tiwlan.ini}` on `hd3` (the reference WLAN staging; the hd3 repurpose overwrote it).  `memdump3`/`memw32`/`pbi2c` are **not** on the UFS: push them to `/tmp` after every reboot (trap 177).  **Sessions 55/56 baked the pvr userspace and catacomb r10000 into hd3** (persistent, unlike the earlier tmpfs test); `/var`/`/home`/`/tmp` remain a tmpfs upper, so the DE state is still volatile.  The first-Nura-boot log is `docs/captures/playbook-live-2026-11-15-hd3-nura-boot.txt`.  Session 57's touch tools (`evcap.py`, `keylog.py`, `muninraw`) live only in `/tmp` (wiped by a reboot); the measured evidence is preserved in `docs/captures/touch-munin-2026-11-16.txt` |
+| TabletOS / OS | **NOT running** — the unit is on the **Nura root from hd3** (image `0x294F8E36`, `0fca:8010`, console `playbook:~#` on the USB ACM, **sshd: dropbear on `169.254.0.1:22`**, `PB_LINK=usb tools/pbssh.sh`; the root is the hd3 ext4 mounted **read-write**, grown to 56.5 G).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
+| hd3 (MCT `0x1C`, FS at loader block `0x4915` / raw `0x49000000`) | **the media is the Nura root, grown in place to 56.5 G and mounted read-write** (session 58; the one-shot `resize2fs` ran on the clean `f7858110…` image and the initramfs installed the dropbear/SSH kit).  It is **no longer byte-identical to `f7858110…`**; that 625 999 872-byte image is the **flasher-restorable way back** (`--component --dest-block 0x4915`).  On top of the session-56 compositor image it adds `tabula` 1.0.2, `epitaph` 1.4.0, `tzompantli` 1.2.0, `gorm` 1.2.1, `swayidle` 1.9.1, `foot` 1.28.0, `grim` 1.5.0, `slurp` 1.5.0, `tremor` 1.1.0, `netsurf` 3.11, `xournalpp` 1.3.8; the rebuilt `snd-soc-omap-mcbsp.ko` / `snd-soc-playbook-wm8994.ko`; `gsettings-desktop-schemas` 51.0-r0 with a recompiled `gschemas.compiled`; and the no-suspend `/etc/catacomb/initrc`.  It still carries the session-54 overlay root + `/lib/modules/7.3.3/kernel/pvrsrvkm_omap4_sgx540_120.ko` + the pvrports stack (`libglvnd`, `mesa-pvr-dri-classic`, `sgx-ddk-um{,-ti443x,-openrc}`, `gcompat`, `wayland-libs-server`), with the module in `/etc/modules` and `modules.dep`, the `sgx-ddk-um` service in the default runlevel, and `MESA_LOADER_DRIVER_OVERRIDE=pvr` in a tinydm env file.  Mainline mesa 26.2.6 / llvm23 / spirv-tools were purged by the replacement.  The base apps image is `blackberry-playbook-root-apps.img` (`711cd5ec…`); the pre-pvr images (`1fcf0cb0…`, `1f14915f…`) and the pristine `076bafcf…` remain on the host.  The QNX userland is no longer on media; the 1917 IFS + vendor UFS are the way back.  See report 249 |
+| device-side files | **persistent on hd3 (session 58: the root is writable and grown):** the initramfs installs `/usr/sbin/dropbear`, `/etc/dropbear/*`, `/root/.ssh/authorized_keys`, `/etc/local.d/pb-ssh.start` and `/etc/local.d/pb-grow.start` on first boot, and `/etc/pb-grown` marks the grow.  `/var`, `/home` and `/tmp` are now real directories on the 56.5 G FS, so the DE state and the SSH kit survive a reboot (the state files written before the switch are on the grown FS).  `memdump3`/`memw32`/`pbi2c` are outside the tree: push them (paced) after a reflash (trap 177).  The first-Nura-boot log is `docs/captures/playbook-live-2026-11-15-hd3-nura-boot.txt`.  Session 57's touch tools (`evcap.py`, `keylog.py`, `muninraw`) lived only in `/tmp`; the measured evidence is preserved in the captures. |
 
 The factory boot budget is **self-maintaining in bench use**: every successful
 factory/CRC boot spends one unit, and the booted OS puts it back — our Linux
@@ -197,16 +223,17 @@ and a failed/half-formed write or a flat pack is still a brick risk.
 
 ## Blockers in play
 
-**Session 57 — the open blockers are:** (1) the **touch position ghost** — the
-release/merge bug is fixed, but fast taps still report the previous contact's
-coordinates, so typing is unreliable (report 247 §2; trap 296); (2) the
-**upload-path performance** — the OSK key-press jank and the glitchy top-left
-cursor are the partial shim uploads, now instrumented but not yet measured;
+**Session 58 — the open blockers are:** (1) the **backspace/enter repeat** —
+the touch driver is clean (one contact, one clean release) but squeekboard
+repeats action keys, so one tap deletes several characters; upstream catacomb
+1.7.0 replaced squeekboard with wvkbd, which is the planned fix (trap 299);
+(2) the **upload-path performance** — the OSK key-press jank and the glitchy
+top-left cursor are the partial shim uploads, instrumented but not measured;
 (3) **`epitaph` aborts** (rc 139, trap 292), so there is no panel; (4) **Kumo**
 needs a WPEWebKit/WebKit-fork build (not packaged, report 247 §4).  **Closed
-this session:** apps/background (`tabula`, `foot`, `netsurf`, `xournalpp`, the
-Catacomb companions), the audio log flood and the PM-QoS taint, and the idle
-suspend that was resetting the unit.
+this session:** the touch position ghost and the lost taps in a fast burst
+(kernel `#74`, report 248).  **Bench note:** DPMS-off cannot be woken by touch,
+so kill `swayidle` after every boot (trap 298).
 
 **The audio blocker is closed, speakers included, and the diagnostics are
 retired (sessions 47/48, reports 214/215).**
@@ -242,19 +269,20 @@ binary blob, and the assigned MAC is in NVRAM `deviceinfo`
 (`14:74:11:8f:9c:c3`, patched into the generic NVS).  It is the source for
 `wl128x-nvs.bin` **after** enumeration; it was never the `-110`.
 
-**The touch is half fixed (session 57).**  I²C2 `0x48072000` = `i2c-1` at
+**The touch is fixed (session 58).**  I²C2 `0x48072000` = `i2c-1` at
 `0x65`, `playbook-munin.c`, `input0`/`event0`; the 1917 `scaling.conf`
 calibration maps to 1024×600, the GPIO2_3 edge IRQ is `irq 110`, and the Y
-inversion is in (kernel `#69`).  The driver now re-reads a torn report until the
-counter parity matches and, while a contact is down, re-arms the poll work every
-10 ms — the controller asserts its line for the whole contact and the lift is a
-rising edge the irqchip does not deliver on a both-edge request (traps 296/297;
-kernel `#73`).  Contacts are 36–158 ms and separate.  **Open:** fast taps still
-ghost the position (report 247 §2).  The power/reset lines are still not driven
-by the driver; only cold boots need the GPIO pulse.
+inversion is in (kernel `#69`).  The driver re-reads a torn report until the
+counter parity matches, keeps sampling while the controller asserts its IRQ
+line (plus a 200 ms grace period) and, on a new down that repeats its slot's
+previous coordinates within 300 ms, waits one sample and reports the fresh
+position (kernel `#74`, report 248).  Contacts are separate and the fast-tap
+ghost is gone.  The remaining backspace/enter repeat is squeekboard's, not the
+driver (trap 299).  The power/reset lines are still not driven by the driver;
+only cold boots need the GPIO pulse.
 
-**Media state: region 0 = `0xB9DD91E3`** (kernel `7.3.3 #73`, `0x967398` B,
-`boot/chainloader/kernel.img` sha256 `5ac47496…`, the touch poll-on-touch fix);
+**Media state: region 0 = `0xED58EF36`** (kernel `7.3.3 #74`, `0x967CE0` B,
+`boot/chainloader/kernel.img` sha256 `c67b75c5…`, the touch position-ghost fix);
 region 1 = the WLAN+BT rootfs **`49e318bf…`** (67,108,864 B, **43 modules** +
 both `wl128x` SR firmware files + the CAM/4-sr `wl12xx.ko` + the per-unit NVS +
 `iw`/`wpa_supplicant`/`wpa_cli`/`passphrase` + the signed `regulatory.db`;
@@ -262,9 +290,9 @@ both `wl128x` SR firmware files + the CAM/4-sr `wl12xx.ko` + the per-unit NVS +
 **`f7858110…`** (625,999,872 B), the read-only lower.  The unit is on Linux,
 not TabletOS.  The way back to TabletOS is the 1917 IFS
 (`local/work/ifs-shim-sealed.ifs`, block `0x825`); the previous Linux images
-`0xA544A731`, `0x373674A4`, `0x23D88CBD`, `0xAB899C49`, `0xA8F0F30C`,
-`0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`, `0x17C2E119`, `0xBAFD9B3B`,
-`0x91E22899`, `0xAD85DF0F`, `0xF8BADFF3`, `0xE5E2AEAF`,
+`0xB9DD91E3`, `0xA544A731`, `0x373674A4`, `0x23D88CBD`, `0xAB899C49`,
+`0xA8F0F30C`, `0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`, `0x17C2E119`,
+`0xBAFD9B3B`, `0x91E22899`, `0xAD85DF0F`, `0xF8BADFF3`, `0xE5E2AEAF`,
 `0x58F85337`, `0x47ED0450`, `0x5A04ACD9`, `0x92458D00`, `0x7A5DD941`,
 `0x36597040`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x0DC36A11`,
 `0xE36C679A` and `0x04AF1433` remain.
@@ -273,23 +301,21 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 ## What is next
 
-0. **THE ACTIVE ITEM — the touch position ghost, then the upload profile
-   (session 57, report 247, ROADMAP items 7a/9).**  Apps and the wallpaper are
-   done (hd3 `f7858110…`) and the release/merge bug is fixed (kernel `#73`).
-   The next experiment:
-   * **decode `b3`/slot ownership**: enable
-     `echo 1 > /sys/module/playbook_munin/parameters/trace`, type a slow
-     `hello` while `evcap.py` runs, and correlate the `PBTS` raw bytes with the
-     evdev positions.  Then either track contacts by id or ignore slots whose
-     coordinates are stale.  The evidence is in
-     `docs/captures/touch-munin-2026-11-16.txt`.
+0. **THE ACTIVE ITEM — the OSK repeat, then the upload profile (session 58,
+   report 248, ROADMAP items 7a/9).**  The touch position ghost is fixed
+   (kernel `#74`, region 0 `0xED58EF36`) and typing is correct.
+   * **The repeat is squeekboard, not the driver** (trap 299): one contact
+     becomes three `0x7f` bytes; letters never repeat.  Upstream catacomb 1.7.x
+     uses **wvkbd**.  Moving the image to `postmarketos-ui-catacomb` 1.7.x is
+     the clean fix and needs the GLES2 shim rebased onto the newer
+     catacomb/smithay.
    * **then profile the upload path**: the `PBGL_PROFILE` catacomb is staged
      (`local/work/nura/pmaports/main/catacomb/`, `pkgrel=10001`, the profile
      patch); building it needs the pmbootstrap command in HANDOFF §0e.  The
      measured input latency is 8–33 ms, so the jank is redraw/upload, not
      input; `EGL_KHR_fence_sync` is present but `GL_OES_EGL_sync` is not and
      the context is not shared, so there is no `glFinish` to remove.
-   * the **export is current**: 64 files / 8 862 lines (`be2ca8ba…`) with the
+   * the **export is current**: 64 files / 8 981 lines (`ca17a057…`) with the
      pvr driver vendored; re-run the copy step on the next kernel change.
 1. **WL1283 — the WLAN ASSOCIATES (session 52, report 236).**  Session 51 fixed
    stability (CAM) and the scan (4-sr); session 52 found the association
@@ -352,7 +378,7 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    26 MHz ref/TCXO), the stack probes, and the firmware stays up; the only
    remaining node-level item is the **per-unit `wl128x-nvs.bin`** from the `hd5`
    calibration (report 197), to replace the generic NVS.
-5. **The unit is on the Nura overlay root from hd3** (image `0xE85217E5`), with
+5. **The unit is on the Nura overlay root from hd3** (image `0xED58EF36`), with
    the lower read-only and every write in the tmpfs upper; **no sshd** — use the
    `ttyGS0` shell on the USB ACM (`/dev/ttyACM0`, `playbook:~#`; note
    `tools/pbcon.py` expects `pb> ` and does not drive this shell — trap 274).

@@ -3,17 +3,22 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**8 862 lines / 64 files** against pristine **linux-7.3.3**
-(sha256 `be2ca8ba…`, session-57 export).  It was verified by applying it to
+**8 981 lines / 64 files** against pristine **linux-7.3.3**
+(sha256 `ca17a057…`, session-58 export).  It was verified by applying it to
 pristine 7.3.3 targets and comparing all 64 files byte-for-byte with
-`local/kernel-tree` — 0 rejects, 64/64 identical.  **Session 57** changes the
-Munin touch driver (`playbook-munin.c`: the parity re-read, the 10 ms
-poll-on-touch watchdog, the mutex and the `trace` parameter — traps 296/297,
-report 247) and the audio print levels (`omap-mcbsp.c` back to `dev_dbg`, the
-machine driver's per-stream prints to `dev_dbg`, the PM-QoS remove guarded —
-traps 293/294).  The walk excludes the **vendored SGX driver**
-(`drivers/gpu/drm/pvrsgx/`, 362 files) and `scripts/` (host tooling); without
-those exclusions the same walk reports 337 files, including two generated
+`local/kernel-tree` — 0 rejects, 64/64 identical.  **Session 58** fixes the
+Munin touch position ghost: `playbook-munin.c` keeps the 10 ms poll armed while
+the controller asserts its IRQ line (and for a 200 ms grace after the last
+contact), and holds a new down back one sample when it repeats the slot's
+previous coordinates within 300 ms; the board DTS gains `irq-gpios` on the
+touch node (report 248, traps 296/298/299).  **Session 57** changed the same
+driver (the parity re-read, the 10 ms poll-on-touch watchdog, the mutex and the
+`trace` parameter — traps 296/297, report 247) and the audio print levels
+(`omap-mcbsp.c` back to `dev_dbg`, the machine driver's per-stream prints to
+`dev_dbg`, the PM-QoS remove guarded — traps 293/294).  The walk excludes the
+**vendored SGX driver** (`drivers/gpu/drm/pvrsgx/`, 362 files) and `scripts/`
+(host tooling); without those exclusions the same walk reports 337 files,
+including `drivers/gpu/drm/pvrsgx/` (271 files) and two generated
 `scripts/mod/*.h`.  Session 52 adds two files,
 both in the USB gadget path: `drivers/usb/musb/musb_gadget.c` sets
 `musb->g.quirk_avoids_skb_reserve = 1` and

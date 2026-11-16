@@ -128,6 +128,7 @@ now `pr_debug` (dynamic debug); `PBREQ`/`PBIRQ` stay behind `pb_trace` (§6).
 | file | what |
 |---|---|
 | `touch-munin-2026-11-16.txt` | the chip's raw report stream with the driver unbound (a stable hold, a smooth drag, and five fast double-taps giving 14 contacts with 76–118 ms lift gaps); the `PBTS` driver trace showing **2 reads across a 480 ms contact** while the chip's counter advanced 40 samples; the evdev+character alignment for a slow `hello` (8–33 ms end-to-end); and the position-ghost example (`h,e,h,h` plus an in-contact move).  This is the evidence behind report 247 and traps 296/297.  The tools (`evcap.py`, `keylog.py`, `muninraw`) lived in `/tmp` and are not tracked. |
+| `touch-munin-2026-11-16-session58.txt` | the fixes on kernel `#74`: the clean `a,b,c,BackSpace` run (four contacts, each one down and one up), the `keylog.py` proof that **one backspace contact becomes three `0x7f`** while one `a` tap is one `0x61` and a 1.3 s `a` hold is still one `0x61`, and the DPMS-off observation (taps reach the kernel, `bl_power` stays 4).  Evidence behind report 248 and traps 298/299.  The tools (`evcap.py`, `keylog.py`, `inj.py`) are session scratchpad, not tracked. |
 
 ## Exact duplicates
 

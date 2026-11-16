@@ -14,6 +14,38 @@ duplicated here because the commit preserves it verbatim.
 `docs/project/STATE.md`; it was replaced by the session-43 state and is not
 duplicated here because the commit preserves it verbatim.
 
+## Previous state — 2026-11-16 (session 57)
+
+**THE UI HAS CONTENT AND THE TOUCH MERGE IS FIXED; a position ghost remained.**
+`tabula` drew the wallpaper, `foot`/`netsurf`/`xournalpp` ran, and the app set
+was baked into hd3.  The repeated-key bug was the driver losing the *release*:
+the controller asserts its line for the whole contact and the lift is a rising
+edge, so a falling-edge-only IRQ never read it; the fix is falling edge plus a
+10 ms poll while a contact is down (kernel `#73`).  Contacts were 36–158 ms and
+separate; a slow `hello` typed correctly at 8–33 ms end-to-end latency.  A fast
+burst still ghosted the *position* (h,e,h,h instead of h,e,l,l,o), which became
+session 58's item.  [report 247; capture `touch-munin-2026-11-16.txt`; traps
+296/297]
+
+**The audio log flood and the idle suspend were fixed.**  The McBSP register
+dump and the machine driver's per-stream prints went back to `dev_dbg`, and the
+PM-QoS remove was guarded (a failed 48 kHz `hw_params` no longer tainted the
+kernel).  The initrc no longer suspends: `loginctl suspend` blanked the panel,
+dropped USB and WDT2-reset the unit.  [traps 293–295]
+
+**`epitaph` was broken and squeekboard's globe was fixed.**  `epitaph` aborted
+(rc 139) after a UPower `GetAll` failure; `gsettings-desktop-schemas` and a
+recompiled `gschemas.compiled` stopped the layout switcher from killing
+squeekboard.  [trap 292]
+
+* **Region 0 = `0xB9DD91E3`** (`0x967398` B, sha256 `5ac47496…`, kernel `#73`).
+* **hd3 = `f7858110…`** (apps + rebuilt audio modules + gsettings + the
+  no-suspend initrc), read-only lower.
+* **Region 1 = `49e318bf…`** (the fallback, not booted).
+* **Bench:** ACM `0fca:8010`, `playbook:~#`; no sshd; `usb0` down after boot;
+  `BOOTCTR_FCTRY` `0x25`.
+* **Next:** the touch position ghost, then the upload-path profile.
+
 ## Previous state — 2026-11-15 (session 56)
 
 **THE SGX540 COMPOSITOR WORKS: catacomb runs on the PowerVR SGX 540.**  The

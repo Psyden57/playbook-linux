@@ -2406,36 +2406,13 @@ report 121 §3/§11/§12.
       `pkgrel=1`); the image carries the same edit.  Kill `swayidle` on a
       running root to stop the timer before it fires.  (Session 57.)
 
-296. **Fast taps are merged because our Munin driver drops the sample that
-      carries the lift.**  The report register is updated asynchronously with
-      the IRQ, so an IRQ-timed 18-byte read can hold the status/counter from
-      one sample and the contact bytes from another; the counter parity detects
-      it, and `munin_report()` used to `return` on a mismatch.  The lift is
-      exactly the transition that gets caught mid-update, so the release is
-      dropped and the next tap's down arrives as a position jump inside the
-      previous contact.  Evidence: the raw register stream (driver unbound)
-      shows the chip does report the gaps — five double taps gave 14 contacts
-      with 76–118 ms lift gaps, 0 multi-slot samples and no jumps — and a
-      polled read is torn ~6 % of the time; on the evdev side the same taps
-      appear as one contact with a single jump (e.g. `h` at (628,445) →
-      `l` at (923,461) ~250 ms later), so the OSK emits two letters and a fast
-      second tap is swallowed.  (Note: idle evdev is *silent by design* — the
-      input core suppresses duplicate `SYN_REPORT`s — so "no idle events" is
-      not evidence about the reads; gotcha for the next session.)  Fix, in two
-      steps (kernels `#70`/`#73`): (a) re-read up to 4 times with
-      `usleep_range(200,400)` until the parity matches instead of dropping the
-      sample; (b) request the IRQ **falling-edge** (a both-edge request makes
-      the OMAP GPIO counter stay at 0 — trap 297) and, while any contact is
-      down, re-arm the 20 ms poll work with a 10 ms delay so the lift is read.
-      Measured after the fix: contacts are 36–158 ms and separate (14 contacts
-      for the test burst), so fast taps no longer merge.  **Still open:** the
-      controller sometimes reports a later tap at the *previous* position
-      (h,e,h,h instead of h,e,l,l,o, with an in-contact move from h to e); the
-      driver indexes contacts by slot, while the chip reuses slots and carries
-      no stable per-contact id we decode.  Needs contact-id/stale-slot
-      handling before typing is reliable.  The touch driver is built in
-      (`CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`), so these are region-0 changes.
-      (Session 57.)
+296. **Fixed (session 58, kernel `#74`): the fast-tap merge and the position
+      ghost.**  The driver re-reads a torn report until the counter parity
+      matches, keeps the 10 ms poll armed while the controller asserts its IRQ
+      line and for a 200 ms grace period, and holds a new down back one sample
+      when it repeats the slot's previous coordinates within 300 ms.  Report
+      248.  The session-57 analysis and the fix history are in
+      `docs/history/KNOWN-ISSUES-HISTORY.md`, `## Trap 296`.
 
 297. **A both-edge GPIO IRQ request on this line silently yields no
       interrupts.**  Changing the Munin IRQ to `IRQF_TRIGGER_FALLING |
@@ -2445,6 +2422,64 @@ report 121 §3/§11/§12.
       request but did not deliver either edge, and there is no polling
       fallback while `using_irq` is true, so touch dies completely.  Use
       falling-edge plus a poll-on-touch watchdog instead.  (Session 57.)
+
+298. **DPMS off is a one-way trip under touch; kill `swayidle` on the bench.**
+      The image's initrc runs `swayidle -w timeout 180 "catacomb msg dpms off"
+      resume "catacomb msg dpms on"`, and after 3 idle minutes `bl_power`
+      becomes 4 (`FB_BLANK_POWERDOWN`).  **Touching the screen does not restore
+      it**: on a DPMS-off panel the kernel still received the taps
+      (`/proc/interrupts` for `1-0065` advanced, `PBTS` logged them, evdev
+      delivered them) but `bl_power` stayed 4.  Typing on the ACM console is
+      not input activity, so a bench session goes dark while it works.  Restore
+      with `XDG_RUNTIME_DIR=/run/user/10000 WAYLAND_DISPLAY=wayland-1 catacomb
+      msg dpms on`, and after every boot `pkill -f swayidle` before a long
+      bench.  (Session 58, report 248; corrects session 57's "any touch
+      restores it".)
+
+299. **The backspace/enter repeat is squeekboard's action-key repeat, not the
+      touch driver.**  One tap produces one clean evdev contact (`down=01` →
+      `down=00`, `MT_TRACKING_ID -1`), but squeekboard 1.43.1 sends **three**
+      `0x7f` bytes for it (+0/+194/+234 ms; measured with `keylog.py` on the
+      terminal's stdin).  Letters never repeat (one `a` tap = one `0x61`, and
+      an `a` held 1.3 s = one `0x61`).  So do not "fix" this in
+      `playbook-munin.c`, and do not read it as a lost release.  Upstream
+      **catacomb 1.7.0 replaced squeekboard with wvkbd** (verified 2026-11-16,
+      squeekboard is unmaintained); the image's `postmarketos-ui-catacomb`
+      still depends on squeekboard, and moving to wvkbd needs the catacomb
+      GLES2 shim rebased onto the newer catacomb/smithay.  (Session 58, report
+      248.)
+
+300. **The eMMC's cache flush hangs the card (`Card stuck being busy!`), and the
+      block layer reports it at sector 0.**  A journalled read-write root
+      reproduces it on the first commit (`I/O error, dev mmcblk1, sector 0 op
+      0x1:(WRITE)`, `Aborting journal on device loop0-8`, remount read-only).
+      A flush carries no data, hence sector 0.  Mount the root with
+      `barrier=0` **and** set `/sys/block/{mmcblk1,loopN}/queue/write_cache` to
+      `write through` before the mount (the initramfs does both): the journal
+      stops issuing the flush, the FS stays writable and `resize2fs` completes.
+      **An explicit `sync` still stalls** (measured: `sector 0 … flags
+      0x900000`, a lost async page write), because the MMC core issues
+      `FLUSH_CACHE` whenever `EXT_CSD.CACHE_SIZE != 0` — the queue flag does not
+      gate it.  The clean fix is to clear the card's cache capability
+      (`EXT_CSD.CACHE_CTRL` = 0 and/or a `cache_size = 0` quirk in `mmc`), so
+      no flush is issued.  Data writes are fine (a 16 KiB `O_DIRECT` probe and
+      the 15-million-block resize both succeeded).  (Session 58, report 249 §3.)
+
+301. **One `DSI: omapdss DSI error: Failed to set dsi_if_enable to 0` at boot
+      can recover.**  Measured at 52.7 s on the read-write boot, followed by a
+      successful PLL re-lock and hs-clock null packets at 54 s; catacomb runs
+      and the backlight is on.  A single modeset that recovers is not the
+      wedged-link case of trap 289 — that one is a compositor *restart* over a
+      live link.  Watch for a repeat; reboot on a real wedge.  (Session 58,
+      report 249 §5.)
+
+302. **An unpaced host→device RNDIS burst loses data.**  Two `nc` copies of the
+      968 032-byte dropbear came back short (724 960 and 752 384 bytes) when the
+      host sent in one go; sending 8 KiB chunks with a 5 ms pause is
+      byte-exact.  Pace bulk pushes (`nc -l -p` on the device; the host paces).
+      The link itself is fast (session 52: RX 6.3 / TX 4.1 MB/s), so this is a
+      burst/queue effect, not the DMA alignment bug.  (Session 58, report
+      249 §4.)
 
 ## 3. Corrections to older reports
 

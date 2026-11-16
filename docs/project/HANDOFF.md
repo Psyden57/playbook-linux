@@ -1,4 +1,4 @@
-# Handoff — session 57 (absolute)
+# Handoff — session 58 (absolute)
 
 ## 0. The job, and where it stands
 
@@ -7,60 +7,62 @@
 media region 0 with an initramfs that hands PID 1 to a **Nura** root on hd3
 with a GPU-accelerated compositor.
 
-**Working:** everything from session 56 (audio, touch calibration, display,
-eMMC/overlay, WLAN on the region-1 root, BT core, SGX540/catacomb) — plus this
-session: **apps and background** (`tabula` wallpaper, `foot`, `netsurf`,
-`xournalpp`, the Catacomb companions), the **audio log cleanup**, the
-**no-suspend initrc**, and the **touch release fix**.
+**Working:** everything from session 57 (apps and background, the audio log
+cleanup, the no-suspend initrc) — plus this session: **the touch position ghost
+is fixed** (kernel `#74`) and **the root is writable, grown to 56.5 G, with SSH
+back** (kernel `#77`, region 0 `0x294F8E36`).  `PB_LINK=usb tools/pbssh.sh` is
+the clean shell; the ttyGS0 getty is the fallback.
 
-**THE NEXT ITEM (operator): the touch position ghost, then the upload profile.**
-The repeated-key bug is fixed: the controller asserts its line for the whole
-contact and the lift is a rising edge, so a falling-edge-only IRQ never read it;
-kernel `#73` keeps falling-edge, re-reads until the counter parity matches, and
-re-arms the driver's poll work every 10 ms while a contact is down.  Contacts are
-now 36–158 ms and separate, and a slow `hello` types correctly at 8–33 ms
-end-to-end.  **What remains:** a *fast* tap can be reported at the **previous**
-contact's coordinates (h,e,h,h instead of h,e,l,l,o), so typing is unreliable.
-Report 247 §2, capture `touch-munin-2026-11-16.txt`, trap 296.
+**THE NEXT ITEM: clear the eMMC cache capability so no flush is issued.**  The
+root is writable with `barrier=0` + `write_cache=write through`, but an explicit
+`sync` still hits `mmc1: Card stuck being busy!` (`sector 0`, a flush) because
+the MMC core sends `FLUSH_CACHE` whenever `EXT_CSD.CACHE_SIZE != 0`.  Set
+`CACHE_CTRL = 0` (mmc-utils or a tiny `MMC_IOC_CMD` tool) and/or quirk
+`cache_size = 0` in `mmc`.  Report 249 §3, trap 300.
+
+**Then:** the backspace/enter repeat (squeekboard; wvkbd in catacomb 1.7.x —
+trap 299) and the upload profile (§0b).
 
 ## 0a. THE ONE EXPERIMENT (do this first)
 
-**Question:** does the ghost come from the controller's report or from our read
-of it?
+**Question:** can the eMMC's cache be disabled so no `FLUSH_CACHE` is issued,
+removing the last stall?
 
-**Inputs:** kernel `#73` (region 0 `0xB9DD91E3`); the `trace` parameter; the
-`evcap.py` decoder (session scratchpad, or re-create from the capture's tool
-note) and, for the raw side, `muninraw` (same source).
+**Inputs:** the running read-write root (region 0 `0x294F8E36`); `mmc-utils` is
+**not installed**, so either build a static `mmc` and push it (paced; trap 302)
+or use a tiny `MMC_IOC_CMD` tool.  The card is `/dev/mmcblk1` (MCGAFA).  The two
+EXT_CSD bytes are **CACHE_SIZE = 249** (read it; non-zero means the kernel will
+flush) and **CACHE_CTRL = 33** (0 = cache off, 1 = on).
 
-1. On the Nura shell:
-   `echo 1 > /sys/module/playbook_munin/parameters/trace`
-2. Push `evcap.py` over usb0; run `python3 /tmp/evcap.py 120 /tmp/ev.txt &`.
-3. Tap a **slow h,e,l,l,o** (pause ~1 s between keys) and then one **fast h,e,l,l,o**.
-4. Read `dmesg | grep PBTS` and `/tmp/ev.txt`.
+1. Read: `mmc extcsd read /dev/mmcblk1 | grep -E 'CACHE_SIZE|CACHE_CTRL'`.
+2. Disable: `mmc cacheoff /dev/mmcblk1` (CMD6 `WRITE_BYTE` index 33 = 0).
+3. Verify the read-back is `CACHE_CTRL = 0x00`.
+4. `sync` and check `dmesg | tail` for `Card stuck being busy` / `I/O error`.
+
+**These commands are untested here** (`mmc-utils` is not installed; building a
+static `mmc` or a tiny `MMC_IOC_CMD` tool is part of the experiment).
 
 **What each result means:**
 
-* **The `PBTS` down line's `raw=` bytes carry the *new* position, but the
-  contact immediately "moves" to the old one, and a polled raw read (driver
-  unbound) of the same contact is correct** → our IRQ-timed read is stale; add
-  a double-read consistency check (read twice and compare all 18 bytes before
-  accepting).
-* **The `raw=` bytes themselves show the new contact at the previous
-  coordinates for several samples** → the controller's slot update lags; the
-  fix is to track contacts by `b3` (which alternates 01/02) or to delay the down
-  report until the position is fresh.
-* **The down is correct and later samples move to the old position** → the
-  controller is reassigning slots; the fix is slot/ID mapping, not timing.
+* **No stall; `sync` clean** → the flush was the only failing command.  Record
+  it; keep `barrier=0` + write-through; consider a one-line kernel quirk to
+  clear `card->ext_csd.cache_size` so ext4 never asks either.
+* **Still stalls** → the MMC core still issues the flush because `CACHE_SIZE`
+  is non-zero regardless of `CACHE_CTRL`.  Add the quirk (clear
+  `cache_size` in `mmc` for this card) and re-test; the card command itself is
+  then not sent.
+* **The write is refused or the card resets** → abort, keep the current
+  workaround (`barrier=0` + write-through; do not call `sync`), and record the
+  refusal.  The card is the boot media; `CACHE_CTRL` is standard and reversible
+  (set it back to 1), but do not retry a refused EXT_CSD write.
 
-Then implement the matching fix in `kernel/source/playbook-munin.c` (+ the
-`local/kernel-tree` copy), rebuild `zImage`, wrap, flash region 0 only (the
-touch driver is built in), and re-run the same capture.  Do not enable both IRQ
-edges (trap 297).
+The touch experiment from earlier this session is done: see report 248 and
+§0d; do not repeat it.
 
-## 0b. The upload-path profile (second, after the touch)
+## 0b. The upload-path profile (next performance item)
 
 The input latency is 8–33 ms, so the OSK jank and the glitchy top-left cursor
-are redraw/upload, not input.  A profile build of catacomb is **staged**:
+are redraw/upload.  A profile build of catacomb is **staged**:
 
 * `local/work/nura/pmaports/main/catacomb/APKBUILD` is `pkgrel=10001` and applies
   `smithay-gles2-profile.patch` (env-gated by `PBGL_PROFILE`) after the GLES2
@@ -74,54 +76,60 @@ are redraw/upload, not input.  A profile build of catacomb is **staged**:
     python3 pmbootstrap.py --as-root --no-cross --no-ccache \
     build --lax --arch armv7 catacomb
   ```
-* Bake the resulting APK into a copy of hd3 with the offline `apk --root`
-  method, flash hd3 only, and run catacomb with `PBGL_PROFILE=1` (tinydm env
-  file).  Then type on the OSK and read the tinydm log.
+* Bake the APK into a copy of hd3 with the offline `apk --root` method, flash
+  hd3 only, and run catacomb with `PBGL_PROFILE=1` (tinydm env file).  Then type
+  on the OSK and read the tinydm log.
 
-Measured facts for the profile: `EGL_KHR_fence_sync` **is** present,
-`GL_OES_EGL_sync` is not, and catacomb's `EGLContext::new()` is **not shared**,
-so the upload path does **not** call `glFinish`; the cost is the `TexSubImage2D`
-calls themselves.
+Measured facts: `EGL_KHR_fence_sync` **is** present, `GL_OES_EGL_sync` is not,
+and catacomb's `EGLContext::new()` is **not shared**, so the upload path does
+**not** call `glFinish`; the cost is the `TexSubImage2D` calls themselves.
 
 ## 0c. The media, and the way back
 
-* **region 0 = `0xB9DD91E3`** (`0x967398` B, `boot/chainloader/kernel.img`
-  sha256 `5ac47496…`, kernel **`7.3.3 #73`**) — the touch poll-on-touch fix.
-* **hd3 = `f7858110…`** (625 999 872 B;
-  `local/work/nura/images/blackberry-playbook-root-apps-audio.img`) — the
+* **region 0 = `0x294F8E36`** (`0x9E0980` B, `boot/chainloader/kernel.img`
+  sha256 `f0738625…`, kernel **`7.3.3 #77`**) — the read-write root, the
+  dropbear/SSH install, `barrier=0` + write-through, and the one-shot
+  `resize2fs`.
+* **hd3 (media)** = the Nura root **grown in place to 56.5 G**, read-write, with
+  the SSH kit installed.  It is **no longer `f7858110…`**; the
+  flasher-restorable image is `local/work/nura/images/
+  blackberry-playbook-root-apps-audio.img` (`f7858110…`, 625 999 872 B) — the
   session-56 compositor image + the app set + the rebuilt audio modules +
-  `gsettings-desktop-schemas` + the no-suspend initrc, mounted **read-only** at
-  boot.  Its base apps image is `blackberry-playbook-root-apps.img`
-  (`711cd5ec…`).
+  `gsettings-desktop-schemas` + the no-suspend initrc.
 * **region 1 = `49e318bf…`** (the BusyBox fallback, not booted).
-* **`BOOTCTR_FCTRY = 0x25`** (`dmesg | grep pbrpmb`; started `0x2c`, the flash
-  boots and two idle-suspend resets spent the difference).
-* **The unit is on the Nura overlay root** (`0fca:8010`, console
-  `playbook:~#` on the ACM `/dev/ttyACM0`, **no sshd**).  **`usb0` is down
-  after boot** — `ip link set usb0 up; ip addr add 169.254.0.1/16 dev usb0`;
-  transfer host→device (device `nc -l -p 8765 > /tmp/f`, host sends).
+* **`BOOTCTR_FCTRY` = `0x32`** (this boot read `0x1B` and `/init` wrote `0x32`;
+  the reboots had drained `0x25 → 0x1B`).  Read it with `dmesg | grep pbrpmb`.
+* **The unit runs the Nura root read-write** (`0fca:8010`, `169.254.0.1:22`
+  dropbear, `PB_LINK=usb tools/pbssh.sh`; the ACM `playbook:~#` getty is the
+  fallback).  `usb0` is brought up by `/etc/local.d/pb-ssh.start`; **pace bulk
+  host→device transfers** (8 KiB/5 ms; trap 302).  `/tmp` is a real directory on
+  the grown FS now, but still treat a reflash as wiping the root.
 * **To boot the ORACLE:** flash `local/work/ifs-shim-sealed.ifs` at block
   `0x825`, then reboot; `0fca:8012`, `PB_LINK=door tools/pbssh.sh`.  **To stock
   TabletOS:** that IFS at `0x825` + `local/work/rcfs-1917.rcfs` at `0x8D5`
-  (+ the vendor UFS if hd3 was repurposed).  `/tmp` is wiped by a reboot.
-  **Do NOT restore `local/images/ifs0.sealed.bin`** (trap 84).
+  (+ the vendor UFS if hd3 was repurposed).  **Do NOT restore
+  `local/images/ifs0.sealed.bin`** (trap 84).
 
 ## 0d. What this session fixed (do not redo)
 
-* **Drivers**: `omap_mcbsp_dump_reg()` and the machine driver's per-stream
-  prints are `dev_dbg`; the PM-QoS remove is guarded with
-  `cpu_latency_qos_request_active()`; the Munin driver has the parity re-read,
-  the poll-on-touch watchdog, and an off-by-default `trace` parameter.
-* **Image**: `tabula`/`epitaph`/`tzompantli`/`gorm`/`swayidle`/`foot`/`grim`/
-  `slurp`/`tremor`/`netsurf`/`xournalpp`; `gsettings-desktop-schemas` +
-  `gschemas.compiled`; the rebuilt audio modules; the initrc's
-  `swayidle timeout 180 "catacomb msg dpms off"` + `resume "catacomb msg dpms
-  on"` and **no suspend**.
-* **Export**: 64 files / 8 862 lines, sha256 `be2ca8ba…`, 0 rejects / 64/64
-  identical.  Re-run the copy step (`kernel/vendor/README.md`) on the next
-  kernel change and the tree walk after `make clean` (traps 161/211).
+* **The root is writable and grown, and SSH is back.**  `initramfs/init.c`
+  mounts hd3 read-write (no overlay), installs the static dropbear + host keys +
+  authorized key + `/etc/local.d/{pb-ssh,pb-grow}.start` on first boot, sets
+  `barrier=0` and `write_cache=write through` on the card and the loop, and
+  chroots.  `pb-grow.start` runs `resize2fs` once (`/etc/pb-grown`) → 56.5 G.
+  `PB_LINK=usb tools/pbssh.sh` works; the ttyGS0 getty stays.  Kernel `#77`,
+  region 0 `0x294F8E36`.
+* **Touch** (`playbook-munin.c` + the board DTS): the poll now survives a burst
+  (keeps sampling while the controller asserts its line, plus a 200 ms grace)
+  and a new down is confirmed on a fresh sample (the ghost).  The optional
+  `irq-gpios = <&gpio2 3 GPIO_ACTIVE_LOW>` gives the driver the line level; the
+  `trace` output now carries `down=<mask> line=<level>`.  Kernel `#74`.
+* **Export**: 64 files / 8 981 lines, sha256 `ca17a057…`, 0 rejects / 64/64
+  identical.  The walk excludes `drivers/gpu/drm/pvrsgx/` and `scripts/`.
+  Re-export only when the kernel source changes; the session-58 initramfs/SSH
+  work did not touch it.
 
-## 0e. catacomb build (only if the profile or a compositor change needs it)
+## 0e. catacomb / OSK package work
 
 ```bash
 cd local/work/nura/pmbootstrap
@@ -132,6 +140,13 @@ sudo env HOME=$HOME XDG_CONFIG_HOME=$PWD/../config PYTHONPATH=$PWD \
 `--no-cross` because crossdirect refuses native rustc 1.100.0 against the
 armv7 chroot's 1.99.1; `--no-ccache` because `sccache` is absent.  Artifact:
 `local/work/nura/work/packages/edge/armv7/catacomb-1.5.0-r10001.apk`.
+
+**The OSK move:** upstream catacomb 1.7.0 depends on **wvkbd** instead of
+squeekboard.  Moving `postmarketos-ui-catacomb` to 1.7.x is the fix for the
+backspace/enter repeat; it needs the GLES2 shim patch rebased onto the newer
+catacomb/smithay, and the `postmarketos-ui-catacomb` APKBUILD's dependency
+changed from `squeekboard` to `wvkbd`.  Do not try to fix this in the touch
+driver.
 
 ## 0f. Apps, the schema, and known breakage
 
@@ -146,6 +161,7 @@ armv7 chroot's 1.99.1; `--no-ccache` because `sccache` is absent.  Artifact:
   `chrisduerr/WebKit` fork; Alpine/Nura have `libwpe`/`wpebackend-fdo` but no
   `wpewebkit`.  `netsurf` is the interim browser; `badwolf` (WebKitGTK 4.1) is
   the packaged WebKit option.
+* **Backspace/enter repeat is squeekboard's** (trap 299); see §0e.
 
 ## 0g. FM and GPS (parked)
 
@@ -156,8 +172,8 @@ fallback.
 
 ## 1. Useful local extracts
 
-* `kernel/patches/0001-playbook-winchester-7.3.3.patch` (64 files / 8 862
-  lines, `be2ca8ba…`) + `kernel/vendor/pvrsgx-…tar.xz`.
+* `kernel/patches/0001-playbook-winchester-7.3.3.patch` (64 files / 8 981
+  lines, `ca17a057…`) + `kernel/vendor/pvrsgx-…tar.xz`.
 * `local/work/modules-7.3.3/` — the 43 modules including the rebuilt
   `snd-soc-omap-mcbsp.ko` / `snd-soc-playbook-wm8994.ko`.
 * `local/work/nura/images/blackberry-playbook-root-apps-audio.img` (`f7858110…`)
@@ -166,8 +182,10 @@ fallback.
   the GLES2 fallback patch and the profile patch.
 * `local/work/nura/pmaports/main/postmarketos-ui-catacomb/initrc` (no suspend)
   and its `pkgrel=1` APKBUILD.
-* `docs/captures/touch-munin-2026-11-16.txt` — the touch evidence.
-* Reports **247** (this session), 246, 243–245.
+* `docs/captures/touch-munin-2026-11-16-session58.txt` — this session's touch
+  evidence; `…-2026-11-16.txt` is session 57's.
+* Reports **249** (the writable/grown root and the eMMC flush), **248** (the
+  touch ghost and the squeekboard repeat), 247, 246, 243–245.
 
 ## 2. Build and flash (7.3.3)
 
@@ -179,6 +197,11 @@ tar -xJf kernel/vendor/pvrsgx-1.17.4948957-101c687a.tar.xz -C "$K/drivers/gpu/dr
 arm-linux-gcc -static -O2 -Wall -o initramfs/root/console initramfs/console.c
 arm-linux-gcc -static -O2 -Wall -o initramfs/root/init    initramfs/init.c
 arm-linux-gcc -static -O2 -Wall -o initramfs/root/pbrpmb  initramfs/rpmb.c
+# the initramfs also installs the SSH kit (session 58); these are gitignored:
+cp local/work/dropbear/dropbear initramfs/root/dropbear
+cp local/work/ssh/dropbear_*_host_key initramfs/root/
+cp local/secrets/rsa.pub initramfs/root/authorized_keys
+chmod 600 initramfs/root/dropbear_*_host_key initramfs/root/authorized_keys
 rm -f $K/usr/initramfs_data.cpio*
 make -C $K ARCH=arm CROSS_COMPILE=arm-linux- -j12 zImage
 make -C $K ARCH=arm CROSS_COMPILE=arm-linux- ti/omap/omap4-winchester.dtb
@@ -210,42 +233,52 @@ reboot.
 
 ## 3. Bench
 
-* The Nura `ttyGS0` prompt is **`playbook:~#`**; `tools/pbcon.py` does not drive
-  it (trap 274).  `pbraw.py` for raw reads; the session's `nr.py`-style helper
-  (marker + paced write) is the convenient driver.
-* **After a boot, kill `swayidle` if you will be idle**: the image's initrc now
-  only does DPMS, but a *pre-session-57* root would still suspend and reset.
-  The current image is safe (`timeout 180` DPMS off, `resume` on).
-* **The touch trace:**
-  `echo 1 > /sys/module/playbook_munin/parameters/trace`, then
-  `dmesg | grep PBTS`; `PBTS` shows `st/x17/b3/x/y/reads/torn` and the 18 raw
-  bytes on every contact transition and every jump > 40.
-* `evdev`: `evcap.py <secs> <file>`; characters with `keylog.py` inside `foot`.
+* **SSH is the primary shell:** `PB_LINK=usb tools/pbssh.sh 'cmd'` (root,
+  key-only, `169.254.0.1:22`; `usb0` is brought up by
+  `/etc/local.d/pb-ssh.start`).  The ttyGS0 getty on the ACM is the fallback
+  (`playbook:~#`; `tools/pbcon.py` does not drive it — trap 274).
+* **Pace bulk host→device pushes:** 8 KiB chunks with a 5 ms pause (trap 302).
+  The device side is `nc -l -p <port> > /tmp/f`; the host sends.  An unpaced
+  burst is truncated.
+* **After every boot, `pkill -f swayidle`** before a long bench: its 180 s <!-- audit-ok: the initrc's timer value, not a session count -->
+  DPMS-off is a one-way trip under touch (trap 298).  Restore a dark panel with
+  `XDG_RUNTIME_DIR=/run/user/10000 WAYLAND_DISPLAY=wayland-1 catacomb msg dpms
+  on`.
+* **Injecting a command into foot's shell:** `TIOCSTI` on `/dev/pts/0` works
+  (`scratchpad/inj.py <cmd>`); writing `/proc/<foot>/fd/7` (the pty master) does
+  **not** feed the terminal.  `keylog.py` on foot's stdin logs the bytes the app
+  receives — the decisive tool for input bugs.
+* **The touch trace:** `echo 1 > /sys/module/playbook_munin/parameters/trace`,
+  then `dmesg | grep PBTS`; `PBTS` shows `st/x17/b3/x/y/reads/torn/down/line`
+  and the 18 raw bytes on a slot-0 transition or a jump > 40.
+* `evdev`: `evcap.py <secs> <file>`; characters with `keylog.py`.
 * **The compositor:** `md5sum /usr/bin/catacomb` (r10000 `7418d9ea…`);
   `pgrep -a catacomb`; `tail -20 /home/playbook/.local/state/tinydm.log`;
   `catacomb msg dpms on|off`; a restart over a wedged DSI does not recover
   (trap 289) — reboot.
-* hd3 checks: `dd` the superblock at `0x49000000`; read-only is safe.
-* WLAN/BT: as `STATE.md` §0b/§0c of the session-56 handoff; WM8994
-  `i2ctransfer` args DECIMAL, bus 4 addr `0x1a`.  QNX tools `-static`; `/tmp`
-  is wiped by a reboot.
+* **The root FS:** `/dev/loop0` on `/` is the hd3 ext4, read-write, 56.5 G;
+  `barrier=0` and `write_cache=write through` are set by the initramfs.  An
+  explicit `sync` still stalls the eMMC (trap 300) — avoid it until the card
+  cache is disabled.
+* WLAN/BT: as `STATE.md`; WM8994 `i2c2` bus 4 addr `0x1a` (decimal args).  QNX
+  tools `-static`.
 
-## 4. Traps added last session (full list 14–297 in `KNOWN-ISSUES.md` §2)
+## 4. Traps added last session (full list 14–302 in `KNOWN-ISSUES.md` §2)
 
-* **292.** `epitaph` 1.4.0 aborts (rc 139) after a UPower `GetAll` failure.
-* **293.** The audio bring-up diagnostics were still at info level; now
-  `dev_dbg` (`omap_mcbsp_dump_reg`, the machine driver's per-stream lines).
-* **294.** A failed `hw_params` removed an inactive PM-QoS request → WARN +
-  taint; guarded.
-* **295.** `loginctl suspend` blanks the panel, drops USB and WDT2-resets the
-  unit; the initrc no longer suspends.
-* **296.** The driver dropped the lifted-contact sample; the controller holds
-  its line through the contact, so the release needs a poll (kernel `#73`).
-* **297.** A both-edge GPIO IRQ request on this line yields **0** interrupts.
-* Still current: 285–291, 266, 267, 268/274, 269, 270, 271, 275–284, **265**,
-  264, 261, 260, 259, 253–258, **250**, **248**, **247**, **244**, **246**,
-  **243**, **241**, **239**, **238**, **237**, **236**, **227**, **224**,
-  **221**, **214**, **212**, **211**, **190**.
+* **300.** The eMMC cache flush hangs (`Card stuck being busy`, sector 0); the
+  root needs `barrier=0` + write-through, and an explicit `sync` still stalls
+  until the card cache is disabled.
+* **301.** One `DSI … Failed to set dsi_if_enable to 0` at boot recovered.
+* **302.** An unpaced host→device RNDIS burst loses data; pace it.
+* **298.** DPMS off cannot be woken by touch; kill `swayidle` after every boot.
+* **299.** The backspace/enter repeat is squeekboard's action-key repeat (one
+  contact → three `0x7f`; a letter never repeats); upstream catacomb 1.7.x uses
+  wvkbd.
+* **296** is fixed (kernel `#74`): the position ghost and the lost burst taps.
+* Still current: 292–295, 285–291, 266, 267, 268/274, 269, 270, 271, 275–284,
+  **265**, 264, 261, 260, 259, 253–258, **250**, **248**, **247**, **244**,
+  **246**, **243**, **241**, **239**, **238**, **237**, **236**, **227**,
+  **224**, **221**, **214**, **212**, **211**, **190**.
 
 ## 5. Where things are
 
@@ -253,22 +286,24 @@ reboot.
 |---|---|
 | safety before any write | `docs/project/SAFETY.md` |
 | build/flash/boot/console | `docs/project/DEVELOPMENT.md` |
-| **the active plan (touch ghost, then profile)** | `docs/project/ROADMAP.md` items 7a/9, report **247** |
-| **the touch evidence** | `docs/captures/touch-munin-2026-11-16.txt` |
+| **the active plan (eMMC cache, then OSK/profile)** | `docs/project/ROADMAP.md` items 7a/9, reports **249** and **248** |
+| **the writable root / grow / flush** | report **249**, `initramfs/init.c`, trap 300 |
+| **the touch evidence** | `docs/captures/touch-munin-2026-11-16-session58.txt` |
 | **the catacomb package + patches** | `local/work/nura/pmaports/main/catacomb/` |
+| **the OSK package** | `local/work/nura/pmaports/main/postmarketos-ui-catacomb/` |
 | **the SGX kernel driver (vendored)** | `kernel/vendor/pvrsgx-1.17.4948957-101c687a.tar.xz` + `README.md` |
 | **the kernel tree (source)** | `local/kernel-tree/` |
 | **the export** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` |
 | **the config** | `kernel/winchester-7.3.3.config` |
-| **the overlay root code** | `initramfs/init.c` |
-| **the hd3 images** | `local/work/nura/images/` |
+| **the initramfs root code** | `initramfs/init.c` (read-write mount, SSH install, grow script) |
+| **the hd3 images** | `local/work/nura/images/` (the flasher-restorable base is `…-apps-audio.img`, `f7858110…`) |
 | flasher (region 0/1, **hd3**) | `tools/bbusb.py` |
 | the module staging | `local/work/modules-7.3.3/` |
 | board DTS + patched drivers | `kernel/source/`, `local/kernel-tree/` |
 | OSS player / mixer / BT probe | `rootfs/pbplay.c`, `rootfs/pbmix.c`, `rootfs/hci.c` |
 | qconn / ssh | `tools/QCL.py`, `tools/pbssh.sh` |
-| reports | `docs/reports/` (**247** current) |
-| sessions | `docs/sessions/session-57.md` |
+| reports | `docs/reports/` (**249** current) |
+| sessions | `docs/sessions/session-58.md` |
 
 ## 6. Working rules (including the operator's explicit preferences)
 
@@ -281,14 +316,15 @@ reboot.
 * After every console command, dump the log tail and read it.  Read
   `dmesg`/`sloginfo` **unfiltered** after a reboot or structural change.
   **Do not run two console commands in parallel** — they interleave on the one
-  tty (a session-57 mistake).
+  tty.
 * Write the durable fact into the repository in the same turn.
 * **One variable per boot.**  A test boot is not a budget concern.
 * **Never present a guess as a fact.**  Prefer a fresh read.
 * **Use the reference before the bench** (DECISIONS §61).  Subagents:
   static/file-only (trap 109) and time-boxed.
 * **Look up every external fact.**  Nura was renamed on 2026-09-27; search
-  "Nura", and expect `postmarketos`/`pmaports` in package names.
+  "Nura", and expect `postmarketos`/`pmaports` in package names.  Catacomb's
+  OSK move to wvkbd was confirmed this session, not recalled.
 * **Revert experiments and prove the revert.**
 * **The flash:** `--from-bootrom` needs the unit **booted** (or already in the
   bootrom); one bootrom session; the pack coordinate is the loader block minus
@@ -304,56 +340,59 @@ reboot.
 ## 7. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 58 (absolute; Linux-era 52)
+PlayBook (OMAP4430 "winchester") — session 59 (absolute; Linux-era 53)
 
 Workspace: this repository — a git checkout.  Map: docs/README.md.  The earlier
 work tree $HOME/rea-work is READ-ONLY.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md items 7a AND 9, KNOWN-ISSUES.md §2 (traps 14-297, especially
-292-297) and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md (61-82),
-docs/reports/INDEX.md, report 247, docs/captures/touch-munin-2026-11-16.txt and
-sessions/session-57.md.
+file), ROADMAP.md items 7a AND 9, KNOWN-ISSUES.md §2 (traps 14-302, especially
+296-302) and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md (61-83),
+docs/reports/INDEX.md, reports 249 and 248,
+docs/captures/touch-munin-2026-11-16-session58.txt and sessions/session-58.md.
 
-WHERE IT STANDS: apps and background are in (wallpaper, terminal, browser,
-paint, the Catacomb companions), the audio diagnostics are gated, the idle
-suspend is removed, and the touch RELEASE bug is fixed (contacts separate).
-The touch POSITION GHOST remains: a fast tap can be reported at the previous
-contact's coordinates.  The upload-path profile build of catacomb is staged
-(PBGL_PROFILE) but not built.
+WHERE IT STANDS: the touch position ghost is FIXED and fast typing is correct
+(kernel #74).  The root is WRITABLE and grown to 56.5 G, and SSH is back (kernel
+#77, region 0 0x294F8E36; PB_LINK=usb tools/pbssh.sh).  The one hardware fault is
+the eMMC cache flush: barrier=0 + write_cache=write through keep the root
+writable, but an explicit sync still stalls the card (trap 300).  The
+backspace/enter repeat is squeekboard's (trap 299); upstream catacomb 1.7.0 uses
+wvkbd.  The upload-path profile build is staged (PBGL_PROFILE) but not built.
 
-THE ACTIVE ITEM (operator): fix the touch position ghost, then profile the
-upload path.  THE ONE EXPERIMENT: enable
-`echo 1 > /sys/module/playbook_munin/parameters/trace`, type a slow h,e,l,l,o
-with evcap.py running, and correlate the PBTS raw bytes with evdev; the three
-outcomes and their fixes are in HANDOFF §0a.  Do not request both IRQ edges
-(trap 297).
+THE ACTIVE ITEM: clear the eMMC cache capability (CACHE_CTRL=0 and/or a
+cache_size=0 quirk in mmc) so no FLUSH is issued.  Then the OSK (wvkbd) and the
+upload profile.  Do not try to fix the repeat in playbook-munin.c (trap 299).
+After every boot, kill swayidle (trap 298).
 
-THE FACTS: region 0 = 0xB9DD91E3 (0x967398 B, sha256 5ac47496..., kernel #73);
-hd3 = f7858110... (apps + audio modules + gsettings + no-suspend initrc);
-region 1 = 49e318bf... (fallback, not booted); BOOTCTR_FCTRY = 0x25.  The
-kernel/module vermagic is 7.3.3 mod_unload modversions ARMv6 p2v8.
+THE FACTS: region 0 = 0x294F8E36 (0x9E0980 B, sha256 f0738625..., kernel #77);
+hd3 media = the same root grown in place to 56.5 G, read-write (the
+flasher-restorable base is f7858110..., 625999872 B); region 1 = 49e318bf...
+(fallback, not booted); BOOTCTR_FCTRY = 0x32 (this boot read 0x1B and /init
+wrote 0x32).  The kernel/module vermagic is 7.3.3 mod_unload modversions ARMv6
+p2v8.
 
-PHYSICAL STATE: the unit is on the Nura overlay root (0fca:8010, console
-playbook:~# on the ACM /dev/ttyACM0, no sshd); usb0 is DOWN after boot (bring it
-up by hand; the host UFW blocks inbound, so push host->device).  To boot the
-ORACLE: flash local/work/ifs-shim-sealed.ifs at 0x825.  To stock TabletOS: that
-IFS at 0x825 + local/work/rcfs-1917.rcfs at 0x8D5 (+ the vendor UFS if hd3 was
-repurposed).  /tmp is wiped by a reboot.  Do NOT restore
-local/images/ifs0.sealed.bin (trap 84).
+PHYSICAL STATE: the unit runs the Nura root read-write (0fca:8010, SSH dropbear
+on 169.254.0.1:22, PB_LINK=usb tools/pbssh.sh; the ACM playbook:~# getty is the
+recovery console).  usb0 is brought up by /etc/local.d/pb-ssh.start.  PACE bulk
+host->device pushes (8 KiB chunks / 5 ms; trap 302) — an unpaced burst truncates.
+To boot the ORACLE: flash local/work/ifs-shim-sealed.ifs at 0x825.  To stock
+TabletOS: that IFS at 0x825 + local/work/rcfs-1917.rcfs at 0x8D5 (+ the vendor
+UFS if hd3 was repurposed).  Do NOT restore local/images/ifs0.sealed.bin
+(trap 84).
 
-BENCH: the Nura ttyGS0 prompt is playbook:~#, NOT pb> — pbcon.py does not drive
-it (trap 274); use a raw send/read helper.  pbssh.sh is for the REGION-1 root.
-REBOOT: reboot -f over the raw ACM.  THE FLASH: start the flasher first, then
-the reboot; one bootrom session; the 60 s window; --from-bootrom UPLOADS THE
-RAMLOADER, so the unit must be BOOTED (trap 266), unless it is already in the
-bootrom after a WDT reset.  ttyACM0 is 0666.  An agent NEVER writes RPMB; NVRAM
-read-only.  Read dmesg UNFILTERED.  One console command at a time.
+BENCH: SSH is the primary shell; the ttyGS0 prompt is playbook:~#, NOT pb> —
+pbcon.py does not drive it (trap 274).  REBOOT: reboot -f (over SSH or the raw
+ACM).  THE FLASH: start the flasher first, then the reboot; one bootrom session;
+the 60 s window; --from-bootrom UPLOADS THE RAMLOADER, so the unit must be BOOTED
+(trap 266), unless it is already in the bootrom after a WDT reset.  ttyACM0 is
+0666.  An agent NEVER writes RPMB; NVRAM read-only.  Read dmesg UNFILTERED.
+One command at a time.
 
-TOUCH: trace via /sys/module/playbook_munin/parameters/trace; PBTS lines in
-dmesg; evcap.py/keylog.py are /tmp tools.  A both-edge IRQ request kills touch
-(trap 297).  Suspend resets the unit (trap 295); the current initrc does not
-suspend.
+TOUCH/INPUT: trace via /sys/module/playbook_munin/parameters/trace; PBTS lines
+in dmesg (down=/line= added); evcap.py/keylog.py/inj.py are /tmp tools.  Inject
+into foot with TIOCSTI on /dev/pts/0 (writing /proc/<foot>/fd/7 does not work).
+DPMS off cannot be woken by touch — kill swayidle after every boot (trap 298).
+A both-edge IRQ request kills touch (trap 297).
 
 BT: BT_EN pad 0x4A10007C mux 3 + GPIO2_DATAOUT bit 23; UART2 pads
 0x4118/0x411A; /dev/ttyS1.  After a cold boot EXPORT gpio535 first and pulse low
@@ -369,18 +408,23 @@ drivers/media/radio/wl128x), GPS (2024 LKML patch, else RE the reference).
 LISTENING TESTS: lower `pbmix set "DAC1 Volume" 40` ONCE, restore 96 ONCE; a
 bare `pbplay` plays a 2 s tone (trap 212); state what is playing (trap 191).
 
-BUILDS: modules IN-TREE, strip `--strip-debug`.  The hd3 image edits are
-debugfs/apk on a copy, then e2fsck -fn.  The pack coordinate is the loader
-block minus 0x815.  The kernel export: apply the patch + extract the vendored
-driver, apply-and-compare, tree walk after `make clean`, excluding pvrsgx and
-scripts (traps 161/211).  For a LONG build, give the operator the command (with
-sudo) and STOP THE TURN; do not poll.
+BUILDS: modules IN-TREE, strip `--strip-debug`.  The initramfs carries the SSH
+kit (copy dropbear + host keys + authorized_keys into initramfs/root before the
+build; gitignored).  The hd3 image edits are debugfs/apk on a copy, then
+e2fsck -fn.  The pack coordinate is the loader block minus 0x815.  The kernel
+export: apply the patch + extract the vendored driver, apply-and-compare, tree
+walk after `make clean`, excluding pvrsgx and scripts (traps 161/211).  For a
+LONG build, give the operator the command (with sudo) and STOP THE TURN; do not
+poll.
 
-SAFETY: read SAFETY.md first.  One variable per boot.  Flash region 0 only when
-only it changed; both in one bootrom session only when both changed; a
+SAFETY: read SAFETY.md first.  The root is now mounted READ-WRITE by design
+(operator, session 58): the hd3 image is the way back (reflash f7858110... at
+0x4915), and the ttyGS0 getty is the recovery console; keep it until SSH is
+proven on any new image.  One variable per boot.  Flash region 0 only when only
+it changed; both in one bootrom session only when both changed; a
 module/firmware-only change needs an hd3/region-1-only flash (trap 190).  The
-hard hazards (0 / >0x32 / failed write / flat pack) remain.  The read-only hd3
-is never mounted read-write.  Operator's call when to stop / wrap up.
+hard hazards (0 / >0x32 / failed write / flat pack) remain.  Operator's call
+when to stop / wrap up.
 
 UPDATE THE DOCS as you go and commit: STATE.md, HANDOFF.md, ROADMAP.md,
 KNOWN-ISSUES.md, DECISIONS.md and the session note.  Re-export the kernel patch

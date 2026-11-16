@@ -243,6 +243,15 @@ therefore `bb10mt flash`) cannot be used on this unit (reports `98` §2.3,
   keep the UFS image and the sealed IFS/RCFS as the way back.  (The stock
   loader's allow-list still does not include NVRAM type `0x1E`; the Cellebrite
   build does — report `88` §5/§7.6, `98` §2.5, session-01 §11.)
+* **The hd3 root is mounted read-write at boot** (operator decision, session
+  58; `DECISIONS.md` §84).  `initramfs/init.c` mounts the Nura root rw with
+  `barrier=0`, sets the card and loop queues to `write through`, installs the
+  bench SSH kit, and a one-shot `resize2fs` grows the FS to the partition.  The
+  way back is reflashing the `f7858110…` hd3 image at loader block `0x4915`;
+  the ttyGS0 getty stays as the recovery console.  **Do not call `sync`**
+  until the card's cache is disabled: the eMMC's `FLUSH_CACHE` hangs the card
+  (`Card stuck being busy`, report 249 §3, trap 300).  This does not change the
+  NVRAM/MCT/RPMB prohibitions above.
 * **Read-only mounts are a separate, allowed case** (operator decision, session
   17).  A **read-only** mount of the eMMC or a QNX6 partition from the Linux
   console is allowed **with the operator's approval**; it must be read-only at

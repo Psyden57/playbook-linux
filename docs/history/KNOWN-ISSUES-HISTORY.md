@@ -232,3 +232,33 @@ never by reasoning about undecoded bits.
   while its own §3 says it was re-exported; §0 now matches §3.
 * The host tools under `tools/` no longer hard-code `$HOME/rea-work`, and
   `tools/force_reset_loader.py` is in the tree.
+
+## Trap 296 — fast taps merged, and the position ghost (resolved session 58)
+
+**Was:** fast taps merged because the Munin driver dropped the sample carrying
+the lift.  The report register updates asynchronously with the IRQ, so an
+IRQ-timed 18-byte read could hold the status/counter from one sample and the
+contact bytes from another; the counter parity detects it, and
+`munin_report()` used to `return` on a mismatch.  The lift is exactly the
+transition caught mid-update, so the release was dropped and the next tap's
+down arrived as a position jump inside the previous contact.  Evidence: with
+the driver unbound, five double taps gave 14 contacts with 76–118 ms lift gaps,
+0 multi-slot samples and no jumps; a polled read was torn ~6 % of the time; on
+the evdev side the same taps appeared as one contact with a single jump
+(`h` at (628,445) → `l` at (923,461) ~250 ms later).  Idle evdev is silent by
+design (the input core suppresses duplicate `SYN_REPORT`s).
+
+**Fixed in two steps (kernels `#70`/`#73`):** (a) re-read up to 4 times with
+`usleep_range(200,400)` until the parity matches instead of dropping the
+sample; (b) request the IRQ falling-edge (a both-edge request leaves the OMAP
+GPIO counter at 0 — trap 297) and, while any contact is down, re-arm the poll
+work at 10 ms so the lift is read.  Contacts became 36–158 ms and separate.
+
+**The position ghost** (a later tap reported at the previous contact's
+coordinates) remained and was fixed on kernel `#74` (session 58, report 248):
+the driver keeps polling while the controller asserts its IRQ line and for a
+200 ms grace period, and a new down that repeats its slot's previous
+coordinates within 300 ms is held back one sample and reported with the fresh
+position.  `b3` is only a down flag (the vendor's `get_contact_id` returns the
+digit index), so there is no contact id to track.  The touch driver is built in
+(`CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`), so these were region-0 changes.
