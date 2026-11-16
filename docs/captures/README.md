@@ -123,6 +123,12 @@ The stall precedes the `mmc1` rescan/prints; the trigger is the first rewrite of
 the bootrom-written NAND, not the logging (report 241 §3).  The `PB*` prints are
 now `pr_debug` (dynamic debug); `PBREQ`/`PBIRQ` stay behind `pb_trace` (§6).
 
+## Munin touch — evdev, raw report and driver trace (session 57)
+
+| file | what |
+|---|---|
+| `touch-munin-2026-11-16.txt` | the chip's raw report stream with the driver unbound (a stable hold, a smooth drag, and five fast double-taps giving 14 contacts with 76–118 ms lift gaps); the `PBTS` driver trace showing **2 reads across a 480 ms contact** while the chip's counter advanced 40 samples; the evdev+character alignment for a slow `hello` (8–33 ms end-to-end); and the position-ghost example (`h,e,h,h` plus an in-contact move).  This is the evidence behind report 247 and traps 296/297.  The tools (`evcap.py`, `keylog.py`, `muninraw`) lived in `/tmp` and are not tracked. |
+
 ## Exact duplicates
 
 These pairs are byte-identical; keep one of each when pruning.

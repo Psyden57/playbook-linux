@@ -28,9 +28,27 @@
 #include <linux/interrupt.h>
 #include <linux/math64.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
+#include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/property.h>
 #include <linux/workqueue.h>
+
+/*
+ * Bench trace of contact transitions (default off).  Enabled at runtime with
+ * `echo 1 > /sys/module/playbook_munin/parameters/trace`; prints the report
+ * bytes the driver accepted, so a spurious lift/contact can be told apart
+ * from a parsing artefact.
+ */
+static bool pb_trace;
+module_param_named(trace, pb_trace, bool, 0644);
+MODULE_PARM_DESC(trace, "Trace Munin contact transitions and report bytes");
+
+static unsigned int pb_reads;
+static unsigned int pb_torn;
+static int pb_prev_down = -1;
+static int pb_prev_x = -1;
+static int pb_prev_y = -1;
 
 #define MUNIN_REG_CMD		0x00
 #define MUNIN_REG_DATA		0x01
@@ -77,6 +95,8 @@ struct munin_ts {
 	int irq;
 	bool booted;
 	bool using_irq;
+	bool touching;
+	struct mutex lock;
 };
 
 static int munin_read(struct i2c_client *client, u8 reg, u8 *buf, int len)
@@ -212,14 +232,35 @@ static void munin_report(struct munin_ts *ts)
 {
 	struct input_dev *input = ts->input;
 	u8 buf[MUNIN_REPORT_LEN];
-	int i, ret;
+	int i, ret, tries;
+	bool fresh = false;
+	unsigned int s0_x = 0, s0_y = 0;
+	u8 s0_b3 = 0;
+	bool s0_down = false;
+	bool any_down = false;
 
-	ret = munin_read(ts->client, MUNIN_REG_DATA, buf, sizeof(buf));
-	if (ret)
-		return;
-
-	/* The vendor only accepts a sample when the counter parity matches. */
-	if ((buf[17] & 1) != ((buf[0] >> 4) & 1))
+	/*
+	 * The report register is updated asynchronously with the IRQ: a read
+	 * taken on the falling edge can catch the status/counter and the
+	 * contact bytes from different samples.  The counter parity detects
+	 * that, but dropping the sample is wrong -- the sample that carries a
+	 * lift is exactly the one that gets caught mid-update, so a fast tap
+	 * is merged into the previous contact (two keys from one touch).
+	 * Re-read until the parity matches instead.
+	 */
+	for (tries = 0; tries < 4; tries++) {
+		ret = munin_read(ts->client, MUNIN_REG_DATA, buf, sizeof(buf));
+		if (ret)
+			return;
+		pb_reads++;
+		if ((buf[17] & 1) == ((buf[0] >> 4) & 1)) {
+			fresh = true;
+			break;
+		}
+		pb_torn++;
+		usleep_range(200, 400);
+	}
+	if (!fresh)
 		return;
 
 	for (i = 0; i < MUNIN_CONTACTS; i++) {
@@ -227,6 +268,14 @@ static void munin_report(struct munin_ts *ts)
 		unsigned int xr = buf[o] | ((buf[o + 2] & 0x0f) << 8);
 		unsigned int yr = buf[o + 1] | ((buf[o + 2] & 0xf0) << 4);
 		bool down = buf[o + 3] != 0 && yr != MUNIN_COORD_MAX;
+
+		any_down |= down;
+		if (i == 0) {
+			s0_down = down;
+			s0_x = xr;
+			s0_y = yr;
+			s0_b3 = buf[o + 3];
+		}
 
 		input_mt_slot(input, i);
 		input_mt_report_slot_state(input, MT_TOOL_FINGER, down);
@@ -250,14 +299,38 @@ static void munin_report(struct munin_ts *ts)
 
 	input_mt_sync_frame(input);
 	input_sync(input);
+
+	ts->touching = any_down;
+
+	/*
+	 * The controller asserts its line for the whole contact and only
+	 * releases it on the lift, which is a rising edge the irqchip will not
+	 * deliver.  While a contact is down, poll the report so the release is
+	 * seen within ~10 ms; otherwise two fast taps merge into one contact.
+	 */
+	if (any_down && ts->using_irq && ts->poll_ms)
+		schedule_delayed_work(&ts->poll, msecs_to_jiffies(10));
+
+	if (pb_trace && (s0_down != pb_prev_down ||
+			 (s0_down && (abs((int)s0_x - pb_prev_x) > 40 ||
+				      abs((int)s0_y - pb_prev_y) > 40))))
+		dev_info(&ts->client->dev,
+			 "PBTS %s st=%02x x17=%02x b3=%02x x=%u y=%u reads=%u torn=%u raw=%*phN\n",
+			 s0_down ? "down" : "up", buf[0], buf[17], s0_b3,
+			 s0_x, s0_y, pb_reads, pb_torn, MUNIN_REPORT_LEN, buf);
+	pb_prev_down = s0_down;
+	pb_prev_x = s0_x;
+	pb_prev_y = s0_y;
 }
 
 static irqreturn_t munin_irq(int irq, void *data)
 {
 	struct munin_ts *ts = data;
 
+	mutex_lock(&ts->lock);
 	if (ts->booted)
 		munin_report(ts);
+	mutex_unlock(&ts->lock);
 
 	return IRQ_HANDLED;
 }
@@ -289,6 +362,12 @@ static void munin_boot_work(struct work_struct *work)
 	 * binding has no interrupt or the request fails.
 	 */
 	if (ts->irq > 0) {
+		/*
+		 * Falling edge only: the OMAP GPIO irqchip does not deliver
+		 * both-edge requests on this line (the counter stays at 0), so
+		 * the release is caught by re-arming the poll work while a
+		 * contact is down (see munin_report()/munin_poll()).
+		 */
 		ret = request_threaded_irq(ts->irq, NULL, munin_irq,
 					   IRQF_ONESHOT | IRQF_TRIGGER_FALLING,
 					   dev_name(&ts->client->dev), ts);
@@ -316,12 +395,14 @@ static void munin_poll(struct work_struct *work)
 	struct munin_ts *ts = container_of(to_delayed_work(work),
 					   struct munin_ts, poll);
 
+	mutex_lock(&ts->lock);
 	if (ts->booted) {
 		munin_report(ts);
-		if (ts->poll_ms)
+		if (ts->poll_ms && (ts->touching || !ts->using_irq))
 			schedule_delayed_work(&ts->poll,
 					      msecs_to_jiffies(ts->poll_ms));
 	}
+	mutex_unlock(&ts->lock);
 }
 
 static int munin_probe(struct i2c_client *client)
@@ -340,6 +421,7 @@ static int munin_probe(struct i2c_client *client)
 
 	ts->client = client;
 	i2c_set_clientdata(client, ts);
+	mutex_init(&ts->lock);
 
 	/* Defaults: the 1917 scaling.conf `1024x600:mode=calib` line. */
 	ts->cal_x = (struct munin_cal){ 172, 1108, 102, 922 };

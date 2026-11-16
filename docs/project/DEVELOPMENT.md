@@ -548,6 +548,28 @@ read-only, but it injects packets into a live link: about half the reads fail
 with an ACK/error `0x0003` (that is the reference's own `PPI_TX_RX_TA = 4`) and
 it retries.
 
+### 5c. Reading the touch stream
+
+Two user-space views plus the driver's own trace make the Munin input path
+measurable (session 57; evidence in
+`docs/captures/touch-munin-2026-11-16.txt`):
+
+* **`/dev/input/event0`** — read 16-byte `input_event` records (32-bit ARM:
+  8-byte timeval + `type`/`code`/`value`).  A small decoder (`evcap.py`) prints
+  each event with a monotonic timestamp; `keylog.py` (run inside `foot`,
+  `tty.setraw(0)`) logs the characters the app actually receives, so a contact
+  can be aligned with its key.
+* **`PBTS`** — enable the driver's transition trace:
+  `echo 1 > /sys/module/playbook_munin/parameters/trace`, then
+  `dmesg | grep PBTS`.  It prints `st/x17/b3/x/y/reads/torn` and the 18 raw
+  bytes on every contact transition and every jump > 40; `reads` is cumulative,
+  so the delta across a contact is the driver's sample rate (a 480 ms contact
+  with 2 reads is the lost-release bug — trap 296).
+* **Raw register** — with the driver unbound (`echo 1-0065 >
+  /sys/bus/i2c/drivers/playbook-munin/unbind`), a small I²C tool (`muninraw`)
+  reads the 18-byte report at 5 ms and prints changes.  The chip reports lifts
+  the IRQ path can miss; rebind afterwards.  Do not leave the driver unbound.
+
 ## 6. Bench state at the end of a session
 
 There is **no required restore**.  The Linux `/init` tops `BOOTCTR_FCTRY` up at

@@ -314,7 +314,7 @@ static int playbook_wm8994_hw_params(struct snd_pcm_substream *substream,
 	snd_soc_dai_set_sysclk(codec_dai, PB_WM8994_SYSCLK_FLL1,
 			       aifclk, SND_SOC_CLOCK_IN);
 
-	dev_info(rtd->dev,
+	dev_dbg(rtd->dev,
 		 "rate %u Hz: AIF1CLK %u Hz, BCLK %u Hz (McBSP bit/frame provider, CLKSM=1, CLKGDV=%u, FLL1 from BCLK)\n",
 		 rate, aifclk, bclk, div);
 	return 0;
@@ -378,7 +378,7 @@ static void playbook_wm8994_repair(struct work_struct *work)
 	 * PM3 = 0x3cf0, R0x036 = 0, R0x060 = 0, R0x04c = 0x1f25.
 	 */
 	jack = priv->hp ? gpiod_get_value_cansleep(priv->hp) : 1;
-	dev_info(codec->dev, "repair: jack %s\n",
+	dev_dbg(codec->dev, "repair: jack %s\n",
 		 jack ? "in (headphone)" : "out (speaker)");
 
 	if (jack) {
@@ -478,7 +478,7 @@ static void playbook_wm8994_repair(struct work_struct *work)
 	snd_soc_component_update_bits(codec, PB_WM8994_AIF1_CLOCKING_1,
 				      PB_AIF1CLK_ENA, PB_AIF1CLK_ENA);
 
-	dev_info(codec->dev, "repair: %s\n",
+	dev_dbg(codec->dev, "repair: %s\n",
 		 (snd_soc_component_read(codec, 0x732) & 0x0020) ?
 		 "done, FLL1 locked" : "done, FLL1 NOT locked");
 }
@@ -533,7 +533,7 @@ static int playbook_wm8994_data_hw_params(struct snd_pcm_substream *substream,
 	if (ret < 0 && ret != -ENOTSUPP)
 		return ret;
 
-	dev_info(rtd->dev,
+	dev_dbg(rtd->dev,
 		 "data link: rate %u Hz, AIF2CLK %u Hz (McBSP3 consumer, data on AIF1 DACDAT)\n",
 		 rate, aifclk);
 	return 0;

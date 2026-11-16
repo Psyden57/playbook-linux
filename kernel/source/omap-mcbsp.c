@@ -38,26 +38,26 @@ enum {
 static void omap_mcbsp_dump_reg(struct omap_mcbsp *mcbsp)
 {
 	/*
-	 * Printed at info level (not dbg) because the rate this SPI-style
-	 * register block generates cannot be read from userspace: the L4_ABE
-	 * target aborts on a user-mode access (trap 158), so the only way to
-	 * see SRGR1/SRGR2/PCR on the bench is from kernel context.
+	 * Off by default: this runs on every stream start, and the console is
+	 * fbcon, so an info-level dump is 14 synchronous writes per stream
+	 * (traps 52/293).  Enable it on the bench with dynamic debug when the
+	 * L4_ABE target cannot be read from userspace (trap 158).
 	 */
-	dev_info(mcbsp->dev, "**** McBSP%d regs ****\n", mcbsp->id);
-	dev_info(mcbsp->dev, "DRR2:  0x%04x\n", MCBSP_READ(mcbsp, DRR2));
-	dev_info(mcbsp->dev, "DRR1:  0x%04x\n", MCBSP_READ(mcbsp, DRR1));
-	dev_info(mcbsp->dev, "DXR2:  0x%04x\n", MCBSP_READ(mcbsp, DXR2));
-	dev_info(mcbsp->dev, "DXR1:  0x%04x\n", MCBSP_READ(mcbsp, DXR1));
-	dev_info(mcbsp->dev, "SPCR2: 0x%04x\n", MCBSP_READ(mcbsp, SPCR2));
-	dev_info(mcbsp->dev, "SPCR1: 0x%04x\n", MCBSP_READ(mcbsp, SPCR1));
-	dev_info(mcbsp->dev, "RCR2:  0x%04x\n", MCBSP_READ(mcbsp, RCR2));
-	dev_info(mcbsp->dev, "RCR1:  0x%04x\n", MCBSP_READ(mcbsp, RCR1));
-	dev_info(mcbsp->dev, "XCR2:  0x%04x\n", MCBSP_READ(mcbsp, XCR2));
-	dev_info(mcbsp->dev, "XCR1:  0x%04x\n", MCBSP_READ(mcbsp, XCR1));
-	dev_info(mcbsp->dev, "SRGR2: 0x%04x\n", MCBSP_READ(mcbsp, SRGR2));
-	dev_info(mcbsp->dev, "SRGR1: 0x%04x\n", MCBSP_READ(mcbsp, SRGR1));
-	dev_info(mcbsp->dev, "PCR0:  0x%04x\n", MCBSP_READ(mcbsp, PCR0));
-	dev_info(mcbsp->dev, "***********************\n");
+	dev_dbg(mcbsp->dev, "**** McBSP%d regs ****\n", mcbsp->id);
+	dev_dbg(mcbsp->dev, "DRR2:  0x%04x\n", MCBSP_READ(mcbsp, DRR2));
+	dev_dbg(mcbsp->dev, "DRR1:  0x%04x\n", MCBSP_READ(mcbsp, DRR1));
+	dev_dbg(mcbsp->dev, "DXR2:  0x%04x\n", MCBSP_READ(mcbsp, DXR2));
+	dev_dbg(mcbsp->dev, "DXR1:  0x%04x\n", MCBSP_READ(mcbsp, DXR1));
+	dev_dbg(mcbsp->dev, "SPCR2: 0x%04x\n", MCBSP_READ(mcbsp, SPCR2));
+	dev_dbg(mcbsp->dev, "SPCR1: 0x%04x\n", MCBSP_READ(mcbsp, SPCR1));
+	dev_dbg(mcbsp->dev, "RCR2:  0x%04x\n", MCBSP_READ(mcbsp, RCR2));
+	dev_dbg(mcbsp->dev, "RCR1:  0x%04x\n", MCBSP_READ(mcbsp, RCR1));
+	dev_dbg(mcbsp->dev, "XCR2:  0x%04x\n", MCBSP_READ(mcbsp, XCR2));
+	dev_dbg(mcbsp->dev, "XCR1:  0x%04x\n", MCBSP_READ(mcbsp, XCR1));
+	dev_dbg(mcbsp->dev, "SRGR2: 0x%04x\n", MCBSP_READ(mcbsp, SRGR2));
+	dev_dbg(mcbsp->dev, "SRGR1: 0x%04x\n", MCBSP_READ(mcbsp, SRGR1));
+	dev_dbg(mcbsp->dev, "PCR0:  0x%04x\n", MCBSP_READ(mcbsp, PCR0));
+	dev_dbg(mcbsp->dev, "***********************\n");
 }
 
 static int omap2_mcbsp_set_clks_src(struct omap_mcbsp *mcbsp, u8 fck_src_id)
@@ -821,7 +821,8 @@ static void omap_mcbsp_dai_shutdown(struct snd_pcm_substream *substream,
 	if (mcbsp->latency[stream2])
 		cpu_latency_qos_update_request(&mcbsp->pm_qos_req,
 					       mcbsp->latency[stream2]);
-	else if (mcbsp->latency[stream1])
+	else if (mcbsp->latency[stream1] &&
+		 cpu_latency_qos_request_active(&mcbsp->pm_qos_req))
 		cpu_latency_qos_remove_request(&mcbsp->pm_qos_req);
 
 	mcbsp->latency[stream1] = 0;

@@ -231,16 +231,20 @@ flasher can replace at every point:
    (`ZINK: failed to load libvulkan.so.1`) — the remaining blocker is the GPU.
    A writable eMMC root is a separate experiment; the region-1 root is the
    fallback.
-5. **SGX540 — THE COMPOSITOR WORKS (session 56, report 246); apps and
-   performance are the remainder.**  catacomb 1.5.0-r10000 runs on the SGX540
-   with a smithay 0.7.0 GLES2 fallback (the `GL_EXT_unpack_subimage` check is
-   relaxed and the uploads use per-row/full-row paths) and maps
-   `libGLESv2_PVR_MESA`/`libsrv_um`/`libusc`/`pvr_dri.so`; `squeekboard` is
-   composited and the touch cursor tracks.  The stack is baked into hd3
-   (`89399744…`), and region 0 is `0xAB899C49` (kernel `#69`, the Munin Y fix).
-   **Next:** install `tabula` + the wallpaper and a browser/paint client, and
-   profile the upload path (the OSK key-press jank survived the v2 full-row
-   optimization).
+5. **SGX540 — THE COMPOSITOR WORKS; apps and background are in (sessions
+   56/57, reports 246/247); performance and the touch ghost are the
+   remainder.**  catacomb 1.5.0-r10000 runs on the SGX540 with a smithay 0.7.0
+   GLES2 fallback and maps `libGLESv2_PVR_MESA`/`libsrv_um`/`libusc`/
+   `pvr_dri.so`; `squeekboard` is composited.  The app set (`tabula` +
+   wallpaper, `foot`, `netsurf`, `xournalpp`, `tzompantli`, `gorm`, `grim`,
+   `slurp`, `tremor`, `swayidle`) and `gsettings-desktop-schemas` are baked into
+   hd3 (`f7858110…`); region 0 is `0xB9DD91E3` (kernel `#73`).  **Next:** (a)
+   fix the touch position ghost (report 247 §2, HANDOFF §0a); (b) profile the
+   upload path — the `PBGL_PROFILE` catacomb build is staged
+   (`local/work/nura/pmaports/main/catacomb/`, `pkgrel=10001`).  The measured
+   input latency is 8–33 ms, so the jank is redraw/upload.  `epitaph` aborts
+   (trap 292), so there is no panel; Kumo needs a WPEWebKit build (report 247
+   §4).
 
 Step 3 is reversible at any time by re-flashing the same block range — which is
 the whole reason it beats an in-place mkfs.
@@ -364,9 +368,12 @@ terminal (trap 216).
   **FM:** mainline carried `drivers/media/radio/wl128x` from 2.6.39 to 6.13 and
   removed it; bringing it back is a forward port.  **GPS:** no mainline driver;
   a 2024 LKML patch is the candidate, the reference's own path the fallback.
-* **Touch.**  Done; the remaining nicety is driving power/reset
-  (GPIO1_14 / GPIO4_8) for cold boots — a warm reset keeps the controller up
-  (session 42).
+* **Touch.**  The release/merge bug is fixed (kernel `#73`: falling edge plus a
+  10 ms poll while a contact is down); contacts are 36–158 ms and separate.
+  **Open:** a fast tap can be reported at the previous contact's coordinates
+  (the position ghost — report 247 §2, traps 296/297).  The remaining nicety is
+  driving power/reset (GPIO1_14 / GPIO4_8) for cold boots — a warm reset keeps
+  the controller up (session 42).
 
 ## Out of scope for now
 

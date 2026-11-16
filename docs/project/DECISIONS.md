@@ -2820,6 +2820,55 @@ the main patch (kernel `#69`); the two generated `scripts/mod/*.h` that the old
 
 **Evidence.**  Report 246 §6; `kernel/vendor/README.md`.
 
+## 81. Suspend is disabled on the Nura root (session 57)
+
+**Decision.**  The Catacomb initrc keeps DPMS (`swayidle timeout 180 "catacomb
+msg dpms off"` + `resume "catacomb msg dpms on"`) and has **no suspend
+action**.  `loginctl suspend` is removed from
+`local/work/nura/pmaports/main/postmarketos-ui-catacomb/initrc` (`pkgrel=1`)
+and from `/etc/catacomb/initrc` in the hd3 image.
+
+**Why.**  `/sys/power/state` advertises `freeze mem`, so elogind tries
+suspend-to-RAM.  On this platform the panel blanks, USB disappears and WDT2
+resets the unit about a minute later, spending a factory boot.  Measured twice
+in session 57; `BOOTCTR_FCTRY` went `0x2b → 0x2a` across one of them.  DPMS off
+is safe and any touch restores the panel.
+
+**Constraint.**  Suspend/resume is not implemented, not "impossible": a future
+experiment could try `freeze` alone or a driver-level suspend.  Until then, an
+idle root must not invoke the suspend action, and a pre-session-57 root must
+have `swayidle` killed by hand before a long idle.
+
+**Evidence.**  Report 247 §5; trap 295; the running root's
+`/sys/power/state = "freeze mem"`; the `BOOTCTR_FCTRY` readings above.
+
+## 82. The Munin input model: falling edge, parity re-read, poll-on-touch (session 57)
+
+**Decision.**  Request the touch IRQ **falling-edge only**; when a report read
+fails the counter-parity consistency check, re-read up to 4 times with
+`usleep_range(200,400)` instead of dropping the sample; and while any contact is
+down, re-arm the driver's poll work with a 10 ms delay so the lift is read.  A
+both-edge IRQ must not be requested on this line.
+
+**Why.**  The controller asserts its line for the whole contact and releases it
+on the lift, which is a rising edge.  With a falling-edge-only IRQ the driver
+read the touchdown and then **nothing** for the rest of the contact (measured:
+2 reads across a 480 ms contact while the report counter advanced 40 samples),
+so the release was only seen at the next falling edge — fast taps merged into
+one contact and the OSK autorepeated a held key.  A both-edge request is the
+obvious alternative but the OMAP GPIO irqchip delivered neither edge: the
+`1-0065` counter stayed at **0** and touch died.  The parity re-read is
+independent: the report register updates asynchronously and 6.3 % of polled
+reads are torn.
+
+**Constraint.**  The poll runs at 10 ms only while a contact is down; idle
+behaviour is unchanged (~174 IRQ/s from the controller, no input events).  The
+driver serialises the IRQ thread and the poll work with a mutex.  The `trace`
+module parameter is off by default.
+
+**Evidence.**  Report 247 §1; capture `touch-munin-2026-11-16.txt` §2/§3;
+traps 296/297; kernels `#70`/`#73` (region 0 `0xB9DD91E3`).
+
 ### Repository license
 
 **Decided (session 23): GPL-3.0-or-later.**  The project's own code and

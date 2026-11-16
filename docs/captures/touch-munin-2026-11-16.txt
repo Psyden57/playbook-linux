@@ -1,0 +1,130 @@
+# Munin touch — evdev, raw-report and driver-trace evidence (session 57)
+
+Date: 2026-11-16.  Unit: Nura overlay root, region 0 kernels `#70`/`#73`
+(7.3.3), hd3 `f7858110…`.  These are the measurements behind report 247 and
+traps 296/297.  They are evidence; do not edit them.
+
+Tools (device-side, pushed to `/tmp`, wiped by a reboot; sources are the session
+scratchpad, not tracked): `evcap.py` reads `/dev/input/event0` (16-byte
+`input_event`) and prints every event with a monotonic timestamp; `keylog.py`
+runs inside `foot`, sets raw mode and logs each delivered byte;
+`muninraw`/`muninraw.c` reads the 18-byte report register directly with the
+driver unbound.  `/tmp/mr` is the same binary under a second name.
+
+## 1. Raw chip stream with the driver unbound (holds and drags)
+
+`muninraw 300 > /tmp/raw.txt`, driver unbound, read every 5 ms, change-only
+output.  Idle reports show the counter `x17` incrementing per sample, `st` bit 4
+mirroring its low bit, and slots 0/1 carrying `b3 = 02`/`01` with
+`x = y = 4095` (no contact).
+
+* active window `47.969 .. 56.904 s`: a 50 ms tap at `(605,433)`, a 1.1 s hold
+  at `x ≈ 228`, then a smooth drag to the right.  **No jump > 60 units and no
+  sample with two active slots.**
+* parity (`x17 & 1` vs `st bit 4`): 583 mismatches in 9 204 polled samples
+  (**6.3 %**) — the report register is updated asynchronously, so a read at a
+  random phase can be torn.
+
+## 2. Raw chip stream, five fast double-taps (the decisive one)
+
+`muninraw 300 > /tmp/raw2.txt`; 14 contact intervals, with the **lift gaps the
+chip really reports**:
+
+| # | start..end (s) | dur | gap before | x range | y range |
+|---|---|---|---|---|---|
+| 0 | 14.057..14.093 | 36 ms | — | 1027..1018 | 521..512 |
+| 1 | 14.169..14.204 | 35 ms | 76 ms | 975..950 | 539..547 |
+| 2 | 14.284..14.290 | 6 ms | 80 ms | 1007..1006 | 530 |
+| 3 | 17.041..17.063 | 22 ms | 2751 ms | 699..690 | 526..504 |
+| 4 | 17.147..17.177 | 30 ms | 84 ms | 651..672 | 471 |
+| 5 | 19.061..19.085 | 24 ms | 1884 ms | 999..976 | 498..519 |
+| 6 | 19.179..19.214 | 35 ms | 94 ms | 1007..1036 | 489..477 |
+| 7 | 20.703..20.729 | 26 ms | 1489 ms | 786..784 | 427..424 |
+| 8 | 20.819..20.855 | 36 ms | 90 ms | 803..809 | 453..445 |
+| 9 | 22.696..22.730 | 34 ms | 1841 ms | 980..978 | 468 |
+| 10 | 22.830..22.862 | 32 ms | 100 ms | 1008..1006 | 504..502 |
+| 11 | 25.785..25.809 | 24 ms | 2923 ms | 683..682 | 457..446 |
+| 12 | 25.927..25.939 | 12 ms | 118 ms | 689..684 | 473..474 |
+| 13 | 26.029..26.067 | 38 ms | 90 ms | 727..721 | 473..481 |
+
+0 multi-slot samples, 0 jumps > 60 units.  **The controller reports every lift
+of a fast double/triple tap.**  With the driver bound the same taps produced one
+merged contact (session 56/57 evdev), so the loss was driver-side.
+
+## 3. Driver trace, kernel `#71` (`trace=1`)
+
+Format: `PBTS <down|up> st=<byte0> x17=<byte17> b3=<slot0 b3> x= y= reads=<cum>
+torn=<cum> raw=<18 bytes>`.  Four slow taps then fast taps.
+
+```
+[ 68.073669] PBTS down st=00 x17=84 b3=01 x=534 y=475 reads=1655 torn=95
+[ 68.562225] PBTS up   st=00 x17=ac b3=01 x=4095 y=4095 reads=1673 torn=95
+[ 69.922729] PBTS down st=10 x17=5f b3=01 x=524 y=426 reads=1807 torn=104
+[ 70.402435] PBTS up   st=10 x17=87 b3=01 x=4095 y=4095 reads=1809 torn=104
+[ 71.785766] PBTS down st=10 x17=33 b3=01 x=551 y=418 reads=1905 torn=113
+[ 71.992218] PBTS up   st=10 x17=45 b3=01 x=4095 y=4095 reads=1913 torn=113
+[ 73.102722] PBTS down st=10 x17=d5 b3=01 x=979 y=467 reads=1951 torn=115
+[ 73.132537] PBTS up   st=00 x17=d8 b3=01 x=4095 y=4095 reads=1955 torn=115
+[ 73.262664] PBTS down st=00 x17=e8 b3=01 x=1009 y=476 reads=1971 torn=116
+[ 73.302398] PBTS up   st=00 x17=ec b3=01 x=4095 y=4095 reads=1977 torn=116
+[ 73.442565] PBTS down st=10 x17=fd b3=02 x=1012 y=473 reads=1979 torn=116
+[ 73.512390] PBTS up   st=10 x17=05 b3=02 x=4095 y=4095 reads=1981 torn=116
+[ 78.835449] PBTS down st=10 x17=c3 b3=02 x=1099 y=199 reads=2416 torn=143
+[ 78.892608] PBTS up   st=10 x17=c9 b3=04 x=4095 y=4095 reads=2422 torn=143
+[ 78.932708] PBTS down st=00 x17=ce b3=02 x=1099 y=242 reads=2433 torn=143
+[ 79.032653] PBTS up   st=00 x17=d8 b3=03 x=4095 y=4095 reads=2442 torn=143
+```
+
+**The 69.922 down → 70.402 up pair is the measurement that found the real bug:**
+the contact lasted 480 ms on the driver's timestamps, but only **2 reads**
+(`1807 → 1809`) happened in that window while the chip's counter advanced
+`0x5f → 0x87` (40 samples).  The line is asserted for the whole contact, so a
+falling-edge-only IRQ sees no further edges; the lift is a rising edge that the
+OMAP GPIO irqchip would not deliver when both edges were requested (trap 297:
+the `/proc/interrupts` counter stayed at 0).  Fix: falling edge plus a 10 ms
+poll re-arm while any contact is down (`#73`).
+
+## 4. evdev + characters, slow `hello` on kernel `#73`
+
+`evcap.py` (t0 = 359.865754) and `keylog.py` (t0 = 356.162263); character times
+are 12–34 ms after the matching contact down.
+
+| contact down (abs) | hold | evdev (x,y) | character | latency |
+|---|---|---|---|---|
+| 379.861 | 249 ms | 615,452 | h | 12 ms |
+| 382.631 | 242 ms | 245,402 | e | 10 ms |
+| 384.139 | 244 ms | 934,451 | l | 13 ms |
+| 385.456 | 244 ms | 937,449 | l | 8 ms |
+| 386.751 | 241 ms | 890,381 | o | 16 ms |
+| 390.151 | 252 ms | 240,410 | e | 33 ms |
+| 390.411 | 253 ms | 914,435 | l | 31 ms |
+
+The slow word is correct (h,e,l,l,o).  The "fast" attempt produced only e,l.
+
+## 5. evdev + characters, the position ghost (kernel `#73`)
+
+Same capture, the hello burst.  Four contacts, but the 3rd/4th carry the
+**first key's position**; the 4th moves from `h` to `e` inside one contact:
+
+```
+15.7214 MT_TRACKING_ID 0 / MT_X 630 / MT_Y 456  -> character h
+15.7890 release id 0; MT_SLOT 1; id 1 at 246,395 -> character e
+16.9158 MT_SLOT 0; id 2 at 616,436               -> character h
+17.9724 id 3 at 632,444 (h); 18.0352 MT_X 228 / MT_Y 405 -> character e
+```
+
+Characters delivered: `h e h h e`.  So the driver reports separate contacts now,
+but the controller supplies a later tap's coordinates from the previous contact
+(and one in-contact jump).  The driver indexes contacts by slot; `b3` alternates
+`01/02` even when idle and is not used as an identity.
+
+## 6. Related observations
+
+* Idle: `/proc/interrupts` for `1-0065` advances ~174/s with no finger; evdev
+  shows **no** events because the input core suppresses duplicate
+  `SYN_REPORT`s (not evidence of dropped reads).
+* `IRQF_TRIGGER_FALLING | IRQF_TRIGGER_RISING` → counter 0, touch dead
+  (trap 297).
+* Suspend: `/sys/power/state = "freeze mem"`; the stock initrc's
+  `loginctl suspend` blanks the panel, drops USB and WDT2-resets the unit
+  (`BOOTCTR_FCTRY 0x2b → 0x2a`, session 57).

@@ -14,6 +14,44 @@ duplicated here because the commit preserves it verbatim.
 `docs/project/STATE.md`; it was replaced by the session-43 state and is not
 duplicated here because the commit preserves it verbatim.
 
+## Previous state — 2026-11-15 (session 56)
+
+**THE SGX540 COMPOSITOR WORKS: catacomb runs on the PowerVR SGX 540.**  The
+GPU stack is unchanged; the blocker was smithay's hard requirement for
+`GL_EXT_unpack_subimage`, which the GLES2 SGX lacks.  A smithay 0.7.0 patch
+(relax the check; per-row/full-row upload fallbacks) lets catacomb 1.5.0
+composite on `libGLESv2_PVR_MESA`/`libsrv_um`/`libusc`/`pvr_dri.so` (no
+`swrast`).  `squeekboard` is composited and the touch cursor tracks the finger.
+[report 246]
+
+**The touch Y axis was inverted and is fixed.**  Measured: physical top →
+evdev `Y 577–591`, bottom → `Y 35–51`; `playbook-munin.c` now reports
+`panel_h - 1 - munin_map(...)`.  Kernel `#69`.
+
+**Both are baked and flashed:** region 0 **`0xAB899C49`** (kernel `#69`) and
+hd3 **`89399744…`** (catacomb r10000).  One bootrom session wrote region 0 +
+hd3 v1 (`COMPLETE 0x40C0 -> cmd 0x4006`, `done`); a hd3-only flash wrote the
+optimized v2.  The overlay root boots with no eMMC stall; `elogind`/`tinydm`/
+`catacomb` run; the DSI HS-clock packets succeed (`irqstatus=0x4 polls=1`).
+[report 246]
+
+**Open: performance.**  Tapping OSK keys still drops frames badly; dragging is
+better but hitchy.  The v2 full-row partial upload did not remove the
+key-press cost.  Next: apps/background (`tabula`, wallpapers, a browser/paint
+client) and a profile of the upload path (stride/damage, `glFinish`/fencing).
+
+* **Region 0 = `0xAB899C49`** (`0x9676A0` B, sha256 `c37ee2fe…`, kernel
+  `7.3.3 #69`) — the overlay init with `&sgx_module` and the Munin Y fix.
+* **hd3 = `89399744…`** (625 999 872 B; the pvr stack + catacomb r10000), the
+  read-only lower.
+* **Region 1 = `49e318bf…`** (the fallback, not booted).
+* **Bench:** ACM `0fca:8010`, `ttyACM0` 0666, `playbook:~#`; **no sshd**;
+  **`usb0` is down after boot** (bring it up by hand; the host UFW drops
+  inbound, so push host→device with a device `nc` listener).  `BOOTCTR_FCTRY`
+  = `0x2c`.
+* **Next:** apps/background + the upload-path profile; then the compositor
+  polish.
+
 ## Previous state — 2026-11-15 (session 55)
 
 **The read-only hd3 + overlayfs root is flashed and booting, and the SGX540

@@ -2360,6 +2360,92 @@ report 121 §3/§11/§12.
       8765 > /tmp/f`, host pushes the bytes) at ~10 MB/s.  Do not add a UFW
       inbound rule just for a transfer.  (Session 56.)
 
+292. **`epitaph` 1.4.0 segfaults on this root (rc=139), so the panel never
+      appears.**  It logs `Started Epitaph`, then a zbus warning
+      `Failed to populate properties cache via GetAll:
+      org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path
+      "/"` (upowerd *is* running), then `Segmentation fault`.  Reproducible
+      from the session env (`XDG_RUNTIME_DIR=/run/user/10000
+      WAYLAND_DISPLAY=wayland-1`).  `tabula`, `swayidle`, `foot`, `netsurf`
+      and `xournalpp` all run; only epitaph dies.  Do not read the empty bar as
+      "the panel is not installed" — it is installed and crashing.  (Session
+      57.)
+
+293. **The audio bring-up diagnostics are still at info/error level and fire on
+      every stream start.**  `omap_mcbsp_start()` calls
+      `omap_mcbsp_dump_reg()` (`sound/soc/ti/omap-mcbsp.c`), which is 14
+      `dev_info` lines (upstream is `dev_dbg`; session 45 promoted it for the
+      bench because L4_ABE register reads fault in user mode — trap 158).  The
+      machine driver also prints `rate … AIF1CLK …` and the repair lines at
+      `dev_info`.  With PipeWire/wireplumber installed, probing the card
+      produces a burst of these every time a stream opens/closes; the
+      `RX Buffer Underflow!` `dev_err` (upstream `omap_mcbsp_irq_handler`) fires
+      on playback-only starts.  None of it is a fault.  Gate the dump behind a
+      module parameter (or `dev_dbg`) before shipping.  (Session 57.)
+
+294. **A failed `hw_params` taints the kernel: the shutdown path removes an
+      inactive PM-QoS request.**  Measured with `xournalpp` opening the card at
+      48 kHz: `omap_mcbsp_dai_hw_params: not enough bandwidth …` (`-EINVAL`),
+      then `omap_mcbsp_dai_shutdown()` sees `mcbsp->latency[stream]` set (it is
+      assigned *before* the bandwidth check) and calls
+      `cpu_latency_qos_remove_request()` on a request `prepare()` never added →
+      `WARNING: kernel/power/qos.c:327 … called for unknown object`, taint
+      `W`.  Guard the remove with `cpu_latency_qos_request_active()`.  The
+      48 kHz failure itself is a format/bandwidth question (the card is stereo
+      S16); pbplay's direct 48 kHz path still works.  (Session 57.)
+
+295. **Do not suspend this platform: `loginctl suspend` drops USB, blanks the
+      panel, and ends in a WDT2 reset (~1 min later, one factory boot).**
+      `/sys/power/state` advertises `freeze mem`, so elogind tries `mem`; the
+      unit does not resume.  Observed on the Nura root: the default catacomb
+      initrc's `swayidle timeout 180 "catacomb msg dpms off"` blanked the
+      backlight, `timeout 210 "$systemctl suspend"` took USB away, and the
+      unit came back on a fresh boot with `BOOTCTR_FCTRY` `0x2b → 0x2a`.
+      The initrc now keeps DPMS off/resume but has **no suspend action**
+      (`local/work/nura/pmaports/main/postmarketos-ui-catacomb/initrc`,
+      `pkgrel=1`); the image carries the same edit.  Kill `swayidle` on a
+      running root to stop the timer before it fires.  (Session 57.)
+
+296. **Fast taps are merged because our Munin driver drops the sample that
+      carries the lift.**  The report register is updated asynchronously with
+      the IRQ, so an IRQ-timed 18-byte read can hold the status/counter from
+      one sample and the contact bytes from another; the counter parity detects
+      it, and `munin_report()` used to `return` on a mismatch.  The lift is
+      exactly the transition that gets caught mid-update, so the release is
+      dropped and the next tap's down arrives as a position jump inside the
+      previous contact.  Evidence: the raw register stream (driver unbound)
+      shows the chip does report the gaps — five double taps gave 14 contacts
+      with 76–118 ms lift gaps, 0 multi-slot samples and no jumps — and a
+      polled read is torn ~6 % of the time; on the evdev side the same taps
+      appear as one contact with a single jump (e.g. `h` at (628,445) →
+      `l` at (923,461) ~250 ms later), so the OSK emits two letters and a fast
+      second tap is swallowed.  (Note: idle evdev is *silent by design* — the
+      input core suppresses duplicate `SYN_REPORT`s — so "no idle events" is
+      not evidence about the reads; gotcha for the next session.)  Fix, in two
+      steps (kernels `#70`/`#73`): (a) re-read up to 4 times with
+      `usleep_range(200,400)` until the parity matches instead of dropping the
+      sample; (b) request the IRQ **falling-edge** (a both-edge request makes
+      the OMAP GPIO counter stay at 0 — trap 297) and, while any contact is
+      down, re-arm the 20 ms poll work with a 10 ms delay so the lift is read.
+      Measured after the fix: contacts are 36–158 ms and separate (14 contacts
+      for the test burst), so fast taps no longer merge.  **Still open:** the
+      controller sometimes reports a later tap at the *previous* position
+      (h,e,h,h instead of h,e,l,l,o, with an in-contact move from h to e); the
+      driver indexes contacts by slot, while the chip reuses slots and carries
+      no stable per-contact id we decode.  Needs contact-id/stale-slot
+      handling before typing is reliable.  The touch driver is built in
+      (`CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`), so these are region-0 changes.
+      (Session 57.)
+
+297. **A both-edge GPIO IRQ request on this line silently yields no
+      interrupts.**  Changing the Munin IRQ to `IRQF_TRIGGER_FALLING |
+      IRQF_TRIGGER_RISING` (to catch the lift, which is a rising edge) made
+      `/proc/interrupts` count for `1-0065` stay at **0** while the driver
+      still logged "Munin touchscreen ready": the GPIO irqchip accepted the
+      request but did not deliver either edge, and there is no polling
+      fallback while `using_irq` is true, so touch dies completely.  Use
+      falling-edge plus a poll-on-touch watchdog instead.  (Session 57.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

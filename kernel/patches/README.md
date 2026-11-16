@@ -3,10 +3,18 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**8 762 lines / 61 files** against pristine **linux-7.3.3**
-(sha256 `20556c5f…`, session-52 export).  It was verified by applying it to
-pristine 7.3.3 targets and comparing all 61 files byte-for-byte with
-`local/kernel-tree` — 0 rejects, 61/61 identical.  Session 52 adds two files,
+**8 862 lines / 64 files** against pristine **linux-7.3.3**
+(sha256 `be2ca8ba…`, session-57 export).  It was verified by applying it to
+pristine 7.3.3 targets and comparing all 64 files byte-for-byte with
+`local/kernel-tree` — 0 rejects, 64/64 identical.  **Session 57** changes the
+Munin touch driver (`playbook-munin.c`: the parity re-read, the 10 ms
+poll-on-touch watchdog, the mutex and the `trace` parameter — traps 296/297,
+report 247) and the audio print levels (`omap-mcbsp.c` back to `dev_dbg`, the
+machine driver's per-stream prints to `dev_dbg`, the PM-QoS remove guarded —
+traps 293/294).  The walk excludes the **vendored SGX driver**
+(`drivers/gpu/drm/pvrsgx/`, 362 files) and `scripts/` (host tooling); without
+those exclusions the same walk reports 337 files, including two generated
+`scripts/mod/*.h`.  Session 52 adds two files,
 both in the USB gadget path: `drivers/usb/musb/musb_gadget.c` sets
 `musb->g.quirk_avoids_skb_reserve = 1` and
 `drivers/usb/gadget/function/u_ether.c` realigns misaligned TX frames — MUSB's

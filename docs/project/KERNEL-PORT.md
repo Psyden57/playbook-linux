@@ -6,10 +6,11 @@ BusyBox userland.
 
 * Base: **upstream 7.3.3** (not the pmOS package, which is still `!armhf`).
 * Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **64 files /
-  8 800 lines**, sha256 `014eb8a8…`, verified 0 rejects / 64/64 byte-identical
-  against pristine 7.3.3 targets (session 56).  It includes the SGX integration
-  (`drivers/gpu/drm/{Kconfig,Makefile}`, `mm/vmalloc.c`, the DTS, the config)
-  and the session-56 Munin Y fix; the **362-file SGX driver itself is vendored**
+  8 862 lines**, sha256 `be2ca8ba…`, verified 0 rejects / 64/64 byte-identical
+  against pristine 7.3.3 targets (session 57).  It includes the SGX integration
+  (`drivers/gpu/drm/{Kconfig,Makefile}`, `mm/vmalloc.c`, the DTS, the config),
+  the session-56 Munin Y fix and the session-57 touch input model and audio
+  print levels; the **362-file SGX driver itself is vendored**
   at `kernel/vendor/pvrsgx-1.17.4948957-101c687a.tar.xz` (sha256 `a9d04d3c…`;
   extract it into `drivers/gpu/drm/` after applying the patch — see
   `kernel/vendor/README.md`).  A build from the patch alone is missing the
@@ -33,10 +34,10 @@ BusyBox userland.
 * `initramfs/init.c`: `ROOTFS_RAW_OFF = 0x49000000` (hd3 at loader block
   `0x4915`), the `lstat()` hand-off, and the read-only root: the loop
   `LO_FLAGS_READ_ONLY`, the ext4 `MS_RDONLY`+`noload`, a 256 MiB tmpfs
-  upper/work and overlayfs on `/newroot`.  Unchanged in session 55; the region-0
-  image is `local/images/kernel-0xAB899C49-touch.img` (`0x9676A0` B, CRC
-  `0xAB899C49`, sha256 `c37ee2fe…`, with `&sgx_module` enabled and the session-56
-  Munin Y fix).
+  upper/work and overlayfs on `/newroot`.  Unchanged since session 55; the
+  current region-0 image is `0xB9DD91E3` (`0x967398` B, sha256 `5ac47496…`,
+  kernel `#73`, `&sgx_module` enabled, the Munin Y fix and the touch input
+  model).
 * Session 54's instrumentation change: the general MMC/GPIO/sysc/probe prints
   are `pr_debug` (`PBSIO`/`PBINI`/`PBX`/`PBM` in `omap_hsmmc.c`, `PBC` in
   `mmc/core/{core,host,mmc_ops}.c`, `PBR` in `drivers/base/dd.c`, `PBG` in
@@ -45,6 +46,13 @@ BusyBox userland.
 * Session 56 adds the Munin Y fix: the controller's Y axis is inverted
   relative to the display (physical top → evdev 577–591), so
   `playbook-munin.c` reports `panel_h - 1 - munin_map(...)`.
+* Session 57 adds the touch input model to `playbook-munin.c`: the parity
+  re-read (up to 4 tries, `usleep_range(200,400)`), the 10 ms poll-on-touch
+  watchdog, the per-contact `trace` module parameter, and the mutex that
+  serialises the IRQ thread and the poll work; it also puts
+  `omap_mcbsp_dump_reg()` and the machine driver's per-stream prints back at
+  `dev_dbg` and guards the PM-QoS remove (`omap-mcbsp.c`,
+  `playbook-wm8994.c`).
 * Earlier session deltas already in the patch: the MUSb HSDMA fix
   (`musb_gadget.c`, `u_ether.c`), the UART2 CTS/RTS pads, the WL1283 CAM/4-sr
   (`wl12xx`), the CLK32KG (`clk-twl.c`), the audio path (McBSP3, the speaker
