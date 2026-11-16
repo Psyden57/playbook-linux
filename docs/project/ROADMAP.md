@@ -231,27 +231,26 @@ flasher can replace at every point:
    (`ZINK: failed to load libvulkan.so.1`) — the remaining blocker is the GPU.
    A writable eMMC root is a separate experiment; the region-1 root is the
    fallback.
-5. **SGX540 — the GPU WORKS (session 55, reports 244/245); the DE is the
-   remainder.**  The `openpvrsgx-devgroup` 7.3 driver (DDK 1.17.4948957) builds
-   in-tree and binds; the pvrports userspace (`libglvnd`, `mesa-pvr-dri-classic`
-   21.3.9, `sgx-ddk-um` 1.17.4948957 with `gcompat` + `wayland-libs-server`)
-   initializes it (`UM/KM DDK match`), and a headless EGL/GLES 2.0 context
-   reports `GL_RENDERER = PowerVR SGX 540`, `GL_VERSION = OpenGL ES 2.0 build
-   1.17@4948957`.  **Next:** bake the nine APKs + the module autoload + the
-   service into hd3 (the test was in the tmpfs upper), and choose a compositor
-   that works on this GLES2 driver — catacomb panics on
-   `GL_EXT_unpack_subimage`; pvrports supports Phosh (patched phoc) and Plasma,
-   and a wlroots DE is an alternative.
+5. **SGX540 — THE COMPOSITOR WORKS (session 56, report 246); apps and
+   performance are the remainder.**  catacomb 1.5.0-r10000 runs on the SGX540
+   with a smithay 0.7.0 GLES2 fallback (the `GL_EXT_unpack_subimage` check is
+   relaxed and the uploads use per-row/full-row paths) and maps
+   `libGLESv2_PVR_MESA`/`libsrv_um`/`libusc`/`pvr_dri.so`; `squeekboard` is
+   composited and the touch cursor tracks.  The stack is baked into hd3
+   (`89399744…`), and region 0 is `0xAB899C49` (kernel `#69`, the Munin Y fix).
+   **Next:** install `tabula` + the wallpaper and a browser/paint client, and
+   profile the upload path (the OSK key-press jank survived the v2 full-row
+   optimization).
 
 Step 3 is reversible at any time by re-flashing the same block range — which is
 the whole reason it beats an in-place mkfs.
 
 **Closes when:** the unit boots a real rootfs from hd3 unattended, and a trivial
 EGL/GLES 2.0 program runs on SGX540.  **Both are met** — Nura boots from the
-read-only hd3 (sessions 54/55) and the EGL/GLES2 probe reports `PowerVR SGX 540`
-(session 55, report 245).  The remaining DE work (a compositor that runs on this
-GLES2 driver, and baking the stack into hd3) is tracked under step 5 and does not
-reopen the GPU result.
+read-only hd3 (sessions 54/55), the EGL/GLES2 probe reports `PowerVR SGX 540`
+(session 55, report 245), and **catacomb now composites on it** (session 56,
+report 246).  The remaining work (apps/content and the upload-path performance)
+is tracked under step 5 and does not reopen the GPU result.
 
 ## 8. A BB10 image on the PlayBook — **PARKED (operator, session 25)**
 

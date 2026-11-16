@@ -14,6 +14,45 @@ duplicated here because the commit preserves it verbatim.
 `docs/project/STATE.md`; it was replaced by the session-43 state and is not
 duplicated here because the commit preserves it verbatim.
 
+## Previous state — 2026-11-15 (session 55)
+
+**The read-only hd3 + overlayfs root is flashed and booting, and the SGX540
+kernel driver builds on 7.3.3 and binds the GPU.**  The packed both-halves
+container was written in one bootrom session (`COMPLETE 0x40C0 -> cmd 0x4006`,
+`done`); the unit boots `7.3.3 #68` on
+`overlay / … lowerdir=/rootfs,upperdir=/overlay/upper,workdir=/overlay/work`
+with the lower `EXT4-fs (loop0): … ro without journal`.  **No eMMC stall and no
+journal abort.**  `elogind`, `tinydm` and `catacomb` run, `/run/user/10000` and
+the catacomb Wayland socket exist, the Munin touch is ready, the backlight is
+255, and `wlcore` boots the WLAN firmware.  `/init` took `BOOTCTR_FCTRY`
+`0x1d -> 0x32` (`PASS`).  [report 243]
+
+**SGX540 (session 55, reports 244/245): THE GPU WORKS.**  The driver
+(`openpvrsgx-devgroup` 7.3, DDK 1.17.4948957) is in the tree and binds
+(`pvrsrvkm 56000000.gpu`, `card1`/`renderD129`); the pvrports userspace
+(`libglvnd` + `mesa-pvr-dri-classic` 21.3.9 + `sgx-ddk-um` 1.17.4948957, with
+`gcompat` and `wayland-libs-server`) initializes it —
+`PVR_K: UM DDK-(4948957) and KM DDK-(4948957) match. [ OK ]` — and a headless
+EGL/GLES 2.0 context reports **`GL_RENDERER = PowerVR SGX 540`,
+`GL_VERSION = OpenGL ES 2.0 build 1.17@4948957`**.  **The stack is baked into
+hd3** (image `85b44deb…`): the module autoloads, the `sgx-ddk-um` service runs,
+and the EGL probe works on a fresh boot.  **catacomb cannot use it**: smithay
+requires `GL_EXT_unpack_subimage`, which the SGX540 GLES2 driver lacks, and
+catacomb panics — so the panel is black with the backlight on.  A compatible
+compositor (Phosh/phoc or a wlroots DE) is the next step.
+
+* **Region 0 = `0xA8F0F30C`** (`0x967880` B, sha256 `fb9905f3…`, kernel
+  `7.3.3 #68`) — the read-only/overlay initramfs **with `&sgx_module` enabled**.
+* **hd3 = `85b44deb…`** (the overlay image + the **pvr userspace stack** and the
+  347 KB `pvrsrvkm_omap4_sgx540_120.ko`), flashed this session
+  (`--component --dest-block 0x4915`).
+* **Region 1 = `49e318bf…`** (the BusyBox fallback), intact and not booted.
+* **Bench:** the ACM is `0fca:8010`, `ttyACM0` 0666, the Nura `ttyGS0` shell is
+  `playbook:~#`; **no sshd**; `usb0` is DOWN on this root.
+* **Next:** the SGX **userspace** (`sgx-ddk-um` + `mesa-pvr-dri-classic` +
+  `libglvnd` + `gcompat`), a trivial EGL/GLES 2.0 test, then catacomb.  The
+  kernel patch re-export (358 driver files) is pending the packaging decision.
+
 ## Previous state — 2026-11-14 (session 51)
 
 **THE WL1283 WLAN WORKS: it scans.**  Two findings closed the bring-up in one

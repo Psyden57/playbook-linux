@@ -2304,6 +2304,62 @@ report 121 §3/§11/§12.
         eMMC read on the live overlay (session 55; the read caused a visible
         display flicker and proves nothing).  (Session 55.)
 
+285. **smithay hard-requires `GL_EXT_unpack_subimage`; the SGX540 is GLES 2.0
+      and has neither that nor GLES 3.0.**  Catacomb 1.5.0 pins smithay 0.7.0
+      (`dba255cd…`); `GlesRenderer::new()` returns
+      `GLExtensionNotSupported(["GL_EXT_unpack_subimage"])` and catacomb panics
+      at `src/udev.rs:400`.  The fix is a smithay patch: remove the hard error
+      and implement the upload fallbacks (full tight → one `TexImage2D`; full
+      padded → NULL alloc + per-row; partial tight → whole damaged rows; partial
+      padded → per-row; `update_memory` → full-texture-layout rows).  Do not
+      read the panic as a GPU failure; the EGL/GLES probe works.  (Session 56,
+      report 246.)
+
+286. **catacomb/smithay are statically linked; rebuild catacomb with a local
+      pmaports package.**  The Alpine `testing/catacomb` APKBUILD is copied to
+      `local/work/nura/pmaports/main/catacomb/`, `pkgrel` bumped, `!check`
+      added, and `prepare()` applies `smithay-gles2-fallback.patch` to the
+      fetched cargo git checkout.  Build with
+      `--as-root --no-cross --no-ccache build --lax --arch armv7 catacomb`:
+      crossdirect refuses native rustc 1.100.0 against the armv7 chroot's
+      1.99.1, and `sccache` is absent from the QEMU buildroot.  LTO under QEMU
+      is ~18–20 min with `!check`.  (Session 56, report 246 §3.)
+
+287. **The Munin touch Y axis is inverted relative to the display.**  Measured
+      with a top/bottom edge capture: physical top → evdev `Y 577–591`,
+      physical bottom → `Y 35–51`; the X axis is correct.  The driver now
+      reports `panel_h - 1 - munin_map(cal_y, yr, panel_h - 1)`.  Kernel `#69`.
+      Report 198's "Y=0 at the top" does not hold on this display pipeline; the
+      bench measurement is authoritative.  (Session 56, report 246 §4.)
+
+288. **The SGX kernel driver is vendored, not folded into the board patch.**
+      `kernel/vendor/pvrsgx-1.17.4948957-101c687a.tar.xz` (362 files, sha256
+      `a9d04d3c…`) + `kernel/vendor/README.md`; the main patch is 64 files /
+      8 800 lines (sha256 `014eb8a8…`), verified 0 rejects / 64/64 identical,
+      and the driver 362/362 after extraction.  The old patch's two generated
+      `scripts/mod/*.h` were removed.  Apply the patch, extract the archive
+      into `drivers/gpu/drm/`, then build.  (Session 56, report 246 §6.)
+
+289. **Restarting the compositor over a wedged DSI does not recover.**  After a
+      panicked/restarted session, stopping tinydm left the screen black and a
+      restart produced `DSI: Failed to set dsi_if_enable to 0`, `VC(0) busy`,
+      `NO PACKET_SENT`, `VC(1) error`.  A clean boot does one clean modeset
+      (`irqstatus=0x4 polls=1`).  Recover with a reboot; do not iterate
+      compositor restarts on a wedged link.  (Session 56, report 246 §5.)
+
+290. **OSK key presses still drop frames; the full-row upload optimization did
+      not fix it.**  The v2 fallback uploads whole damaged rows for a tight
+      stride (one call per rect) instead of one per row, but the key-press cost
+      is unchanged.  Next: log the shm stride/damage, consider packing rows,
+      and check `EGL_KHR_fence_sync` vs the per-upload `glFinish`
+      (`GL_OES_EGL_sync` is absent).  (Session 56, report 246 §7.)
+
+291. **The Nura `usb0` is down after boot, and the host UFW blocks inbound.**
+      Bring the link up with `ip link set usb0 up; ip addr add
+      169.254.0.1/16 dev usb0`; transfer **host→device** (device `nc -l -p
+      8765 > /tmp/f`, host pushes the bytes) at ~10 MB/s.  Do not add a UFW
+      inbound rule just for a transfer.  (Session 56.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it
@@ -2619,6 +2675,15 @@ decrements `BOOTCTR_FCTRY`" was an incomplete caller audit — reports 89 §3.5 
   wrote 626 065 440 B and verified sha256 `076bafcf…`.  This corrects the
   session-53 handoff/ROADMAP and report 239/240 wording; `SAFETY.md` §4 already
   said `0x4915`.  (Report 241, trap 259.)
+
+**3.32 Report 198's "no inversion" Y orientation does not hold on the current
+display pipeline.**  Report 198 §1/§3 read the vendor calibration as axis-
+aligned/increasing and observed `ABS_Y = 0` at the top edge.  Session 56's
+controlled top/bottom edge capture reads the opposite: physical top →
+evdev `Y 577–591`, physical bottom → `Y 35–51` (X is correct).  The driver now
+inverts the mapped Y (`panel_h - 1 - munin_map(...)`, kernel `#69`).  The
+calibration *values* are unchanged; only the axis direction was wrong on this
+pipeline.  Report 246 §4.
 
 ## 4. Documentation and tree defects (not behavioural bugs)
 

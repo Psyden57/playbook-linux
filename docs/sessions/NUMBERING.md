@@ -1,13 +1,13 @@
 # Session numbering
 
-The project spans **fifty-five sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **fifty-six sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-55`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-56`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
 * **Linux-era** ("session 1…49") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
@@ -67,6 +67,7 @@ So:
 | **53** | **47** | **The WL1283's BT core works, and loading its service pack makes `hci0` register with mgmt for the first time** (report 238).  Driven over UART2 as H4 the core answers `HCI_Reset`, reports `hci ver 6` / `lmp ver 6` / `mfr 0x002b` (TI, BT 4.0) and BD_ADDR `8e:e4:3c:22:61:00`, and **runs a full BR/EDR inquiry that finds a peer** (`f0:a3:b2:bb:d1:00`, class `0x011c00`), reproducibly.  The reference's `WL1283.bts` replays **315/315** over a userspace H4 loader and moves the LMP subversion `0x2b0f` → **`0x2b33`** (what its own header declares); loaded **before** the attach it makes `MGMT_OP_READ_INDEX_LIST` report **1** controller instead of **0**, with the no-pack case as the negative control.  The three-session `hci0` failure is thus identified: **`0x201c` is `HCI_LE_Read_Supported_States`** (report 237 §4 called it a benign TI vendor op — wrong), a bare ROM answers it **Command Disallowed** with 5 payload bytes where 9 are needed, `hci_cc_func()` rejects it, `le_init2` aborts, and the controller never registers — the pack fixes the **length** (11 → 12 bytes).  **Left:** opening the controller — `SET_POWERED` returns `0x05` after `Frame reassembly failed (-84)` (`-EILSEQ`), a kernel `hci_uart` fault since the same commands answer instantly from userspace (trap 250).  **LE is refused by the controller** and the reference stack is BR-EDR-only.  Settles the BT-firmware contradiction (the reference's file is `Quattro, 6.0.15 ROM`; `TIInit_*` is `BL6450, WL1271/3 2.0 ROM`).  Region 0 `0xDD66D8C3` and region 1 `49e318bf…` unchanged — **no flash this session**.  Traps 249/250; DECISIONS §73 |
 | **54** | **48** | **hd3/Nura device work and the read-only overlay build** (reports 240/241/242).  The host-side pmbootstrap experiment (240) built the Nura catacomb root and the artifact `linux-*` wrapper; the device work (241) found the hd3 filesystem at loader block **`0x4915`** (the MCT entry `0x4905` has a 1 MiB prefix; the loader gate rejected 0x4905), flashed 626 065 440 B and verified `sha256 076bafcf…`; fixed the initramfs hand-off (`lstat`, not `access`); and booted **Nura** from hd3, but the first ext4 journal/udev write stalls the eMMC and the root remounts read-only.  The continuation (242) implemented the **read-only hd3 + overlayfs** init (`LO_FLAGS_READ_ONLY`, `MS_RDONLY`+`noload`, a 256 MiB tmpfs upper), rebuilt region 0 as **`0xE85217E5`**, edited the hd3 image (root fstab line + tty1 getty removed, the WLAN firmware, the 43 modules; sha256 `1f14915f…`) and packed the both-halves container **`c3ed1f61…`**; **the flash did not run** (the operator stopped).  Traps 253–271; DECISIONS §74/§75/§76. |
 | **55** | **49** | **The overlay root is flashed and booting; the eMMC is out of the boot path; the SGX540 runs EGL/GLES 2.0** (reports 243/244/245).  The packed container was written in one bootrom session (`COMPLETE 0x40C0 -> cmd 0x4006`, `done`) and the unit booted `7.3.3 #68` on `overlay / … lowerdir=/rootfs,upperdir=/overlay/upper`, the lower `ro without journal`: **no `Card stuck`, no journal abort**.  `elogind`/`tinydm`/**`catacomb`** run, `/run/user/10000` and the catacomb Wayland socket exist, the Munin touch is ready, the backlight is 255, and `wlcore` boots the WLAN firmware.  The `openpvrsgx-devgroup` 7.3 driver (DDK 1.17.4948957) builds in-tree and binds (`pvrsrvkm 56000000.gpu`, `card1`/`renderD129`); the pvrports userspace (`libglvnd`, `mesa-pvr-dri-classic` 21.3.9, `sgx-ddk-um` + `gcompat` + `wayland-libs-server`) initializes it (`UM/KM DDK match`) and a headless EGL/GLES2 probe reports **`GL_RENDERER = PowerVR SGX 540`**, `GL_VERSION = OpenGL ES 2.0 build 1.17@4948957`.  catacomb panics on `GL_EXT_unpack_subimage` (compositor requirement); pvrports supports Phosh/phoc and Plasma.  The stack is **baked into hd3** (image `85b44deb…`: offline `apk --root` install, module in `/etc/modules`/`modules.dep`, the service in the default runlevel, the `pvr` tinydm env; hd3-only `--component --dest-block 0x4915` flash) and verified on a fresh boot.  Traps 272–284; DECISIONS §76 (executed), §77, §78. |
+| **56** | **50** | **The SGX540 compositor works: catacomb 1.5.0 runs on it with a smithay GLES2 fallback (relax `GL_EXT_unpack_subimage`; per-row/full-row uploads), and the touch Y inversion is fixed** (report 246).  Region 0 **`0xAB899C49`** (#69) and hd3 **`89399744…`** (catacomb r10000) were baked and flashed (region 0 + hd3 v1 in one bootrom session, then hd3-only v2).  `squeekboard` composites and the touch cursor tracks; the OSK key-press performance is open.  The kernel export is **64 files / 8 800 lines** (sha256 `014eb8a8…`), with the **362-file SGX driver vendored** at `kernel/vendor/pvrsgx-1.17.4948957-101c687a.tar.xz` (sha256 `a9d04d3c…`; 362/362 verified).  Traps 285–291; DECISIONS §79/§80. |
 
 ## Anchors (evidence for the mapping)
 
@@ -111,7 +112,7 @@ and each session knows its own position:
 Reports `10`…`102` are the pre-Linux phase's output (boot media, monitor
 security, IRAM tables, the ROM API, `hd0`, NVRAM records `0x2801`, RPMB, the CRC
 recipe, the loader audit, the pre-OS IFS reflash).
-`103`…`245` are the Linux-era sessions (and continuing).
+`103`…`246` are the Linux-era sessions (and continuing).
 
 ## Why the two schemes are kept
 

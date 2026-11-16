@@ -178,6 +178,16 @@ DTB=$K/arch/arm/boot/dts/ti/omap/omap4-winchester.dtb \
 python3 tools/build_kernel_image.py
 ```
 
+**The SGX driver is vendored (session 56).**  After applying the patch to a
+pristine tree, extract
+`kernel/vendor/pvrsgx-1.17.4948957-101c687a.tar.xz` into
+`$K/drivers/gpu/drm/` before building; `kernel/vendor/README.md` records the
+source URL, branch, commit, licence and sha256, and the exact copy step.  The
+main patch's `drivers/gpu/drm/{Kconfig,Makefile}` and `mm/vmalloc.c` refer to
+`pvrsgx/`, so the extraction must precede the build.  The catacomb compositor is
+built from `local/work/nura/pmaports/main/catacomb/` (HANDOFF §0e); its APK is
+baked into the hd3 image with the offline `apk --root` method (report 246 §3).
+
 **The printed CRC must differ from the previous build** (trap 39).  A build that
 repeats a CRC has usually failed to link or reused a stale object; if you also
 edited `initramfs/root/*`, check step 4 *before* flashing.

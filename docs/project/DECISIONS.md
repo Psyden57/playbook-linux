@@ -2772,6 +2772,54 @@ The repository licence and visibility are decided below; the remaining
 policy questions (publication of the proprietary corpus) stay open and are
 recorded here so nobody assumes a policy exists.
 
+## 79. Catacomb on the SGX540: a smithay GLES2 fallback (session 56)
+
+**Decision.**  Keep catacomb as the Nura compositor and patch **smithay 0.7.0**
+(the pinned rev) to treat `GL_EXT_unpack_subimage` as optional.  The renderer
+creation check becomes a warning, and the upload paths fall back to per-row /
+whole-damaged-row `TexSubImage2D` (and a NULL-alloc + per-row full upload for a
+padded stride).  Build catacomb from a local pmaports package
+(`local/work/nura/pmaports/main/catacomb/`, `pkgrel=10000`, `!check`) with the
+patch applied to the fetched cargo checkout in `prepare()`.
+
+**Why.**  The SGX540 is a GLES 2.0 part with neither the extension nor GLES 3.0;
+smithay's guard excluded it.  The Khronos spec explicitly allows the per-line
+fallback; the GPU, EGL/GLES 2.0 and the pvr stack were already working.  The
+alternative (Phosh/phoc) is a version mismatch (pvrports phoc 0.52 vs edge
+0.58/greetd/wlroots 0.20).  Catacomb is the Nura default and the lightest.
+
+**Constraint.**  The patch is against the pinned smithay rev; a smithay bump
+needs a re-port.  Building needs `--no-cross --no-ccache` (native rust 1.100.0
+vs armv7 1.99.1; no sccache) and LTO under QEMU (~18–20 min).  The OSK
+key-press path still janks; the fallback is correct but not a performance fix.
+
+**Evidence.**  `GL_EXT_unpack_subimage not supported, using per-row uploads`
+in the tinydm log; catacomb maps `libGLESv2_PVR_MESA`/`libsrv_um`/`libusc`/
+`pvr_dri.so`; `squeekboard` composites; the touch cursor tracks.  Report 246.
+
+## 80. The SGX driver is vendored; the board patch stays reviewable (session 56)
+
+**Decision.**  Ship the 362-file / 6.5 MB `openpvrsgx-devgroup` driver as
+`kernel/vendor/pvrsgx-1.17.4948957-101c687a.tar.xz` (source URL, branch,
+commit, licence and sha256 in `kernel/vendor/README.md`) with a documented copy
+step, and keep `0001-playbook-winchester-7.3.3.patch` to the integration
+(`drivers/gpu/drm/{Kconfig,Makefile}`, `mm/vmalloc.c`, the DTS, the config) and
+the board fixes.  The patch is 64 files / 8 800 lines (sha256 `014eb8a8…`).
+
+**Why.**  Three options were considered: fold the driver into one patch (~429
+files, ~150k lines), a second driver patch (~6.5 MB series), or vendor it.  The
+operator chose the vendor archive: the main patch stays reviewable, and the
+third-party code is a pinned dependency with explicit provenance.
+
+**Constraint.**  A build from a clean checkout must apply the patch, then
+extract the archive into `drivers/gpu/drm/`, then build.  The export check is
+apply-and-compare (0 rejects; 64/64 files and 362/362 driver files identical)
+plus the tree walk after `make clean` (traps 161/211).  The touch Y fix is in
+the main patch (kernel `#69`); the two generated `scripts/mod/*.h` that the old
+63-file export carried were removed.
+
+**Evidence.**  Report 246 §6; `kernel/vendor/README.md`.
+
 ### Repository license
 
 **Decided (session 23): GPL-3.0-or-later.**  The project's own code and

@@ -234,7 +234,15 @@ static void munin_report(struct munin_ts *ts)
 			input_report_abs(input, ABS_MT_POSITION_X,
 					 munin_map(&ts->cal_x, xr,
 						   ts->panel_w - 1));
+			/*
+			 * The controller's raw Y increases upward, while the
+			 * display and Linux use Y down.  Measured on the bench:
+			 * the physical top edge reads about 580 and the bottom
+			 * edge about 35.  Invert the calibrated value so the
+			 * compositor's touch position matches the display.
+			 */
 			input_report_abs(input, ABS_MT_POSITION_Y,
+					 ts->panel_h - 1 -
 					 munin_map(&ts->cal_y, yr,
 						   ts->panel_h - 1));
 		}
