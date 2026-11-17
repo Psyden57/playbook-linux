@@ -28,9 +28,11 @@
         .equ EP_TICKS,    __EP_TICKS__
         .equ BL_PROBE,    __BL_PROBE__
 
-        @ WDT2 reload/kick is done from the kernel instead (report 109 §8.1):
-        @ a loader-side write diagnostic wedged the loader and produced no
-        @ trustworthy readback.  Loader keeps its hands off the watchdog.
+        @ WDT2 stays the *kernel's* to program (report 109 §8.1, trap 115).
+        @ Session 62 tried to extend the window here with the same WSPR
+        @ sequence and it wedged the unit before the kernel ran, leaving the
+        @ timer stopped so it never reset: do NOT touch WDT2 from the
+        @ chainloader.  The loader's 7.8125 s window stands.
 
         .equ ZIMAGE_SRC,  __ZIMAGE_SRC__
         .equ ZIMAGE_SIZE, __ZIMAGE_SIZE__
@@ -39,25 +41,74 @@
         .equ KERNEL_DEST, __KERNEL_DEST__
         .equ DTB_DEST,    __DTB_DEST__
 
-        @ Clear the DEBUG_LL ring state (count +0x80, index +0x84) and the
-        @ first page of characters, so every boot's earlyprintk log starts
-        @ clean instead of accumulating across the WDT2 reset loop.  Only the
-        @ header really matters: the reader uses count/index to read exactly
-        @ the bytes written this boot, so the rest of the 32 KB ring is
-        @ overwritten before it can be read.  The breadcrumb words at
-        @ +0x00..+0x7C are left alone (the ring starts at +0x80).
-        .macro clear_ring, base
+        @ Ring hand-off.  The DEBUG_LL ring is ONE append-only character
+        @ stream per page: count +0x80, index +0x84, chars +0x100..+0x7FFF.
+        @ It used to be cleared here — header plus the first 0xF80 bytes —
+        @ which destroyed the whole log of a kernel that died early: such a
+        @ log is shorter than the 3840 characters that reach +0x1000, so the
+        @ read-back boot's chainloader erased all of it.  The "printk window
+        @ at +0x1000" was never a second writer: it is this stream at
+        @ character #3840, the first byte past the old clear, and it held
+        @ stale text whenever the boot under test wrote fewer characters.
+        @ (Session 62, report 255, trap 317a.)
+        @
+        @ So: do not clear.  A boot keeps writing where the previous one
+        @ stopped, so the failed log survives the read-back boot (which
+        @ appends ~1.6 KB after it, never over it).  Record the last two
+        @ entry headers here, so the two most recent boots can be delimited
+        @ exactly:
+        @   +0xb8  magic "RHND" (0x444E4852), written last
+        @   +0xbc  prev_count      entry count of THIS boot = end of prev log
+        @   +0xc0  prev_index
+        @   +0xc4  prevprev_count  entry count of the boot before     = start of
+        @   +0xc8  prevprev_index                                      prev log
+        @   +0xcc  prev_tjump     previous boot's WDT2 CRR at kernel jump
+        @   +0xd0  prev_tentry    previous boot's WDT2 CRR at kernel entry
+        @   +0xd4  prev_magic     previous boot's kernel-entry stamp (0x51000001)
+        @ prev log = chars from prevprev_index, prev_count-prevprev_count long
+        @ this log = chars from prev_index,     count-prev_count long
+        @ The three timing words are what make a failed boot's timing readable
+        @ later: the kernel's head.S samples WDT2 CRR into +0x18 at entry, and
+        @ this boot's own epoch block overwrites +0x88..+0xb3 (so +0x90, the
+        @ chainloader's pre-jump CRR, would otherwise be lost).  Both are read
+        @ only — WDT2 is never written from here (trap 322).
+        @ A header that cannot be a live one (a QNX boot leaves 0xAA fill, and
+        @ index 0xAAAAAAAA would walk the character store out of the page) is
+        @ reset to zero instead.
+        .macro ring_handoff, base
         ldr     r0, =\base
-        add     r0, r0, #0x80
+        ldr     r1, [r0, #0x80]          @ count
+        ldr     r2, [r0, #0x84]          @ index
+        cmp     r2, #0x7F00
+        blo     97f
         mov     r1, #0
-        mov     r2, #0x3E0               @ (0x1000 - 0x80) / 4 words
-99:     str     r1, [r0], #4
-        subs    r2, r2, #1
-        bne     99b
+        mov     r2, #0
+        str     r1, [r0, #0x80]
+        str     r2, [r0, #0x84]
+97:
+        ldr     r3, [r0, #0xbc]          @ prev -> prevprev
+        ldr     r12, [r0, #0xc0]
+        str     r3, [r0, #0xc4]
+        str     r12, [r0, #0xc8]
+        str     r1, [r0, #0xbc]          @ this entry -> prev
+        str     r2, [r0, #0xc0]
+        ldr     r3, [r0, #0x90]          @ previous boot's pre-jump CRR
+        str     r3, [r0, #0xcc]
+        ldr     r3, [r0, #0x18]          @ previous boot's kernel-entry CRR
+        str     r3, [r0, #0xd0]
+        ldr     r3, [r0, #0x14]          @ previous boot's entry stamp
+        str     r3, [r0, #0xd4]
+        ldr     r3, =0x444E4852          @ "RHND"
+        str     r3, [r0, #0xb8]
+        dsb
         .endm
 
 _start:
         ldr     sp, =0x800F0000
+
+        @ Ring hand-off first, before anything else can write a character:
+        @ keep the previous boot's log and record this boot's entry header.
+        ring_handoff BC_PRIMARY
 
         @ Sample the always-on WDT2 counter as early as it is safe to, so the
         @ epoch block can separate "bootrom hand-over variance" from "this
@@ -81,10 +132,7 @@ _start:
         ldr     r0, =0x4B45524E          @ "KERN"
         str     r0, [r4, #8]
         bl      bc_mirrors
-        clear_ring 0x88000000
-        clear_ring 0x90000000
-        clear_ring 0x94000000
-        clear_ring 0x9FE00000
+        @ (no ring clear: ring_handoff above keeps the stream append-only)
         str     r11, [r4, #0xa8]         @ CRR on entry to this chainloader
         mov     r0, #1
         
@@ -188,16 +236,34 @@ kernel_park:
 
 @ ---------------------------------------------------------------------------
 @ r0 = src, r1 = dst, r2 = bytes (rounded up to words)
+@
+@ The MMU and caches are off here, so every access is a single non-cached
+@ memory cycle and the loop overhead is a large part of the cost.  Measured on
+@ the unit (session 62): a word-at-a-time copy of the 7.5 MB zImage took
+@ 0.795-0.832 s of the loader's 7.812 s watchdog window, and the window is what
+@ limits an SMP boot (the kernel needs ~0.74 s of its own to reach the late
+@ initcall that reprograms WDT2 -- see report 255).  LDM/STM in eight-word
+@ bursts keeps the same semantics with far fewer cycles.  r4-r10 are saved
+@ because the caller keeps BC_PRIMARY in r4 and the CRR sample in r11.
 copy_words:
+        push    {r4-r10}
         add     r2, r2, #3
-        lsr     r2, r2, #2
-1:      cmp     r2, #0
-        beq     2f
+        lsr     r2, r2, #2               @ words
+        cmp     r2, #8
+        blo     2f
+1:      ldmia   r0!, {r3, r4, r5, r6, r7, r8, r9, r10}
+        stmia   r1!, {r3, r4, r5, r6, r7, r8, r9, r10}
+        subs    r2, r2, #8
+        cmp     r2, #8
+        bhs     1b
+2:      cmp     r2, #0
+        beq     3f
         ldr     r3, [r0], #4
         str     r3, [r1], #4
         subs    r2, r2, #1
-        bne     1b
-2:      bx      lr
+        bne     2b
+3:      pop     {r4-r10}
+        bx      lr
 
 bc_mirrors:
         ldr     r1, =BC_MIR1

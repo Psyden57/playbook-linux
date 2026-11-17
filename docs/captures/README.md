@@ -172,6 +172,7 @@ pair only when a report needs a before/after comparison.
 | `wlan-oracle-up-2026-11-14.txt` | the oracle's whole-session slog, including the reference's live WLAN bring-up (`sdioAdapt_ConnectBus: Send commands sequence: 0, 5, 3, 7` → firmware `Rev 7.1.4.10.77`); report 217 |
 | `wlan-qnx-state-2026-11-14.txt` | stock TabletOS with `ti0` RUNNING: CORE/WKUP pads, GPIO1/2, `CM_PER`/`CM2`/`PRM`, TWL `0x80`–`0xB5`; report 218 |
 | `wlan-linux-state-2026-11-14.txt` | the same ranges on our Linux boot, for the report-218 diff; report 225 reads its `CM2` domain modes |
+| `ring-handoff-2026-11-16.txt` | the DEBUG_LL ring hand-off: the proof that `+0x1000` is the character array at #3840, the per-boot segmentation of one ring (3208/3943/4211 characters), the recovered `rcu2` log showing **`rcu_init()` completes**, the watchdog timing decode (kernel entry at 7.450 s of 7.812 s) and the first SMP boot to userspace; report 255 |
 
 `docs/reports/data/` is indexed by the reports that produced it; the report
 INDEX (`docs/reports/INDEX.md`) says which report is current for a topic.

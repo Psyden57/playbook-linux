@@ -3082,6 +3082,57 @@ fixes.
 `bbee7beb…`, trailer magic `0xD7C82D1F` + CRC `0x433232F1`; region 1 sha256
 `a3277272…`; `BOOTCTR_FCTRY = 0x31`).
 
+## 89. The chainloader hands the ring off and copies in blocks; WDT2 stays the kernel's (session 62)
+
+**Decision.**  Three changes in `boot/chainloader/chainloader_kernel.S.in`:
+
+1. **`clear_ring` is replaced by `ring_handoff`.**  The DEBUG_LL ring is an
+   append-only character stream: a boot keeps writing where the previous one
+   stopped.  The chainloader sanitises a header that cannot be live
+   (`index >= 0x7F00` → `count = index = 0`, because a QNX boot leaves `0xAA`
+   fill and `0xAAAAAAAA` as an index would walk `ring_put` out of the page) and
+   records the last two entry headers in ring2 (`BC_PRIMARY`): `+0xb8` magic
+   `RHND`, `+0xbc/+0xc0` prev count/index, `+0xc4/+0xc8` prevprev, `+0xcc/+0xd0/
+   +0xd4` the previous boot's pre-jump CRR, kernel-entry CRR and entry stamp.
+2. **`copy_words` copies in eight-word `LDMIA`/`STMIA` bursts** (`r4-r10` saved,
+   because the caller keeps `BC_PRIMARY` in `r4` and the CRR sample in `r11`).
+3. **The chainloader never writes WDT2.**  The loader's 7.8125 s arming stands and
+   the kernel keeps owning the timer after its late-initcall re-program.
+
+`tools/pb_ring.py` decodes the new contract (`--boot prev|cur|all`, plus the
+timing line), and the read-back image is built with `earlyprintk` removed from
+its DT `bootargs` (a `fdtput` on the carved DTB — no kernel rebuild).
+
+**Why.**  `+0x1000` is not a printk window: it is the ring's own character array
+at character #3840, the first byte past the old clear (`+0x80..+0xFFF`), and the
+only writer of the page is `ring_put` (report 255 §1).  A kernel that dies early
+prints ~4 KB, so it never wrote there; the read-back boot's chainloader then
+erased the real log and the "window" showed an older boot's text — which is why
+session 61's markers could not be trusted.  With the hand-off, the failed log
+survives and `rcu_init()` turned out to complete.  The block copy is what made an
+SMP boot possible at all: kernel entry was at **7.450 s of the 7.812 s window**
+(copy 0.825 s + XZ decompression 6.619 s) leaving 362 ms, while the kernel needs
+~0.74 s to reach its own WDT2 re-program — so the "hang" was the watchdog.
+
+**Constraint.**  The read-back image must stay quiet (`loglevel=0`, no
+`earlyprintk`): a multi-10-KB log wraps the 32 KiB ring and overwrites the
+failure.  Only ring2 carries a trusted hand-off record (the mirrors'
+`+0x80..+0xFF` is overwritten by `bc_mirrors` and by `/init`'s `rlog`).  A
+power-off wipes the ring (DRAM), so capture before any power cycle.  Programming
+WDT2 from the chainloader wedged the unit and left the timer stopped — never
+again (trap 322).  The SMP kernel boots only with both the block copy and the
+quiet boot; `earlyprintk`/`ignore_loglevel` can return once the kernel owns the
+watchdog.  The session's tree instruments (the `PBDBG` set in
+`init/main.c`, the `CRR` stamp in `head.S`) and `CONFIG_SMP=y` in
+`local/kernel-tree/.config` are experiments and must be removed before a
+kernel-patch re-export; the chainloader is not part of the patch.
+
+**Evidence.**  Report 255 (identification, timing table, the SMP boot,
+the SMP-only root-mount failure); traps 312 and 315 corrected, 317a closed,
+321–326 added; the recovered logs `local/work/{rcu2-log.txt,smp-plain-log.txt,
+mark62-log.txt}`; the images `kernel-readback-quiet.img` (`0x5BBCD22E`),
+`kernel-smp-quiet.img` (`0xA2FA490E`), `kernel-smp-mark62.img` (`0x0A70D405`).
+
 ### Repository license
 
 **Decided (session 23): GPL-3.0-or-later.**  The project's own code and

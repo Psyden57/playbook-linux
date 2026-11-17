@@ -1,5 +1,21 @@
 # 254 — CONFIG_SMP: the kernel boots and hangs inside `rcu_init()`; and how to read the ring at all
 
+> **SUPERSEDED (2026-11-16, session 62) — report 255 is current.**  Two of this
+> report's conclusions do not survive a correct read of the ring:
+> * **"It hangs inside `rcu_init()` after the RCU geometry print" is wrong.**
+>   `rcu_init()` completes (every `PBDBG` marker through `rcu_init done`), and
+>   the varying stop points are the **loader's 7.8125 s WDT2 window** expiring
+>   mid-init — kernel entry happens at 7.450 s of it (chainloader copy 0.825 s +
+>   XZ decompression 6.619 s), leaving 362 ms.
+> * **The `+0x1000` "printk window" has no writer of its own**: it is the ring's
+>   character array at character #3840, the first byte past the old chainloader
+>   clear, and every early-death log was being erased by the read-back boot
+>   (report 255 §1–§4; traps 315, 317a, 321–326).
+>
+> The measurements this report *does* stand on — the SCU/CM/PRM accessibility,
+> `SMC` being merely privileged, the oracle's dual-core 1008 MHz, and the fact
+> that `dd` on `/dev/mem` cannot read the `no-map` pages — are unchanged.
+
 Date: 2026-11-16 (session 61, Linux-era 55).
 Bench at the end of the investigation: the unit runs **our region-1 image**
 (`local/work/kernel-region1.img`, CRC `0x433232F1`): the non-SMP kernel with the

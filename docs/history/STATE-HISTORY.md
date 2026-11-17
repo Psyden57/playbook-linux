@@ -20,6 +20,15 @@ commit `00228e4` in `docs/project/STATE.md`; it was replaced by the session-59
 state and is not duplicated here because the commit preserves it verbatim.
 The full session-58 record is `docs/sessions/session-58.md`.
 
+**The session-61 state snapshot** (2026-11-16 — the ring method and its
+`+0x1000` "window", the SMP kernel dying early, the oracle measured dual-core
+at 1008 MHz, region 0 `0x433232F1`, `BOOTCTR_FCTRY` `0x31`) is at git commit
+`b9a6b20` in `docs/project/STATE.md`; it was replaced by the session-62 state
+and is not duplicated here because the commit preserves it verbatim.  Its ring
+method section is **superseded** by report 255 (the window was the ring's own
+character array at #3840).  The full session-61 record is
+`docs/sessions/session-61.md`.
+
 ## Previous state — 2026-11-16 (session 57)
 
 **THE UI HAS CONTENT AND THE TOUCH MERGE IS FIXED; a position ghost remained.**

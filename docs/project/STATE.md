@@ -1,73 +1,86 @@
 # Current state
 
-## Current state — 2026-11-16 (session 61, IN PROGRESS)
+## Current state — 2026-11-16 (session 62)
 
-**THE CPU ITEM IS OPEN AND THE FAILURE IS LOCALISED TO ~0.000 s: `CONFIG_SMP=y`
-boots and stops right after the RCU geometry print (`rcu_init()`).**  The SMP kernel (`0x202E9F38`,
-`NR_CPUS=2`, `maxcpus=1`) runs (`SLUB: … CPUs=2`) and prints the RCU init lines,
-then stops at `rcu: RCU calculated value of scheduler-enlistment delay is 10
-jiffies.` (`adjust_jiffies_till_sched_qs()` from `rcu_init_geometry()` inside
-`rcu_init()`) with no oops text; the loader's WDT2 then resets it.  The finer
-localization is **not** established: three `PBDBG` marker builds were silent
-(built while the DTS had `earlyprintk` removed — always
-`grep -ac earlyprintk <image>` before trusting a marker run) and the one with
-`earlyprintk` left a *shorter* trace than the plain SMP image, so the `+0x1000`
-printk window has an unidentified writer (trap 317a).  **Identify that writer
-first.**  **The SCU, the register
-firewall and the ROM public API are all excluded**: `SCU_CONFIG = 0x1` (2 cores),
-`SCU_CTRL = 0x531` (enabled), `0x4824380c = 0`, WUGEN `AUX_CORE_BOOT_0/1 = 0`,
-PL310 ID `0x410000C4` all read from non-secure Linux, and SMC is a privileged
-instruction (a QNX user probe gets `SIGILL` even for `0x102`, which our own
-kernel uses).  [report **254**; traps 315–320]
+**THE SMP KERNEL NOW BOOTS TO USERSPACE (`possible = 0-1`, `online = 0`) — the
+blocker was the loader's 7.8125 s watchdog window, not a hang.**
+`+0x1000` never had a writer of its own: it is the ring's own character array at
+**character #3840**, the first byte past the old chainloader clear, so every
+early-death log was erased by the read-back boot.  The chainloader now **hands
+the ring off** (append-only, last two entry headers + timing saved, trap 321) and
+`tools/pb_ring.py` decodes it.  With that read: **`rcu_init()` completes** (every
+`PBDBG` marker through `rcu_init done`), the earlier stop points (3208/3943/4211
+chars) were the watchdog, and the fix was measured and applied:
+**kernel entry happened at 7.450 s of 7.812 s (362 ms left)** — chainloader copy
+0.825 s + XZ decompression **6.619 s** — while the kernel needs ~0.74 s to reach
+its own WDT2 re-program.  A **block copy** in the chainloader (0.83 s → a few
+hundred ms) plus a **quiet boot** (`loglevel=0`) buys that time, and the SMP
+kernel then boots.  [reports **255**; traps 312 corrected, 315 corrected, 317a
+closed, 321–326 added]
 
-* **The reference is measured dual-core at 1008 MHz** — `pidin info` on the live
-  oracle: `Processor1` and `Processor2`, both `Cortex A9 MPCore 1008MHz`, on
-  `/procnto-smp-instr`.  That is the MPU OPP target (handoff §0b, trap 312).
-* **The ring can only be read by the boot that immediately follows the failure.**
-  Three writers: the chainloader (`clear_ring 0x88000000` + breadcrumbs), the
-  decompressor (`busyuart` mirrors chars into all three rings), and pbmon (a
-  printk window at `+0x1000` that does **not** touch count/index — it is what
-  carries a failed boot's tail).  QNX fills free RAM with `0xAA`, so an oracle
-  boot destroys it.  `dd if=/dev/mem` fails on the `no-map` pages; use
-  `tools/bench/ringdump.c` (`mmap`).  [trap 316/317]
-* **Bench at the wrap-up (all values read off the media, `/dev/mmcblk1`, on the
-  unit):** region 0 = **the region-1 image, CRC `0x433232F1`**; its
-  10 355 592 bytes at raw `0x8100000` hash to
-  `bbee7bebb61eeaa4167a6bcfef83b6df6e858beb4b902a29846dcea57d91156d`, equal to
-  `local/work/kernel-region1.img`, with the trailer `1f2dc8d7 f1323243` =
-  magic `0xD7C82D1F` + CRC `0x433232F1` at that offset.  Region 1 = the busybox
-  root at raw `0x29000000`, 64 MiB, now
-  `a32772720e30d2aad53dc88cc7c7125d81b9cdf339448dff8d27d625c8a05f55` (the baked
-  image was `49e318bf…`; the root was mounted read-write).  Linux `7.3.3 #79`,
-  `online = 0`, root `/dev/loop0` (58.7 M, `rw,nobarrier`), 43 modules in
-  `/lib/modules/7.3.3` (the mismatched set — trap 320), `pb> ` on the ACM,
-  dropbear on `169.254.0.1:22` (`PB_LINK=usb tools/pbssh.sh`).
-  **`BOOTCTR_FCTRY = 0x31`** at the last boot (`31000000`, ≥ `0x1e`, no write).
-  No device-side files are deployed (`/tmp` is tmpfs and was wiped by the
-  reboot).  **hd3 = the 1917 vendor UFS** (the Nura root is gone; see below).
-* **The region-1 root's modules no longer match the config** —
-  `.gnu.linkonce.this_module section size must match` on every `insmod`; rebuild
-  them before using region 1 as a real bench root.  [trap 320]
-* **Host:** the RNDIS interface name flaps (`enp8s0f3u1` / `enp8s0f3u1i2`), so the
-  `pb-rndis` NM profile must be bound by MAC (`02:1a:11:00:00:02`), not by name.
-  [trap 318]
-* **How the media got here:** to read the ring a live QNX was needed, which
-  needed a UFS on hd3.  In order: the shim IFS at `0x825`
-  (`ifs-shim-sealed.ifs`, `b52195bb…`); a patched minimal RCFS
-  (`minimal/rcfs-noufs.rcfs`, `9b67cbdb…`) — **no network**; the session-43
-  `setB.signed` (`d22eab3b…`) — **no network**; the full modified 1917 RCFS
-  (`rcfs-1917.rcfs`, `c4ab6e34…`, packed `rcfs1917-flash.signed`) — **USB +
-  qconn work**; and the 1917 vendor UFS with the devuser injection
-  (`ufs-1917-devuser.ufs`, `482e0473…`, packed `371b09a1…`).  **The Nura root on
-  hd3 is gone.**  The way back is `local/work/nura/images/
-  blackberry-playbook-root-apps-audio.img` (`f7858110…`, 625 999 872 B) at
-  `0x4915`; `/init` regrows it, but the session-59/60 live fixes (llvmpipe,
-  `epitaph` r10006, the udev/polkit/gorm rules) must be re-applied.
-* **Next:** identify the `+0x1000` window's writer, then bracket `rcu_init()`'s
-  own statements (`rcu_init_one`, the three
-  `rcutree_*_cpu` calls, the two `alloc_workqueue`s,
-  `start_poll_synchronize_rcu_expedited`) with markers and re-run the capture —
-  one build, two flashes.  Then the MPU OPP (1008 MHz is the reference's value).
+* **The remaining SMP blocker is the root mount** (trap 326): the first SMP boot
+  fell back to the initramfs console with
+  `EXT4-fs (loop0): VFS: Can't find ext4 filesystem`, while the **same**
+  region-1 filesystem mounts cleanly on the UP image minutes later
+  (`/dev/loop0 on / type ext4 (rw,relatime,nobarrier)`, 58.7 M, 42 % used).  The
+  FS is intact; the loop/ext4 bring-up differs under SMP.  Next: `SMP=y` +
+  `NR_CPUS=1` and `nosmp`, and a retry/delay in the initramfs loop setup.
+* **The instrument** (verified on the bench, byte-exactly):
+  `boot/chainloader/chainloader_kernel.S.in` no longer clears the ring; it
+  sanitises a garbage header (`index >= 0x7F00` → 0), records `RHND` at `+0xb8`
+  with the last two entry headers (`+0xbc..+0xc8`) and the previous boot's
+  timing (`+0xcc` pre-jump CRR, `+0xd0` kernel-entry CRR, `+0xd4` entry stamp),
+  and copies in eight-word `LDMIA`/`STMIA` bursts.  Chainloader is 852 B.
+* **Images this session** (host, gitignored; media holds the read-back):
+  * region 0 now = **`local/work/kernel-readback-quiet.img`, CRC `0x5BBCD22E`**
+    (10 355 580 B): region-1 kernel `#79`, `earlyprintk` removed from its DT
+    `bootargs`, the hand-off + block-copy chainloader.  Boots to a shell.
+  * `local/work/kernel-smp-quiet.img` (`0xA2FA490E`) — **the SMP image that
+    boots** (plain SMP `#78` zImage + `loglevel=0` DTB + chainloader).
+  * `local/work/kernel-smp-loud.img` (`0x3BD64F22`) — same with
+    `earlyprintk`/`ignore_loglevel`: expected to work now that the kernel owns
+    the watchdog, **not yet booted**.
+  * `local/work/kernel-smp-mark62.img` (`0x0A70D405`) — `#86 SMP` with the dense
+    `PBDBG` set and the `head.S` CRR stamp; its boot gave the timing above.
+  * `local/work/kernel-smp-wdt.img` — **bad**, contains the rejected
+    chainloader WDT step (trap 322); do not flash.
+  * Re-wrapping a carved `zImage`+DTB reproduces `0x202E9F38`, `0x4F6CC563` and
+    the region-1 image **byte-identically**, so chainloader-only changes need no
+    kernel build (`local/work/carve/*`, `carve.py`).
+* **Do NOT program WDT2 from the chainloader** (trap 322): it wedged the boot
+  and left the timer stopped — no USB, no reset, dark panel; recovery was a
+  power-button power cycle plus a reflash through the power-on bootrom.
+* **Bench at the wrap-up (read on the unit):** the unit runs the read-back image
+  (`7.3.3 #79`, UP), root `/dev/loop0` (58.7 M, 42 % used), `pb> ` on the ACM,
+  dropbear on `169.254.0.1:22` (`PB_LINK=usb tools/pbssh.sh`); `/tmp` empty
+  (tmpfs — re-push the tools).  **`BOOTCTR_FCTRY = 0x28`** (the session's failing
+  boots drained it from `0x32`; one normal boot read `0x1d` and wrote `0x32`
+  earlier, `PASS`).  Region 1 = the busybox root (intact, mounts, 43 modules
+  that still do not match the config — trap 320).  hd3 = the 1917 vendor UFS.
+* **Bench laws that cost time this session:** the bootrom can hold **~20 s**
+  before the chainloader runs, so a read-back flash armed 10 s after the test
+  flash catches the bootrom *before the image under test has run* (trap 323) —
+  wait ≥25 s or poll `lsusb`; a **power-off wipes the ring**; and
+  `kernel-smp-marks{,2}` are **silent by construction** (trap 324).
+* **The tree** carries this session's instruments (they are gitignored and must
+  be removed before any patch re-export): the `PBDBG` marker set in
+  `local/kernel-tree/init/main.c` (pristine copy at
+  `local/work/carve/main.c.session62-orig`) and the WDT2 `CRR` stamp in
+  `local/kernel-tree/arch/arm/kernel/head.S`.  `.config` is now
+  **`CONFIG_SMP=y`, `CONFIG_NR_CPUS=2`**; the tracked
+  `kernel/winchester-7.3.3.config` is still non-SMP (the change is an
+  experiment until cpu1 works).
+
+## Previous state — 2026-11-16 (session 61)
+
+The ring method was built and the SMP kernel was found to boot and die early;
+**its conclusion ("stops inside `rcu_init()` after the RCU geometry print") is
+withdrawn this session** — that was the ring artefact (trap 315/317a).  Also:
+the oracle measured **dual-core at 1008 MHz** (`pidin info`), `SMC` from QNX
+user space is merely `SIGILL` (privileged instruction, trap 319), the SCU and
+every register the SMP path touches read cleanly from non-secure Linux, and
+hd3 was given up to the 1917 vendor UFS to get the oracle.  Full snapshot:
+`docs/sessions/session-61.md`, report 254.
 
 ## Current state — 2026-11-16 (session 60)
 

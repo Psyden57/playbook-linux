@@ -2593,17 +2593,27 @@ report 121 §3/§11/§12.
       the profile patch (`w.max(0)`/`h.max(0)` + saturating arithmetic) before
       trusting the byte rate.  (Session 60.)
 
-312. **The MPU runs at 400 MHz with no cpufreq/OPP.**  Measured: the debugfs
-      `clk_summary` shows `dpll_mpu_ck = 400000000` (BogoMIPS 795.44); there is
-      no `/sys/devices/system/cpu/cpu0/cpufreq/`, and the DTS has no
-      `operating-points`/`cpu-supply`.  The reference OS programs the MPU DPLL
-      and voltage (`CM_CLKMODE_DPLL_MPU 0x4A004160` idle-bypass→lock,
+312. **The MPU runs at 400 MHz with no cpufreq/OPP — but the OPP *table* is
+      already there, from the SoC dtsi.**  Measured (session 60, re-read live in
+      session 62): `clk_summary` shows `dpll_mpu_ck = 400000000`,
+      `dpll_mpu_m2_ck = 400000000`, `div_mpu_hs_clk = 400000000`; BogoMIPS
+      795.44; there is no `/sys/devices/system/cpu/cpu0/cpufreq/`.  The board
+      DTS adds no `operating-points`/`cpu-supply`, but the **upstream
+      `omap443x.dtsi` already carries the OMAP4430 table** — the built DTB's
+      `cpu@0` node has `operating-points = <300000 1025000  600000 1200000
+      800000 1313000  1008000 1375000>` (kHz/µV) and
+      `clock-latency = <300000>` — so "there is no OPP table" is wrong: what is
+      missing is a **`cpu-supply` (a `vdd_mpu` regulator) and the driver
+      binding** (`CONFIG_CPUFREQ_DT=m` is built but not loaded; no `cpu-supply`
+      means nothing binds).  The reference OS programs the MPU DPLL and voltage
+      itself (`CM_CLKMODE_DPLL_MPU 0x4A004160` idle-bypass→lock,
       `CM_CLKSEL_DPLL_MPU 0x4A00416C`, `PRM_VC_* 0x4A307BA0–0xBF8`; report 223
       Q6/§9), so our boot chain simply leaves the loader's 400 MHz.  This is the
       biggest performance lever (the OMAP4430's nominal is 1.0 GHz): measure the
-      reference's exact OPP/voltage on the oracle first, then add an OPP table +
-      `vdd_mpu` + ABB (or a boot-time write), and check the thermal zone
-      (`cpu_thermal` read 65.0 °C idle at 400 MHz).  (Session 60, report 253.)
+      reference's exact OPP/voltage on the oracle first, then wire `cpu-supply`
+      + `vdd_mpu` (+ ABB) to the existing table, or write the DPLL/voltage at
+      boot, and check the thermal zone (`cpu_thermal` read 65.0 °C idle at
+      400 MHz).  (Session 60, report 253; table located session 62.)
 
 313. **Only CPU0 is online: the kernel is built `CONFIG_SMP=n`, and the DTS
       also sets `maxcpus=1`.**  `dmesg` reports `Unknown kernel command line
@@ -2629,41 +2639,49 @@ report 121 §3/§11/§12.
        rendering via GBM+dmabuf, or an X/Wayland bridge — not started.  (Session
        60, report 253.)
 
-315. **`CONFIG_SMP=y` boots and stops at ~0.000 s right after the RCU geometry
-      print — it is not an entry or SCU failure.**  Measured with the ring capture of trap 316:
-      the SMP kernel (`0x202E9F38`, `NR_CPUS=2`, `maxcpus=1`) prints up to
-      `rcu: RCU calculated value of scheduler-enlistment delay is 10 jiffies.`
-      (`adjust_jiffies_till_sched_qs()`, `kernel/rcu/tree.c:474`, called from
-      `rcu_init_geometry()` inside `rcu_init()`) and then stops with **no oops
-      text** — a silent hang, then the loader's WDT2 resets it.  `SLUB: … CPUs=2`
-      proves the SMP kernel is running.  The finer
-      localization is **not** established: the first three `PBDBG` marker builds
-      were made while the tree DTS had `earlyprintk` removed (so they were silent
-      — always `grep -ac earlyprintk <image>` before trusting a marker run), and
-      the one with `earlyprintk` (`0x4F6CC563`) left a *shorter* trace
-      (`mem auto-init`) than the plain SMP image — which is impossible for a
-      linear log, so the `+0x1000` printk window has a writer that is not yet
-      identified (trap 317a).  Identify that writer first.  Everything the platform SMP path touches is
-      readable/writable from non-secure Linux (`SCU_CONFIG = 0x1` = 2 cores,
-      `SCU_CTRL = 0x531` enabled, `0x4824380c` = 0, `0x48281800/4` = 0, PL310 ID
-      `0x410000C4`), so the SCU/firewall and ROM-SMC hypotheses are dead.  Next:
-      bracket `rcu_init()`'s own statements.  (Session 61, report 254.)
+315. **CORRECTED TWICE (session 62): the SMP kernel used to die inside the
+      loader's watchdog window, not at a statement — and the stop point moved
+      boot to boot for that reason.**  Read with a trustworthy ring (trap 321):
+      * **`rcu_init()` completes.**  The `rcu2` marker image (`0x4F6CC563`,
+        `#85 SMP`) prints **every** marker inside it — `rcu_init enter`,
+        `after early_boot_tests`, `after init_geometry`, `after init_one`,
+        `after open_softirq`, `after pm_notifier`,
+        `after rcutree_prepare_cpu`, `after rcutree_report_cpu_starting`,
+        `after rcutree_online_cpu`, `after rcu_gp_wq`, `after sync_wq`,
+        `after qovld`, `after start_poll_expedited`, `after test_sync_prims`,
+        `rcu_init done` — and continues into `kvfree_rcu_init`/`trace_init`.
+        Session 61's "stops right after the RCU geometry print" was a ring
+        artefact (trap 317a).
+      * **The stop point varies on one image**: the plain SMP image
+        (`0x202E9F38`, `#78 SMP`), 7 boots, stopped at 3208 / 3943 (×5) / 4211
+        characters.
+      * **The cause is the loader's 7.8125 s WDT2 window** (trap 325): measured
+        by sampling `CRR` in `head.S` at kernel entry, the kernel starts at
+        **7.450 s of 7.812 s — 362 ms left** — and needs ~0.74 s of its own time
+        to reach the late initcall that re-programs WDT2.  A fast chainloader
+        copy plus a quiet boot gets it there, and **the SMP kernel then boots to
+        userspace** (`possible = 0-1`, `online = 0`).
+      * Everything the platform SMP path touches is readable/writable from
+        non-secure Linux (`SCU_CONFIG = 0x1`, `SCU_CTRL = 0x531`,
+        `0x4824380c = 0`, `0x48281800/4 = 0`, PL310 ID `0x410000C4`).
+      (Sessions 61/62, reports 254/255.)
 
 316. **A DEBUG_LL ring can only be read by the boot that immediately follows the
-      failure — and `dd if=/dev/mem` cannot read it.**  Three writers exist:
-      the **chainloader** `clear_ring 0x88000000` (plus breadcrumbs at
-      `+0x00..+0x7c`), the **decompressor** (`busyuart` mirrors every char into
-      *all three* rings via `ring_put`: count `+0x80`, index `+0x84`, chars
-      `+0x100`), and **pbmon**, which mirrors printk into a small window at
-      `+0x1000` **without** touching count/index — that window is what carries a
-      failed boot's tail.  The ring pages are `no-map` reserved, so
-      `dd if=/dev/mem` returns `Bad address`; use `mmap` (`tools/bench/ringdump.c`)
-      or busybox `devmem` one word at a time, and note that `mmap` needs a
-      page-aligned offset.  A read-back kernel must be silent: `earlyprintk`
-      removed from the bootargs (`/init`'s ring logger is a separate writer —
-      disable it) and `CONFIG_DEBUG_LL=n` if the *decompressor* line must also be
-      preserved; root it at region 1 for a shell.  Zero the rings first with
-      `tools/bench/memzero.c`.  (Session 61, report 254 §2.)
+      failure — and `dd if=/dev/mem` cannot read it.**  There are only **two**
+      writers: the **chainloader** (breadcrumbs at `+0x00..+0x7c`, the epoch
+      block at `+0x88..+0xb3`, the ring hand-off record at `+0xb8..+0xc8` — and,
+      since session 62, **no clear**) and the DEBUG_LL path (`busyuart` mirrors
+      every char into all three character rings via `ring_put`: count `+0x80`,
+      index `+0x84`, chars `+0x100`).  There is **no `+0x1000` printk window**
+      and no third writer (trap 317a).  The ring pages are `no-map` reserved, so
+      `dd if=/dev/mem` returns `Bad address`; use `mmap`
+      (`tools/bench/ringdump.c`) or busybox `devmem` one word at a time, and note
+      that `mmap` needs a page-aligned offset.  Since the hand-off (trap 321) the
+      read-back boot does **not** have to be silent, but it must not print more
+      than ~32 K characters or it wraps the ring and overwrites the failure; the
+      read-back image used on the bench has `earlyprintk` removed from its DT
+      `bootargs` (a `make dtb`-only change).  Root it at region 1 for a shell.
+      (Session 61, report 254 §2; revised session 62, report 255.)
 
 317. **QNX fills free RAM with `0xAA`, so a QNX boot destroys the ring.**  On the
       oracle `0x88000000`, `0x90000000` and the pbmon shadow `0x90200000` all read
@@ -2673,16 +2691,23 @@ report 121 §3/§11/§12.
       read full rings through the QNX door, so some image/config preserved them;
       do not present "QNX always wipes it" as settled.  (Session 61, report 254.)
 
-317a. **The `+0x1000` printk window in the DEBUG_LL ring has an unidentified
-      writer.**  It is not `ring_put` (count/index stay at the decompressor's
-      `0x32`) and `drivers/misc/pbmon.c` has no printk hook, yet a small printk
-      window appears at ring `+0x1000` whose content varies per boot.  After the
-      17:05 SMP image it held `SLUB … CPUs=2` + the RCU lines; after a marked SMP
-      image that should print *more* it held only `mem auto-init` — i.e. a
-      *shorter* log, which a linear boot log cannot produce.  Consequence: a
-      marker run cannot be trusted to describe the boot under test until the
-      writer is known.  Cheap probe: add a unique boot-time printk to the
-      read-back kernel and see whether it appears there.  (Session 61.)
+317a. **CLOSED (session 62): the `+0x1000` "printk window" is the ring's own
+      character array at character #3840 — there is no second writer.**  The old
+      chainloader cleared `+0x80..+0xFFF` (`0x3E0` words), i.e. exactly up to one
+      byte short of `+0x1000`; `+0x1000 - 0x100 = 0xF00 = 3840`, and the only
+      writer of the page is `ring_put` in
+      `arch/arm/include/debug/omap4bc.S` — which is also the kernel's
+      `earlyprintk` path (`early_printk.c` → `printascii` → `busyuart`).  Proof:
+      on a live ring the text flows straight across `+0x1000` mid-line
+      (`[ 9.624053] … kpp` / `ime\r\n[ 9.628753] … kpp` / `[ 9.633453]`), and
+      `index == count mod 0x7F00` exactly.  The "impossible shorter trace" was a
+      boot that printed **fewer than 3840 characters**, so it never wrote at
+      `+0x1000` and the window still held an older, longer boot's text: the
+      offset of `mobility grouping` is 3822 in every SMP log, `SLUB:` is at 3959
+      and `RCU calculated` at 4294, so a 3943-character boot leaves
+      `mem auto-init…` at `+0x1000` and a 4986-character one leaves `SLUB`+`RCU`.
+      Read the ring with `tools/pb_ring.py` (now hand-off aware), never a
+      "window".  (Session 61 found it; session 62 closed it — report 255 §1.)
 
 318. **The host's RNDIS interface name flaps, so a NetworkManager profile bound
       by name silently stops activating.**  The PlayBook enumerates as
@@ -2713,6 +2738,101 @@ report 121 §3/§11/§12.
       `/lib/modules/7.3.3` re-staged) before it is a useful bench root again.
       When pushing SMP-built modules to a root, remember the vermagic gains
       `SMP` (trap 313).  (Session 61.)
+
+321. **The chainloader no longer clears the DEBUG_LL ring: it hands it off, and
+      the reader must use ring2's recorded entry headers.**  Session 62 replaced
+      `clear_ring` (which zeroed `+0x80..+0xFFF` on every boot and destroyed every
+      early-death log) with an append-only contract in
+      `boot/chainloader/chainloader_kernel.S.in`:
+      * an `index >= 0x7F00` is sanitised to `count = index = 0` (a QNX boot
+        leaves `0xAA` fill, and `0xAAAAAAAA` as an index would walk `ring_put`'s
+        character store out of the page);
+      * `+0xb8` = magic `RHND` (`0x444E4852`), `+0xbc`/`+0xc0` = *this* boot's
+        entry count/index (= the previous boot's end), `+0xc4`/`+0xc8` = the
+        entry of the boot before (= the previous boot's start);
+      * the character area is left alone, so a read-back boot **appends** its
+        ~1.6 KB after the failed log.
+      Read it as: previous log = chars from `prevprev_index`,
+      `prev_count - prevprev_count` long; this log = chars from `prev_index`,
+      `count - prev_count` long.  `tools/pb_ring.py` implements this and falls
+      back to the old model when the magic is absent.  Only **ring2
+      (`0x90000000` = `BC_PRIMARY`)** carries a trusted record — the mirrors'
+      `+0x80..+0xFF` is overwritten by `bc_mirrors` and by `rlog`.  Two
+      consequences: the read-back image must not print more than ~32 K
+      characters (it would wrap and overwrite the failure), and **a power-off
+      wipes the ring** (DRAM loses content) — capture before any power cycle.
+      (Session 62, report 255 §2.)
+
+322. **Do not program WDT2 from the chainloader — it wedges the boot and can
+      leave the watchdog stopped.**  Session 62 tried to extend the loader's
+      7.8125 s window from the chainloader with the kernel's own `WSPR` sequence
+      (stop `0xAAAA`/`0x5555`, write `WLDR`, start `0xBBBB`/`0x4444`, polling
+      `WWPS` after each write).  The image never reached the kernel: the unit sat
+      dark with **no USB and no periodic reset for minutes**, i.e. the timer had
+      been stopped rather than reloaded, so nothing could reset it and the
+      bootrom never reappeared.  Recovery was a power-button power cycle (and the
+      bootrom window at power-on) — see trap 323.  Report 109 §8.1's
+      "loader-side WDT writes wedge the loader" stands; the kernel's
+      late-initcall reprogram is the supported path (trap 115), and the window is
+      *not* what kills the SMP kernel (trap 315).  (Session 62, report 255 §4a.)
+
+323. **The bootrom can take ~20 s before it hands over to the chainloader, so a
+      fixed short delay after a flash proves nothing — poll instead.**  A
+      read-back flash armed 10 s after the image-under-test flash caught the
+      bootrom *before that image had run at all* (the ring showed no log for it),
+      which looked like "the image printed nothing".  Operator's bench fact: the
+      bootrom may hold for up to ~20 s.  Wait ≥25 s, or poll `lsusb` for the
+      bootrom's disappearance/reappearance (`0fca:0001` ↔ none ↔ `8001`) rather
+      than sleeping a fixed time.  Same class as trap 266, one layer out.
+      (Session 62.)
+
+324. **`Marks`/`marks2` are silent by construction.**  Both marker images from
+      session 61 (`local/work/kernel-smp-marks{,2}.img`) carry a DTB whose
+      `bootargs` has **no `earlyprintk`** (96 483-byte DTB, `grep -ac earlyprintk`
+      = 0), so their kernels print nothing to the ring whatever their markers do.
+      Only `kernel-smp-rcu2.img` (`0x4F6CC563`) has `earlyprintk` *and* markers.
+      Check `grep -ac earlyprintk <image>` (`= 1`) before spending a boot on a
+      marker build.  (Session 62, following trap 315.)
+
+325. **The loader's 7.8125 s WDT2 window is the real budget for an SMP boot — and
+      the chainloader's copy was eating a quarter of it.**  Measured with a WDT2
+      `CRR` sample taken in `head.S` at kernel entry (ring2 `+0x18`, saved by the
+      chainloader into `+0xd0`; see trap 321):
+
+      | phase | seconds of the 7.812 s |
+      |---|---|
+      | loader arm → chainloader entry | 0.007 |
+      | chainloader copy (word-at-a-time, MMU+caches off) | 0.825 |
+      | zImage jump → kernel entry (XZ decompression) | **6.619** |
+      | **left when `start_kernel` runs** | **0.362** |
+
+      The kernel needs ~0.74 s of its own time to reach `pb_wdt_timer_init()`
+      (the late initcall that re-programs WDT2 to 58.6 s), so it was killed
+      mid-init — which is exactly what the varying 3208/3943/4211-character
+      stop points are (trap 315).  **Two changes fix it and were verified
+      together:** `copy_words` now copies in eight-word `LDMIA`/`STMIA` bursts
+      (saving `r4-r10`: the caller keeps `BC_PRIMARY` in `r4` and the CRR in
+      `r11`), and the boot is done with `loglevel=0` so the ~4 KB of early
+      `printk` through the uncached ring does not spend the rest.  With both,
+      the SMP kernel reaches its own reprogram and **boots to userspace**
+      (`possible = 0-1`, `online = 0`).  Never solve this by writing WDT2 from
+      the chainloader (trap 322).  (Session 62, report 255 §4.)
+
+326. **Under `CONFIG_SMP=y` the region-1 ext4 loop mount fails; the same filesystem
+      mounts fine on the UP kernel.**  First SMP boot to userspace: the initramfs
+      fell back to its console with
+
+          loop0: detected capacity change from 0 to 124583936
+          loop0: detected capacity change from 124583936 to 122191872
+          EXT4-fs (loop0): VFS: Can't find ext4 filesystem
+
+      while the UP read-back image mounted the same media minutes later as
+      `/dev/loop0 on / type ext4 (rw,relatime,nobarrier)`, 58.7 M, 42 % used
+      (only `warning: mounting unchecked fs`, i.e. the expected dirty-state
+      warning after unclean resets).  So the filesystem is intact and the
+      loop/ext4 bring-up is what differs under SMP — a timing/geometry question,
+      not corruption.  Discriminate with `SMP=y` + `NR_CPUS=1` and `nosmp`, and
+      with a retry/delay in the initramfs loop setup.  (Session 62.)
 
 ## 3. Corrections to older reports
 

@@ -1,0 +1,154 @@
+# Ring hand-off and the SMP early-death logs — 2026-11-16 (session 62)
+
+Raw evidence behind report 255.  Everything here was read from the unit through
+`tools/bench/ringdump.c` (an `mmap` of `/dev/mem`; `dd if=/dev/mem` fails on the
+`no-map` pages), dumped to `/tmp` and pulled over ssh.  The host-side files are
+`local/work/r2{b,c,e,f,g,h}.bin` (gitignored); this file records the decoded
+facts so they survive.
+
+The chainloader that produced these boots is the session-62 one: ring2
+(`0x90000000` = `BC_PRIMARY`) carries an append-only character stream, `count` at
+`+0x80`, `index` at `+0x84`, a `RHND` record at `+0xb8` with the last two entry
+headers (`+0xbc..+0xc8`) and the previous boot's timing
+(`+0xcc` pre-jump CRR, `+0xd0` kernel-entry CRR, `+0xd4` entry stamp).
+
+## 1. `+0x1000` is the ring's character array, not a window
+
+Live ring2 on the bench image (the region-1 kernel, `#79`):
+
+```
+count = 71103 (0x115BF)     index = 6079 (0x17BF) = 71103 mod 0x7F00
+buffer at +0xE80 .. +0x11C0 (i.e. characters 0xE80..0x11C0 of the page):
+  …ime
+  [    9.624053] module kpp: .gnu.linkonce.this_module section size must match …
+  [    9.628753] module kpp: .gnu.linkonce.this_module section size must match …
+  [    9.633453] module ecdh_generic: .gnu.linkonce.this_module section size must …
+```
+
+The text flows straight across `+0x1000` (character #3840) mid-line with
+increasing timestamps.  The wrap seam is at the write index:
+
+```
+position 6079:
+  [   34.402374] audio-ldo: disabling        <- newest
+  ] of_get_named_gpiod_flags: parsed 'gpio' …  <- oldest (≈2.8 s)
+```
+
+Offsets inside a boot log explain both session-61 captures: `mobility grouping`
+at **3822**, `SLUB:` at **3959**, `RCU calculated` at **4294** — so `+0x1000`
+starts mid-`grouping on.  Total pages:` in every SMP log, and a 3943-character
+boot leaves `mem auto-init…` there while a 4986-character one leaves
+`SLUB`+`RCU`.
+
+## 2. One ring, many boots (plain SMP `#78`, `0x202E9F38`)
+
+The append-only ring split at every `Uncompressing Linux` fragment (11 segments
+still in the 32 KiB window):
+
+| characters | last line of that boot |
+|---|---|
+| 3208 | `On node 0, zone HighMem: 512 pages in unavailable ranges` |
+| 3943 | `mem auto-init: stack:all(zero), heap alloc:off, heap free:off` |
+| 3943 | same |
+| 4986 | `rcu: PBDBG: rcu_init done` |
+| 50 | `Uncompressing Linux... done, booting the kernel.` |
+| 50 | same |
+| 3943 | `mem auto-init…` |
+| 50 | same |
+| 3943 | `mem auto-init…` |
+| 4211 | `…RCU calculated value of scheduler-enlistment delay is 10 jif` (truncated) |
+| 50 | same |
+
+So one and the same image stops at 3208 / 3943 / 4211 characters — the
+signature of a time cut, not a statement-level hang (§4).
+
+## 3. `rcu2` (`0x4F6CC563`, `#85 SMP`) — the recovered log, 4986 characters
+
+```
+Uncompressing Linux... done, booting the kernel.
+.[    0.000000] Booting Linux on physical CPU 0x0
+[    0.000000] Linux version 7.3.3 … #85 SMP Mon Nov 16 19:42:06 -03 2026
+[    0.000000] CPU: ARMv7 Processor [411fc092] revision 2 (ARMv7), cr=10c5387d
+[    0.000000] CPU: PIPT / VIPT nonaliasing data cache, VIPT aliasing instruction cache
+[    0.000000] OF: fdt: Machine model: BlackBerry PlayBook (winchester)
+[    0.000000] printk: legacy bootconsole [earlycon0] enabled
+…
+[    0.000000] percpu: Embedded 18 pages/cpu s41676 r8192 d23860 u73728
+[    0.000000] pcpu-alloc: s41676 r8192 d23860 u73728 alloc=18*4096
+[    0.000000] pcpu-alloc: [0] 0 [0] 1
+[    0.000000] Kernel command line: earlyprintk keep_bootcon ignore_loglevel maxcpus=1 clk_ignore_unused panic=10 fw_devlink=permissive
+…
+[    0.000000] Built 1 zonelists, mobility grouping on.  Total pages: 261632
+[    0.000000] mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+[    0.000000] SLUB: HWalign=32, Order=0-3, MinObjects=0, CPUs=2, Nodes=1
+[    0.000000] rcu: PBDBG: rcu_init enter
+[    0.000000] rcu: PBDBG: after early_boot_tests
+[    0.000000] rcu: Hierarchical RCU implementation.
+[    0.000000] rcu: 	RCU event tracing is enabled.
+[    0.000000] rcu: PBDBG: after bootup_announce/prio
+[    0.000000] rcu: RCU calculated value of scheduler-enlistment delay is 10 jiffies.
+[    0.000000] rcu: PBDBG: after init_geometry
+[    0.000000] rcu: PBDBG: after init_one
+[    0.000000] rcu: PBDBG: after open_softirq
+[    0.000000] rcu: PBDBG: after pm_notifier
+[    0.000000] rcu: PBDBG: after rcutree_prepare_cpu
+[    0.000000] rcu: PBDBG: after rcutree_report_cpu_starting
+[    0.000000] rcu: PBDBG: after rcutree_online_cpu
+[    0.000000] rcu: PBDBG: after rcu_gp_wq
+[    0.000000] rcu: PBDBG: after sync_wq
+[    0.000000] rcu: PBDBG: after qovld
+[    0.000000] rcu: PBDBG: after start_poll_expedited
+[    0.000000] rcu: PBDBG: after test_sync_prims
+[    0.000000] rcu: PBDBG: rcu_init done
+```
+
+**`rcu_init()` completes**; the boot ends there because the watchdog fires, not
+because a marker is missing.
+
+## 4. The timing decode (`kernel-smp-mark62.img`, `0x0A70D405`, `#86 SMP`)
+
+Ring2 hand-off record of the boot that ran the marked kernel:
+
+```
+RHND  prev=(8122,8122)  prevprev=(4136,4136)
+prev tjump  = 0xfffc827a
+prev tentry = 0xffffd1a8   (head.S stamp magic 0x51000001 present)
+LDR (loader arming value) = 0xfffc1800
+                           ticks / 32768
+chainloader entry -> jump      0.832 s
+jump -> kernel entry           6.619 s   (the XZ decompression)
+elapsed since arming at entry  7.450 s   of 7.812 s
+prev log length                3986 characters
+```
+
+The marked boot's own log (3986 characters) ends at
+
+```
+[    0.000000] PBDBG: before mm_core_init
+[    0.000000] Built 1 zonelists, mobility grouping on.  Total pages: 261632
+[    0.000000] mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+```
+
+i.e. inside `mm_core_init()`, with 362 ms of window left when it started.
+
+## 5. The SMP boot that reached userspace (`kernel-smp-quiet.img`, `0xA2FA490E`)
+
+Read over the ACM console (`pbcon.py`), after the block-copy chainloader and a
+`loglevel=0` boot:
+
+```
+cat /proc/cmdline                      -> loglevel=0 maxcpus=1 clk_ignore_unused panic=10 fw_devlink=permissive
+cat /sys/devices/system/cpu/possible   -> 0-1
+cat /sys/devices/system/cpu/online     -> 0
+```
+
+and the root did not mount:
+
+```
+loop0: detected capacity change from 0 to 124583936
+loop0: detected capacity change from 124583936 to 122191872
+EXT4-fs (loop0): VFS: Can't find ext4 filesystem
+```
+
+The same media mounted minutes later on the UP read-back image as
+`/dev/loop0 on / type ext4 (rw,relatime,nobarrier)`, 58.7 M, 42 % used.

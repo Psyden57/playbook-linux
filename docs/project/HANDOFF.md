@@ -1,4 +1,4 @@
-# Handoff — session 61 (absolute) → session 62
+# Handoff — session 62 (absolute) → session 63
 
 ## 0. The job, and where it stands
 
@@ -8,174 +8,168 @@ media region 0 with an initramfs that hands PID 1 to a real root on **hd3**, wit
 a GPU-accelerated compositor.
 
 **THE ACTIVE ITEM: the CPU (second core, then the MPU OPP).**  The unit runs one
-core at 400 MHz.  This session built the SMP kernel and found where it stops:
+core at 400 MHz — but **the SMP kernel now boots to userspace**
+(`possible = 0-1`, `online = 0`).
 
-* **`CONFIG_SMP=y` + `CONFIG_NR_CPUS=2` + `maxcpus=1` boots** — the trace proves
-  it (`SLUB: … CPUs=2`) — and **stops right after `rcu_init_geometry()` printed
-  `rcu: RCU calculated value of scheduler-enlistment delay is 10 jiffies.`**
-  (`adjust_jiffies_till_sched_qs()`, `kernel/rcu/tree.c:474`), with no oops text;
-  the loader's WDT2 then resets it.  Report **254**, trap **315**.
-* **No hardware blocks the platform SMP path.**  From non-secure Linux:
-  `SCU_CONFIG 0x48240000 = 0x00000001` (2 cores), `SCU_CTRL 0x48240004 = 0x00000531`
-  (enabled), `0x4824380c = 0`, WUGEN `0x48281800/4 = 0`, PL310 ID `0x410000C4`,
-  SAR `0x4a326000 = 0xC80E2E93`, `CM_CLKSEL_DPLL_MPU = 0x00800000`,
-  `CM_CLKMODE_DPLL_MPU = 0x5` (locked).  `SMC` is merely privileged (`SIGILL` in
-  a QNX user process even for `0x102`, which our kernel uses).  Report 254 §3–§4,
-  trap 319.
-* **The reference is dual-core at 1008 MHz** — `pidin info` on the live oracle,
-  `Processor1` *and* `Processor2`.  That is the MPU OPP target (trap 312).
+* **The blocker was the loader's 7.8125 s watchdog window, not a hang.**  A WDT2
+  `CRR` sample in `head.S` (ring2 `+0x18`, saved by the chainloader into `+0xd0`)
+  measured kernel entry at **7.450 s of 7.812 s — 362 ms left**: chainloader copy
+  **0.825 s** + XZ decompression **6.619 s**.  The kernel needs ~0.74 s to reach
+  its own late-initcall re-program, so it was killed mid-init — which is what the
+  varying 3208/3943/4211-character stop points were.  The fix, verified together:
+  a **block copy** in the chainloader (`LDMIA`/`STMIA` ×8) **and** a quiet boot
+  (`loglevel=0`).  Then `kernel-smp-quiet.img` (`0xA2FA490E`) boots.
+* **`rcu_init()` completes** — with the fixed ring, `rcu2` prints every `PBDBG`
+  marker through `rcu_init done` and on into `kvfree_rcu_init`/`trace_init`.
+  Session 61's "stops inside `rcu_init()`" is withdrawn (ring artefact).
+* **The ring artefact is fixed** (that was the session's first half): there never
+  was a `+0x1000` printk window — `+0x1000` is the ring's character array at
+  **character #3840**, the first byte past the old chainloader clear, so a short
+  log left older text there while the read-back chainloader erased the real log.
+  The chainloader now hands the ring off (report 255, trap 321).
+* **The remaining SMP blocker is the root mount** (trap 326): the first SMP boot
+  fell back to the initramfs console with
+  `EXT4-fs (loop0): VFS: Can't find ext4 filesystem`, while the **same** region-1
+  filesystem mounts fine on the UP image (`/dev/loop0 on / type ext4`, 58.7 M,
+  42 % used).  The FS is intact; loop/ext4 bring-up differs under SMP.
+* **No hardware blocks the platform SMP path** (unchanged): `SCU_CONFIG = 0x1`
+  (2 cores), `SCU_CTRL = 0x531`, `0x4824380c = 0`, WUGEN `0x48281800/4 = 0`,
+  PL310 ID `0x410000C4`; `SMC` is merely privileged (trap 319).  The reference is
+  measured **dual-core at 1008 MHz** — the MPU OPP target (trap 312).
 
-**The next experiment is a measurement-method fix, not a kernel experiment.**
-Before any marker run can be believed, the writer of the ring's `+0x1000` printk
-window must be identified (trap **317a**): it is not `ring_put` (count/index stay
-at the decompressor's `0x32`) and `drivers/misc/pbmon.c` has no printk hook, yet
-its content changes per boot and a *more* chatty kernel left a *shorter* window.
+## 0a. THE NEXT EXPERIMENT — separate "SMP kernel" from "two possible CPUs", then the mount
 
-## 0a. THE NEXT EXPERIMENT — identify the `+0x1000` window's writer
+1. **`CONFIG_SMP=y` with `CONFIG_NR_CPUS=1`** (same SMP code paths, one possible
+   CPU) and a plain SMP build with **`nosmp`** on the cmdline.  Boot each with
+   `loglevel=0` (keep the block-copy chainloader): does the region-1 ext4 mount
+   succeed?  If `NR_CPUS=1` mounts and `NR_CPUS=2` does not, the trigger is
+   `nr_cpu_ids = 2` with one online CPU.
+2. **Retry/delay in the initramfs loop setup** (`initramfs/init.c`,
+   `rootfs_boot()`): the loop geometry change messages
+   (`0 -> 124583936 -> 122191872`) come *before* the ext4 failure, so a retry is
+   the cheap way to separate "geometry" from "timing".  A change here needs the
+   userspace binary rebuilt (`arm-linux-gcc -static -O2`) **and** the cpio
+   removed (`rm -f $K/usr/initramfs_data.cpio*`) — i.e. a kernel relink.
+3. **Then cpu1 proper**: drop `maxcpus=1` from the DTS `bootargs` and let the
+   kernel bring CPU1 up (`omap4_smp_prepare_cpus()` → `scu_enable()` →
+   `AUX_CORE_BOOT_1`).  Keep `loglevel=0` for the first attempt; once the kernel
+   owns the 58.6 s watchdog, `earlyprintk`/`ignore_loglevel` can come back for
+   measurement (that is `kernel-smp-loud.img`, `0x3BD64F22`, **not yet booted**).
+4. **Then the MPU OPP**: the OPP table already exists in `omap443x.dtsi`
+   (300/600/800/**1008** MHz with 1.025/1.2/1.313/1.375 V, trap 312); what is
+   missing is `cpu-supply`/`vdd_mpu` and the `cpufreq-dt` binding — or a
+   boot-time DPLL/VC write measured against the reference's own values.
 
-**Why first.**  Three `PBDBG` marker builds this session were silent because they
-were made while the tree DTS had `earlyprintk` removed, and the one that did carry
-`earlyprintk` produced an impossible (shorter) trace.  Until the window's writer
-is known, marker work cannot localise the hang.
+## 0b. Reading the ring (works; reuse it)
 
-**Inputs (nothing to build).**  The unit is already on
-`local/work/kernel-region1.img` (CRC `0x433232F1`) with `PB_LINK=usb tools/pbssh.sh`
-and the diagnostic loop of §0b below.
-
-**The one experiment, exactly:**
-
-1. Put a **unique, unmistakable** boot-time line in the read-back kernel — e.g.
-   `pr_info("PBWINPROBE readback 0x5a5a0001\n")` as the *first* statement of
-   `start_kernel()` in `init/main.c` — rebuild that image **and check it**:
-   `grep -ac earlyprintk <image>` must be `0` (this is a read-back image), and
-   the new string must be findable in the zImage.
-2. Run the §0b sequence with (a) the plain SMP image `kernel-0x202E9F38-smp.img`
-   and then (b) this read-back image, and dump `0x90000000` with
-   `local/work/ringdump` + `xxd -p`.
-3. **Read the result:**
-   * the string is in the window **and** the SMP trace survived → the window is
-     written by the *read-back* boot, so it is a live printk mirror and the
-     `<n> chars` window belongs to the newest boot; marker runs are then valid
-     and §0c is next;
-   * the string is in the window **and** the SMP trace is gone → the window is
-     the read-back boot's own mirror (i.e. it is always the newest boot's) and
-     the 17:05 trace we read was the *read-back* image's, not the SMP image's —
-     so the whole "stops after the RCU line" attribution must be re-measured with
-     the SMP image as the *last* boot before the read (which is impossible) or
-     with another instrument (see §0c's alternatives);
-   * the string is **not** in the window → the window is written by neither the
-     read-back kernel nor `ring_put`; search `startup`/`procnto`-style writers in
-     our own tree (`grep -rn "0x1000" drivers/misc/ arch/arm/kernel/`) and in the
-     QNX side, and record the answer in trap 317a.
-
-## 0b. The ring-capture procedure (works; reuse it)
-
-The unit must be on the region-1 image (`local/work/kernel-region1.img`,
-`0x433232F1`) for the zeroing and the read-back shell.  `local/work/ringclean3.sh`
-implements the whole loop; the pieces:
-
-1. build the two instruments static (`arm-linux-gcc -static -O2 -Wall -o
-   local/work/memzero tools/bench/memzero.c`, same for `ringdump`) and push them
-   to `/tmp` on the unit;
-2. arm the flasher for the image under test
-   (`tools/bbusb.py flash --component <img> --dest-block 0x825 --from-bootrom
-   --password 0000 --apply`, in a retry loop — `local/work/*-flash-retry.sh`);
-3. `ssh '… /tmp/memzero 88000000 8000; /tmp/memzero 90000000 8000;
-   /tmp/memzero 94000000 8000; sync; reboot -f'` — this zeroes the rings and
-   resets into the bootrom so the flasher catches it;
-4. let the image under test run (25 s is enough for an early hang);
-5. flash the **read-back image** (`local/work/kernel-dump3.img`, `0x11D29723`:
-   non-SMP, `earlyprintk` removed, `CONFIG_DEBUG_LL=n`, `/init`'s `rlog`
-   disabled, region-1 root) and boot it;
-6. `/tmp/ringdump 88000000 8000 /tmp/r1.bin; /tmp/ringdump 90000000 8000
-   /tmp/r2.bin; xxd -p /tmp/r1.bin` → decode on the host.
-
-**Facts that make this necessary** (traps 316/317): the chainloader
-`clear_ring 0x88000000` on every boot; `busyuart` mirrors every debug char into
-all three rings; **`dd if=/dev/mem` cannot read those pages** (`Bad address`,
-`no-map`) — `mmap` can; a QNX boot leaves `0xAA` fill (contradiction file
-`docs/contradictions/ring-survives-a-qnx-boot.md`).
+* **Ring2 = `0x90000000`** is the canonical page (the chainloader's
+  `BC_PRIMARY`); only its hand-off record is trusted.
+* Layout: `+0x00..+0x7C` breadcrumbs, `+0x80` count, `+0x84` index,
+  `+0x88..+0xB3` epoch block, `+0xB8` magic `RHND`, `+0xBC/+0xC0` prev
+  count/index (= this boot's entry = the previous boot's end), `+0xC4/+0xC8`
+  prevprev count/index (= the previous boot's start), `+0x100..+0x7FFF`
+  characters (append-only across boots).
+* **Previous boot's log** = chars from `prevprev_index`,
+  `prev_count - prevprev_count` long.  `tools/pb_ring.py decode <memdump>
+  [--boot prev|cur|all]` does it, and `--boot all` prints both delimited boots.
+* **Read-back image:** `local/work/kernel-readback-quiet.img`
+  (`0xBBAC2B82`) — the region-1 kernel (`#79`) with `earlyprintk` removed from
+  its DT `bootargs` plus the hand-off chainloader.  It boots to a shell and
+  appends only ~1.6 KB, so the failed log survives.
+* `tools/bench/{ringdump,memzero}.c` are the instruments (`mmap`; `dd` on
+  `/dev/mem` fails on the `no-map` pages).  Push them to `/tmp` (`/tmp` is
+  tmpfs); `tools/pbssh.sh 'cat > /tmp/ringdump' < local/work/ringdump` is
+  byte-exact.
+* **A power-off wipes the ring** (DRAM); capture before any power cycle.
 
 ## 0c. Then, in order
 
-1. **Bracket `rcu_init()`** — but only after §0a.  Markers before/after
-   `rcu_init_one`, `rcutree_prepare_cpu`, `rcutree_report_cpu_starting`,
-   `rcutree_online_cpu`, the two `alloc_workqueue()`s,
-   `start_poll_synchronize_rcu_expedited`.  **Check every marker image with
-   `grep -ac earlyprintk` first** (trap 315).
-2. **Test the "one possible CPU" class**: a build with `CONFIG_SMP=y` and
-   `CONFIG_NR_CPUS=1` (cannot boot cpu1, but keeps every SMP code path with one
-   possible CPU), and a plain SMP build with `nosmp` on the cmdline.  If either
-   boots, the trigger is `nr_cpu_ids = 2` with one online CPU, and the fix is
-   likely in the per-CPU/percpu init path rather than in mach-omap2.
-3. **Then cpu1 proper** (remove `maxcpus=1` from the DTS) — the SCU, the WUGEN
+1. **The "one possible CPU" class** — `SMP=y` with `CONFIG_NR_CPUS=1`, and a
+   plain SMP build with `nosmp` on the cmdline.  If either boots, the trigger is
+   `nr_cpu_ids = 2` with one online CPU and the fix is in the per-CPU/percpu
+   init path, not in mach-omap2.
+2. **cpu1 proper** (remove `maxcpus=1` from the DTS) — the SCU, the WUGEN
    `AUX_CORE_BOOT` registers and the ROM API are all demonstrably usable.
-4. **Then the MPU OPP**: the reference's measured rate is **1008 MHz**; the
-   voltage/ABB are still unmeasured (`PRM_VC_*` reads die in QNX user space — read
-   them from a *Linux* `devmem` instead, they are accessible: `0x4a307ba0` area).
+3. **Then the MPU OPP**: the reference's measured rate is **1008 MHz**; the
+   voltage/ABB are still unmeasured — read `PRM_VC_*` (`0x4a307ba0`) from a
+   *Linux* `devmem` (they read there; they die in QNX user space).
 
 ## 0d. The media, and the way back
 
-* **Region 0 = the region-1 image, CRC `0x433232F1`** (verified on media:
-  `bbee7beb…`, trailer `1f2dc8d7 f1323243`).
-* **Region 1 = the busybox root**, raw `0x29000000`, 64 MiB, now `a3277272…`
-  (baked `49e318bf…`; mounted rw).  **Its modules no longer match the config**
-  (trap 320) — rebuild them before using it as a real bench root.
-* **hd3 = the 1917 UFS** (the Nura root was written away this session).
-* **The oracle** is one region-0 flash away: `local/work/ifs-shim-sealed.ifs`
-  (`b52195bb…`) at `0x825`, with the full modified 1917 RCFS
-  (`local/work/rcfs-1917.rcfs`, `c4ab6e34…`, packed
-  `local/work/rcfs1917-flash.signed`) at `0x8D5` — that combination gave
-  `0fca:8012`, `qconn` on `169.254.0.1:9090` (`python3 tools/QCL.py …`) and
-  `sshd` once.  The patched minimal RCFS (`minimal/rcfs-noufs.rcfs`) and
-  `setB.signed` did **not** bring the network up.
-* **The way back to the Nura root:** flash
+* **Region 0 = the read-back image `0x5BBCD22E`** (`local/work/kernel-readback-quiet.img`).
+  Rebuilding it needs no kernel compile: carve `zImage`/DTB out of an existing
+  image (`zoff 0x2C0000`, `zlen = u32 @ +0x2C`, `dtoff = align(zoff+zlen, 8)`,
+  DTB totalsize at `+4`), then `ZIMAGE=… DTB=… python3 tools/build_kernel_image.py`.
+  Re-wrapping the stock images reproduces their CRCs byte-identically.
+  `fdtget/fdtput` on a carved DTB is how the quiet (`loglevel=0`) variants are
+  made — no DTS edit, no `make dtb` needed.
+* **Region 1 = the busybox root** at raw `0x29000000`, 64 MiB (mounted rw by
+  `/init`).  **Its modules still do not match the config** (trap 320) — rebuild
+  them before using region 1 as a real bench root.
+* **hd3 = the 1917 vendor UFS** (the Nura root is gone; way back:
   `local/work/nura/images/blackberry-playbook-root-apps-audio.img`
-  (`f7858110…`, 625 999 872 B) at `0x4915`; `/init` regrows it and reinstalls the
-  SSH kit, but the session-59/60 live fixes must be re-applied from the host
-  payloads (`local/work/llvmpipe/`,
-  `local/work/nura/pmaports/main/{epitaph,catacomb}/`, the udev/polkit rules).
+  (`f7858110…`, 625 999 872 B) at `0x4915`, then re-apply the session-59/60 live
+  fixes).
+* **The oracle** is one region-0 flash away: `local/work/ifs-shim-sealed.ifs`
+  (`b52195bb…`) at `0x825` with the full modified 1917 RCFS at `0x8D5`; qconn on
+  `169.254.0.1:9090` (`python3 tools/QCL.py …`).
 * **Do NOT restore** `local/images/ifs0.sealed.bin` (trap 84).
 
 ## 0e. What this session changed (do not redo)
 
-* SMP kernel built (`0x202E9F38`): `CONFIG_SMP=y`, `CONFIG_NR_CPUS=2`,
-  `maxcpus=1` kept; all 44 modules rebuilt (vermagic gains `SMP`) and installed;
-  vermagic verified.  The tracked config is **unchanged** (still non-SMP) —
-  re-apply `scripts/config -e SMP --set-val NR_CPUS 2` + `olddefconfig` when
-  continuing.
-* The whole ring-capture method and three tools
-  (`tools/bench/{ringdump,memzero,smcprobe}.c`).
-* The oracle measurements (dual-core 1008 MHz; register accessibility; SMC is
-  privileged) — report 254 §4, capture
-  `docs/captures/oracle-live-2026-11-16-ring-and-cpu.txt`.
-* The UFS/RCFS work that produced a bootable oracle (`ufs-1917-devuser.*`,
-  `rcfs1917-flash.signed`) — **and the loss of the Nura root** (operator's call).
-* No kernel/DTS/config change persisted → **no kernel-patch re-export and no tree
-  walk were needed** (the tree is back to canonical: no `PBDBG`, non-SMP config,
-  `ROOTFS_RAW_OFF 0x49000000`, `earlyprintk` restored).
+* **`boot/chainloader/chainloader_kernel.S.in`** (852 B, was 828):
+  * `clear_ring` → `ring_handoff` (sanitise a garbage header + append-only +
+    last two entry headers + the previous boot's timing words, traps 321/325);
+  * `copy_words` → eight-word `LDMIA`/`STMIA` bursts (saves `r4-r10`; the word
+    loop cost 0.825 s of the 7.812 s window). **This is what let the SMP kernel
+    boot** (trap 325).
+* **`tools/pb_ring.py`** now speaks the hand-off contract (`--boot prev|cur|all`,
+  and it prints the previous boot's timing when the `head.S` stamp is present).
+* **Builds:** `kernel-readback-quiet.img` (`0x5BBCD22E`),
+  `kernel-smp-quiet.img` (`0xA2FA490E`, **boots to userspace**),
+  `kernel-smp-loud.img` (`0x3BD64F22`, not booted),
+  `kernel-smp-mark62.img` (`0x0A70D405`, `#86 SMP` with the dense markers and
+  the CRR stamp — it produced the 7.450 s measurement).
+* **Tried and rejected:** extending WDT2 from the chainloader.  It wedged the
+  boot and left the timer stopped (no USB, no reset, dark panel) — recovered by
+  a power-button power cycle and a reflash through the power-on bootrom.  The
+  code is removed; trap 322 records it.  `local/work/kernel-smp-wdt.img` is that
+  bad image — never flash it.
+* **The tree** carries two instruments (gitignored; remove before a patch
+  re-export): the `PBDBG` set in `local/kernel-tree/init/main.c` (pristine copy
+  `local/work/carve/main.c.session62-orig`) and the WDT2 `CRR` stamp in
+  `local/kernel-tree/arch/arm/kernel/head.S`.  `.config` is now
+  **`CONFIG_SMP=y`, `CONFIG_NR_CPUS=2`**; the tracked
+  `kernel/winchester-7.3.3.config` is still non-SMP.
+* The chainloader is not part of the kernel patch, so no re-export was needed
+  for it; the `init/main.c`/`head.S`/config edits are experiments.
 
-## 0f. Traps added this session (full list 14–320 in `KNOWN-ISSUES.md` §2)
+## 0f. Traps added/corrected this session (full list 14–326 in `KNOWN-ISSUES.md` §2)
 
-315 SMP stops after the RCU geometry print (and a marker build must carry
-`earlyprintk`); 316 ring writers, the `no-map` `dd` failure, the read-back
-recipe; 317 QNX's `0xAA` fill (open — contradiction file); 317a the `+0x1000`
-window's unknown writer; 318 the RNDIS interface-name flap vs the NM profile;
-319 SMC is privileged (not evidence about the ROM); 320 the region-1 module
-mismatch.
+312 **corrected** (the OPP table comes from `omap443x.dtsi`; what is missing is
+`cpu-supply` + the binding); 315 **corrected twice** (`rcu_init()` completes;
+the stop points were the watchdog expiring); 317a **closed** (`+0x1000` =
+character #3840, no second writer); 316 revised (two writers, no clear); 321 the
+ring hand-off contract; 322 never program WDT2 from the chainloader; 323 the
+bootrom can hold ~20 s (poll, do not sleep 10 s); 324 `marks`/`marks2` are silent
+by construction; **325 the watchdog window is the real budget (and the copy ate
+it)**; **326 the region-1 ext4 mount fails under SMP but not UP**.
 
 ## 1. Useful local extracts
 
-* `local/work/kernel-region1.img` (`0x433232F1`) — **the bench image**;
-  `local/images/kernel-0x202E9F38-smp.img` — the SMP build;
-  `local/work/kernel-dump{,2,3}.img` — the read-back variants.
-* `local/work/ringclean3.sh`, `local/work/*-flash-retry.sh` — the capture loop.
-* `tools/bench/{ringdump,memzero,smcprobe}.c` — the new instruments (sources;
-  the built static binaries are `local/work/{ringdump,memzero}`).
-* `local/work/minimal/` — the pruned/stage-A RCFS, `setB.signed`, `memdump3`.
-* `local/work/{rcfs-1917.rcfs, rcfs1917-flash.signed, ufs-1917-devuser.ufs}`.
-* `kernel/patches/0001-playbook-winchester-7.3.3.patch` — unchanged this session.
-* Reports **254** (current), 253–249; sessions `docs/sessions/session-61.md`.
+* `local/work/kernel-readback-quiet.img` (`0x5BBCD22E`) — **the bench image**;
+  `kernel-smp-quiet.img` (`0xA2FA490E`) — **the SMP image that boots**;
+  `kernel-smp-loud.img` (`0x3BD64F22`); `kernel-smp-mark62.img` (`0x0A70D405`);
+  `kernel-smp-wdt.img` (**bad** — the rejected WDT step).
+* `local/work/carve/` — carved `zImage`/DTB for `region1`, `smp`, `rcu2`,
+  `marks2`, `marks`; `region1-quiet.dtb`, `smp-quiet.dtb` (`loglevel=0`);
+  `main.c.session62-orig`; `carve.py`.
+* `local/work/{ringdump,memzero}` (static ARM builds); `tools/bench/*.c`.
+* `local/work/{flash825.sh,flash825-long.sh,run-smp-then-readback.sh}` —
+  the flash/measurement wrappers.
+* Captured ring from this session: `local/work/r2{b,c,e,f,g,h}.bin` and the
+  recovered logs `local/work/{rcu2-log.txt,smp-plain-log.txt,mark62-log.txt}`.
+* Reports **255** (current) and 254; sessions `docs/sessions/session-62.md`.
 
 ## 2. Build and flash (7.3.3)
 
@@ -184,115 +178,118 @@ mismatch.
 -j12 zImage; make -C $K … ti/omap/omap4-winchester.dtb`; wrap with
 `ZIMAGE=… DTB=… python3 tools/build_kernel_image.py` (prints the CRC; must stay
 under `0xB00000`).  Modules **in-tree**, strip `--strip-debug`.  **A config
-change (e.g. `CONFIG_SMP`) changes the module vermagic — rebuild and install every
-module before the region-0 flash.**  A `-j12` kernel build is ~7 min here; hand
-long builds to the operator.
+change (e.g. `CONFIG_SMP`) changes the module vermagic — rebuild and install
+every module before the region-0 flash.**  A `-j12` kernel build is ~7 min here;
+hand long builds to the operator.
 
 ## 3. Bench
 
-* SSH is the primary shell on the region-1 image: `PB_LINK=usb tools/pbssh.sh`.
-  The ttyGS0 prompt is `pb> ` (region-1 root) or the initramfs console (when the
-  root does not mount) — `pbcon.py` drives only the former (trap 274).
-* **Host link:** the PlayBook's RNDIS interface flaps between `enp8s0f3u1` and
-  `enp8s0f3u1i2`; NM's `pb-rndis` profile must be bound by MAC
-  (`02:1a:11:00:00:02`), not by name (trap 318).  Do not add the address by hand.
-* Reboot: `reboot -f` over ssh.  The flash: start the flasher first, then reset;
-  one bootrom session; `--from-bootrom` needs the unit booted (trap 266) unless it
-  is already in the bootrom after a WDT reset — a boot-looping image therefore
-  feeds the flasher by itself.
-* The oracle: `python3 tools/QCL.py info | exec | put | get | shell`
-  (`QCL.py exec` truncates long replies and needs `--` before `-flags`; compound
-  commands want `QCL.py shell`).  `PB_LINK=door tools/pbssh.sh` works only while
-  the oracle's `sshd` is alive (it died after one connection here).
+* SSH is the primary shell: `PB_LINK=usb tools/pbssh.sh`.  The ttyGS0 prompt is
+  `pb> ` (region-1 root) or the initramfs console; `pbcon.py` drives only the
+  former (trap 274).
+* **Host link:** the RNDIS interface flaps (`enp8s0f3u1` / `enp8s0f3u1i2`); NM's
+  `pb-rndis` profile must be bound by MAC (`02:1a:11:00:00:02`), not by name
+  (trap 318).
+* Reboot: `reboot -f` over ssh.  **The flash: start the flasher first, then
+  reset**; one bootrom session; 60 s window.  **The bootrom can hold ~20 s
+  before it runs the chainloader** (trap 323) — wait ≥25 s before a read-back
+  flash, or poll `lsusb`.
+* The oracle: `python3 tools/QCL.py info | exec | put | get | shell`.
 
 ## 4. Working rules
 
-* One variable per boot; a test boot is not a budget concern, but a boot-loop is —
-  stop it, and read the counter at both ends of a cycle (`dmesg | grep pbrpmb`).
+* One variable per boot; a test boot is not a budget concern, but a boot-loop is
+  — stop it, and read the counter at both ends of a cycle
+  (`dmesg | grep pbrpmb`).  A failing image never runs `/init`, so its loops
+  drain the counter with no top-up: keep the window short.
 * Read dmesg **unfiltered** after a boot or structural change; do not run two
   console commands in parallel.
 * Never present a guess as a fact; prefer a fresh read.  Look up external facts
   from the primary source.
 * **Check a marker/read-back build for `earlyprintk` before believing a trace**
-  (trap 315) — this session lost time to exactly that.
+  (traps 315/324).
 * Revert experiments and prove the revert; re-export the kernel patch when the
-  DTS/config/driver changes persist (trap 161), then apply-and-compare and tree
+  DTS/config/driver change persists (trap 161), then apply-and-compare and tree
   walk (trap 211).
 * Do not take screenshots; ask the operator to look.  Only the operator decides
   when to stop / wrap up.
 
-## 5. Paste-ready kickoff prompt (session 62)
+## 5. Paste-ready kickoff prompt (session 63)
 
 ```
-PlayBook (OMAP4430 "winchester") — session 62 (absolute; Linux-era 56)
+PlayBook (OMAP4430 "winchester") — session 63 (absolute; Linux-era 57)
 
 Workspace: this repository — a git checkout.  Map: docs/README.md.  The earlier
 work tree $HOME/rea-work is READ-ONLY.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md items 7a and 9, KNOWN-ISSUES.md §2 (traps 14-320, especially
-312-320) and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md (84-88), reports
-254, 253 and 249-252, docs/captures/oracle-live-2026-11-16-ring-and-cpu.txt,
-docs/contradictions/ring-survives-a-qnx-boot.md and sessions/session-61.md.
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 14-326, especially 312-326)
+and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md (84-89), reports 255, 254,
+253 and 249-252, docs/sessions/session-62.md.
 
-WHERE IT STANDS: THE ACTIVE ITEM IS THE CPU.  The unit runs one core at 400 MHz.
-Session 61 built CONFIG_SMP=y + CONFIG_NR_CPUS=2 with maxcpus=1: the kernel
-BOOTS (SLUB: ... CPUs=2) and STOPS right after rcu_init_geometry() printed
-"rcu: RCU calculated value of scheduler-enlistment delay is 10 jiffies."
-(kernel/rcu/tree.c:474) — no oops text, then WDT2 resets it (report 254, trap
-315).  The SCU and every register the SMP path touches are accessible from
-non-secure Linux (SCU_CONFIG=1 = 2 cores, SCU_CTRL=0x531, 0x4824380c=0,
-0x48281800/4=0, PL310 0x410000C4), and SMC is merely privileged — so this is not
-a firewall/ROM problem.  The reference is measured dual-core at 1008 MHz (the
-MPU OPP target).  The finer localization is NOT established: the PBDBG marker
-runs were invalid (builds made without earlyprintk) or inconsistent, because the
-ring's +0x1000 printk window has an unidentified writer (trap 317a).
+WHERE IT STANDS: THE ACTIVE ITEM IS THE CPU, and it moved a long way: with
+CONFIG_SMP=y + CONFIG_NR_CPUS=2 + maxcpus=1 the kernel NOW BOOTS TO USERSPACE
+(`possible = 0-1`, `online = 0`).  The blocker was never a hang: the loader arms
+WDT2 with 7.8125 s and kernel entry happened at 7.450 s of it (chainloader copy
+0.825 s + XZ decompression 6.619 s), so the kernel was being reset mid-init; the
+fix was a block copy in the chainloader plus a quiet boot (loglevel=0).  The
+remaining SMP problem is the ROOT MOUNT: the same region-1 ext4 that mounts on
+the UP image fails under SMP with "EXT4-fs (loop0): VFS: Can't find ext4
+filesystem" (trap 326).  The ring is trustworthy now too: +0x1000 was never a
+printk window (it is the ring's character array at #3840, the first byte past
+the old chainloader clear); the chainloader hands the ring off (append-only,
+prev/prevprev headers + timing, trap 321) and tools/pb_ring.py decodes it.
+rcu_init() COMPLETES (session 61's "stops inside rcu_init" is withdrawn).
 
-THE NEXT EXPERIMENT (HANDOFF §0a, no kernel build needed): identify that writer.
-Put a unique printk as the first statement of start_kernel() in a read-back
-image, run the capture loop (HANDOFF §0b: zero the rings, boot the SMP image,
-boot the read-back image kernel-dump3.img, dump 0x90000000 with
-tools/bench/ringdump), and interpret per HANDOFF §0a.  Then bracket rcu_init()
-(§0c) — checking every marker image with `grep -ac earlyprintk` first.
+THE NEXT EXPERIMENT (HANDOFF §0a): (1) CONFIG_SMP=y with CONFIG_NR_CPUS=1, and a
+plain SMP build with nosmp, both with loglevel=0 — does the region-1 ext4 mount
+succeed?  (2) a retry/delay in the initramfs loop setup (initramfs/init.c
+rootfs_boot(); rebuild the binary AND remove the cpio).  Then cpu1 proper
+(drop maxcpus=1) and then the MPU OPP (the OPP table already exists in
+omap443x.dtsi: 300/600/800/1008 MHz — trap 312).
 
-THE FACTS: region 0 = local/work/kernel-region1.img, CRC 0x433232F1, verified on
-media (sha256 bbee7beb... at raw 0x8100000, trailer 1f2dc8d7 f1323243); it is the
-non-SMP kernel with the initramfs rooted at region 1.  Region 1 = the busybox
-root at 0x29000000, 64 MiB, sha256 a3277272... (baked was 49e318bf...), 43
-modules that NO LONGER MATCH the config (trap 320).  hd3 = the 1917 vendor UFS
-(the Nura root is gone; way back: local/work/nura/images/
-blackberry-playbook-root-apps-audio.img, f7858110..., at 0x4915).  BOOTCTR_FCTRY
-= 0x31 at the last boot (self-maintaining, threshold 0x1e).  Region 0's RCFS is
-the full modified 1917 one, so the oracle is one IFS flash away
-(ifs-shim-sealed.ifs at 0x825) and answers qconn on 169.254.0.1:9090.
+THE FACTS: region 0 = local/work/kernel-readback-quiet.img, CRC 0x5BBCD22E (the
+region-1 kernel #79, earlyprintk removed from its DT bootargs, the hand-off +
+block-copy chainloader) — the bench/read-back image.  local/work/
+kernel-smp-quiet.img (0xA2FA490E) is the SMP image that boots.  Region 1 = the
+busybox root at 0x29000000, 64 MiB, mounts on UP (58.7 M, 42% used), 43 modules
+that NO LONGER MATCH the config (trap 320).  hd3 = the 1917 vendor UFS (way
+back: local/work/nura/images/blackberry-playbook-root-apps-audio.img,
+f7858110..., at 0x4915).  BOOTCTR_FCTRY = 0x28 at the wrap-up.  The oracle is one
+IFS flash away (ifs-shim-sealed.ifs at 0x825), qconn on 169.254.0.1:9090.
 
-PHYSICAL STATE: the unit runs the region-1 busybox root, SSH dropbear on
-169.254.0.1:22 (PB_LINK=usb tools/pbssh.sh); the ACM is the fallback console.
-The host's RNDIS interface name flaps (enp8s0f3u1 / enp8s0f3u1i2) — bind the NM
-pb-rndis profile by MAC 02:1a:11:00:00:02 (trap 318), never add the address by
-hand.  No device-side files are deployed (/tmp is tmpfs).  Pace bulk pushes
-(8 KiB/5 ms; trap 302).  To boot the ORACLE: ifs-shim-sealed.ifs at 0x825;
-qconn/QCL.py for a shell.  Do NOT restore local/images/ifs0.sealed.bin (trap 84).
+PHYSICAL STATE: the unit runs the read-back image, SSH dropbear on
+169.254.0.1:22 (PB_LINK=usb tools/pbssh.sh); the ACM is the fallback console
+(pb> ).  The host's RNDIS interface name flaps (trap 318) — bind the NM pb-rndis
+profile by MAC 02:1a:11:00:00:02.  /tmp is tmpfs: re-push ringdump/memzero.
+Pace bulk pushes (8 KiB/5 ms; trap 302).  A power-off WIPES the ring (DRAM):
+capture before any power cycle.
 
 BENCH: SSH is the primary shell; `reboot -f` to reset.  THE FLASH: start the
-flasher first, then the reset; one bootrom session; 60 s window; --from-bootrom
-uploads the ramloader so the unit must be booted (trap 266) unless it is in the
-bootrom after a WDT reset.  An agent NEVER writes RPMB; NVRAM read-only.  Read
-dmesg UNFILTERED.  One command at a time.  A boot-looping image drains
-BOOTCTR_FCTRY: stop it and read the counter with `dmesg | grep pbrpmb`.
+flasher first, then the reset; one bootrom session; 60 s window.  The bootrom can
+hold ~20 s before the chainloader runs (trap 323) — wait >=25 s before a
+read-back flash, or poll lsusb.  An agent NEVER writes RPMB; NVRAM read-only.
+Read dmesg UNFILTERED.  One command at a time.  A boot-looping image drains
+BOOTCTR_FCTRY with no top-up: stop it and read `dmesg | grep pbrpmb`.  NEVER
+program WDT2 from the chainloader (trap 322: it wedges and stops the timer; the
+recovery is a power cycle).
 
-RING WORK: only the boot that immediately follows the failure can be read.  The
-chainloader clears ring1 on every boot; busyuart mirrors chars into all three
-rings; dd on /dev/mem FAILS on the no-map pages — use tools/bench/ringdump (mmap)
-and tools/bench/memzero; a QNX boot leaves 0xAA fill.  ALWAYS check a
-read-back/marker image with `grep -ac earlyprintk` before trusting its trace.
+RING WORK: ring2 0x90000000 is canonical.  +0x80 count, +0x84 index, +0x88..+0xb3
+epoch block, +0xb8 magic "RHND", +0xbc/+0xc0 prev, +0xc4/+0xc8 prevprev,
++0xcc prev pre-jump CRR, +0xd0 prev kernel-entry CRR, +0xd4 prev entry stamp,
+chars +0x100.. append-only.  Previous boot's log = chars from prevprev_index,
+prev_count-prevprev_count long; tools/pb_ring.py --boot prev|cur|all also prints
+the timing.  dd on /dev/mem FAILS on the no-map pages — use tools/bench/ringdump
+(mmap) and memzero.  A QNX boot leaves 0xAA fill (the hand-off sanitises it).
 
 BUILDS: modules IN-TREE, strip --strip-debug; a config change (CONFIG_SMP)
 changes the module vermagic — rebuild every module before the flash.  A -j12
-kernel build is ~7 min; hand long builds to the operator and stop the turn.  The
-initramfs binaries are built separately (arm-linux-gcc -static -O2) and the cpio
-must be removed.  The kernel export only changes if the DTS/config/driver change
-persists (trap 161), then apply-and-compare + tree walk (trap 211).
+kernel build is ~7 min; hand long builds to the operator and stop the turn.
+Carving zImage+DTB out of an existing image and re-wrapping it reproduces its
+CRC byte-identically, so chainloader- or bootargs-only changes need no kernel
+build (fdtget/fdtput for bootargs).  The tree currently carries two experiment
+instruments (init/main.c PBDBG markers, head.S WDT2 CRR stamp) and CONFIG_SMP=y;
+remove them before any kernel-patch re-export.
 
 SAFETY: read SAFETY.md first.  The hard hazards (BOOTCTR_FCTRY 0 / >0x32 / failed
 write / flat pack) remain; a test boot is not a budget concern but a loop is.

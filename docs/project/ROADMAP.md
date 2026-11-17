@@ -261,25 +261,34 @@ flasher can replace at every point:
    deferred `swap` and its first-draw JIT.  **The unit runs one core at
    400 MHz** (`maxcpus=1` in the DTS, `dpll_mpu_ck = 400 MHz`, no cpufreq/OPP),
    while the reference programs `DPLL_MPU`/`PRM_VC` for 1.0 GHz dual-core
-   (report 223) — the biggest remaining lever.  **Session 61 built (a) and
-   measured it:** the SMP kernel (`0x202E9F38`, `CONFIG_SMP=y`,
-   `CONFIG_NR_CPUS=2`, `maxcpus=1`, all 44 modules rebuilt with the `SMP`
-   vermagic) **boots and stops right after the RCU geometry print**
-   (`rcu: RCU calculated value of scheduler-enlistment delay is 10 jiffies.`,
-   `kernel/rcu/tree.c:474`) with no oops text, then WDT2 resets it.  The SCU and
-   every register the SMP path touches are accessible from non-secure Linux
-   (`SCU_CONFIG = 1` = 2 cores, `SCU_CTRL = 0x531`), and SMC is merely
-   privileged, so no hardware blocks it; the reference is measured
-   **dual-core at 1008 MHz**.  The finer localization is open — the ring's
-   `+0x1000` printk window has an unidentified writer (trap 317a) and the
-   marker builds were invalid (trap 315).  **Next:** identify that writer, then
-   bracket `rcu_init()` (report 254, HANDOFF §0a–§0c); (b) remove `maxcpus=1`
-   and boot cpu1 (trap 313); (c) read the reference's `PRM_VC_*`/voltage from a
-   *Linux* `devmem` (they read there; they die in QNX user space) — the rate is
-   measured at 1008 MHz — then add an OPP table + `vdd_mpu`/ABB (trap 312); (d) shrink/pre-warm
-   the drawer; (e) pursue hardware GL for Wayland clients (trap 314); (f) rebake
-   the restorable hd3 base with `epitaph` r10005+, the llvmpipe files and the
-   rules.  Kumo needs a WPEWebKit build (report 247 §4).
+   (report 223) — the biggest remaining lever.  **Session 61 built (a); session
+   62 fixed the instrument, found the real blocker and got the SMP kernel to
+   userspace:** the stop points that looked like a nondeterministic hang
+   (3208/3943/4211 characters) were the **loader's 7.8125 s WDT2 window**
+   expiring mid-init — measured with a `CRR` sample in `head.S`: kernel entry at
+   **7.450 s of 7.812 s (362 ms left)**, chainloader copy 0.825 s + XZ
+   decompression **6.619 s**, while the kernel needs ~0.74 s to reach its own
+   WDT2 re-program.  A **block copy** in the chainloader (`LDMIA`/`STMIA` ×8)
+   plus a quiet boot (`loglevel=0`) buys that time and the SMP kernel **boots to
+   userspace** (`possible = 0-1`, `online = 0`, image `0xA2FA490E`).  Along the
+   way the ring became trustworthy: `+0x1000` was never a printk window (it is
+   the ring's character array at #3840, the first byte past the old chainloader
+   clear) and the chainloader now **hands the ring off** (append-only,
+   prev/prevprev headers + timing, trap 321; report 255); with that read
+   **`rcu_init()` completes**.  The SCU and every register the SMP path touches
+   are accessible from non-secure Linux (`SCU_CONFIG = 1` = 2 cores,
+   `SCU_CTRL = 0x531`), SMC is merely privileged, and the reference is measured
+   **dual-core at 1008 MHz**.  **Next (HANDOFF §0a):** the remaining SMP blocker
+   is the **root mount** — the region-1 ext4 that mounts on the UP image fails
+   under SMP (`EXT4-fs (loop0): VFS: Can't find ext4 filesystem`, trap 326) — so
+   test `SMP=y` + `NR_CPUS=1` and `nosmp`, then a retry/delay in the initramfs
+   loop setup; then (b) drop `maxcpus=1` and boot cpu1 (trap 313); (c) the MPU
+   OPP — the table already exists in `omap443x.dtsi` (300/600/800/**1008** MHz,
+   trap 312), so what is missing is `cpu-supply`/`vdd_mpu` and the `cpufreq-dt`
+   binding, or a boot-time DPLL/VC write; (d) shrink/pre-warm the drawer; (e)
+   pursue hardware GL for Wayland clients (trap 314); (f) rebake the restorable
+   hd3 base with `epitaph` r10005+, the llvmpipe files and the rules.  Kumo needs
+   a WPEWebKit build (report 247 §4).
 
 Step 3 is reversible at any time by re-flashing the same block range — which is
 the whole reason it beats an in-place mkfs.
