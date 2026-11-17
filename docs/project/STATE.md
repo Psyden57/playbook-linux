@@ -1,5 +1,85 @@
 # Current state
 
+## Current state — 2026-11-17 (session 64)
+
+**The dual-core wedge is the USB gadget bind, and a targeted MUSB fix makes
+dual-core boot reliably.**  The IPI markers (HANDOFF-63 §0a) showed the
+TLB-flush IPI is sent, received and serviced — so the "IPI race" reading is
+superseded.  Panel diagnostics (a DSI-init TCON hook, report 261) exposed a
+real kernel panic in `omap_musb_set_mailbox` from the gadget bind performed by
+`/init`; a second mode was a `pbrpmb` hang.  Disabling the gadget entirely gave
+no wedge (>100 s), proving the trigger.  The targeted fix — call only
+`omap_control_usb_set_mode(USB_MODE_DEVICE)` from `omap2430_musb_enable()` on
+winchester, skipping the faulting mailbox — gave **3/3 clean dual-core boots**
+(`kernel-usbdev-cpu1.img`, `0xC675E206`).  [report 262; session-64 note]
+
+* **Region 0 = `local/work/kernel-usbdev-cpu1.img`, CRC `0xC675E206`** — `#102
+  SMP` zImage, fast chainloader, no-`nosmp` loud DTB, DSI-init TCON hook, MUSB
+  device-mode fix.  Dual-core `online = 0-1`, 1008 MHz, root ext4 on hd3.
+  Region 1 = the busybox ext4 `6f5b8ca7…` at `0x29000000` (inherited, not
+  re-hashed this session); hd3 = the same ext4 at `0x4915`, mounted rw.
+* **`BOOTCTR_FCTRY = 0x2c`** at the last boot (`2c000000`, above the `0x1e`
+  threshold, no write) — healthy after the session's wedge cycles (read at
+  `0x31`, drained to `0x18`, topped to `0x32`, then `0x29`/`0x2d`/`0x2c`).
+  Linux `/init` tops it up; no manual write was needed.
+* **OS: Linux**, not TabletOS.  dropbear on `169.254.0.1:22` after a
+  `pbconsole entropy <hex>` seed (trap 328); ACM `pb> ` is the fallback.  At
+  wrap-up the unit is **off USB** after ~32 s idle (`VUSB: disabling`, gadget
+  deactivated — idle runtime PM, not a wedge; the unit keeps running with its
+  panel console).  Cable replug did not re-enumerate; separate PM matter.
+* Device-side files: `/tmp/ringdump` (tmpfs, ephemeral).  **No restore required**;
+  the way back to TabletOS is the 1917 IFS at block `0x825`.
+* **Bench gotcha:** the ACM wraps at ~80 columns and `echo <hex> > /dev/random`
+  credits only ~21 bits per short write; seed with `/bin/pbconsole`'s
+  `entropy <hex>` driven via `tools/pbraw.py` (trap 328).  On the read-back
+  image the ACM is the bring-up console, so `entropy <hex>` works directly.
+* **Ghidra MCP**: the server lacked `GHIDRA_INSTALL_DIR`; `rea doctor` is
+  healthy with it set.  This session used the REA CLI + bundled `pyghidra`.
+
+## Current state — 2026-11-17 (session 63)
+
+**TRAP 326 IS A MISDIAGNOSIS — the "SMP-only ext4 mount failure" was a rootfs-
+offset difference between two images, not an SMP kernel bug.**  The SMP image
+(`kernel-smp-quiet.img`, `#78 SMP`) carries an initramfs with
+`ROOTFS_RAW_OFF = 0x49000000` (hd3); the UP read-back image (`#79`) uses
+`0x29000000` (region 1).  hd3 held the 1917 vendor UFS (QNX6), so `mount -t ext4`
+failed correctly.  Proof: the failing boot's loop capacity changed
+`0 → 124583936 → 122191872` sectors — a drop of exactly `0x49000000` bytes;
+`qnx6 49000000` mounted hd3 read-only as QNX6; `initramfs/init.c:452` has
+`ROOTFS_RAW_OFF = 0x49000000`.  After flashing the region-1 ext4 (`49e318bf…`)
+to hd3 at `0x4915`, the **same SMP kernel** mounts `/dev/loop0 on / type ext4`
+and boots a full userland.  [report 256; trap 326 corrected]
+
+* **The MPU runs at 1008 MHz via the fast chainloader.**  `boot/chainloader/
+  chainloader_kernel.S.in` now commands VDD_MPU = 1.35 V (VC bypass) and programs
+  the MPU DPLL to 1008 MHz at entry, before the copy/XZ decompress.  Kernel entry
+  is **3.276 s of 7.812 s** (decompression 2.959 s, down from 6.6 s), and the
+  clock persists through boot (`dpll_mpu_ck = 1008000000`,
+  `CM_CLKSEL = 0x0080D207`).  A runtime `clk_set_rate` measured a **2.54×**
+  CPU speedup (13.63 s vs 34.66 s); **1.2 GHz crashes the unit**.  Single-core
+  boot is now reliable (3/3 clean reboots).  [report 257 §1–§3; DECISIONS §91]
+* **CPU1 works; dual-core boot is flaky, not a cpu1 bug.**  `PBCPU1:` markers
+  through `post complete`, `online cpus=02`, `nproc=2` and `twd` interrupts on
+  both cores were measured; dual-core 1008 MHz booted cleanly once (`#91`,
+  stable >2 min) but a 3-boot set was 1 success / 2 wedges.  The wedge is a
+  clean `execve("/init")` hang — a timing/race in the IPI/TLB-flush path
+  (traps 329 corrected, 330).  Power is ruled out: MPU rail `0x3A` = 1.35 V,
+  battery 97 % / 3.819 V (trap 331).  [report 257 §4–§5]
+* **`nosmp` is not a `nr_cpu_ids=1` test** (trap 327): `nr_cpu_ids` stays 2
+  (`SLUB: CPUs=2`); a real test needs `CONFIG_NR_CPUS=1` or a DTB with `cpu@1`
+  dropped.  **SSH needs an entropy seed** each fresh boot (trap 328): dropbear
+  blocks in `wait_for_random_bytes`; `pbconsole entropy <hex>` fixes it.
+* **Bench at the wrap-up (verified off the media)**: region 0 =
+  `local/work/kernel-fastcl-nosmp.img`, CRC **`0x8B83421F`** (media trailer at
+  raw `0x8B10198` = `1f2dc8d7 1f42838b`), cmdline `loglevel=0 nosmp
+  clk_ignore_unused panic=10 fw_devlink=permissive`, `possible = 0-1`,
+  `online = 0`, 1008 MHz; root `/dev/loop0` ext4 **on hd3** (58.7 M, 42 % used).
+  Region 1 = the busybox ext4, sha256 `6f5b8ca7…` (drifted from `49e318bf…`
+  from read-back boots mounting it rw).  dropbear on `169.254.0.1:22` after an
+  entropy seed; `pb> ` on the ACM; `BOOTCTR_FCTRY = 0x20`.  `/tmp` empty (tmpfs,
+  nothing deployed).  No restore required; the way back to TabletOS is the 1917
+  IFS at `0x825` + `local/work/ufs-1917-devuser.ufs` (`482e0473…`) at `0x4915`.
+
 ## Current state — 2026-11-16 (session 62)
 
 **THE SMP KERNEL NOW BOOTS TO USERSPACE (`possible = 0-1`, `online = 0`) — the

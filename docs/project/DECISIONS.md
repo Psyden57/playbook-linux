@@ -3127,11 +3127,137 @@ watchdog.  The session's tree instruments (the `PBDBG` set in
 `local/kernel-tree/.config` are experiments and must be removed before a
 kernel-patch re-export; the chainloader is not part of the patch.
 
-**Evidence.**  Report 255 (identification, timing table, the SMP boot,
-the SMP-only root-mount failure); traps 312 and 315 corrected, 317a closed,
-321–326 added; the recovered logs `local/work/{rcu2-log.txt,smp-plain-log.txt,
-mark62-log.txt}`; the images `kernel-readback-quiet.img` (`0x5BBCD22E`),
-`kernel-smp-quiet.img` (`0xA2FA490E`), `kernel-smp-mark62.img` (`0x0A70D405`).
+**Evidence.**  Report 255 (identification, timing table, the SMP boot, the
+*suspected* SMP-only root-mount failure — **withdrawn by report 256**); traps
+312 and 315 corrected, 317a closed, 321–326 added; the recovered logs
+`local/work/{rcu2-log.txt,smp-plain-log.txt,mark62-log.txt}`; the images
+`kernel-readback-quiet.img` (`0x5BBCD22E`), `kernel-smp-quiet.img`
+(`0xA2FA490E`), `kernel-smp-mark62.img` (`0x0A70D405`).
+
+## 90. The SMP root-mount failure was a rootfs-offset artefact; hd3 becomes the ext4 bench root (session 63)
+
+**Decision.**  Withdraw trap 326: there was no SMP-only ext4 mount bug.  The SMP
+image (`kernel-smp-quiet.img`, `#78`) had an initramfs with
+`ROOTFS_RAW_OFF = 0x49000000` (hd3), the UP read-back image (`#79`) had
+`0x29000000` (region 1); hd3 at the time held the 1917 vendor UFS (QNX6), so the
+SMP image's `mount -t ext4` failed correctly.  Flash the region-1 ext4
+(`49e318bf…`, 64 MiB) to hd3 at loader block `0x4915` and the same SMP kernel
+mounts `/dev/loop0 on / type ext4` and boots a full userland with dropbear.  No
+kernel rebuild, no retry, no delay.  Keep region 1 and the sealed IFS/RCFS and
+the `ufs-1917-devuser.ufs` (`482e0473…`, packed `371b09a1…`) as the way back.
+
+**Why.**  The failing loop's capacity drop is exactly `0x49000000` bytes
+(`124583936 − 122191872` sectors × 512) — the loop's backing offset, hd3 — and
+`qnx6 49000000` mounted that media read-only as QNX6.  `initramfs/init.c:452`
+defines `ROOTFS_RAW_OFF = 0x49000000ULL`.  The 1917 UFS is a deliberate
+repurpose, recoverable from the host image (safety §4).  `nosmp` was not a
+"one possible CPU" test: `nr_cpu_ids` stayed 2 (`SLUB: CPUs=2`), only online
+CPUs were capped (trap 327).
+
+**Constraint.**  dropbear blocks in `wait_for_random_bytes` on a fresh boot
+(firewalled SoC RNG, trap 87): the port is open but SSH gives "Connection timed
+out during banner exchange".  Seed with `/bin/pbconsole`'s `entropy <hex>`
+(≥32 hex digits) — `random: crng init done` then SSH works; re-seed each boot
+that serves dropbear.  The early "cpu1 hangs in `smp_init()`" reading was
+**superseded later in session 63**: CPU1 brings up fine and dual-core boots at
+least sometimes (trap 329 corrected, trap 330).  Then the MPU OPP (§91).
+
+**Evidence.**  Report 256; `local/work/kmsg-nosmp.txt` (failing boot),
+`local/work/dmesg-smp-nosmp-hd3-root.txt` (successful SMP boot with hd3 ext4);
+traps 326 corrected, 327–329 added; flash logs
+`local/work/flash-{smpnosmp,hd3,cpu1,recovery}.log`.
+
+## 91. The chainloader raises VDD_MPU and the MPU DPLL to 1008 MHz; dual-core boot stays flaky (session 63)
+
+**Decision.**  Keep the **fast chainloader** as the region-0 build path: at
+entry (MMU/caches off, physical writes) it commands VDD_MPU = 1.35 V via
+`PRM_VC_VAL_BYPASS` and programs the MPU DPLL to 1008 MHz before the copy/XZ
+decompress.  This is safe across warm reboots and does not touch WDT2 (trap
+322).  It cuts kernel entry to 3.276 s of 7.812 s (~4.5 s spare) and makes the
+single-core boot reliable (3/3 clean reboots).  Keep `kernel-fastcl-nosmp.img`
+(`0x8B83421F`) as the region-0 bench image.
+
+**Why.**  The loader's 7.8125 s WDT2 window was the real limit on a marginal
+boot (trap 325).  XZ decompression dominates it; at 1008 MHz it falls from 6.6 s
+to 2.959 s.  `clk_set_rate()` at runtime proved 1008 MHz stable at the current
+voltage and gave a measured 2.54× CPU speedup (13.63 s vs 34.66 s).  The chainloader
+route applies the clock before decompression and it persists through boot.  1.2
+GHz crashes the unit — rejected.  The VC command registers and a healthy battery
+rule out power as the cause of the remaining dual-core wedge (trap 331).
+
+**Constraint.**  The chainloader grew 852 → 1000 B (tracked template
+`boot/chainloader/chainloader_kernel.S.in`; pre-change copy at
+`local/work/carve/chainloader_kernel.S.in.session63-orig`).  Dual-core at 1008
+MHz boots successfully at least once (`kernel-ipidbg-cpu1.img`, `0xF8264016`,
+`#91 SMP`, both cores, `twd` on both) but nondeterministically (1/2 wedges) —
+a timing/race in the IPI/TLB-flush path (trap 330), not yet fixed.  The tree
+carries extra gitignored `PBCPU:`/`PBCPU1:`/`PBIPI1:`/`PBSMF:` markers on top of
+the session-62 instruments; remove all before a kernel-patch re-export.
+`.config` stays `CONFIG_SMP=y`, `CONFIG_NR_CPUS=2`.  Next: capture the ring from
+a wedged dual-core boot and read the last IPI markers.
+
+**Evidence.**  Report 257; ring `local/work/r2-fastcl.words` (timing),
+`local/work/r2-cpu1ok.words` (dual-core bring-up), media trailer read
+(`1f2dc8d7 1f42838b` = CRC `0x8B83421F`); register reads `PRM_VC_VAL_BYPASS =
+0x003A5512`, `PRM_VC_VAL_CMD_VDD_MPU_L = 0x3A3A1400`, `bq27541-0` 3819000 µV /
+97 % / Full; traps 327–331; `cmdline` and benchmark runs via `tools/pbssh.sh`.
+
+## 92. The dual-core wedge is downstream of the IPI; read the reference's core-up sequence (session 64)
+
+**Decision.**  Keep `kernel-fastcl-nosmp.img` (`0x8B83421F`) as the region-0
+bench.  Treat the dual-core wedge as *not* an IPI delivery/service fault: the
+next kernel instrument goes in `flush_old_exec()`/`mmput()`, written by CPU0 only
+(because CPU0 and CPU1 `printascii` share one unlocked ring and garble markers,
+trap 332).  In parallel, reverse the **reference's** core bring-up (`startup-
+playbook` and `setup-core-inactive`) to learn whether it starts both cores at
+IFS boot, brings them up sequentially, and what PMIC/VC sequencing surrounds it —
+before adding more kernel timing experiments.
+
+**Why.**  HANDOFF §0a was run: a wedged `kernel-ipidbg-cpu1.img` (`0xF8264016`)
+boot was captured through the quiet read-back image and decoded (report 258).
+The 5512-character wedge log shows full `PBCPU1:` bring-up, `online cpus=02`, a
+`PBSMF: pre`/`post csd_lock_wait` pair, ~170 `PBIPI1: CALL_FUNC enter`/`done`
+pairs, and **four clean `enter`/`done` pairs after `PBCPU: pre run_init(/init)`**
+before silence.  So the IPI is sent, received and serviced; this is the
+handoff's fourth branch, not a GIC SGI or csd-ack fault.  Kernel entry was a
+normal 3.299 s of 7.812 s, and power is ruled out (trap 331).
+
+**Constraint.**  The final `execve` shows no `PBSMF` line, but one earlier pair
+is visibly interleaved with CPU1 text — absence in a dual-core log is weak
+evidence (trap 332).  A marker-only kernel edit does not change vermagic, so no
+module rebuild is needed for the next instrument; a config change would require
+rebuilding every module (trap 313).  Region 0 was restored and verified after
+the experiment; `BOOTCTR_FCTRY = 0x31`.
+
+**Evidence.**  Report 258; session-64 note;
+`local/work/r2-64.{bin,words}`, `r2-64-{prev,all}.txt`,
+`ipi-wedge-findings-64.txt`, `boot2-usb.log`; traps 330 updated, 332 added.
+
+## 93. Keep the targeted MUSB device-mode fix as the dual-core build path (session 64)
+
+**Decision.**  On winchester, `omap2430_musb_enable()` calls only
+`omap_control_usb_set_mode(USB_MODE_DEVICE)` and returns, skipping
+`omap_musb_set_mailbox()` in the `musb_start()` path.  Keep
+`kernel-usbdev-cpu1.img` (`0xC675E206`) as the dual-core test image; retain
+`kernel-fastcl-nosmp.img` (`0x8B83421F`) as the reliable single-core fallback.
+
+**Why.**  The dual-core wedge is triggered by `/init`'s USB gadget bind:
+`musb_start` → `omap2430_musb_enable` → `omap_musb_set_mailbox` faults (PID 1
+Oops, `Attempted to kill init!`) or `pbrpmb` hangs.  Disabling the gadget
+entirely prevented the wedge (>100 s) but removed ACM/RNDIS.  The targeted
+device-mode-only call gave 3/3 clean dual-core boots with `online = 0-1`,
+gadget up and `pbrpmb` OK.  The broad mailbox-skip gave 4/4 boots but is less
+suitable because it omits the OTG state setup.  [report 262]
+
+**Constraint.**  This is a driver-source experiment in the gitignored tree; it
+must be reviewed (and the exact bad indirect call inside
+`omap_musb_set_mailbox` identified) before any kernel-patch re-export.  No
+`.config` change was made, so modules/vermagic are unchanged.  3/3 boots is a
+small sample — session 65 must soak it.  The ~32 s USB drop is idle runtime PM,
+separate from this fix.
+
+**Evidence.**  Report 262 §3 (image CRC, boot outcomes, `pbrpmb` line); operator
+screenshots (Oops call trace); `local/work/r2-*.{bin,words}` captures.
 
 ### Repository license
 

@@ -36,9 +36,10 @@ threshold, no write).
   **3208**, **3943** (×5) and **4211** characters — the last one *inside* the
   `RCU calculated value…` line.  So this is not a statement-level hang and a
   marker bracket will give a distribution, not a single answer.
-* **The loader's 7.8125 s watchdog is not the cause** (§4), and the
-  chainloader must never program WDT2 (§4a — it wedged the unit and left the
-  timer stopped).
+* **The loader's 7.8125 s watchdog IS the cause** (§4 — this was corrected in
+  the same session; the first draft of this headline said "is not the cause"),
+  and the chainloader must never program WDT2 (§4a — it wedged the unit and
+  left the timer stopped).
 
 ## 1. The identification, with the evidence
 

@@ -2818,21 +2818,123 @@ report 121 §3/§11/§12.
       (`possible = 0-1`, `online = 0`).  Never solve this by writing WDT2 from
       the chainloader (trap 322).  (Session 62, report 255 §4.)
 
-326. **Under `CONFIG_SMP=y` the region-1 ext4 loop mount fails; the same filesystem
-      mounts fine on the UP kernel.**  First SMP boot to userspace: the initramfs
-      fell back to its console with
+326. **CORRECTED (session 63): the "SMP-only ext4 mount failure" was a rootfs-
+      offset difference between two images, not an SMP kernel bug.**  Session 62
+      saw the first SMP boot fall back to its console with
 
           loop0: detected capacity change from 0 to 124583936
           loop0: detected capacity change from 124583936 to 122191872
           EXT4-fs (loop0): VFS: Can't find ext4 filesystem
 
-      while the UP read-back image mounted the same media minutes later as
-      `/dev/loop0 on / type ext4 (rw,relatime,nobarrier)`, 58.7 M, 42 % used
-      (only `warning: mounting unchecked fs`, i.e. the expected dirty-state
-      warning after unclean resets).  So the filesystem is intact and the
-      loop/ext4 bring-up is what differs under SMP — a timing/geometry question,
-      not corruption.  Discriminate with `SMP=y` + `NR_CPUS=1` and `nosmp`, and
-      with a retry/delay in the initramfs loop setup.  (Session 62.)
+      while the UP read-back image mounted "the same" region-1 filesystem fine.
+      They were **not** the same filesystem: the SMP image's initramfs has
+      `ROOTFS_RAW_OFF = 0x49000000` (hd3, `initramfs/init.c:452`), which at the
+      time held the **1917 vendor UFS (QNX6)** — `qnx6 49000000` mounts it
+      read-only.  The capacity drop is exactly `0x49000000` bytes
+      (`124583936 − 122191872 = 2392064` sectors × 512).  The UP image had
+      `0x29000000` (region 1, a real ext4).  After flashing the region-1 ext4
+      (`49e318bf…`) to hd3 at `0x4915`, the same SMP kernel printed
+      `EXT4-fs (loop0): mounted filesystem … r/w without journal` and booted to
+      a full userland with dropbear — no retry, no delay, no kernel change.  The
+      `nosmp` discriminator was invalid too: `nosmp` leaves `nr_cpu_ids = 2`
+      (`SLUB: CPUs=2`) and only caps online CPUs (already 1).  (Session 63,
+      report 256.)
+
+327. **`nosmp` does not reduce `nr_cpu_ids` — it is not a "one possible CPU"
+      test.**  On the SMP kernel, a `nosmp` cmdline still prints
+      `SLUB: … CPUs=2` and `percpu: [0] 0 [0] 1`, and `smp: Brought up 1 node,
+      1 CPU`; only the number of *online* CPUs changes (and that was already 1
+      with `maxcpus=1`).  To exercise SMP code paths with one possible CPU you
+      need `CONFIG_NR_CPUS=1` (a rebuild) or to drop `cpu@1` from the DTB.
+      (Session 63.)
+
+328. **dropbear blocks in `wait_for_random_bytes` on a fresh boot, so SSH opens
+      the port but never sends a banner.**  With the firewalled SoC RNG (trap 87)
+      the CRNG is unseeded; `netstat` shows dropbear LISTEN and the host gets
+      `Connection timed out during banner exchange` with no server banner, while
+      ping works both ways.  `/bin/pbconsole`'s `entropy <hex>` (≥32 hex digits;
+      64 → "credited 256 bits") triggers `random: crng init done`; dropbear's
+      `wchan` moves from `wait_for_random_bytes` to `poll_schedule_timeout` and
+      SSH works.  Re-seed after every boot that serves dropbear.  (Session 63.)
+
+329. **CORRECTED later in session 63: cpu1 brings up fine; dual-core boot is
+      nondeterministic.**  Early in the session, `kernel-smp-cpu1.img`
+      (`0x182B0E00`, no `nosmp`/`maxcpus`) produced no USB for ~70 s then a brief
+      `0fca:0001` bootrom — a reset loop draining `BOOTCTR_FCTRY` (`0x26 → 0x22`,
+      no top-up because `/init` was never reached).  The full marker trace
+      disproved a `smp_init()` hang: a `kernel-smp-cpu1-mark4.img` (`0x0A80BDC6`)
+      boot printed `PBCPU: post smp_init, online cpus=02` and every `PBCPU1:`
+      marker through `post complete`, and the system then ran with `nproc=2`,
+      `online=0-1` and `twd` interrupts on both CPUs (4863 / 5770).  Dual-core at
+      1008 MHz also booted once cleanly (`kernel-ipidbg-cpu1.img`, `0xF8264016`,
+      `#91 SMP`, both cores, stable >2 min) but a 3-boot set gave 1 success /
+      2 wedges.  The failure is a clean `execve("/init")` hang, not a power
+      reset; power is ruled out (trap 331).  Recovery from a wedge: reflash the
+      known-good `kernel-fastcl-nosmp.img` (`0x8B83421F`).  The remaining fault
+      is a timing/race in the IPI/TLB-flush path (trap 330).  (Session 63,
+      reports 256 §4 / 257 §4.)
+
+330. **Dual-core wedge at 1008 MHz is a race in the IPI/TLB-flush path, not a
+     fixed stall.**  With two cores online, `execve("/init")` →
+     `flush_old_exec` → `smp_call_function_many()` → `csd_lock_wait()` sends a
+     TLB-flush IPI to CPU1; the boot wedge shows all markers through
+     `pre run_init(/init)` (or `post run_init FAILED`) and a frozen cursor.
+     Markers `PBSMF: pre/post csd_lock_wait` (CPU0) and `PBIPI1: CALL_FUNC
+     enter/done` (CPU1, `do_handle_IPI`) are in the tree but did not remove the
+     nondeterminism (1 success / 2 wedges) — timing perturbation, not a single
+     stuck statement.  Settle by capturing the ring from a *wedged* boot of
+     `kernel-ipidbg-cpu1.img` (`0xF8264016`) via the quiet read-back image and
+     `tools/pb_ring.py decode --boot prev`; the last markers show whether the
+     IPI is sent, received, or serviced.  **Measured (session 64, report 258):
+     the IPI is sent, received and serviced.**  The wedge log (5512 chars) shows
+     full CPU1 bring-up, `online cpus=02`, a `PBSMF: pre`/`post csd_lock_wait`
+     pair, ~170 `PBIPI1: CALL_FUNC enter`/`done` pairs, and **four clean
+     `enter`/`done` pairs after `PBCPU: pre run_init(/init)`** before silence.
+     So it is the handoff's fourth branch — the hang is *later* than the IPI
+     service; instrument `flush_old_exec`/`mmput` next.  Caveat: the final
+     `execve` shows no `PBSMF` line, but CPU0/CPU1 `printascii` share the ring
+     and visibly garble markers (trap 332), so that absence is not evidence of a
+     csd ack failure.  (Session 63 measured the nondeterminism; session 64,
+     report 258, read the wedge markers.)  **Superseded:** report 262 found the
+     real fault is the MUSB gadget bind (trap 333), not an IPI/TLB-flush race;
+     the "instrument `flush_old_exec`/`mmput` next" inference is obsolete.
+
+331. **The dual-core 1008 MHz wedge is not a power problem.**  MPU rail is
+     correctly commanded to the 1 GHz OPP: `PRM_VC_VAL_BYPASS = 0x003A5512`
+     (VSEL `0x3A` = 1.35 V) and `PRM_VC_VAL_CMD_VDD_MPU_L = 0x3A3A1400`; battery
+     `bq27541-0` = 3819000 µV / 97 % / Full.  Dual-core still wedges with power
+     proven good, and the failure is a clean software hang, not a reset.  Note
+     the VC's `reg = 0x55`/`slave 0x12` is its own SRI2C addressing; the Linux
+     I²C PMIC register for SMPS voltage is `0x30 + 4 = 0x34`, and reading `0x55`
+     over Linux I²C 0x48 returns `0x00` and is **not** the MPU rail.  The kernel's
+     VDD1 SMPS ops return `-ENODEV` (VC-hardware-managed).  1.2 GHz
+     (`clk_set_rate` to 1200000000) crashed the unit.  (Session 63, report 257
+     §2/§5.)
+
+332. **CPU0 and CPU1 `printascii` markers share one unlocked ring, so a marker
+      can be garbled or lost.**  The `PB*` markers write through `printascii` →
+      `busyuart` → `ring_put` into the same append-only character stream, with
+      no per-CPU buffer and no lock.  In the session-64 wedge log a `PBSMF: pre
+      csd_lock_wait` is visibly interleaved with a CPU1 `PBIPI1: CALL_FUNC` line
+      (`…entPeBrS / M / F: pPre csd_lock_wait`), and the final `execve` shows no
+      `PBSMF` line at all even though IPIs are being serviced.  **Consequence:**
+      absence of a marker in a dual-core log is weak evidence; do not conclude a
+      csd-ack failure from it.  Use CPU0-only markers, or a per-CPU marker page,
+      for the next instruments in `flush_old_exec`/`mmput`.  (Session 64,
+      report 258 §0/§3.)
+
+333. **The dual-core 1008 MHz wedge is the USB gadget bind from `/init`, not an
+     IPI race.**  Session 64: initramfs `/init`'s `gadget_setup()` writes the UDC
+     via configfs; PID 1 then Oopses in `omap_musb_set_mailbox` from
+     `musb_start` (or hangs `pbrpmb`), because the mailbox function jumps to a
+     zeroed page.  Disabling `gadget_setup()` entirely gave no wedge (>100 s),
+     proving the trigger.  A targeted fix — call only
+     `omap_control_usb_set_mode(USB_MODE_DEVICE)` from
+     `omap2430_musb_enable()` on winchester, skipping the faulting mailbox —
+     gave 3/3 clean dual-core boots (`kernel-usbdev-cpu1.img`, `0xC675E206`).
+     Rejected: SMC 0x108 replica (0/3), 1 s gadget delay, `otg->set_vbus` text
+     guard, PID-1 CPU0 affinity pin.  The ~32 s USB drop seen later is idle
+     runtime PM (`VUSB: disabling`), not a wedge.  (Session 64, report 262.)
 
 ## 3. Corrections to older reports
 

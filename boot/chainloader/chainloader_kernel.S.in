@@ -106,6 +106,64 @@
 _start:
         ldr     sp, =0x800F0000
 
+        @ Session 63/64: raise VDD_MPU to 1.35 V via the VC bypass BEFORE the
+        @ DPLL boost.  The 1008 MHz OPP wants 1.375 V but this TWL6030's
+        @ standard range tops out at ~1.317 V; the kernel's own
+        @ twl6030_uv_to_vsel() maps 1350000 uV -> VSEL 0x3A.  With two cores
+        @ online at 1008 MHz the bootloader's ~1.10 V is too low and execve
+        @ hangs (the TLB-flush IPI to a wedged CPU1 never completes).
+        @ PRM_VC_VAL_BYPASS = 0x4A307BA0, VALID = bit24;
+        @ value = (vsel<<16)|(reg<<8)|slave = 0x003A5512
+        @ (slave 0x12, MPU volt reg 0x55 — omap_twl.c / vc44xx_data.c).
+        ldr     r0, =0x4A307BA0
+        ldr     r1, =0x003A5512
+        str     r1, [r0]                 @ command without VALID
+        ldr     r2, =0x01000000          @ VALID bit
+        orr     r1, r1, r2
+        str     r1, [r0]                 @ trigger VC transaction
+        ldr     r3, =0x00100000          @ poll bound
+94:     ldr     r12, [r0]
+        tst     r12, r2
+        beq     95f                      @ SMPS acked (VALID cleared)
+        subs    r3, r3, #1
+        bne     94b
+95:
+
+        @ Session 63/64: raise MPU DPLL to 1008 MHz BEFORE the big copy/XZ
+        @ decompress.  The loader arms WDT2 with 7.8125 s; kernel entry was
+        @ measured at 7.007-7.022 s (only ~0.8 s spare), which is why the boot
+        @ is nondeterministic.  clk_set_rate() at runtime proved 1008 MHz is
+        @ stable at the bootloader's voltage and gives a 2.5x speedup.  MMU
+        @ and caches are off here, so these are physical addresses.  Sequence
+        @ from drivers/clk/ti/dpll3xxx.c + include/linux/clk/ti.h:
+        @   CM_CLKMODE = 5 (low-power bypass) -> wait IDLEST bit0 == 0
+        @   CM_CLKSEL  = 0x0080D207 (M=210, N=8 -> 38.4MHz*210/8 = 1008MHz)
+        @   CM_CLKMODE = 7 (locked)          -> wait IDLEST bit0 == 1
+        @ Each poll is bounded (~2^20 loops); on failure we fall through with
+        @ the DPLL possibly in bypass — the watchdog then resets, which is
+        @ recoverable.  WDT2 itself is NEVER written here (trap 322).
+        ldr     r0, =0x4A004160          @ CM_CLKMODE_DPLL_MPU
+        mov     r1, #5                   @ DPLL_LOW_POWER_BYPASS
+        str     r1, [r0]
+        ldr     r2, =0x4A004164          @ CM_IDLEST_DPLL_MPU
+        ldr     r3, =0x00100000          @ poll bound
+90:     ldr     r12, [r2]
+        tst     r12, #1
+        beq     91f                      @ bypass achieved
+        subs    r3, r3, #1
+        bne     90b
+91:     ldr     r12, =0x0080D207          @ M/N for 1008 MHz
+        str     r12, [r0, #0xC]          @ CM_CLKSEL_DPLL_MPU (0x16c)
+        mov     r12, #7                  @ DPLL_LOCKED
+        str     r12, [r0]
+        ldr     r3, =0x00100000          @ poll bound
+92:     ldr     r12, [r2]
+        tst     r12, #1
+        bne     93f                      @ locked
+        subs    r3, r3, #1
+        bne     92b
+93:
+
         @ Ring hand-off first, before anything else can write a character:
         @ keep the previous boot's log and record this boot's entry header.
         ring_handoff BC_PRIMARY

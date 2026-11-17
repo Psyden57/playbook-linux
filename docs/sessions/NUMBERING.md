@@ -1,13 +1,13 @@
 # Session numbering
 
-The project spans **sixty-two sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **sixty-four sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-62`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-64`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
 * **Linux-era** ("session 1…56") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
@@ -116,7 +116,7 @@ and each session knows its own position:
 Reports `10`…`102` are the pre-Linux phase's output (boot media, monitor
 security, IRAM tables, the ROM API, `hd0`, NVRAM records `0x2801`, RPMB, the CRC
 recipe, the loader audit, the pre-OS IFS reflash).
-`103`…`253` are the Linux-era sessions (and continuing).
+`103`…`262` are the Linux-era sessions (and continuing).
 
 ## Why the two schemes are kept
 

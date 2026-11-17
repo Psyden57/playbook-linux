@@ -278,17 +278,38 @@ flasher can replace at every point:
    **`rcu_init()` completes**.  The SCU and every register the SMP path touches
    are accessible from non-secure Linux (`SCU_CONFIG = 1` = 2 cores,
    `SCU_CTRL = 0x531`), SMC is merely privileged, and the reference is measured
-   **dual-core at 1008 MHz**.  **Next (HANDOFF §0a):** the remaining SMP blocker
-   is the **root mount** — the region-1 ext4 that mounts on the UP image fails
-   under SMP (`EXT4-fs (loop0): VFS: Can't find ext4 filesystem`, trap 326) — so
-   test `SMP=y` + `NR_CPUS=1` and `nosmp`, then a retry/delay in the initramfs
-   loop setup; then (b) drop `maxcpus=1` and boot cpu1 (trap 313); (c) the MPU
-   OPP — the table already exists in `omap443x.dtsi` (300/600/800/**1008** MHz,
-   trap 312), so what is missing is `cpu-supply`/`vdd_mpu` and the `cpufreq-dt`
-   binding, or a boot-time DPLL/VC write; (d) shrink/pre-warm the drawer; (e)
-   pursue hardware GL for Wayland clients (trap 314); (f) rebake the restorable
-   hd3 base with `epitaph` r10005+, the llvmpipe files and the rules.  Kumo needs
-   a WPEWebKit build (report 247 §4).
+   **dual-core at 1008 MHz**.  **Session 63 withdrew trap 326:** the "SMP-only
+   root-mount failure" was a rootfs-offset artefact — the SMP image's initramfs
+   pointed at hd3 (`0x49000000`, then the QNX6 UFS), the UP one at region 1
+   (`0x29000000`, ext4).  Flashing the region-1 ext4 (`49e318bf…`) to hd3 at
+   `0x4915` makes the same SMP kernel mount `/dev/loop0 on / type ext4` and boot
+   a full userland with dropbear (after an entropy seed, trap 328); hd3 is now
+   the ext4 bench root, with region 1 + the sealed IFS/RCFS + the UFS image the
+   way back.  `nosmp` is not a `nr_cpu_ids=1` test (trap 327).  **Session 63
+   continued:** the fast chainloader (VC 1.35 V + MPU DPLL 1008 MHz at entry)
+   makes single-core 1008 MHz reliable (kernel entry 3.276 s of 7.812 s, 2.54×
+   CPU speedup; 1.2 GHz crashes — rejected, report 257).  CPU1 brings up fine
+   (`online cpus=02`, `twd` on both cores) and dual-core 1008 MHz booted once
+   cleanly, but is ~1 success / 2 wedges — a clean `execve` hang from an
+   IPI/TLB-flush race (trap 330), not power (VSEL 0x3A, 97 % battery, trap 331)
+   nor the watchdog; trap 329 corrected.  **Session 64 resolved the dual-core wedge:** it is the USB gadget bind from
+   initramfs `/init` (`musb_start` → `omap2430_musb_enable` →
+   `omap_musb_set_mailbox`), not an IPI race (reports 258–262; trap 333).  The
+   reference core-up/PMIC order and `cpu_startnext` were decompiled (reports
+   259/260) and an SMC-0x108 replica was tested and rejected.  Panel diagnostics
+   (DSI-init TCON hook, report 261) exposed a real kernel panic.  A targeted
+   MUSB device-mode fix (`kernel-usbdev-cpu1.img`, `0xC675E206`, report 262)
+   gave 3/3 clean dual-core boots with the gadget up and `pbrpmb` OK.
+   **Next (session 65):** (a) soak/reboot the fixed image 5+ times and >5 min to
+   confirm reliability — if a wedge recurs, capture the Oops header via the
+   read-back ring to identify the exact bad indirect call; (b) the real
+   one-possible-CPU test (`CONFIG_NR_CPUS=1` or drop `cpu@1` from the DTB);
+   (c) the MPU OPP soak — the table exists in `omap443x.dtsi`
+   (300/600/800/**1008** MHz, trap 312), what is missing is `cpu-supply`/
+   `vdd_mpu` + `cpufreq-dt`, or a boot-time DPLL/VC write (report 257 §6);
+   (d) shrink/pre-warm the drawer; (e) pursue hardware GL for Wayland clients
+   (trap 314); (f) rebake the restorable hd3 base with `epitaph` r10005+, the
+   llvmpipe files and the rules.  Kumo needs a WPEWebKit build (report 247 §4).
 
 Step 3 is reversible at any time by re-flashing the same block range — which is
 the whole reason it beats an in-place mkfs.
