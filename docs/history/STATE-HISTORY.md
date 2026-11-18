@@ -29,6 +29,15 @@ method section is **superseded** by report 255 (the window was the ring's own
 character array at #3840).  The full session-61 record is
 `docs/sessions/session-61.md`.
 
+## Previous state — 2026-11-16 (session 59)
+
+This snapshot (writable, grown root; SSH back; region 0 `0x294F8E36`, kernel
+`#77`; the eMMC cache-flush item closed by measurement; wvkbd fixing the OSK
+repeat; `BOOTCTR_FCTRY` `0x1B → 0x32`) was replaced by the session-60 state and
+is preserved verbatim at git commit `7316dec` in `docs/project/STATE.md`.  The
+full session-59 record is `docs/sessions/session-59.md`; its current lines are
+reports 249/250 and traps 298/299/300.
+
 ## Previous state — 2026-11-16 (session 57)
 
 **THE UI HAS CONTENT AND THE TOUCH MERGE IS FIXED; a position ghost remained.**

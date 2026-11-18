@@ -2935,6 +2935,67 @@ report 121 §3/§11/§12.
      Rejected: SMC 0x108 replica (0/3), 1 s gadget delay, `otg->set_vbus` text
      guard, PID-1 CPU0 affinity pin.  The ~32 s USB drop seen later is idle
      runtime PM (`VUSB: disabling`), not a wedge.  (Session 64, report 262.)
+     **Corrected in session 65: the drop is *not* an idle timer** (it did not
+     occur in a 376 s boot; see trap 337), and **serializing the two callers
+     does not fix the mailbox fault** — a glue mutex plus the stock call still
+     panicked on dual-core (report 263 §1), so the device-mode-only workaround
+     stays and the fault is probably corruption of the `usb_phy`/`usb_otg`, not
+     the race.
+
+334. **The kernel was being built `-march=armv6k`, not ARMv7.**  The kernel log
+     showed `CPU: ARMv7 Processor`, but module vermagic said `ARMv6 p2v8` and
+     the compile flags were `-march=armv6k -D__LINUX_ARM_ARCH__=6`.  Cause:
+     `CONFIG_ARCH_MULTI_V6=y` selects `CPU_ARM1176 → CPU_V6K → CPU_32v6`, and
+     `arch/arm/Makefile` (lines 68–70 and 84–86) makes the v6K setting
+     override the v7 one whenever `CPU_32v6` is set.  `CPU_V7` selecting
+     `CPU_32v6K` is normal (v6K extensions are part of v7) and is not the
+     trigger.  Fix: `scripts/config --disable ARCH_MULTI_V6` (this unit is
+     OMAP4430 only) + `olddefconfig`; then `-march=armv7-a`,
+     `__LINUX_ARM_ARCH__=7`, vermagic `ARMv7 p2v8`.  ARMv6 code does run on
+     Cortex-A9 (v6K is a subset), so this was a performance defect, not a
+     correctness one.  The tracked `kernel/winchester-7.3.3.config` now matches
+     the bench (`CONFIG_SMP=y`, `CONFIG_NR_CPUS=2`, no `ARCH_MULTI_V6`).
+     (Session 65, report 263 §2.)
+
+335. **A stock-mailbox image with `panic=10` boot-loops and spends
+     `BOOTCTR_FCTRY`.**  The first dual-core boot of the mutex build
+     (`0x19E24D8F`) panicked in `omap_musb_set_mailbox`; `panic=10` rebooted it
+     about six times before the unit was powered off, draining the counter
+     `0x22 → 0x1c` (one unit per boot, no `/init` top-up because PID 1 never
+     reached userland).  Recovery: reflash `kernel-usbdev-cpu1.img`
+     (`0xC675E206`) — its `/init` read `0x1c`, wrote `0x32`
+     (`pbrpmb: topup: writing 0x1c -> 0x32 (RPMB counter 12463)`, `PASS`).
+     **Rule:** boot a deliberately-faulting image with `panic=0` so a panic
+     hangs instead of looping; watch the panel/ring, then power-cycle.
+     (Session 65, report 263 §1.)
+
+336. **A power cut can damage the read-write hd3 ext4.**  The root is mounted
+     `barrier=0` + write-through (session 59).  After several power cycles the
+     BusyBox ext4 on hd3 reported `EXT4-fs (loop0): This should not happen!!
+     Data will be lost`, `ext4_lookup: … deleted inode referenced`,
+     `ext4_validate_inode_bitmap: … Corrupt inode bitmap`, and a
+     `/var/log/pm-trace.log` written minutes earlier was gone.  The image was
+     replaced with the baked Nura root (report 263 §3).  **Prefer a clean
+     `reboot`; treat a power cut as a filesystem event, not just a DRAM
+     event.**  The eMMC WRITE-busy stall (report 250 §1, trap 300) makes this
+     more likely during write bursts.  A corrupted root is recoverable by
+     reflashing the 625,999,872-byte Nura image at `0x4915`.
+
+337. **The USB (`VUSB`) teardown is intermittent, not an idle timer.**  The
+     only path that disables the device's own 3.3 V USB rail is
+     `twl6030_usb_irq()` in `drivers/usb/phy/phy-twl6030-usb.c`: on a VBUS
+     disconnect it calls `regulator_disable(twl->usb3v3)` (the `VUSB:
+     disabling` line).  Measured timings: BusyBox root, a command every 15 s →
+     link dead at **~30 s**; Nura, SSH traffic → **~90 s**; final session-65
+     boot, 240 s of continuous ACM reads plus 90 s idle → **still up at
+     376 s**, no VUSB message.  `audio-ldo: disabling` at ~31.8 s is a
+     separate regulator event and occurs on both roots.  Whether the TWL
+     reads `CONTROLLER_STAT1.VBUS_DET` low spuriously, or the loaded
+     `twl6030_charger` module (it probes with `vmax -22 imax: -22`) disturbs
+     the charger block, is not settled — see
+     `docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md`.  A dropped
+     link does **not** re-enumerate on a cable replug; the unit keeps running.
+     (Session 65, report 263 §4/§4a.)
 
 ## 3. Corrections to older reports
 

@@ -1,6 +1,62 @@
 # Current state
 
-## Current state — 2026-11-17 (session 64)
+## Current state — 2026-11-18 (session 65)
+
+**The mailbox mutex is not the fix, the kernel is now ARMv7, and hd3 runs the
+Nura root.**  Serializing the two `omap_musb_set_mailbox()` callers with a glue
+mutex and restoring the stock bind-path call **still panics** on dual-core: the
+first dual-core boot of `0x19E24D8F` faulted in `omap_musb_set_mailbox` and
+`panic=10` rebooted it ~6 times, draining `BOOTCTR_FCTRY` `0x22 → 0x1c`.  It was
+recovered by reflashing `kernel-usbdev-cpu1.img` (`0xC675E206`), whose `/init`
+topped `0x1c → 0x32` (`PASS`).  The device-mode-only workaround stays until the
+real cause is known (the surviving overflow points at corruption of the
+`usb_phy`/`usb_otg`, not just the two-caller race).  [report 263; session-65 note]
+
+* **Region 0 = `local/work/kernel-armv7-console-cpu1.img`, CRC `0xC9FEE2D1`**
+  (10,450,108 B) — `#105 SMP`, **`-march=armv7-a`**, fast chainloader, loud DTB
+  **without `maxcpus`**, DSI-init TCON hook, device-mode-only mailbox
+  workaround.  The only change over `0x158D8A85` is an inert
+  `console=ttyGS0,115200` (the gadget tty has no kernel-console path; no
+  `console [ttyGS0] enabled`).  Dual-core `online = 0-1`, 1008 MHz, 6/6 clean
+  boots and a **376 s soak with the gadget link alive**.
+* **The kernel had been ARMv6K**, not ARMv7: `CONFIG_ARCH_MULTI_V6=y` selected
+  `CPU_ARM1176 → CPU_V6K → CPU_32v6`, and `arch/arm/Makefile` lets the v6K
+  `-march=armv6k` / `__LINUX_ARM_ARCH__=6` override v7 while `CPU_32v6` is set.
+  Disabling `ARCH_MULTI_V6` (OMAP4430 only) gives `-march=armv7-a` and module
+  vermagic `ARMv7 p2v8`.  The tracked `kernel/winchester-7.3.3.config` now
+  matches the working tree (`CONFIG_SMP=y`, `CONFIG_NR_CPUS=2`, no
+  `ARCH_MULTI_V6`).
+* **hd3 = the Nura root.**  The BusyBox ext4 that had been flashed there was
+  **damaged by power cycles** (`EXT4-fs: This should not happen!! Data will be
+  lost`, corrupt inode bitmap) — the rw root is mounted `nobarrier`.  The baked
+  Nura image (`local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img`,
+  sha256 `07555bde…`, 625,999,872 B) was written at loader block `0x4915`
+  (626,065,440 B, `FLASH_OK`).  First boot grew it to 15,273,984 blocks
+  (**62.5 GB**), installed dropbear (crng init at 13.1 s, no seed needed) and
+  the ttyGS0 root shell.  Its pre-SMP modules were replaced with the ARMv7 set
+  (29 MB, `depmod` OK); after that `pvrsrvkm` binds (`Enabling quirks`),
+  `catacomb` runs, panel `connected`, backlight 255, `online=0-1`.
+* **Region 1 = the BusyBox ext4 `6f5b8ca7…`** at `0x29000000` — the fallback
+  root; not booted.  hd3 no longer holds a BusyBox root.
+* **`BOOTCTR_FCTRY` = `0x26`** (last boot, `0x26 ≥ 0x1e`, no write).  The panic
+  loop drained it `0x22 → 0x1c` and the recovery top-up restored `0x32`.
+  Healthy; `/init` tops up below `0x1e`.
+* **The USB teardown is intermittent, not an idle timer.**  It killed the link
+  at ~30 s on the BusyBox root (with a command every 15 s) and at ~90 s on Nura
+  (SSH traffic), but did **not** occur on the final boot: 240 s of continuous
+  ACM reads (`cat /dev/kmsg` streamed to the host) followed by 90 s with the
+  port closed ended at `uptime 376 s`, link alive, no VUSB message.
+  `audio-ldo: disabling` at ~31.8 s is a separate regulator event.  Only
+  `twl6030_usb_irq()` disables `usb3v3`; the trigger is still unproven.
+* **Bench:** SSH works on Nura — `PB_LINK=usb tools/pbssh.sh 'cmd'` (root,
+  key-only, `169.254.0.1:22`); the ttyGS0 shell is `playbook:~#` (not `pb> `,
+  trap 274 still applies to `pbcon.py`).  At wrap-up the unit is **up and on
+  USB** (uptime 376 s), running the desktop.  Flash: start the flasher, then
+  reset/power on; the power-on bootrom is caught reliably.
+* **No restore required.**  The way back is the 1917 IFS at block `0x825` plus
+  the vendor UFS at `0x4915`; region 1 is intact.
+
+## Previous state — 2026-11-17 (session 64)
 
 **The dual-core wedge is the USB gadget bind, and a targeted MUSB fix makes
 dual-core boot reliably.**  The IPI markers (HANDOFF-63 §0a) showed the
@@ -237,76 +293,14 @@ traps 303–305; DECISIONS §86]
   shrink/pre-warm the drawer and pursue a hardware GL path for clients.
   Remove the r10006 draw timing and rebake the hd3 image with the fixes.
 
-## Previous state — 2026-11-16 (session 59)
-
-**THE ROOT IS WRITABLE AND GROWN, AND SSH IS BACK (kernel `#77`, region 0
-`0x294F8E36`).**  The initramfs mounts hd3 read-write (no overlay) and a
-one-shot `resize2fs` grew it to the partition: **`/dev/loop0 56.5G, 53.9G
-free`**, and a file written before a reboot survives it.  A static dropbear and
-key are installed into the root on first boot; an OpenRC `local.d` script
-brings `usb0` to `169.254.0.1/16` and starts dropbear on `:22`, so
-`PB_LINK=usb tools/pbssh.sh` is a clean shell.  The ttyGS0 getty stays as the
-recovery console.  [report 249 §1–§2]
-
-**The eMMC "cache flush" item is closed by measurement — the card has no
-cache.**  `EXT_CSD.CACHE_SIZE = 0` and `CACHE_CTRL = 0` (direct CMD8 read and
-the kernel's debugfs EXT_CSD agree), so the MMC core never issues
-`FLUSH_CACHE`; the handoff's "CACHE_SIZE = 249" was the byte *index*, not the
-value.  The session-58 error (`sector 0 … flags 0x900000`) is a plain WRITE
-(`REQ_BACKGROUND|REQ_ALLOC_CACHE`, no `PREFLUSH`/`FUA`), not a flush; a traced
-`sync` showed only CMD25/CMD13 and no CMD6.  The intermittent
-busy-after-WRITE remains unexplained, with `barrier=0` + write-through as the
-mitigation.  [report 250 §1; traps 300 corrected]
-
-**THE TOUCH POSITION GHOST IS FIXED.**  Fast typing is correct: the driver
-keeps sampling while the controller asserts its IRQ line and for a 200 ms grace
-period after the last contact, and a new down that repeats its slot's previous
-coordinates within 300 ms is held back one sample and reported with the fresh
-position.  The same change fixes the lost taps in a fast burst (a fast `hello`
-had arrived as `h,e,o`).  [report 248; capture
-`touch-munin-2026-11-16-session58.txt`; trap 296]
-
-**The backspace/enter repeat is FIXED — by installing wvkbd on catacomb 1.5.0,
-no UI upgrade.**  catacomb 1.5.0 already implements `zwp_virtual_keyboard_v1`
-(`VirtualKeyboardManagerState`), which wvkbd speaks; only the OSK package and
-initrc changed.  One BackSpace tap now delivers one `0x7f` (was three from
-squeekboard).  `wvkbd-mobintl` 0.21 is installed, DejaVu Sans was added for the
-glyphs (`--fn "DejaVu Sans 16"`).  `pb-touchwake.py` wakes a manually blanked
-panel, but **auto-blank was removed**: repeated DPMS resume wedges the DSI
-link (black panel, only a reboot clears it — traps 298/289/301); the panel now
-stays lit.  All persist across reboot.  The pmaport
-APKBUILD/initrc are updated; the flasher-restorable hd3 base still has
-squeekboard.  [report 250 §2/§2a; trap 299 fixed; DECISIONS §85]
-
-**DPMS off cannot be woken by touch on this image.**  After 3 idle minutes the
-initrc's `swayidle` sets `bl_power = 4`; the kernel still receives the taps but
-the panel stays dark, and `catacomb msg dpms on` restores it.  **Kill
-`swayidle` after every boot on the bench.**  [trap 298]
-
-* **Region 0 = `0x294F8E36`** (`0x9E0980` B, `boot/chainloader/kernel.img`
-  sha256 `f0738625…`, kernel `7.3.3 #77`) — read-write root, SSH kit,
-  `barrier=0`, write-through.
-* **hd3 (media)** = the same image grown in place to **56.5 G** with the SSH
-  kit: **no longer byte-identical to `f7858110…`**.  The flasher-restorable
-  image is still `f7858110…` (625 999 872 B) and is the way back.
-* **Region 1 = `49e318bf…`** (the fallback, not booted).
-* **Bench:** SSH works — `PB_LINK=usb tools/pbssh.sh 'cmd'` (root, key-only,
-  `169.254.0.1:22`); `usb0` is brought up by `local.d/pb-ssh.start`.  The ACM
-  `playbook:~#` getty is the fallback.  **Bulk pushes must be paced**
-  (8 KiB/5 ms; trap 302).
-* **`BOOTCTR_FCTRY` = `0x32`** (this boot read `0x1B` and `/init` wrote
-  `0x32`, RPMB counter 12049; the session's reboots drained `0x25 → 0x1B`).
-* **OSK:** wvkbd on catacomb 1.5.0 — one tap = one key; panel stays lit (no
-  auto-blank — DPMS resume wedges the DSI link).
-* **Baked image:** `blackberry-playbook-root-osk-wvkbd.img`, sha256 `07555bde…`
-  (hd3 base + wvkbd/DejaVu/pb-touchwake/icon fixes/no swayidle), e2fsck clean —
-  **not flashed**; the live rw root already has the fixes.
-* **Next:** flash the baked hd3 if media should match; fix epitaph's segfault
-  (panel) and optionally install calls/chatty; the upload-path profile
-  (`PBGL_PROFILE`); the intermittent WRITE-busy stall.
-
 ## Previous states
 
+* **session 59** (2026-11-16) — the root became writable and grew to 56.5 G,
+  SSH came back (kernel `#77`, region 0 `0x294F8E36`), the touch position ghost
+  was fixed (kernel `#74`), the eMMC cache-flush item was closed by measurement,
+  and wvkbd fixed the OSK repeat.  The full snapshot is in
+  [`docs/history/STATE-HISTORY.md`](../history/STATE-HISTORY.md)
+  (`## Previous state — 2026-11-16 (session 59)`).
 * **session 58** (2026-11-16) — the root became writable and grew to 56.5 G,
   SSH came back (kernel `#77`, region 0 `0x294F8E36`), the touch position ghost
   was fixed (kernel `#74`); eMMC flush first isolated.  Full snapshot at git
@@ -395,7 +389,12 @@ the durable record is the CRC and what it demonstrated, not the file.
 
 | image | base | role |
 |---|---|---|
-| `0x294F8E36` | 7.3.3 | **current region 0 — read-write root + SSH + grown FS** (session 58: `0x9E0980` B, `boot/chainloader/kernel.img` sha256 `f0738625…`, kernel `#77`: mounts hd3 rw, installs dropbear, `barrier=0` + write-through, one-shot `resize2fs`) |
+| `0xC9FEE2D1` | 7.3.3 | **current region 0 — ARMv7 dual-core** (session 65: `0x9F74BC` B, `#105 SMP`, `-march=armv7-a`, no `maxcpus`, inert `console=ttyGS0`, device-mode-only mailbox workaround; 6/6 boots, 376 s soak with the gadget up) |
+| `0x158D8A85` | 7.3.3 | session-65 ARMv7 base (`0x9F74A8` B, same kernel/DTB without the console bootarg; 6/6 clean boots) |
+| `0x19E24D8F` | 7.3.3 | **rejected** session-65 mutex experiment — stock `omap_musb_set_mailbox` with a glue mutex still panics on dual-core (`panic=10` loop) |
+| `0xBEF06B78` | 7.3.3 | session-65 mutex build that booted single-core (DTB still had `maxcpus=1`) |
+| `0xC675E206` | 7.3.3 | session-64 dual-core image — the device-mode-only mailbox fix (known-good fallback; used to recover the panic loop) |
+| `0x294F8E36` | 7.3.3 | earlier region 0 — read-write root + SSH + grown FS (session 58: `0x9E0980` B, `boot/chainloader/kernel.img` sha256 `f0738625…`, kernel `#77`: mounts hd3 rw, installs dropbear, `barrier=0` + write-through, one-shot `resize2fs`) |
 | `0xED58EF36` | 7.3.3 | previous region 0 — the touch position-ghost fix (session 58: `0x967CE0` B, sha256 `c67b75c5…`, kernel `#74`) |
 | `0xB9DD91E3` | 7.3.3 | previous region 0 — the touch poll-on-touch fix (session 57: `0x967398` B, `boot/chainloader/kernel.img` sha256 `5ac47496…`, kernel `#73`) |
 | `0x23D88CBD` | 7.3.3 | session-57 experiment — both-edge IRQ (no interrupts, touch dead; trap 297; `0x967800` B) |
@@ -453,14 +452,14 @@ Do not boot `0x5E40C5C1` or `0xB9A1BC4F` (two lanes), or `0x3B04298E`
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **the session-58 read-write/SSH image `0x294F8E36`** (`0x9E0980` B, `boot/chainloader/kernel.img` sha256 `f0738625…`, kernel `7.3.3 #77`, the read-write root, the dropbear/SSH install, `barrier=0` + write-through and the one-shot `resize2fs`), region 0.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier images (the `0xED58EF36`/`0xB9DD91E3` touch, `0xAB899C49` compositor, `0xE85217E5` overlay, `0x060B25F2`, `0xDD66D8C3`, …) remain on the host.  Earlier Linux images (region 0 only, block `0x825`): `0x23D88CBD`, `0x373674A4`, `0xA544A731`, `0xAB899C49`, `0xA8F0F30C`, `0xE85217E5`, `0xE84693A1`, `0x8B709950`, `0x50CD2A48`, `0x5C37F181`, `0x5A7F15D8`, `0x9712A086`, `0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`, `0x17C2E119`, `0xBAFD9B3B`, `0x91E22899`, `0x12C8C320`, `0xAD85DF0F`, `0xF8BADFF3`, `0x36597040`, `0xB43F169B`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A`, and the touch `0x04AF1433` |
+| region-0 IFS on media | **the ARMv7 dual-core image `kernel-armv7-console-cpu1.img`, CRC `0xC9FEE2D1`** (`0x9F74BC` B, kernel `7.3.3 #105 SMP`, `-march=armv7-a`, the device-mode-only MUSB workaround, the DSI-init TCON hook), region 0.  The session-65 ARMv7 base is `0x158D8A85`; the session-64 known-good dual-core image is `0xC675E206`; the session-58 read-write/SSH image `0x294F8E36` (`0x9E0980` B, kernel `#77`) remains on the host.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier images (the `0xED58EF36`/`0xB9DD91E3` touch, `0xAB899C49` compositor, `0xE85217E5` overlay, `0x060B25F2`, `0xDD66D8C3`, …) remain on the host.  Earlier Linux images (region 0 only, block `0x825`): `0x23D88CBD`, `0x373674A4`, `0xA544A731`, `0xAB899C49`, `0xA8F0F30C`, `0xE85217E5`, `0xE84693A1`, `0x8B709950`, `0x50CD2A48`, `0x5C37F181`, `0x5A7F15D8`, `0x9712A086`, `0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`, `0x17C2E119`, `0xBAFD9B3B`, `0x91E22899`, `0x12C8C320`, `0xAD85DF0F`, `0xF8BADFF3`, `0x36597040`, `0xB43F169B`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A`, and the touch `0x04AF1433` |
 | region-0 RCFS (`/base`) | **now the full 1917 RCFS at `0xC00000`** (`local/work/rcfs-1917.rcfs`, the modified one with the `/accounts/devuser/startup.sh` hook, sha256 `c4ab6e34…`): session 49 wrote it to recover root on a stock-TabletOS boot, and it sits **outside** the 7.3.3 test image (which ends at `0x9E0980`).  The pruned oracle RCFS is no longer on media — re-flash `local/work/minimal/setB.signed` for the minimal oracle (trap 227).  Not readable as `/base` without the 1917 IFS |
-| UFS (`/`) | **the 1917 vendor `.5.ufs` with `autorun::0`** (the session-27 set); the BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
+| UFS (`/`) | **not on media** — hd3 has held Linux filesystems since session 63 and now the Nura ext4; the 1917 vendor `.5.ufs` with `autorun::0` (the session-27 set, `local/work/ufs-1917-devuser.ufs`, sha256 `482e0473…`) is on the host as the way back.  The BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
 | `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it last ran during the session-35 S3/S2 TabletOS bench and topped `BOOTCTR_FCTRY` back to `0x32` |
-| `BOOTCTR_FCTRY` | **`0x27`** at the session-59 wrap-up (this boot read `27000000` = `0x27`, above the `0x1e` threshold so `/init` did not write; the session's reboots drained it from `0x2d`).  Block `0x3a` record@196.  **Read it on Linux with `dmesg \| grep pbrpmb`** (the top-up line carries the 4-byte LE record).  Self-replenishing: `/init` tops up at <`0x1e`, a TabletOS boot writes `0x32` (`SAFETY.md` §2, `DEVELOPMENT.md` §5) |
+| `BOOTCTR_FCTRY` | **`0x26`** at the session-65 wrap-up (the boot read `26000000` = `0x26`, above the `0x1e` threshold so `/init` did not write; the session-64 panic loop had drained it to `0x1c` and the recovery image topped it to `0x32`).  Block `0x3a` record@196.  **Read it on Linux with `dmesg \| grep pbrpmb`** (the top-up line carries the 4-byte LE record).  Self-replenishing: `/init` tops up at <`0x1e`, a TabletOS boot writes `0x32` (`SAFETY.md` §2, `DEVELOPMENT.md` §5) |
 | region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`49e318bf…`** (`local/images/rootfs-region1-wl1283-bt.ext4`, session 52: the WLAN fixes, **`ccm`/`ctr`**, the per-unit NVS, the CAM+4-sr `wl12xx.ko` and the seven Bluetooth modules), **43 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus **`cfg80211`, `mac80211`, `wlcore`, `wlcore_sdio`, `wl12xx`, `libarc4`, `crc7`** and **`bluetooth`, `hci_uart`, `btbcm`, `crc-ccitt`, `ecdh_generic`, `ecc`, `kpp`**), `pbplay`, `pbmix`, **dropbear**, **`/usr/bin/iw`**, **`/usr/sbin/wpa_{supplicant,cli,passphrase}`**, and **`/lib/firmware/ti-connectivity/{wl128x-fw-4-sr.bin,wl128x-fw-5-sr.bin,wl128x-nvs.bin}`** plus the signed **`/lib/firmware/regulatory.db`/`.p7s`**; `rcS` loads the wireless stack and `bluetooth hci_uart`.  Earlier images: `…-wl1283-final.ext4` (`877c42c3…`), `…-wl1283-assoc.ext4` (`6c2cfb30…`), `a148c362…`, `7e067560…`, `88084b78…`, `a4e76b18…` and `0342ab06…`.  The modules in any of them can be checked by extracting them with `debugfs` (trap 163).  **Session 55: not booted.**  The region-0 image is the hd3-pointing `0xA8F0F30C`; it mounts hd3 (Nura) and never touches region 1.  This root remains the fallback; its `rcS`/dropbear/WLAN/BT are unchanged. |
-| TabletOS / OS | **NOT running** — the unit is on the **Nura root from hd3** (image `0x294F8E36`, `0fca:8010`, console `playbook:~#` on the USB ACM, **sshd: dropbear on `169.254.0.1:22`**, `PB_LINK=usb tools/pbssh.sh`; the root is the hd3 ext4 mounted **read-write**, grown to 56.5 G).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
-| hd3 (MCT `0x1C`, FS at loader block `0x4915` / raw `0x49000000`) | **the media is the Nura root, grown in place to 56.5 G and mounted read-write** (session 58; the one-shot `resize2fs` ran on the clean `f7858110…` image and the initramfs installed the dropbear/SSH kit).  It is **no longer byte-identical to `f7858110…`**; that 625 999 872-byte image is the **flasher-restorable way back** (`--component --dest-block 0x4915`).  On top of the session-56 compositor image it adds `tabula` 1.0.2, `epitaph` 1.4.0, `tzompantli` 1.2.0, `gorm` 1.2.1, `swayidle` 1.9.1, `foot` 1.28.0, `grim` 1.5.0, `slurp` 1.5.0, `tremor` 1.1.0, `netsurf` 3.11, `xournalpp` 1.3.8; the rebuilt `snd-soc-omap-mcbsp.ko` / `snd-soc-playbook-wm8994.ko`; `gsettings-desktop-schemas` 51.0-r0 with a recompiled `gschemas.compiled`; and the no-suspend `/etc/catacomb/initrc`.  It still carries the session-54 overlay root + `/lib/modules/7.3.3/kernel/pvrsrvkm_omap4_sgx540_120.ko` + the pvrports stack (`libglvnd`, `mesa-pvr-dri-classic`, `sgx-ddk-um{,-ti443x,-openrc}`, `gcompat`, `wayland-libs-server`), with the module in `/etc/modules` and `modules.dep`, the `sgx-ddk-um` service in the default runlevel, and `MESA_LOADER_DRIVER_OVERRIDE=pvr` in a tinydm env file.  Mainline mesa 26.2.6 / llvm23 / spirv-tools were purged by the replacement.  The base apps image is `blackberry-playbook-root-apps.img` (`711cd5ec…`); the pre-pvr images (`1fcf0cb0…`, `1f14915f…`) and the pristine `076bafcf…` remain on the host.  The QNX userland is no longer on media; the 1917 IFS + vendor UFS are the way back.  Session 59 added wvkbd/DejaVu/pb-touchwake and the icon-theme fix to the **live** root and removed swayidle auto-blank; a flasher-restorable baked base **`local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img`** (`07555bde…`) exists (not flashed).  See reports 249/250 |
+| TabletOS / OS | **NOT running** — the unit is on the **Nura root from hd3** (image `0xC9FEE2D1`, `#105 SMP` dual-core ARMv7, `0fca:8010`, console `playbook:~#` on the USB ACM, **sshd: dropbear on `169.254.0.1:22`**, `PB_LINK=usb tools/pbssh.sh`; the root is the hd3 ext4 mounted **read-write**, grown to **62.5 G**, with the ARMv7 module set installed).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
+| hd3 (MCT `0x1C`, FS at loader block `0x4915` / raw `0x49000000`) | **the media was re-created on 2026-11-18 (session 65)** by flashing the baked Nura image `local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`, 625,999,872 B) at block `0x4915` (626,065,440 B, `FLASH_OK`), because the BusyBox ext4 that had been flashed there in session 63 was **damaged by power cycles** (`EXT4-fs: This should not happen!! Data will be lost`, corrupt inode bitmap).  First boot grew it to **62.5 G** (15,273,984 blocks) and installed dropbear; the ARMv7 module set was then installed over SSH and `depmod` run.  It is a rw ext4 with `barrier=0` + write-through, so power cuts can still damage it — prefer a clean `reboot`.  The same 625,999,872-byte image is the flasher-restorable base (`--component --dest-block 0x4915`).  Its content is the session-59 state: `tabula` 1.0.2, `epitaph` 1.4.0, `tzompantli` 1.2.0, `gorm` 1.2.1, `swayidle` 1.9.1, `foot` 1.28.0, `grim` 1.5.0, `slurp` 1.5.0, `tremor` 1.1.0, `netsurf` 3.11, `xournalpp` 1.3.8, the pvrports stack (`libglvnd`, `mesa-pvr-dri-classic`, `sgx-ddk-um{,-ti443x,-openrc}`, `gcompat`, `wayland-libs-server`), `MESA_LOADER_DRIVER_OVERRIDE=pvr`, the pvrsrvkm module in `/etc/modules`, wvkbd/DejaVu/pb-touchwake, the icon-theme fix and the no-suspend `/etc/catacomb/initrc`.  **It predates the session-60/61 fixes** (`epitaph` r10005, llvmpipe, the udev/polkit rules), which live only in the pmaports tree and the session-59 live root.  The pre-pvr images (`1fcf0cb0…`, `1f14915f…`), the pristine `076bafcf…` and the older `f7858110…` remain on the host.  See reports 249/250 and 263 §3. |
 | device-side files | **persistent on hd3 (session 58: the root is writable and grown):** the initramfs installs `/usr/sbin/dropbear`, `/etc/dropbear/*`, `/root/.ssh/authorized_keys`, `/etc/local.d/pb-ssh.start` and `/etc/local.d/pb-grow.start` on first boot, and `/etc/pb-grown` marks the grow.  `/var`, `/home` and `/tmp` are now real directories on the 56.5 G FS, so the DE state and the SSH kit survive a reboot (the state files written before the switch are on the grown FS).  `memdump3`/`memw32`/`pbi2c` are outside the tree: push them (paced) after a reflash (trap 177).  The first-Nura-boot log is `docs/captures/playbook-live-2026-11-15-hd3-nura-boot.txt`.  Session 57's touch tools (`evcap.py`, `keylog.py`, `muninraw`) lived only in `/tmp`; the measured evidence is preserved in the captures.  **Session 59 deployed:** `wvkbd-mobintl` 0.21 (`/usr/sbin/wvkbd-mobintl`), `/usr/share/fonts/dejavu/DejaVuSans{, -Bold}.ttf`, `/usr/bin/pb-touchwake`, `/usr/share/icons/default/index.theme` (`Inherits=Adwaita,hicolor`), `adwaita-icon-theme` + `glycin-svg`, a hicolor netsurf PNG, the edited `/etc/catacomb/initrc` (no swayidle, wvkbd + pb-touchwake), and `playbook` in the `input` group (gid 23).  Tools/daemon sources are tracked in `tools/bench/`; the pmaport edits are under gitignored `local/work/nura/pmaports/`. |
 
 The factory boot budget is **self-maintaining in bench use**: every successful
@@ -474,25 +473,27 @@ and a failed/half-formed write or a flat pack is still a brick risk.
 
 ## Blockers in play
 
-**Session 60 — the open blockers are:** (1) the remaining **UI performance** —
-the client's softpipe rasterizer was replaced with llvmpipe (report 253), so a
-slider draw is now 2.7–6 ms instead of 1.6–2.3 s; what is left is llvmpipe's
-deferred `swap` (420–550 ms per full-screen drawer frame), its first-draw LLVM
-JIT, and above all the **CPU: one core at 400 MHz** — the kernel is built
-`# CONFIG_SMP is not set`, the DTS adds `maxcpus=1`, and there is no
-cpufreq/OPP (traps 312/313); (2) **Kumo** needs a WPEWebKit/WebKit-fork build
-(not packaged, report 247 §4); (3) the **intermittent WRITE-busy stall** — not
-a cache flush (report 250 §1), mitigated by `barrier=0` + write-through.
-**Closed:** the **`epitaph` panel** (two client bugs fixed in r10005 —
-report 251; trap 292); the panel's **permissions** (group `catacomb` + the
-udev/polkit rules — brightness and the Wi-Fi/cellular toggles); the touch
-position ghost and lost burst taps (kernel `#74`, report 248); the
-backspace/enter repeat (wvkbd on catacomb 1.5.0, report 250 §2); the
-app-drawer icons (report 250 §2b); the eMMC cache item (closed by measurement,
-report 250 §1).  **Bench note:** DPMS wake-by-touch works with pb-touchwake,
-but repeated DPMS resume wedges the DSI link (black panel — only a reboot
-clears it), so auto-blank was removed and the panel stays lit (report 250
-§2a/§2b, traps 289/298/301).
+**Session 65 — the open blockers are:** (1) the **mailbox fault** — dual-core
+needs the device-mode-only MUSB workaround; the stock `omap_musb_set_mailbox()`
+still panics with the callers serialized (report 263); (2) the **MPU OPP** — no
+`cpufreq` policy, `twl6030_uv_to_vsel: OUT OF RANGE` for 1.375/1.41 V (report
+257 §6); (3) the remaining **UI performance** — llvmpipe's deferred `swap`
+(420–550 ms per full-screen drawer frame) and its first-draw JIT, now on two
+cores at 1008 MHz; (4) **Kumo** needs a WPEWebKit/WebKit-fork build (not
+packaged, report 247 §4); (5) the **intermittent WRITE-busy stall** — not a
+cache flush (report 250 §1), mitigated by `barrier=0` + write-through, but it
+still fires during write bursts and can damage the rw ext4 if power is cut
+(trap 336); (6) the **intermittent USB teardown** (`VUSB` disabled by the TWL
+comparator; 30 s, 90 s or not in 6 min — trap 337, contradiction file).
+**Closed since session 60:** the CPU's second core (dual-core stable with the
+workaround), the ARMv6 codegen (now `-march=armv7-a`, trap 334), the
+**`epitaph` panel** (r10005 — report 251; trap 292); the panel's
+**permissions**; the touch position ghost and lost burst taps (kernel `#74`,
+report 248); the backspace/enter repeat (wvkbd, report 250 §2); the app-drawer
+icons; the eMMC cache item (closed by measurement, report 250 §1).  **Bench
+note:** DPMS wake-by-touch works with pb-touchwake, but repeated DPMS resume
+wedges the DSI link (black panel — only a reboot clears it), so auto-blank was
+removed and the panel stays lit (report 250 §2a/§2b, traps 289/298/301).
 
 **The audio blocker is closed, speakers included, and the diagnostics are
 retired (sessions 47/48, reports 214/215).**
@@ -540,45 +541,45 @@ ghost is gone.  The remaining backspace/enter repeat is squeekboard's, not the
 driver (trap 299).  The power/reset lines are still not driven by the driver;
 only cold boots need the GPIO pulse.
 
-**Media state: region 0 = `0xED58EF36`** (kernel `7.3.3 #74`, `0x967CE0` B,
-`boot/chainloader/kernel.img` sha256 `c67b75c5…`, the touch position-ghost fix);
-region 1 = the WLAN+BT rootfs **`49e318bf…`** (67,108,864 B, **43 modules** +
-both `wl128x` SR firmware files + the CAM/4-sr `wl12xx.ko` + the per-unit NVS +
+**Media state: region 0 = `0xC9FEE2D1`** (kernel `7.3.3 #105 SMP`,
+`-march=armv7-a`, `0x9F74BC` B, no `maxcpus`, the device-mode-only MUSB
+workaround, the DSI-init TCON hook); region 1 = the WLAN+BT rootfs
+**`49e318bf…`** (67,108,864 B, **43 modules** + both `wl128x` SR firmware files
++ the CAM/4-sr `wl12xx.ko` + the per-unit NVS +
 `iw`/`wpa_supplicant`/`wpa_cli`/`passphrase` + the signed `regulatory.db`;
-`local/images/rootfs-region1-wl1283-bt.ext4`); hd3 = the Nura app+audio image
-**`f7858110…`** (625,999,872 B), the read-only lower.  The unit is on Linux,
-not TabletOS.  The way back to TabletOS is the 1917 IFS
-(`local/work/ifs-shim-sealed.ifs`, block `0x825`); the previous Linux images
-`0xB9DD91E3`, `0xA544A731`, `0x373674A4`, `0x23D88CBD`, `0xAB899C49`,
-`0xA8F0F30C`, `0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`, `0x17C2E119`,
-`0xBAFD9B3B`, `0x91E22899`, `0xAD85DF0F`, `0xF8BADFF3`, `0xE5E2AEAF`,
-`0x58F85337`, `0x47ED0450`, `0x5A04ACD9`, `0x92458D00`, `0x7A5DD941`,
-`0x36597040`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x0DC36A11`,
-`0xE36C679A` and `0x04AF1433` remain.
+`local/images/rootfs-region1-wl1283-bt.ext4`); hd3 = the **Nura** ext4 from
+`local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`,
+625,999,872 B), mounted read-write and grown to 62.5 G, with the ARMv7 module
+set.  The unit is on Linux, not TabletOS.  The way back to TabletOS is the 1917
+IFS (`local/work/ifs-shim-sealed.ifs`, block `0x825`); the previous Linux images
+`0x158D8A85`, `0xC675E206`, `0x19E24D8F`, `0xBEF06B78`, `0x294F8E36`,
+`0xED58EF36`, `0xB9DD91E3`, `0xA544A731`, `0x373674A4`, `0x23D88CBD`,
+`0xAB899C49`, `0xA8F0F30C`, `0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`,
+`0x17C2E119`, `0xBAFD9B3B`, `0x91E22899`, `0xAD85DF0F`, `0xF8BADFF3`,
+`0xE5E2AEAF`, `0x58F85337`, `0x47ED0450`, `0x5A04ACD9`, `0x92458D00`,
+`0x7A5DD941`, `0x36597040`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`,
+`0x0DC36A11`, `0xE36C679A` and `0x04AF1433` remain.
 NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 (`SAFETY.md` §6).
 
 ## What is next
 
-0. **THE ACTIVE ITEM — the CPU: cpu1, then the MPU OPP (session 60, report
-   253, ROADMAP 7a).**  The UI latency was the client's software rasterizer
-   and the CPU: the unit runs **one core at 400 MHz** (`maxcpus=1` in the DTS;
-   `dpll_mpu_ck = 400 MHz`; no cpufreq/OPP), while the reference runs 1.0 GHz
-   dual-core and programs `DPLL_MPU`/`PRM_VC` (report 223).  llvmpipe (report
-   253) fixed the 2 s draw (render 2.7–6 ms), but the remaining 420–550 ms per
-   full-screen frame, and all CPU work, will improve with the cores and the
-   OPP.
-   * **First experiment (one variable):** build **`CONFIG_SMP=y`**
-     (`CONFIG_NR_CPUS=2`) and keep `maxcpus=1`.  The vermagic gains `SMP`, so
-     rebuild **all** modules (in-tree + the vendored `pvrsrvkm_omap4_sgx540_120.ko`)
-     and install them in `/lib/modules/7.3.3` **before** flashing region 0.
-     The first boot proves the SMP kernel still comes up on one CPU.  Then a
-     second build removes `maxcpus=1` from `omap4-winchester.dts:88` and boots
-     the second core.  Verify `online=0-1`, dmesg, WDT2, thermal, a llvmpipe
-     drag.  A cpu1 hang is a revert with dmesg captured (trap 313).
-   * **Then the MPU OPP:** measure the reference's `DPLL_MPU`/`PRM_VC` on the
-     oracle, then add an OPP table + `vdd_mpu`/ABB (or a boot-time write) and
-     thermal-check 1.0 GHz (trap 312).
+0. **THE ACTIVE ITEM — the CPU: dual-core works; the MPU OPP and the mailbox
+   fault remain (session 65, report 263, ROADMAP 7a).**  The unit runs
+   **dual-core at 1008 MHz** on `0xC9FEE2D1` (`#105 SMP`, `online=0-1`; 6/6
+   boots and a 376 s soak with the gadget up).  The kernel had been built
+   `-march=armv6k` because `CONFIG_ARCH_MULTI_V6=y`; disabling it (this unit is
+   OMAP4430 only) gives `-march=armv7-a` and module vermagic `ARMv7`, and the
+   tracked config now matches the bench.  Dual-core is stable **only** with the
+   session-64 device-mode-only MUSB workaround: restoring the stock
+   `omap_musb_set_mailbox()` call still panics on dual-core even with both
+   callers serialized by a mutex, so the workaround stays until the fault is
+   identified (entry marker with `panic=0` is the next experiment).
+   * **Then the MPU OPP:** no `cpufreq` policy exists; boot logs
+     `twl6030_uv_to_vsel: OUT OF RANGE` for 1.375/1.41 V against a 1.31666 V
+     table max.  Measure the reference's `DPLL_MPU`/`PRM_VC` on the oracle,
+     then add the `cpu-supply`/`vdd_mpu` + `cpufreq-dt` path (or a boot-time
+     write) and thermal-check (trap 312; report 257 §6).
    * **Then:** shrink/pre-warm the drawer (the swap) and pursue a hardware GL
      path for Wayland clients (trap 314).  Remove the r10006 draw timing and
      the `PBGL_PROFILE` env before the final image.

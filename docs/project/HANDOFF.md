@@ -1,4 +1,4 @@
-# Handoff — session 64 (absolute) → session 65
+# Handoff — session 65 (absolute) → session 66
 
 ## 0. The job, and where it stands
 
@@ -7,55 +7,97 @@
 media region 0 with an initramfs that hands PID 1 to a real root on **hd3**, with
 a GPU-accelerated compositor.
 
-**THE ACTIVE ITEM: the CPU — now with a working dual-core fix.**  The MPU runs
-at **1008 MHz** (fast chainloader).  Session 64 found the dual-core wedge is
-**not** an IPI race: it is the USB gadget bind from initramfs `/init`
-(`musb_start` → `omap2430_musb_enable` → `omap_musb_set_mailbox`), which either
-Oopses (PID 1 dies) or hangs `pbrpmb`.  A targeted MUSB device-mode fix gives
-**3/3 clean dual-core boots**.  Report **262** is the current authority; reports
-258–261 are its evidence chain.
+**Where it stands.**  The unit runs **dual-core at 1008 MHz on the ARMv7 kernel**
+and **Nura on hd3**, with `catacomb` compositing on the SGX540.  The session-64
+USB device-mode workaround is still required: restoring the stock
+`omap_musb_set_mailbox()` call panics on dual-core **even with both callers
+serialized by a mutex**, so the fault is not merely the two-caller race.  The
+kernel had also been built `-march=armv6k`; that is fixed (`-march=armv7-a`).
 
-* **Region 0 = `local/work/kernel-usbdev-cpu1.img`, CRC `0xC675E206`** — `#102
-  SMP`, dual-core `online=0-1`, gadget up, `pbrpmb` OK.  This is what the unit
-  boots at wrap-up.
-* **Rejected hypotheses** (all with measurements, report 262): replicate the
-  reference's SMC `0x108` SCU-power call (0/3), delay gadget setup by 1 s (same
-  Oops later), guard `otg->set_vbus` with `func_ptr_is_kernel_text()` (Oops
-  persisted), pin PID 1 to CPU0 (4/4 Oopses).
-* **Disabling `gadget_setup()` entirely** gave no wedge (>100 s up) — proof of
-  the trigger — but no USB console.  Skipping the whole mailbox gave 4/4 boots
-  but USB eventually dropped.
-* **The ~32 s USB drop is idle runtime PM** (`VUSB: disabling`,
-  `audio-ldo: disabling`, gadget deactivated) while the unit keeps running; it
-  is a separate matter from the boot wedge.
-* The panel can show the panic live: a DSI-init TCON retrying work
-  (`dsi.c`, report 261) programs the panel before `execve("/init")`.
+* **Region 0 = `local/work/kernel-armv7-console-cpu1.img`, CRC `0xC9FEE2D1`**
+  (10,450,108 B) — `#105 SMP`, ARMv7, fast chainloader, loud DTB without
+  `maxcpus`, the DSI-init TCON hook, the device-mode-only MUSB workaround, and
+  an inert `console=ttyGS0,115200` bootarg.  6/6 clean boots; a 376 s soak with
+  the gadget link alive.
+* **hd3 = the Nura root** — `local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img`
+  (`07555bde…`, 625,999,872 B) flashed at block `0x4915`, grown to **62.5 G**,
+  with the ARMv7 module set (`/lib/modules/7.3.3`) installed and `depmod` run.
+  `pvrsrvkm` binds, `catacomb` runs, dropbear is up without an entropy seed.
+* **Region 1 = the BusyBox ext4 `6f5b8ca7…`** at `0x29000000` — the fallback
+  root, not booted.
+* **`BOOTCTR_FCTRY = 0x26`** (above `0x1e`, no write).  The session-65 panic loop
+  drained it `0x22 → 0x1c`; the recovery image topped it `0x1c → 0x32`.
+* The unit is on **Linux**, not TabletOS.  **No restore is required.**  The way
+  back is the 1917 IFS at block `0x825` plus the vendor UFS at `0x4915`.
 
-## 0a. THE NEXT EXPERIMENT — validate the MUSB fix, then find the exact fault
+## 0a. THE NEXT EXPERIMENT — identify the faulting indirect transfer
 
-**One variable, primary: longer soak + reliability of `kernel-usbdev-cpu1.img`
-(`0xC675E206`).**  It has booted 3/3; that is a small sample.
+One variable, primary: **instrument the entry of `omap_musb_set_mailbox()` and
+boot the stock-mailbox path with `panic=0`.**  The mutex result (report 263 §1)
+eliminated the pure-race explanation; the surviving possibilities are a bad
+pointer already present at entry (corruption of the `usb_phy`/`usb_otg`) or a
+call that corrupts it during the state-machine update.
 
-1. Reboot via the ACM console (`pbcon.py 'reboot -f'`) at least **5 more times**,
-   recording `lsusb` for `0fca:8010` and `cat /sys/devices/system/cpu/online`
-   for `0-1`.  Each success raises confidence; any wedge means the fix is
-   partial — go to step 3.
-2. Soak **>5 minutes** with host activity every ~20 s (e.g. `pbssh.sh 'uptime'`)
-   to avoid the idle-PM gadget teardown.  If it stays up with both cores and
-   USB, the dual-core item is **closed** and the next work is the MPU OPP soak
-   (report 257 §6) and the drawer/hardware-GL items.
-3. If a wedge recurs, capture the full Oops header: reflash the failing image,
-   then **immediately** (before the WDT2 reset log overwrites it) flash the
-   quiet read-back image and decode `local/work/r2-*.words` for the
-   `Unable to handle kernel …`/`PC is at`/`LR is at` lines.  Earlier captures
-   landed on the **hang** variant, not the Oops variant — that is why the exact
-   faulting indirect call inside `omap_musb_set_mailbox` is still unknown.
-4. Optional follow-up once boots are reliable: replace the broad
-   device-mode-only workaround with a guard on the specific bad call once step
-   3 identifies it; re-test 5 boots.
+**Build (gitignored tree, zImage + DTB only; no `.config` change):**
 
-**Do not** change `.config` (would change module vermagic and force rebuilding
-every module).  Marker-only / driver-only edits are zImage-only rebuilds.
+1. In `local/kernel-tree/drivers/usb/musb/omap2430.c`:
+   * remove the winchester early return in `omap2430_musb_enable()` so the stock
+     `omap_musb_set_mailbox(glue)` runs from the bind path (keep the
+     `set_mailbox_lock` mutex);
+   * at the **entry** of `omap_musb_set_mailbox()`, before the lock, emit one
+     line via `printascii()` (the PB marker mechanism in
+     `arch/arm/kernel/smp.c` / `kernel/smp.c`): `printascii()` takes a plain
+     string, so format with `snprintf()` into a static buffer:
+
+     ```
+     PBMBX entry cpu=%d status=%d glue=%08x musb=%08x xceiv=%08x otg=%08x
+           sv=%08x nh=%08x
+     ```
+     where `sv = xceiv->otg->set_vbus` and `nh = xceiv->notifier.head`
+     (`(unsigned)` casts, `%08x`).  Add a second marker immediately before the
+     final `atomic_notifier_call_chain()` with `last_event`, `otg->state`,
+     `sv` and `nh`.
+2. Put `panic=0` in the board DTS `bootargs` (instead of `panic=10`) so a fault
+   **hangs** and cannot loop over `BOOTCTR_FCTRY` (trap 335).
+3. Rebuild `zImage` + DTB, wrap, flash region 0; boot it on the bench.
+
+**Exact inputs:** the ARMv7 tree with the tracked config (`CONFIG_SMP=y`,
+`CONFIG_NR_CPUS=2`, no `ARCH_MULTI_V6`); the DTB has **no** `maxcpus`; the
+gadget is created by `/init`; Nura is not needed for this test (the BusyBox
+region-1 root is a fine test root, but it boots from region 1 only if
+`ROOTFS_RAW_OFF` is changed — the current initramfs points at hd3, so use Nura).
+
+**What each result means:**
+
+* **The entry marker shows valid kernel-text pointers and the unit faults
+  later** → the corruption happens inside the call.  The second marker tells you
+  whether `sv`/`nh` changed; if `sv` is still fine, the fault is the notifier
+  chain (`nh`) or a branch that calls `musb_set_peripheral()`/`musb_set_host()`.
+  Next: one marker before each branch call.
+* **The entry marker already shows a wild `sv`/`nh` (e.g. a `0xc......` slab
+  address)** → the `usb_phy`/`usb_otg` object is stale before the mailbox is
+  entered.  Stop instrumenting the mailbox and audit the PHY lifecycle:
+  `devm_usb_get_phy_by_phandle` in `omap2430_musb_init()`, the
+  `phy-twl6030-usb` comparator vs the `omap-usb2` PHY instance, and any
+  probe-deferral/rebind.
+* **It boots clean** → the markers changed the timing; rerun 5×.  If it stays
+  clean, the remaining difference from the session-65 failure is the DTB
+  (`panic=` only) — re-check the build actually removed the early return and
+  that the marker is compiled in.
+
+Capture the result from the **panel** (the DSI-init TCON hook prints early) or
+from the ring via the read-back image (`tools/pb_ring.py`, HANDOFF §0b of
+session 65's note); a panic with `panic=0` hangs, so the unit needs a power
+cycle afterwards.  **Do not flash a stock-mailbox image with `panic=10`.**
+
+**Secondary, only if the USB link drops:** the session-65 capture
+`local/work/kmsgcap.py` streams `/dev/kmsg` to the host and survives a whole
+boot; run it before the link dies.  On the final boot the link survived 240 s of
+streaming plus 90 s idle, so the teardown is intermittent (trap 337;
+`docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md`).
+
+**Do not** change `.config` for this experiment (vermagic); a marker-only /
+driver-only edit is a zImage+DTB rebuild.
 
 ## 0b. Reading the ring
 
@@ -66,97 +108,106 @@ every module).  Marker-only / driver-only edits are zImage-only rebuilds.
   `/tmp` paced (8 KiB/5 ms, trap 302).  Run
   `ringdump 90000000 8000 /tmp/r2.bin`, pull it back, convert with
   `local/work/raw2words.py <bin> 90000000 <out.words>`, then decode.
-  `dd if=/dev/mem` fails on the `no-map` pages.  A power-off wipes the ring.
+  `dd if=/dev/mem` fails on the `no-map` pages.  A power-off wipes the ring; a
+  warm reset (the flasher's) keeps it.
 * Worked examples: `local/work/r2-64.*` (IPI markers), `r2-oops.*` (Oops tail),
   `r2-vg.*` (pbrpmb hang).
 
 ## 0c. Media, and the way back
 
-* **Region 0 = `local/work/kernel-usbdev-cpu1.img` (CRC `0xC675E206`)** — dual
-  core, loud bootargs.  Reliable single-core fallback:
-  `local/work/kernel-fastcl-nosmp.img` (`0x8B83421F`).
-* **Region 1** = the busybox ext4 at `0x29000000`, sha256 `6f5b8ca7…`
+* **Region 0 = `local/work/kernel-armv7-console-cpu1.img` (`0xC9FEE2D1`)** —
+  dual-core ARMv7, loud bootargs, device-mode-only MUSB workaround.  The ARMv7
+  base without the console bootarg is `0x158D8A85`; the session-64 known-good
+  dual-core image is `kernel-usbdev-cpu1.img` (`0xC675E206`) and is the
+  reliable recovery image (it tops the counter up).
+* **hd3 = the Nura ext4** (`07555bde…`, grown to 62.5 G, ARMv7 modules).  The
+  flasher-restorable base is the same image at block `0x4915`.
+* **Region 1** = the BusyBox ext4 at `0x29000000`, sha256 `6f5b8ca7…`
   (inherited, not re-hashed this session; modules mismatch, trap 320).
-  **hd3** = the same ext4 at `0x4915`, mounted rw.
 * Way back to the QNX oracle: `ufs-1917-devuser.ufs` (`482e0473…`) at `0x4915`
   + shim IFS (`ifs-shim-sealed.ifs`) at `0x825`; qconn `169.254.0.1:9090`.
   Do NOT restore `local/images/ifs0.sealed.bin` (trap 84).  No restore needed.
 
 ## 0d. Bench
 
-* **`BOOTCTR_FCTRY = 0x2c`** at wrap-up (self-topping; a test boot is fine, a
-  boot-loop is not).  Read with `dmesg | grep pbrpmb`.
-* SSH: `PB_LINK=usb tools/pbssh.sh` — **after** seeding entropy (trap 328).
-  The ACM wraps at ~80 columns; `echo <hex> > /dev/random` only credits ~21
-  bits per short write.  Seed with `/bin/pbconsole`'s `entropy <hex>` driven by
-  `tools/pbraw.py`.  On the read-back image the ACM is the bring-up console, so
-  `entropy <hex>` works directly.
-* **At wrap-up the unit is off USB** after ~32 s idle (runtime PM); the panel
-  console still works.  A fresh boot restores ACM/RNDIS.  RNDIS interface name
-  flaps (trap 318) — bind NM `pb-rndis` by MAC `02:1a:11:00:00:02`.
-* `/tmp` is tmpfs: re-push `ringdump`.  Flash: start the flasher first, then
-  reset; one bootrom session, 60 s window; bootrom can hold ~20 s (trap 323) —
-  poll `lsusb`.  Wrappers: `local/work/flash825{,-long}.sh`.
+* **`BOOTCTR_FCTRY = 0x26`** at wrap-up.  Read with `dmesg | grep pbrpmb`.
+* SSH on Nura: `PB_LINK=usb tools/pbssh.sh 'cmd'` (root, key-only,
+  `169.254.0.1:22`); the ACM shell is `playbook:~#` (not `pb> `, trap 274), so
+  `tools/pbcon.py` does **not** drive it.  dropbear came up without an entropy
+  seed (crng init at 13.1 s); if it blocks, trap 328 applies.
+* The DTB carries an inert `console=ttyGS0,115200` — the gadget serial driver
+  has no kernel-console path, so kernel printk still goes to the panel
+  (`tty0`/fbcon).  Use the panel, or `cat /dev/kmsg` from the shell.
+* `/tmp` is tmpfs: re-push `ringdump`.  Flash: start the flasher, then reset or
+  power on; the power-on bootrom is caught reliably and the 626 MB hd3 write
+  takes ~20 min.  Wrappers: `local/work/flash825{,-long}.sh` (region 0);
+  hd3 needs `python3 tools/bbusb.py flash --component <img> --dest-block 0x4915
+  --from-bootrom --password 0000 --apply`.
 * Read dmesg UNFILTERED.  One command at a time.  An agent never writes RPMB;
-  NVRAM read-only.  A boot-looping image drains `BOOTCTR_FCTRY` with no top-up:
-  stop it and reflash the known-good image.  NEVER program WDT2 from the
-  chainloader (trap 322).  Flash region 0 only when only it changed.
+  NVRAM read-only.  A boot-looping image drains `BOOTCTR_FCTRY`: stop it and
+  reflash `0xC675E206`.  NEVER program WDT2 from the chainloader (trap 322).
+* **The eMMC stall is still live**: `mmc1: Card stuck being busy` + a lost
+  async WRITE during write bursts (27 s/33 s in the Nura boots).  Prefer clean
+  `reboot`s; the rw root is ext4 `nobarrier`, and power cuts have already
+  damaged it once (trap 336).
 
 ## 0e. The tree (gitignored kernel tree; remove before any patch re-export)
 
-`local/kernel-tree/.config` = `CONFIG_SMP=y`, `CONFIG_NR_CPUS=2`.  Instruments:
-session-62 `PBDBG` set + `head.S` CRR stamp; `PBCPU:`/`PBCPU1:`/`PBIPI1:`/
-`PBSMF:` markers (backups `local/work/carve/*.session63-orig`); session-64
-additions: DSI-init TCON delayed work (`dsi.c`), MUSB device-mode fix
-(`omap2430.c`, report 262), `otg_set_vbus` text guard (`otg.h`), MINI4x6 font
-link (`lib/fonts/Makefile`).  The **tracked** `initramfs/init.c` was reverted to
-clean (the CPU-affinity experiment was rejected).  Tracked chainloader template
-holds the VC/DPLL program (DECISIONS §91).  Ghidra MCP needs
+`local/kernel-tree/.config` = `CONFIG_SMP=y`, `CONFIG_NR_CPUS=2`, **no
+`ARCH_MULTI_V6`** (so `-march=armv7-a`); the tracked
+`kernel/winchester-7.3.3.config` now matches it.  Instruments still in the tree:
+session-62 `PBDBG` + `head.S` CRR stamp; `PBCPU:`/`PBCPU1:`/`PBIPI1:`/`PBSMF:`
+markers (`local/work/carve/*.session63-orig` backups); the session-64 DSI-init
+TCON delayed work (`dsi.c`), the MUSB device-mode workaround (`omap2430.c`),
+the MINI4x6 font link (`lib/fonts/Makefile`); session 65 adds the
+`set_mailbox_lock` mutex and removes the `otg.h` text guard (reverted to
+stock).  `kernel/source/omap4-winchester.dts` and the tree DTS are identical:
+no `maxcpus`, plus the inert console bootarg.  Ghidra MCP needs
 `GHIDRA_INSTALL_DIR` in `~/.config/opencode/opencode.json` + restart.
 
 ## 1. Traps / reports
 
-Traps 330 updated (measured IPI markers), 332 added (dual-CPU `printascii`
-race); report 262 adds the MUSB-bind diagnosis.  Reports 256–262 are current for
-the CPU work; report 258's "clean hang" is superseded by 261/262.
+Traps 334–337 added (ARMv6 codegen, panic-loop budget, hd3 ext4 corruption,
+intermittent VUSB teardown); trap 333 corrected (the mutex does not fix it).
+Reports 262 and **263** are current for the CPU/USB work; report 258 is
+superseded.  The new contradiction file is
+`docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md`.
 
-## 2. Paste-ready kickoff prompt (session 65)
+## 2. Paste-ready kickoff prompt (session 66)
 
 ```
-PlayBook (OMAP4430 "winchester") — session 65 (absolute; Linux-era 59)
+PlayBook (OMAP4430 "winchester") — session 66 (absolute; Linux-era 60)
 
 Workspace: this repository — a git checkout.  Map: docs/README.md.  The earlier
 work tree $HOME/rea-work is READ-ONLY.
 
 READ FIRST: SAFETY.md, STATE.md, this HANDOFF, ROADMAP 7a, KNOWN-ISSUES §2
-(esp. 312-332) and §3, DEVELOPMENT §2/3/3a/4/5/7a, DECISIONS 84-93,
-reports 262, 261, 260, 259, 258, 257, 256, and docs/sessions/session-64.md.
+(traps 333–337) and §3, DECISIONS 93–96, reports 263, 262, 259, 257, and
+docs/sessions/session-65.md.
 
-WHERE IT STANDS: THE DUAL-CORE WEDGE IS THE USB GADGET BIND, NOT AN IPI RACE.
-Session 64 found an Oops in omap_musb_set_mailbox from musb_start (PID 1 writing
-the UDC) and a pbrpmb hang, both triggered by /init's gadget_setup. A targeted
-fix (call only omap_control_usb_set_mode(USB_MODE_DEVICE) from
-omap2430_musb_enable on winchester) gave 3/3 clean dual-core boots with the
-gadget up. Region 0 = kernel-usbdev-cpu1.img (0xC675E206), online=0-1,
-BOOTCTR_FCTRY=0x2c. At wrap-up the unit is off USB after ~32s idle (runtime PM,
-VUSB disabling) but still running with panel console.
+WHERE IT STANDS: dual-core at 1008 MHz on the ARMv7 kernel (region 0 =
+kernel-armv7-console-cpu1.img, CRC 0xC9FEE2D1, #105 SMP), Nura on hd3 grown to
+62.5 G with the ARMv7 modules, catacomb on the SGX540, BOOTCTR_FCTRY=0x26.  The
+session-64 device-mode-only MUSB workaround is still required: the stock
+omap_musb_set_mailbox() panics on dual-core even with both callers serialized by
+a mutex.  The USB teardown is intermittent (30 s / 90 s / not in 6 min), not an
+idle timer.
 
-NEXT EXPERIMENT: soak and confirm the fix. Reboot 5+ times via pbcon.py
-'reboot -f', record lsusb 0fca:8010 and online=0-1 each time; soak >5 min with
-host activity every ~20s to avoid idle PM. If it stays up, the dual-core item is
-closed: move to the MPU OPP soak (report 257 §6), drawer, hardware GL. If a
-wedge recurs, capture the ring via the read-back image IMMEDIATELY (earlier
-captures landed on the hang, not the Oops) and read the Unable-to-handle/PC/LR
-lines to identify the exact bad indirect call in omap_musb_set_mailbox.
+NEXT EXPERIMENT: instrument the entry of omap_musb_set_mailbox() (printascii
+marker: cpu, status, glue, musb, xceiv, otg, set_vbus, notifier.head), restore
+the stock bind-path call, set panic=0, build zImage+DTB, flash region 0, boot.
+Valid pointers at entry + later fault ⇒ corruption during the call (next marker
+before each branch); a wild pointer at entry ⇒ stale usb_phy/usb_otg, audit the
+PHY lifecycle.  Capture from the panel or the ring; do not use panic=10.
 
-BENCH: region 1 = ext4 6f5b8ca7... at 0x29000000; hd3 = ext4 at 0x4915 rw.
-Seed entropy with /bin/pbconsole's 'entropy <hex>' via tools/pbraw.py (the ACM
-wraps at ~80 columns; echo-hex-to-/dev/random credits only ~21 bits). RNDIS name
-flaps (trap 318) — bind NM pb-rndis by MAC 02:1a:11:00:00:02. /tmp is tmpfs;
-re-push ringdump; pace bulk pushes 8KiB/5ms. Flash: start flasher, then reset;
-bootrom can hold ~20s (trap 323), poll lsusb. Read dmesg UNFILTERED; one command
-at a time. An agent NEVER writes RPMB; NVRAM read-only. Never program WDT2 from
-the chainloader (trap 322). No config change — it would change module vermagic.
+BENCH: hd3 = Nura (07555bde...), region 1 = BusyBox ext4 at 0x29000000.  SSH:
+PB_LINK=usb tools/pbssh.sh (the ACM shell is playbook:~#, not pb>; pbcon.py
+does not drive it).  Kernel printk goes to the panel; the console=ttyGS0
+bootarg is inert.  Flash region 0 at 0x825; hd3 at 0x4915 (--component).  Start
+the flasher, then reset/power on.  /tmp is tmpfs; re-push ringdump.  Read dmesg
+UNFILTERED.  The eMMC stall still fires on write bursts; prefer clean reboots.
+An agent NEVER writes RPMB; NVRAM read-only.  Never program WDT2 from the
+chainloader (trap 322).  No config change for a marker-only experiment.
 
 SAFETY: hard hazards (BOOTCTR_FCTRY 0 / >0x32 / failed write / flat pack) remain.
 UPDATE THE DOCS as you go and commit. WRAP-UP: only the operator decides when

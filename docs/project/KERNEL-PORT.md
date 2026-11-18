@@ -26,19 +26,23 @@ region-1 BusyBox userland.
     driver calls it; the devgroup branch has the same line);
   * the board DTS `&sgx_module` is `status = "okay"` (the `omap4.dtsi` node
     supplies `gpu@0` with `ti,omap4430-gpu` / `img,powervr-sgx540`).
-* Config: `kernel/winchester-7.3.3.config` (the canonical copy).  Session 55
-  adds the SGX block (`CONFIG_SGX=y`, `CONFIG_PVRSGX_1_17_4948957=y` +
-  `_ABI`, `CONFIG_SGX_DRM=y`, `CONFIG_SGX_OMAP=m`, the HW-perf/recovery
+* Config: `kernel/winchester-7.3.3.config` (the canonical copy).  Session 65
+  aligns it with the bench: `CONFIG_SMP=y`, `CONFIG_NR_CPUS=2` and **no
+  `ARCH_MULTI_V6`** (so the build is `-march=armv7-a`; module vermagic `ARMv7`).
+  Session 55 adds the SGX block (`CONFIG_SGX=y`, `CONFIG_PVRSGX_1_17_4948957=y`
+  + `_ABI`, `CONFIG_SGX_DRM=y`, `CONFIG_SGX_OMAP=m`, the HW-perf/recovery
   defaults) and the FB helpers SGX_DRM selects (`FB_CFB_FILLRECT/COPYAREA/
   IMAGEBLIT`, `FB_IOMEM_FOPS/HELPERS`); session 54 added
   `CONFIG_DYNAMIC_DEBUG=y` and `CONFIG_OVERLAY_FS=y`.
 * `initramfs/init.c`: `ROOTFS_RAW_OFF = 0x49000000` (hd3 at loader block
-  `0x4915`), the `lstat()` hand-off, and the read-only root: the loop
-  `LO_FLAGS_READ_ONLY`, the ext4 `MS_RDONLY`+`noload`, a 256 MiB tmpfs
-  upper/work and overlayfs on `/newroot`.  Unchanged since session 55; the
-  current region-0 image is `0xB9DD91E3` (`0x967398` B, sha256 `5ac47496…`,
-  kernel `#73`, `&sgx_module` enabled, the Munin Y fix and the touch input
-  model).
+  `0x4915`), the `lstat()` hand-off for the absolute `/sbin/init` symlink, and
+  a **read-write** root: the loop/queue are set to `write through`, ext4 is
+  mounted `rw` with `barrier=0`, a one-shot `resize2fs` grows it (`/etc/pb-grown`
+  marks it), and the first boot installs the dropbear/SSH kit and the
+  `/etc/local.d` scripts.  The overlay-root variant is historical (session 55).
+  The current region-0 image is `kernel-armv7-console-cpu1.img` (`0xC9FEE2D1`,
+  `0x9F74BC` B, kernel `#105 SMP`, `-march=armv7-a`, no `maxcpus`, the
+  device-mode-only MUSB workaround, the DSI-init TCON hook).
 * Session 54's instrumentation change: the general MMC/GPIO/sysc/probe prints
   are `pr_debug` (`PBSIO`/`PBINI`/`PBX`/`PBM` in `omap_hsmmc.c`, `PBC` in
   `mmc/core/{core,host,mmc_ops}.c`, `PBR` in `drivers/base/dd.c`, `PBG` in

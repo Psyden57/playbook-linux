@@ -132,6 +132,13 @@ now `pr_debug` (dynamic debug); `PBREQ`/`PBIRQ` stay behind `pb_trace` (§6).
 | `playbook-boot-2026-11-16-rw-barrier0-grow-dmesg.txt` | the full 696-line dmesg of the first working read-write boot (**kernel `#76`**): `EXT4-fs (loop0): barriers disabled`, the `Card stuck being busy!` / `sector 0` flush at 43 s (the grow's start), and `resized filesystem to 15273984`.  Evidence for report 249 §2–§3. |
 | `playbook-boot-2026-11-16-rw-writethrough-dmesg.txt` | the full 694-line dmesg of the final boot (**kernel `#77`**, region 0 `0x294F8E36`): the write-through setting, the one `sync` stall at 45.8 s (`flags 0x900000`), and the complete error review in report 249 §5. |
 
+## Nura on the ARMv7 kernel — boot log and a 4-minute kmsg stream (session 65)
+
+| file | what |
+|---|---|
+| `playbook-live-2026-11-18-nura-armv7-boot.txt` | the full 707-line `dmesg` of the first Nura boot on `0xC9FEE2D1` (`#105 SMP`, ARMv7, region 0): the `smp: Brought up 1 node, 2 CPUs`, the early WDT `KICK FAILED` followed by the successful `ldr fffc1800->ffe2b400, pet 10s`, the `twl6030_uv_to_vsel: OUT OF RANGE` ×7, the initramfs handoff and `resize2fs` (`152832 → 15273984`), the `mmc1: Card stuck being busy` + lost async WRITE at 27 s, `audio-ldo: disabling` at 31.8 s, and the DSI/TCON timing.  It was taken before the ARMv7 modules were installed, so the `.gnu.linkonce.this_module … must match` lines are the **old** modules (0 after the install + reboot).  Report 263 §3. |
+| `playbook-live-2026-11-18-nura-kmsg-stream.txt` | 72,992 bytes of `/dev/kmsg` (records 0–722) streamed to the ACM and captured host-side for 240 s with **no disconnect**, followed by 90 s idle with the port closed (still up at uptime 376 s, no `VUSB` line).  The capture is the evidence that the USB teardown is intermittent, not an idle timer (report 263 §4a; trap 337; `docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md`).  It also shows `twl6030_charger … battery with vmax -22 imax: -22` and `thermal thermal_zone2: Unable to get temperature, disabling!`. |
+
 ## Exact duplicates
 
 These pairs are byte-identical; keep one of each when pruning.

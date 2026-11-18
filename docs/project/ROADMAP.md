@@ -300,16 +300,22 @@ flasher can replace at every point:
    (DSI-init TCON hook, report 261) exposed a real kernel panic.  A targeted
    MUSB device-mode fix (`kernel-usbdev-cpu1.img`, `0xC675E206`, report 262)
    gave 3/3 clean dual-core boots with the gadget up and `pbrpmb` OK.
-   **Next (session 65):** (a) soak/reboot the fixed image 5+ times and >5 min to
-   confirm reliability — if a wedge recurs, capture the Oops header via the
-   read-back ring to identify the exact bad indirect call; (b) the real
-   one-possible-CPU test (`CONFIG_NR_CPUS=1` or drop `cpu@1` from the DTB);
-   (c) the MPU OPP soak — the table exists in `omap443x.dtsi`
-   (300/600/800/**1008** MHz, trap 312), what is missing is `cpu-supply`/
-   `vdd_mpu` + `cpufreq-dt`, or a boot-time DPLL/VC write (report 257 §6);
-   (d) shrink/pre-warm the drawer; (e) pursue hardware GL for Wayland clients
-   (trap 314); (f) rebake the restorable hd3 base with `epitaph` r10005+, the
-   llvmpipe files and the rules.  Kumo needs a WPEWebKit build (report 247 §4).
+    **Session 65:** the dual-core soak passed — 6/6 clean boots and a 376 s run
+    with the gadget link alive on the **ARMv7** image — and hd3 is the Nura root
+    again.  Restoring the stock mailbox with both callers serialized by a mutex
+    **still panics**, so the device-mode-only workaround stays.  **Next (session
+    66):** (a) identify the bad indirect transfer — an entry marker in
+    `omap_musb_set_mailbox()` (CPU, `glue`, `musb`, `xceiv`, `otg`, `set_vbus`,
+    `notifier.head`) with `panic=0`, per HANDOFF §0a; (b) then the MPU OPP — the
+    table exists in `omap443x.dtsi` (300/600/800/**1008** MHz, trap 312), what
+    is missing is `cpu-supply`/`vdd_mpu` + `cpufreq-dt`, or a boot-time DPLL/VC
+    write (report 257 §6); the boot log's `twl6030_uv_to_vsel: OUT OF RANGE`
+    (1.375/1.41 V vs 1.31666 V) shows the present attempt fails; (c) the
+    intermittent USB teardown (trap 337) if it recurs — capture before the drop;
+    (d) shrink/pre-warm the drawer; (e) pursue hardware GL for Wayland clients
+    (trap 314); (f) rebake the restorable hd3 base with `epitaph` r10005+, the
+    llvmpipe files and the rules (the image on hd3 is the session-59 state).
+    Kumo needs a WPEWebKit build (report 247 §4).
 
 Step 3 is reversible at any time by re-flashing the same block range — which is
 the whole reason it beats an in-place mkfs.

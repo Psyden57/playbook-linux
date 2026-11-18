@@ -3253,11 +3253,95 @@ suitable because it omits the OTG state setup.  [report 262]
 must be reviewed (and the exact bad indirect call inside
 `omap_musb_set_mailbox` identified) before any kernel-patch re-export.  No
 `.config` change was made, so modules/vermagic are unchanged.  3/3 boots is a
-small sample — session 65 must soak it.  The ~32 s USB drop is idle runtime PM,
-separate from this fix.
+small sample — soaked in session 65: 6/6 clean boots plus a 376 s run with the
+gadget link alive.  The USB teardown is intermittent, not an idle timer (report
+263 §4; trap 337), and remains open.  Session 65 also showed that serializing
+the two mailbox callers does **not** fix the fault (§95).
 
-**Evidence.**  Report 262 §3 (image CRC, boot outcomes, `pbrpmb` line); operator
+**Evidence.** Report 262 §3 (image CRC, boot outcomes, `pbrpmb` line); operator
 screenshots (Oops call trace); `local/work/r2-*.{bin,words}` captures.
+
+## 94. Build the kernel for ARMv7 (session 65)
+
+**Decision.**  Disable `CONFIG_ARCH_MULTI_V6` in the working and tracked configs.
+The kernel is built `-march=armv7-a` with `__LINUX_ARM_ARCH__=7`; `CONFIG_SMP=y`
+and `CONFIG_NR_CPUS=2` stay.  `kernel/winchester-7.3.3.config` is now the working
+config.
+
+**Why.**  The unit is an OMAP4430 (Cortex-A9, ARMv7-A) only.  ARMv6 support made
+`CONFIG_CPU_ARM1176 → CPU_V6K → CPU_32v6`, and `arch/arm/Makefile`'s
+`ifeq ($(CONFIG_CPU_32v6),y)` branch then overrides the v7 `-march` with
+`-march=armv6k`.  The vermagic betrayed it (`ARMv6 p2v8` while the kernel log
+said `CPU: ARMv7 Processor`).  ARMv6K code does run on Cortex-A9, so this was a
+codegen/performance defect, not a fault — but it also means every module was
+built for the wrong ISA.
+
+**Constraint.**  This is a `.config` change, so the vermagic changes (`ARMv7`)
+and every module must be rebuilt; the Nura root received the new set
+(`/lib/modules/7.3.3`, `depmod`).  A future config change repeats that.  The
+tracked config now differs from the session-58 export, so the kernel patch/config
+pair must be re-exported before it is published as a reproducible build.
+
+**Evidence.**  `kernel/winchester-7.3.3.config` (`CONFIG_SMP=y`,
+`CONFIG_NR_CPUS=2`, no `ARCH_MULTI_V6`); compile flags
+`-march=armv7-a -D__LINUX_ARM_ARCH__=7` from
+`local/kernel-tree/drivers/usb/musb/.omap2430.o.cmd`; module vermagic
+`7.3.3 SMP mod_unload modversions ARMv7 p2v8`; image `0x158D8A85`/`0xC9FEE2D1`,
+6/6 clean dual-core boots and a 376 s soak (report 263 §2).
+
+## 95. Keep the device-mode-only MUSB workaround; do not restore the stock mailbox yet (session 65)
+
+**Decision.**  `omap2430_musb_enable()` keeps the winchester early return that
+calls only `omap_control_usb_set_mode(glue->control_otghs, USB_MODE_DEVICE)`.
+The glue mutex (`set_mailbox_lock`) stays as hardening for the remaining callers.
+The stock bind-path `omap_musb_set_mailbox()` call is **not** restored until the
+faulting transfer is identified.
+
+**Why.**  Session 64's diagnosis (a two-caller race) predicted that serializing
+the callers would fix it.  Session 65 tested exactly that: the mutex plus the
+stock call still panicked on the first dual-core boot (`0x19E24D8F`), and
+`panic=10` turned it into a ~10 s reboot loop (`BOOTCTR_FCTRY 0x22 → 0x1c`).
+So the fault is not, or not only, the race; the session-64 observation that
+`otg->set_vbus` once held a slab address points at corruption of the
+`usb_phy`/`usb_otg` object.  The workaround is the only path with 6/6 boots and a
+376 s soak.
+
+**Constraint.**  This is a driver-source experiment in the gitignored tree; it
+must be reviewed before any kernel-patch re-export, and it is now a *blackberry-
+only bypass* of a stock path (OTG host mode would also need the stock call, so
+this decision is an obstacle to OTG host and is revisited with the root cause).
+No `.config` change is involved.
+
+**Evidence.**  Report 263 §1 (mutex build, panic, loop, recovery top-up
+`0x1c → 0x32`); session-64 screenshots; `local/work/flash-mutex2-*.log`,
+`flash-recover-190153.log`.
+
+## 96. hd3 carries the baked Nura image; a power cut is a filesystem event (session 65)
+
+**Decision.**  hd3 holds the Nura root from
+`local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img`
+(sha256 `07555bde…`, 625,999,872 B), flashed at block `0x4915`, grown to 62.5 G,
+with the ARMv7 modules installed.  It is the rw root; the flasher-restorable base
+is the same image.  Power cuts are treated as a risk to the ext4, not only to
+DRAM.
+
+**Why.**  The BusyBox ext4 that session 63 had put on hd3 was damaged by the
+power cycles needed to work around the USB teardown: `EXT4-fs: This should not
+happen!! Data will be lost`, corrupt inode bitmap, deleted-inode references, and
+a `/var/log` trace file was lost.  The operator asked for the Nura root on hd3;
+flashing it re-creates the filesystem cleanly and restores the intended
+userspace (`catacomb` on the SGX540, dropbear, 62.5 G).
+
+**Constraint.**  The root is mounted `barrier=0` + write-through (session 59), so
+a power cut can still damage it (trap 336); prefer a clean `reboot`.  The baked
+image is the session-59 state and predates the session-60/61 fixes (`epitaph`
+r10005, llvmpipe, the udev/polkit rules); a rebake is still owed.  Region 1
+remains the fallback and the 1917 IFS + vendor UFS remain the way back.
+
+**Evidence.**  Report 263 §3; `local/work/flash-nura-*.log` (626,065,440 B,
+`FLASH_OK`); the first-boot log (`resize2fs` to 15,273,984 blocks) and the
+ARMv7 module install (`depmod` OK, 0 module-size mismatches, `pvrsrvkm` bound,
+`catacomb` running).
 
 ### Repository license
 

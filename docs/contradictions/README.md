@@ -42,10 +42,11 @@ note after it is what a reader needs before opening the file.
 | `safety-no-emmc-mount-vs-readonly-root.md` | **resolved (session 17), extended (session 18)** — read-only eMMC/QNX6 mounts are allowed; the operator has now dropped the blanket writable-eMMC prohibition **for our own data** (NVRAM, the MCT, and dangerous RPMB still forbidden).  Rule in `SAFETY.md` §4/§6, decisions `DECISIONS.md` §17/§18; `hd3` to be repurposed (report 141) |
 | `touch-bus-i2c2-vs-i2c3.md` | **resolved 2026-11-08 (session 36, report 193)** — the board selects `driver = munin`, and `libmtouch-munin` opens QNX `/dev/i2c1` (I²C2 `0x48072000`, live Linux `i2c-1`) at `0x65`; the Pegasus `/dev/i2c2` string was the other driver.  Linux also needed the i2c2 pads muxed (`0x4A100126`/`0x4A100128` were `0x011F` = safe mode; `0x0110` made `0x65` ACK) |
 | `twl-clk32kg-on-both-vs-0xbd-be-difference.md` | **resolved 2026-11-08 (session 35, report 192 §7)** — `CLK32KG` is base `0x8C` (`CFG_GRP`/`CFG_TRANS`/`CFG_STATE` = `0x8C`/`0x8D`/`0x8E`), not the FreeBSD `0xBC`.  QNX `01/05/05` vs Linux `07/05/55`: `CFG_TRANS` identical, `CFG_STATE` APP-ON in both (CON/MOD bits differ), `CFG_GRP` differs.  `0xBC`–`0xBE` is a different, still-unnamed non-regulator resource |
+| `usb-vusb-drop-idle-vs-intermittent.md` | **open** — session 64 called the USB gadget teardown "idle runtime PM at ~32 s"; session 65 measured 30 s with 15 s keepalives, 90 s with SSH traffic, and **no drop at all in a 376 s boot** (240 s of continuous ACM reads + 90 s idle).  Only `twl6030_usb_irq()` disables `usb3v3`; the trigger (spurious `VBUS_DET`, the `twl6030_charger` module, or a host event) is not settled.  Report 263 §4/§4a; trap 337 |
 
 ## Still open — keep these in mind
 
-Eight files have a genuinely open question left; none of them blocks the
+Nine files have a genuinely open question left; none of them blocks the
 IFS rebuild, but each changes how a result should be read:
 
 1. **`ring-survives-a-qnx-boot.md`** — whether a QNX boot preserves or fills the
@@ -80,6 +81,11 @@ IFS rebuild, but each changes how a result should be read:
    registers `0x30/0x40/0x50` take the datasheet's `0b11xxxxxx` or the
    bootloader's `0x36`; the on/off path (GENERAL `0x10`) is unaffected.
    *Would settle it:* a brightness sweep on the live unit, or datasheet Table 4.
+7. **`usb-vusb-drop-idle-vs-intermittent.md`** — whether the USB gadget teardown
+   is idle runtime PM (session 64) or an intermittent event (session 65: 30 s,
+   90 s, and no drop in 376 s).  Only `twl6030_usb_irq()` disables `usb3v3`.
+   *Would settle it:* a kmsg capture that spans the disconnect (the session-65
+   run outlived the event), or a `VBUS_DET`/`linkstat` log in that handler.
 
 *(`bt-firmware-tiinit-vs-wl1283.md` was open here until session 53; it is now
 resolved — see the table above and report 238 §3.  Left out of the live list so

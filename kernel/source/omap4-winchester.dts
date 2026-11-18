@@ -85,7 +85,7 @@
 		 * prints are the only heavy DRAM writer; silencing them tells
 		 * the DRAM event log/heartbeat whether the CPU survives past
 		 * the ~1.5 s stall on its own. */
-		bootargs = "earlyprintk keep_bootcon ignore_loglevel maxcpus=1 clk_ignore_unused panic=10 fw_devlink=permissive";
+		bootargs = "earlyprintk keep_bootcon ignore_loglevel console=ttyGS0,115200 clk_ignore_unused panic=10 fw_devlink=permissive";
 	};
 
 	/* CRC/chainloader path: the zImage is entered at 0x84000000, so the
