@@ -96,6 +96,13 @@ from hd3 instead of the BusyBox root.
   `6f9bef24…`, **0 rejects / 65/65 byte-identical** against pristine 7.3.3.
   It carries the `omap2430.c` workaround + mutex, the DSI-init TCON hook and the
   DTS change; the session-62/63/64 diagnostics are excluded (report 263 §5).
+* **CPU and DDR measured live at the close:** `dpll_mpu_ck` = **1 008 MHz**
+  (BogoMIPS 2013.59/core); the EMIFs are **400 MHz LPDDR2-800, 32-bit, CL 6**,
+  power-down disabled, both identical (`CFG 0x80001AB9`, `REF 0x618`), with the
+  L3 at 200 MHz.  However a userspace benchmark reads only **0.4–0.6 GB/s**
+  (writes ~2 GB/s; no scaling with 8 streams or 2 cores), which is 3–8× below
+  the configuration's 3.2 GB/s peak — an open performance item, not a clock
+  problem (report 263 §4b).
 
 ## Inferred (reasoning from evidence, not directly measured)
 

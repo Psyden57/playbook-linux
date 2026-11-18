@@ -197,6 +197,54 @@ The capture also showed:
 * The eMMC stall repeated (`mmc1: Card stuck being busy`, lost async WRITE)
   at 33.7 s with flags `0x800000`.
 
+### 4b. CPU and DDR: configuration measured (session 65, at the wrap-up)
+
+The live clock tree and the EMIF registers were read to answer "is the CPU at
+1008 and is the RAM at a good speed".
+
+**CPU — yes, 1008 MHz on both cores.**  `/sys/kernel/debug/clk/clk_summary`:
+`dpll_mpu_ck` and `dpll_mpu_m2_ck` = **1 008 000 000 Hz** (consumer `cpu0`);
+`/proc/cpuinfo` BogoMIPS 2013.59 per core, `SMP: Total of 2 processors activated
+(4020.63 BogoMIPS)` in the boot log.  A userspace loop of 300 M volatile adds ran
+at 122.8 Mops/s, consistent with ~1 GHz.  There is no cpufreq policy, so the
+clock does not scale.
+
+**DDR — 400 MHz LPDDR2-800, 32-bit, both EMIFs identical.**
+
+| register (EMIF1 `0x4C000000`, EMIF2 `0x4D000000`) | value | decode |
+|---|---|---|
+| `SDRAM_CONFIG` `+0x08` | `0x80001AB9` | SDRAM_TYPE 4, NARROW_MODE 0 (**32-bit**), CL 6, IBANK 3, EBANK 1, PAGESIZE 1 |
+| `SDRAM_REFRESH_CONTROL` `+0x10` | `0x00000618` | REFRESH_RATE 1560 cycles; 1560 × 3.9 µs (LPDDR2 tREFI) → **400 MHz** |
+| `SDRAM_TIMING_1` `+0x18` | `0x10EB0662` | tRP 8, tRCD 7, tWR 5, tRAS 16, tRC 25, tRRD 4, tWTR 2 cycles (2.5 ns each) |
+| `PWR_MGMT_CTRL` `+0x38` | `0x00000000` | LP_MODE 0 — power-down/self-refresh **disabled** (the i743 ZQ trap is not active) |
+| `L3_CONFIG` `+0x54` | `0x070700FF` | SYS/LL thresholds 7/7 (reset values), PR_OLD_COUNT 0xFF |
+
+Clock tree: `dpll_core_ck` 800 MHz → `ddrphy_ck` 400 MHz (M2/2) and
+`l3-emif-clkctrl` 400 MHz; `div_core_ck` 400 → `l3_div_ck` **200 MHz** (the L3
+and the EMIF's L3 port).  The reference's startup writes only
+`CM_DIV_M3_DPLL_CORE` among the core dividers (report 223), so it inherits the
+same L3 divider — there is no known QNX difference here.
+
+**But the measured read throughput is low.**  A static userspace benchmark on
+the unit (values from this boot):
+
+* `memset` of 64 MiB: **~2.0 GB/s**.
+* Sequential line reads of 64 MiB: **0.4–0.6 GB/s** of lines, with 1 stream
+  (0.58), 8 streams (0.46), and **two cores in parallel (0.38 aggregate — no
+  scaling)**.
+* `memcpy` 64 MiB: 0.25 GB/s copy rate; tmpfs read through `dd`: 242 MB/s;
+  tmpfs `cp`: 102 MB/s.
+
+So the configuration is the intended one (`400 MHz`, 32-bit, CL 6, no
+power-down, reset L3 thresholds), yet reads run **3–8× below the 3.2 GB/s the
+DDR configuration implies**, while writes are much faster.  The flat scaling
+with streams and cores and the reset-valued EMIF L3 thresholds point at a
+throttled/serialized read path (candidate: the 200 MHz L3/EMIF port, the
+conservative `tRP/tRCD = 20/17.5 ns` timings, or the benchmark itself), not at
+the DDR clock.  **This is an open performance item**; it is not established
+whether the QNX reference reads faster, and a timing retune would be a
+boot-time EMIF write (outside the current image), not a Linux-side setting.
+
 ## 5. Patch re-export
 
 The tracked patch was still the session-58 export (64 files / 8,981 lines,

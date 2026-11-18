@@ -485,7 +485,12 @@ packaged, report 247 §4); (5) the **intermittent WRITE-busy stall** — not a
 cache flush (report 250 §1), mitigated by `barrier=0` + write-through, but it
 still fires during write bursts and can damage the rw ext4 if power is cut
 (trap 336); (6) the **intermittent USB teardown** (`VUSB` disabled by the TWL
-comparator; 30 s, 90 s or not in 6 min — trap 337, contradiction file).
+comparator; 30 s, 90 s or not in 6 min — trap 337, contradiction file);
+(7) the **memory read throughput** — the EMIF is correctly configured
+(400 MHz LPDDR2-800, 32-bit, CL 6, power-down off, L3 200 MHz) and the CPU is
+at 1008 MHz, but a userspace benchmark reads only ~0.4–0.6 GB/s (writes
+~2 GB/s; no scaling with streams or cores), 3–8× below the 3.2 GB/s peak
+(report 263 §4b; open).
 **Closed since session 60:** the CPU's second core (dual-core stable with the
 workaround), the ARMv6 codegen (now `-march=armv7-a`, trap 334), the
 **`epitaph` panel** (r10005 — report 251; trap 292); the panel's

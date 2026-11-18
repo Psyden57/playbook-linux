@@ -205,6 +205,15 @@ and the udev/polkit/gorm rules (report 251/253); those fixes lived only in the
 session-59 live root, which the session-63/65 reflashes overwrote.  **A rebake
 is owed** before the desktop can be judged.
 
+**Memory throughput (measured 2026-11-18):** the EMIF is correctly configured —
+both instances identical, 400 MHz LPDDR2-800 (`REF 0x618`), 32-bit, CL 6,
+power-down disabled (`PWR=0`), L3 at 200 MHz — and the CPU is at 1008 MHz, but a
+userspace benchmark reads only **0.4–0.6 GB/s** (writes ~2 GB/s; no scaling with
+8 streams or 2 cores), 3–8× below the 3.2 GB/s the DDR implies.  It is an open
+performance item (report 263 §4b): candidates are the 200 MHz L3/EMIF port, the
+conservative `tRP/tRCD = 20/17.5 ns` timings, or the measurement; a retune is a
+boot-time EMIF write, not a Linux setting.  A QNX comparison would settle it.
+
 **UI performance:** llvmpipe fixed the 2 s client draw (render 2.7–6 ms); what
 remains is its deferred `swap` (420–550 ms per full-screen drawer frame), the
 first-draw LLVM JIT, and now two cores at 1008 MHz instead of one at 400.  A
