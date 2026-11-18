@@ -17,8 +17,9 @@ real cause is known (the surviving overflow points at corruption of the
   **without `maxcpus`**, DSI-init TCON hook, device-mode-only mailbox
   workaround.  The only change over `0x158D8A85` is an inert
   `console=ttyGS0,115200` (the gadget tty has no kernel-console path; no
-  `console [ttyGS0] enabled`).  Dual-core `online = 0-1`, 1008 MHz, 6/6 clean
-  boots and a **376 s soak with the gadget link alive**.
+  `console [ttyGS0] enabled`).  Dual-core `online = 0-1`, 1008 MHz; the 6/6
+  reboot set was run on `0x158D8A85`, and `0xC9FEE2D1` booted once for the
+  **376 s soak with the gadget link alive**.
 * **The kernel had been ARMv6K**, not ARMv7: `CONFIG_ARCH_MULTI_V6=y` selected
   `CPU_ARM1176 → CPU_V6K → CPU_32v6`, and `arch/arm/Makefile` lets the v6K
   `-march=armv6k` / `__LINUX_ARM_ARCH__=6` override v7 while `CPU_32v6` is set.
@@ -566,8 +567,9 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 0. **THE ACTIVE ITEM — the CPU: dual-core works; the MPU OPP and the mailbox
    fault remain (session 65, report 263, ROADMAP 7a).**  The unit runs
-   **dual-core at 1008 MHz** on `0xC9FEE2D1` (`#105 SMP`, `online=0-1`; 6/6
-   boots and a 376 s soak with the gadget up).  The kernel had been built
+   **dual-core at 1008 MHz** on `0xC9FEE2D1` (`#105 SMP`, `online=0-1`; the 6/6
+   reboot set ran on the same zImage as `0x158D8A85`, and `0xC9FEE2D1` booted
+   once for a 376 s soak with the gadget up).  The kernel had been built
    `-march=armv6k` because `CONFIG_ARCH_MULTI_V6=y`; disabling it (this unit is
    OMAP4430 only) gives `-march=armv7-a` and module vermagic `ARMv7`, and the
    tracked config now matches the bench.  Dual-core is stable **only** with the

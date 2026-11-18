@@ -17,7 +17,8 @@ kernel had also been built `-march=armv6k`; that is fixed (`-march=armv7-a`).
 * **Region 0 = `local/work/kernel-armv7-console-cpu1.img`, CRC `0xC9FEE2D1`**
   (10,450,108 B) — `#105 SMP`, ARMv7, fast chainloader, loud DTB without
   `maxcpus`, the DSI-init TCON hook, the device-mode-only MUSB workaround, and
-  an inert `console=ttyGS0,115200` bootarg.  6/6 clean boots; a 376 s soak with
+  an inert `console=ttyGS0,115200` bootarg.  The 6/6 reboot set ran on
+  `0x158D8A85` (the same zImage); this image booted once for a 376 s soak with
   the gadget link alive.
 * **hd3 = the Nura root** — `local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img`
   (`07555bde…`, 625,999,872 B) flashed at block `0x4915`, grown to **62.5 G**,

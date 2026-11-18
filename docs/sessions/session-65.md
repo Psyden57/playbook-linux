@@ -14,7 +14,8 @@ Date / span: 2026-11-18 (one calendar day).
   path; verified, no `console [ttyGS0] enabled`).  Fast chainloader, loud DTB
   **without** `maxcpus`, the session-64 DSI-init TCON hook and the
   **device-mode-only mailbox workaround** in `omap2430_musb_enable()`.  Dual-core
-  `online=0-1`, 1008 MHz, 6/6 clean boots and a >6-minute soak.
+  `online=0-1`, 1008 MHz; the 6/6 reboot set ran on `0x158D8A85` (the same
+  zImage), and this image booted once for the 376 s soak.
 * **hd3 = the Nura root** — the baked image
   `local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img`
   (sha256 `07555bde…`, 625,999,872 B) flashed at loader block `0x4915`
