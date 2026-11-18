@@ -3,11 +3,20 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**8 981 lines / 64 files** against pristine **linux-7.3.3**
-(sha256 `ca17a057…`, session-58 export).  It was verified by applying it to
-pristine 7.3.3 targets and comparing all 64 files byte-for-byte with
-`local/kernel-tree` — 0 rejects, 64/64 identical.  **Session 58** fixes the
-Munin touch position ghost: `playbook-munin.c` keeps the 10 ms poll armed while
+**9 110 lines / 65 files** against pristine **linux-7.3.3**
+(sha256 `6f9bef24…`, session-65 export).  It was verified by applying it to
+pristine 7.3.3 targets and comparing all 65 files byte-for-byte with the
+intended contents — 0 rejects, 65/65 identical.  **Session 65** re-exports it
+after the dual-core work.  It adds `drivers/usb/musb/omap2430.c` (the
+winchester device-mode-only enable path — the bind-time `omap_musb_set_mailbox()`
+call is skipped — plus the `set_mailbox_lock` mutex), the DSI-init TCON hook in
+`drivers/gpu/drm/omapdrm/dss/dsi.c`, and updates the board DTS (`maxcpus=1`
+removed; an inert `console=ttyGS0,115200`).  The **session-62/63/64 diagnostics
+are not in the patch**: the `PBDBG` markers in `init/main.c`, the
+`PBCPU`/`PBIPI1`/`PBSMF` markers in `arch/arm/kernel/smp.c`,
+`arch/arm/mach-omap2/omap-smp.c` and `kernel/smp.c`, the `head.S` `CRR` stamp,
+the `MINI4x6` font link, and the reverted `otg.h` text guard.  **Session 58**
+fixes the Munin touch position ghost: `playbook-munin.c` keeps the 10 ms poll armed while
 the controller asserts its IRQ line (and for a 200 ms grace after the last
 contact), and holds a new down back one sample when it repeats the slot's
 previous coordinates within 300 ms; the board DTS gains `irq-gpios` on the
@@ -233,6 +242,7 @@ config is also baked into every built kernel and recoverable via
 | `arch/arm/Kconfig.debug` (+12) | `DEBUG_PLAYBOOK_BC` choice → `DEBUG_LL_INCLUDE="debug/omap4bc.S"` |
 | `arch/arm/boot/dts/ti/omap/Makefile` + `omap4-winchester.dts` (new) | The device tree: memory bank, pl310 node, reserved-memory bc/ring pages, model string |
 | `arch/arm/kernel/early_printk.c` | early console plumbing compatible with omap4bc |
+| `drivers/usb/musb/omap2430.c` (new, +23) | The winchester MUSB glue: `omap2430_musb_enable()` sets only `USB_MODE_DEVICE` and skips the bind-time `omap_musb_set_mailbox()` that panics on dual-core; a `set_mailbox_lock` mutex serializes the remaining callers (reports 262/263, DECISIONS §93/§95) |
 
 ### Diagnostic instrumentation (as-shipped; safe to strip, but they are in every log)
 

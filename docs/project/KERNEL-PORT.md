@@ -5,10 +5,14 @@ boots it to the hd3 Nura root (now read-write and grown; report 249) and to the
 region-1 BusyBox userland.
 
 * Base: **upstream 7.3.3** (not the pmOS package, which is still `!armhf`).
-* Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **64 files /
-  8 981 lines**, sha256 `ca17a057…`, verified 0 rejects / 64/64 byte-identical
-  against pristine 7.3.3 targets (session 58).  It includes the SGX integration
-  (`drivers/gpu/drm/{Kconfig,Makefile}`, `mm/vmalloc.c`, the DTS, the config),
+* Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **65 files /
+  9 110 lines**, sha256 `6f9bef24…`, verified 0 rejects / 65/65 byte-identical
+  against pristine 7.3.3 targets (session 65 export).  Session 65 adds
+  `drivers/usb/musb/omap2430.c` (device-mode-only enable path + the
+  `set_mailbox_lock` mutex), the DSI-init TCON hook in `dsi.c`, and the board
+  DTS without `maxcpus`; the session-62/63/64 markers, the `head.S` `CRR` stamp
+  and the `MINI4x6` font link are deliberately **not** in it.  It includes the
+  SGX integration (`drivers/gpu/drm/{Kconfig,Makefile}`, `mm/vmalloc.c`, the DTS, the config),
   the session-56 Munin Y fix, the session-57 touch input model and audio
   print levels, and the session-58 position-ghost fix (`playbook-munin.c` +
   `irq-gpios` in the board DTS); the **362-file SGX driver itself is vendored**

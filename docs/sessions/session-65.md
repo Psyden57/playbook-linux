@@ -91,6 +91,11 @@ from hd3 instead of the BusyBox root.
   occurs on both roots and is unrelated.
 * **A 6-minute dual-core soak passes on `0xC9FEE2D1`:** uptime 376 s,
   `online=0-1`, no panic, gadget enumerated, `pbrpmb` `0x26`.
+* **The kernel patch was re-exported** (it was still the session-58 export and
+  no longer reproduced the tree): **65 files / 9,110 lines**, sha256
+  `6f9bef24…`, **0 rejects / 65/65 byte-identical** against pristine 7.3.3.
+  It carries the `omap2430.c` workaround + mutex, the DSI-init TCON hook and the
+  DTS change; the session-62/63/64 diagnostics are excluded (report 263 §5).
 
 ## Inferred (reasoning from evidence, not directly measured)
 
@@ -169,5 +174,7 @@ from hd3 instead of the BusyBox root.
   `kernel-armv7-cpu1.img` (`0x158D8A85`),
   `kernel-usbdev-cpu1.img` (`0xC675E206`), `kernel-mutexmailbox-cpu1.img`
   (`0x19E24D8F`, rejected).
-* Tracked: `kernel/winchester-7.3.3.config` (SMP/ARMv7),
+* Tracked: `kernel/patches/0001-playbook-winchester-7.3.3.patch` (65 files /
+  9,110 lines, sha256 `6f9bef24…`) and `kernel/patches/README.md`,
+  `kernel/winchester-7.3.3.config` (SMP/ARMv7),
   `kernel/source/omap4-winchester.dts` (no `maxcpus`), this note, report 263.

@@ -197,7 +197,31 @@ The capture also showed:
 * The eMMC stall repeated (`mmc1: Card stuck being busy`, lost async WRITE)
   at 33.7 s with flags `0x800000`.
 
-## 5. Evidence
+## 5. Patch re-export
+
+The tracked patch was still the session-58 export (64 files / 8,981 lines,
+sha256 `ca17a057…`): it did not touch `omap2430.c`, had no `PBTCON` in `dsi.c`,
+and its board-DTS hunk still set `maxcpus=1`, so it no longer reproduced the
+kernel in `local/kernel-tree` after sessions 62–65.
+
+Re-exported in session 65: **65 files / 9,110 lines, sha256 `6f9bef24…`**,
+verified by applying it to pristine 7.3.3 targets — **0 rejects, 65/65
+byte-identical**.  Contents added/changed over session 58:
+
+* `drivers/usb/musb/omap2430.c` (new, +23): the winchester device-mode-only
+  enable path and the `set_mailbox_lock` mutex.
+* `drivers/gpu/drm/omapdrm/dss/dsi.c`: the DSI-init TCON hook.
+* `arch/arm/boot/dts/ti/omap/omap4-winchester.dts`: `maxcpus=1` removed; inert
+  `console=ttyGS0,115200` added.
+
+Deliberately **not** exported (diagnostics only): the `PBDBG` markers in
+`init/main.c` and the `head.S` `CRR` stamp (session-58 content is used for both
+files), the `PBCPU`/`PBIPI1` markers in `arch/arm/kernel/smp.c` and
+`arch/arm/mach-omap2/omap-smp.c`, the `PBSMF` markers in `kernel/smp.c`, the
+`MINI4x6` font link in `lib/fonts/Makefile`, and the reverted `otg.h` include.
+The vendored `drivers/gpu/drm/pvrsgx/` tree remains a tarball, not patch content.
+
+## 6. Evidence
 
 * Boot/soak logs: `local/work/soak65-20261118-183036.log` (6/6 on
   `0xC675E206`), `local/work/armv7-boots.log` (6/6 on `0x158D8A85`), the tracked
