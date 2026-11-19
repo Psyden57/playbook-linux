@@ -1,6 +1,53 @@
 # Current state
 
-## Current state — 2026-11-18 (session 65)
+## Current state — 2026-11-19 (session 66)
+
+**The mailbox fault's bad indirect transfer is identified; the working image is
+back on region 0.**  HANDOFF-65 §0d's one experiment was run: an instrumented
+stock-mailbox kernel (winchester early return removed, mutex kept, `panic=0`)
+with `PBMBX` `printascii` markers was booted twice on dual-core, and the hung
+boot's DRAM ring was recovered through a warm reset + the quiet read-back
+image.  **Entry pointers are valid** — `status=4` (`MUSB_VBUS_OFF`), valid
+`xceiv`/`otg`, and `otg->set_vbus = 0xc0729b94` = `omap_usb_set_vbus` kernel
+text — so the "stale `usb_phy` at entry" branch is ruled out.  Branch markers
+show `sv` still valid right before `otg_set_vbus()`, then the Oops:
+`PC = 0xc2c05800`, a `kmalloc-1k` slab address, `LR =
+omap_musb_set_mailbox+0x1e0`; no `PBMBX prechain`, so it is not the notifier
+chain.  Disassembly pins the fault to `omap_usb_set_vbus()`'s tail-call
+`phy->comparator->set_vbus`: the TWL6030 `phy_companion` registered into the
+`omap-usb2` PHY is stale/corrupt (a PHY-lifecycle fault, one level below
+`musb->xceiv`).  [report 264; session-66 note; capture
+`docs/captures/musb-mailbox-fault-2026-11-19.txt`]
+
+* **Region 0 = `local/work/kernel-armv7-console-cpu1.img`, CRC `0xC9FEE2D1`**
+  (10,450,108 B) — **restored** after the experiment (marker images
+  `0xF1AA4568` / `0x405E8997` and the read-back image `0x5BBCD22E` were
+  temporary).  The same session-65 ARMv7 `#105 SMP` dual-core image: fast
+  chainloader, loud DTB **without `maxcpus`**, DSI-init TCON hook,
+  device-mode-only mailbox workaround, inert `console=ttyGS0`.  The operator
+  saw the Nura desktop boot cleanly after a few reset cycles; the USB link then
+  dropped at ~60 s (the intermittent VUSB teardown, trap 337) while the unit
+  kept running.  `boot/chainloader/kernel.img` was reset to this saved file.
+* **Region 1 = the BusyBox ext4 `6f5b8ca7…`** at `0x29000000` (unchanged,
+  fallback, not booted).  **hd3 = the Nura ext4 `07555bde…`**, grown to 62.5 G
+  with the ARMv7 modules (unchanged — no hd3 write this session).
+* **`BOOTCTR_FCTRY` not re-read this session** (the USB link was down at the
+  close); last known `0x26`.  `panic=0` prevented a trap-335 loop, so no
+  counter drain occurred.  Read `dmesg | grep pbrpmb` on the next SSH-capable
+  boot as a health check; `/init` tops up below `0x1e`.
+* **Bench:** Linux/Nura on hd3, not TabletOS.  dropbear on `169.254.0.1:22`
+  when the gadget is up (`PB_LINK=usb tools/pbssh.sh`); at the close the USB
+  link had dropped (~60 s after boot) and the panel console is the recovery
+  path — a cable replug does not re-enumerate (trap 337).  No persistent
+  device-side files were deployed this session (`/tmp/ringdump` and the ring
+  dumps were on the temporary read-back image and are gone).
+* **Build tree reverted and proven:** `omap2430.c` and the board DTS match
+  their pre-experiment backups byte-for-byte, the rebuilt `vmlinux` has zero
+  `PBMBX` strings and the DTB bootargs are back to `panic=10`.  No tracked
+  driver/DTS change; the export stays **65 files / 9 110 lines**,
+  sha256 `6f9bef24…`.  **No restore to TabletOS required.**
+
+## Previous state — 2026-11-18 (session 65)
 
 **The mailbox mutex is not the fix, the kernel is now ARMv7, and hd3 runs the
 Nura root.**  Serializing the two `omap_musb_set_mailbox()` callers with a glue
@@ -474,9 +521,11 @@ and a failed/half-formed write or a flat pack is still a brick risk.
 
 ## Blockers in play
 
-**Session 65 — the open blockers are:** (1) the **mailbox fault** — dual-core
-needs the device-mode-only MUSB workaround; the stock `omap_musb_set_mailbox()`
-still panics with the callers serialized (report 263); (2) the **MPU OPP** — no
+**Session 66 — the open blockers are:** (1) the **mailbox fault** — the bad
+indirect transfer is now identified (`phy->comparator->set_vbus` inside
+`omap_usb_set_vbus()`, a stale TWL6030 `phy_companion`; report 264), but the
+device-mode-only workaround is still required until the comparator lifetime is
+fixed; (2) the **MPU OPP** — no
 `cpufreq` policy, `twl6030_uv_to_vsel: OUT OF RANGE` for 1.375/1.41 V (report
 257 §6); (3) the remaining **UI performance** — llvmpipe's deferred `swap`
 (420–550 ms per full-screen drawer frame) and its first-draw JIT, now on two
@@ -570,18 +619,19 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 ## What is next
 
-0. **THE ACTIVE ITEM — the CPU: dual-core works; the MPU OPP and the mailbox
-   fault remain (session 65, report 263, ROADMAP 7a).**  The unit runs
-   **dual-core at 1008 MHz** on `0xC9FEE2D1` (`#105 SMP`, `online=0-1`; the 6/6
-   reboot set ran on the same zImage as `0x158D8A85`, and `0xC9FEE2D1` booted
-   once for a 376 s soak with the gadget up).  The kernel had been built
-   `-march=armv6k` because `CONFIG_ARCH_MULTI_V6=y`; disabling it (this unit is
-   OMAP4430 only) gives `-march=armv7-a` and module vermagic `ARMv7`, and the
-   tracked config now matches the bench.  Dual-core is stable **only** with the
-   session-64 device-mode-only MUSB workaround: restoring the stock
-   `omap_musb_set_mailbox()` call still panics on dual-core even with both
-   callers serialized by a mutex, so the workaround stays until the fault is
-   identified (entry marker with `panic=0` is the next experiment).
+0. **THE ACTIVE ITEM — the CPU: dual-core works; the mailbox fault's bad
+   indirect transfer is identified, the MPU OPP remains (session 66, report
+   264, ROADMAP 7a).**  The unit runs **dual-core at 1008 MHz** on `0xC9FEE2D1`
+   (`#105 SMP`, `online=0-1`, ARMv7 `-march=armv7-a`).  Session 66 ran the
+   marker experiment: the stock `omap_musb_set_mailbox()` call panics on
+   dual-core because `otg->set_vbus` → `omap_usb_set_vbus()` →
+   `phy->comparator->set_vbus` jumps to a slab address (a stale TWL6030
+   `phy_companion`); entry pointers are valid and the notifier chain is not
+   involved (report 264).  **Next: audit the comparator lifetime**
+   (`omap_usb2_set_comparator()` / `twl6030_usb_probe()` probe-deferral/rebind,
+   and the `cpcap-charger.c` writer of `phy->comparator`) — more branch markers
+   are not useful.  The device-mode-only workaround stays until that is fixed;
+   a fix must restore the stock call for OTG host mode.
    * **Then the MPU OPP:** no `cpufreq` policy exists; boot logs
      `twl6030_uv_to_vsel: OUT OF RANGE` for 1.375/1.41 V against a 1.31666 V
      table max.  Measure the reference's `DPLL_MPU`/`PRM_VC` on the oracle,

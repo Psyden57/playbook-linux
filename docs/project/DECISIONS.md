@@ -3343,6 +3343,50 @@ remains the fallback and the 1917 IFS + vendor UFS remain the way back.
 ARMv7 module install (`depmod` OK, 0 module-size mismatches, `pvrsrvkm` bound,
 `catacomb` running).
 
+## 97. The mailbox fault is a stale comparator; audit its lifetime, keep the workaround (session 66)
+
+**Decision.**  Keep the device-mode-only `omap2430_musb_enable()` workaround and
+the `set_mailbox_lock` mutex.  The next work on the mailbox is a **PHY-lifecycle
+audit** of the TWL6030 `phy_companion` registered into the `omap-usb2` PHY —
+**not** more `PBMBX` branch markers.  The kernel patch is unchanged (65 files /
+9 110 lines, `6f9bef24…`): the session-66 driver/DTS diagnostics were built in
+the gitignored tree and reverted, with the revert proven by source hashes, the
+absence of `PBMBX` strings in the rebuilt `vmlinux`, and the DTB bootargs back
+to `panic=10`.  Region 0 was restored to `0xC9FEE2D1`.
+
+**Why.**  Session 66 completed HANDOFF-65 §0d with `PBMBX` markers and `panic=0`,
+recovering the hung boot's DRAM ring.  Entry pointers are valid — `status=4`
+(`MUSB_VBUS_OFF`), valid `xceiv`/`otg`, `otg->set_vbus = 0xc0729b94` =
+`omap_usb_set_vbus` kernel text — so the "wild pointer at entry" explanation is
+ruled out.  Branch markers show `sv` valid immediately before `otg_set_vbus()`;
+the Oops then jumps to `0xc2c05800` (a `kmalloc-1k` slab), `LR =
+omap_musb_set_mailbox+0x1e0`, with no `PBMBX prechain`.  Disassembly pins the
+fault to `omap_usb_set_vbus()`'s tail call `phy->comparator->set_vbus`: the
+`struct phy_companion` set by `twl6030_usb_probe()` holds a slab address where
+`twl6030_set_vbus` text should be.  So the root cause is a stale/corrupt
+comparator — a PHY-lifecycle fault one level below `musb->xceiv`, which is why
+neither the mutex (session 65) nor an `otg->set_vbus` text guard (session 64)
+could help.  `panic=0` avoided a trap-335 counter-draining loop.
+
+**Constraint.**  No fix is in the tree: a fix must establish why
+`phy->comparator` becomes stale (`omap_usb2_set_comparator()` /
+probe-deferral/rebind; the `cpcap-charger.c` writer of `phy->comparator`) and
+then let the stock `omap_musb_set_mailbox()` call run cleanly on dual-core
+(3+ boots) before the early return is deleted.  Restoring the stock call is
+required for OTG host mode, so this decision is an obstacle until the audit is
+done.  Adding more branch markers has no value.  No `.config` change was made.
+`BOOTCTR_FCTRY` was not re-read at the close (last known `0x26`); the USB link
+dropped ~60 s after the restore boot (trap 337) while the unit kept running.
+
+**Evidence.**  Report 264; capture
+`docs/captures/musb-mailbox-fault-2026-11-19.txt`; raw rings
+`local/work/r2-session66{,-m2}.bin`; images `0xF1AA4568` / `0x405E8997` and the
+restored `0xC9FEE2D1`; source backups
+`local/work/omap2430.c.session66-{orig,markers}` /
+`local/work/omap4-winchester.dts.session66-{orig,panic0}`;
+`arm-linux-objdump -d local/kernel-tree/vmlinux` at `c0a23c6c`/`c0729b94`;
+trap 338; DECISIONS §93/§95.
+
 ### Repository license
 
 **Decided (session 23): GPL-3.0-or-later.**  The project's own code and

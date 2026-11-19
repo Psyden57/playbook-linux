@@ -1,20 +1,22 @@
-# Handoff — session 65 (absolute) → session 66
+# Handoff — session 66 (absolute) → session 67
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§7).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — this handoff is for **absolute 66 = Linux-era 60**, written at the
-session-65 close.  See `docs/sessions/NUMBERING.md`.
+`N+6` — this handoff is for **absolute 67 = Linux-era 61**, written at the
+session-66 close.  See `docs/sessions/NUMBERING.md`.
 
-> **Session-65 result, in two lines.**  **The kernel is now ARMv7** (it had been
-> built `-march=armv6k` because of `CONFIG_ARCH_MULTI_V6`) and runs **dual-core
-> at 1008 MHz**, 6/6 boots plus a 376 s soak with the gadget link alive.  The
-> session-64 device-mode-only MUSB workaround is still required: restoring the
-> stock `omap_musb_set_mailbox()` call **still panics on dual-core even with both
-> callers serialized by a mutex**.  **hd3 carries the Nura root again** (the
-> previous ext4 was damaged by power cycles), grown to 62.5 G with the ARMv7
-> modules; `pvrsrvkm` binds and `catacomb` runs.  Region 0 `0xC9FEE2D1`; region 1
-> `6f5b8ca7…`; hd3 `07555bde…`; patch **65 files / 9 110 lines**, sha256
-> `6f9bef24…`.
+> **Session-66 result, in two lines.**  **The mailbox fault's bad indirect
+> transfer is identified:** `omap_musb_set_mailbox()` enters with valid
+> pointers (`otg->set_vbus = 0xc0729b94` = `omap_usb_set_vbus` text), then the
+> `otg_set_vbus()` call faults at `PC = 0xc2c05800` (a `kmalloc-1k` slab) —
+> the fault is `omap_usb_set_vbus()`'s tail-call `phy->comparator->set_vbus`, a
+> stale TWL6030 `phy_companion`, not the notifier chain or the two-caller race.
+> **Next: audit the comparator lifetime**; the device-mode-only workaround
+> stays until fixed.  Region 0 restored to `0xC9FEE2D1`; region 1 `6f5b8ca7…`;
+> hd3 `07555bde…` (62.5 G Nura); patch **65 files / 9 110 lines**, sha256
+> `6f9bef24…` (unchanged — the diagnostics were reverted).  `BOOTCTR_FCTRY` not
+> re-read at the close (last known `0x26`); the USB link dropped ~60 s after the
+> restore boot while the unit kept running.
 
 ## 0. The job, and where it stands
 
@@ -33,9 +35,10 @@ audio** (headphones + both speakers, 48 kHz), and the **WL1283 WLAN**
 (associates, DHCP, traffic).  The WL1283 **BT core** works (real inquiry; `hci0`
 registers with mgmt) with the controller-open parked (§0c).
 
-**What is left, in order:** the mailbox fault (§0d), then the MPU OPP (§0e),
-then UI performance / hardware GL and the rebake (§0f).  The USB/VUSB teardown
-is intermittent and open (§0d, second experiment).
+**What is left, in order:** the mailbox fault (§0d — bad transfer identified,
+comparator-lifetime audit next), then the MPU OPP (§0e), then UI performance /
+hardware GL and the rebake (§0f).  The USB/VUSB teardown is intermittent and
+open (§0d, second experiment).
 
 ## 0a. The media, and the way back
 
@@ -112,66 +115,59 @@ to 6.13 and removed it; a forward port is the route.  **GPS:** no mainline
 driver; the operator has a 2024 LKML patch to evaluate, the reference's own path
 is the fallback.
 
-## 0d. THE ACTIVE ITEM — the MUSB mailbox fault (§0a of session 65's HANDOFF)
+## 0d. THE ACTIVE ITEM — the MUSB mailbox fault (report 264)
 
-### Where it stands
+### Where it stands — the bad indirect transfer is identified
 
-Dual-core boot is stable **only** with the session-64 workaround: on winchester,
-`omap2430_musb_enable()` calls only
-`omap_control_usb_set_mode(glue->control_otghs, USB_MODE_DEVICE)` and returns,
-skipping the bind-time `omap_musb_set_mailbox()`.  The stock call panics on
-dual-core (PID 1, `Attempted to kill init!`), and session 65 measured that
-**serializing the two callers with a glue mutex does not fix it** (report 263
-§1): the mutex build (`0x19E24D8F`) panicked on its first dual-core boot and
-`panic=10` looped it ~6 times, draining `BOOTCTR_FCTRY 0x22 → 0x1c`.
+Session 66 ran the HANDOFF-65 marker experiment to completion.  With the
+winchester early return removed (mutex kept) and `panic=0`, an instrumented
+stock-mailbox kernel was booted twice on dual-core (`0xF1AA4568`,
+`0x405E8997`); the hung boot's DRAM ring was recovered via a warm reset + the
+quiet read-back image.  [report 264; capture
+`docs/captures/musb-mailbox-fault-2026-11-19.txt`]
 
-The surviving possibilities are (a) the `usb_phy`/`usb_otg` object is already
-corrupt when the mailbox is entered (the session-64 observation that
-`otg->set_vbus` once held a slab address `0xc2b1b800` fits this), or (b) a call
-inside the state-machine update corrupts it.  The device-mode-only workaround is
-also an obstacle to OTG host mode (it forces `USB_MODE_DEVICE` on a host start).
+* **Entry pointers are valid.** `status=4` (`MUSB_VBUS_OFF`), valid `xceiv`/
+  `otg`, and `otg->set_vbus = 0xc0729b94` = `omap_usb_set_vbus` **kernel text**.
+  The "stale `usb_phy` at entry" branch is ruled out at the `musb->xceiv` level.
+* **The fault is one level down.** Branch markers show `sv` still valid right
+  before `otg_set_vbus()`; the Oops follows immediately at `PC = 0xc2c05800`, a
+  `kmalloc-1k` slab address, `LR = omap_musb_set_mailbox+0x1e0`.  There is **no**
+  `PBMBX prechain`, so it is not the notifier chain.
+* **The exact transfer:** `otg_set_vbus()` → `omap_usb_set_vbus()` → its tail
+  call `phy->comparator->set_vbus`.  The `struct phy_companion` registered into
+  the `omap-usb2` PHY by `twl6030_usb_probe()` is stale/corrupt — its `set_vbus`
+  word holds a slab address where `twl6030_set_vbus` text should be.  So this is
+  a **PHY-lifecycle** fault, as the old handoff's second branch suspected, but
+  in the TWL6030 comparator, not in `musb->xceiv` itself.
+* The device-mode-only workaround stays until that is fixed; the stock call is
+  also needed for OTG host mode.  The session-64 "slab address in
+  `otg->set_vbus`" observation was probably this nested pointer, mis-symbolised.
 
-### THE ONE EXPERIMENT: instrument the mailbox entry, `panic=0`
+### THE ONE EXPERIMENT: audit the comparator lifetime (no more markers)
 
-**Inputs:** the ARMv7 tree, tracked config (`CONFIG_SMP=y`, `CONFIG_NR_CPUS=2`,
-no `ARCH_MULTI_V6`), DTB **without** `maxcpus`.  Edit the gitignored tree only:
+The instrumentation question is answered; additional `PBMBX` branches have no
+value.  The next step is a **static + targeted lifecycle audit**, on the
+gitignored tree first (no `.config` change, no module rebuild):
 
-1. In `drivers/usb/musb/omap2430.c`, remove the winchester early return in
-   `omap2430_musb_enable()` so the stock `omap_musb_set_mailbox(glue)` runs from
-   the bind path (keep the `set_mailbox_lock` mutex).
-2. At the **entry** of `omap_musb_set_mailbox()`, before the lock, emit one line
-   with `printascii()` (the PB marker mechanism; `printascii` takes a string, so
-   `snprintf()` into a static buffer):
+1. Read `omap_usb2_set_comparator()` in `drivers/phy/ti/phy-omap-usb2.c` and its
+   call from `twl6030_usb_probe()` (`drivers/usb/phy/phy-twl6030-usb.c:358`).
+   `twl` is `devm_kzalloc`'d; look for a probe-deferral/rebind or a late
+   `omap_usb2_set_comparator(NULL)` that frees `twl` while leaving
+   `phy->comparator` dangling.  The `twl6030_charger … vmax -22 imax: -22`
+   probe (report 263 §4a) is a live clue that this PMIC block has more than one
+   driver.
+2. Check the other writer: `cpcap-charger.c:921/940` calls
+   `omap_usb2_set_comparator(&ddata->comparator)` / `(NULL)`.  Confirm it does
+   not probe on this board and clobber the pointer.
+3. Only if the audit is inconclusive, add one more marker set printing
+   `phy->comparator`, `phy->comparator->set_vbus` and `xceiv->otg->usb_phy` at
+   entry, and re-read `otg->set_vbus` after `musb_set_peripheral()`, to catch an
+   in-call write.  Use `panic=0` and the read-back capture procedure.
 
-   ```
-   PBMBX entry cpu=%d status=%d glue=%08x musb=%08x xceiv=%08x otg=%08x sv=%08x nh=%08x
-   ```
-
-   with `sv = xceiv->otg->set_vbus`, `nh = xceiv->notifier.head`, `(unsigned)`
-   casts.  Add a second marker immediately before the final
-   `atomic_notifier_call_chain()` (`last_event`, `otg->state`, `sv`, `nh`).
-3. Put **`panic=0`** in the board DTS `bootargs` (not `panic=10`; trap 335).
-4. Rebuild `zImage` + DTB, wrap, flash region 0, boot on the bench.
-
-**What each result means.**
-
-* **Valid kernel-text pointers at entry, fault later** → the corruption happens
-  inside the call.  The second marker says whether `sv`/`nh` changed; if `sv` is
-  still fine, the fault is the notifier chain (`nh`) or a branch that calls
-  `musb_set_peripheral()`/`musb_set_host()`.  Next: a marker before each branch
-  call.
-* **A wild `sv`/`nh` at entry (e.g. a `0xc…` slab address)** → the
-  `usb_phy`/`usb_otg` object is stale *before* the mailbox.  Stop instrumenting
-  it and audit the PHY lifecycle: `devm_usb_get_phy_by_phandle()` in
-  `omap2430_musb_init()`, the `phy-twl6030-usb` comparator vs the `omap-usb2`
-  PHY instance, and any probe-deferral/rebind.
-* **Clean boot** → the markers changed the timing; rerun 5×.  If still clean,
-  verify the build actually removed the early return and compiled the marker.
-
-**Capture:** the panel shows the panic (the DSI-init TCON hook prints early), or
-read the ring via the read-back image (§0e, `tools/pb_ring.py`); with `panic=0`
-the unit hangs, so a power cycle follows.  **Do not flash a stock-mailbox image
-with `panic=10`.**
+**Success criterion for a fix:** the stock `omap_musb_set_mailbox()` call runs
+on dual-core with no Oops, the gadget comes up, and the device-mode-only early
+return can be deleted.  Re-verify with 3+ clean dual-core boots before changing
+the kernel patch (re-export via the session-65 method, trap 211/161).
 
 ### SECOND EXPERIMENT (only if the link drops): the VUSB teardown
 
@@ -339,7 +335,7 @@ catch a file the previous export missed.  Update `kernel/patches/README.md` and
 * **Old Nura image:** the panel's `epitaph` may still show the r10005 bug;
   check before judging the desktop (§0f).
 
-## 4. Traps added last session (full list 14–337 in `KNOWN-ISSUES.md` §2)
+## 4. Traps added last session (full list 14–338 in `KNOWN-ISSUES.md` §2)
 
 * **334.** The kernel was built **`-march=armv6k`** because
   `CONFIG_ARCH_MULTI_V6=y` selects `CPU_ARM1176 → CPU_V6K → CPU_32v6`, and
@@ -357,6 +353,11 @@ catch a file the previous export missed.  Update `kernel/patches/README.md` and
 * **337.** The **USB/VUSB teardown is intermittent**, not an idle timer (30 s,
   90 s, and none in a 376 s boot).  Only `twl6030_usb_irq()` disables `usb3v3`;
   the trigger is not settled (contradiction file).
+* **338.** The mailbox fault's **bad indirect transfer is
+  `phy->comparator->set_vbus`**, a stale TWL6030 `phy_companion`, **not** a wild
+  `otg->set_vbus` at entry: entry `sv = 0xc0729b94` is valid kernel text, and the
+  Oops jumps to `0xc2c05800` (slab) inside `omap_usb_set_vbus()`'s tail call.
+  Next is a PHY-lifecycle audit, not more markers (report 264).
 * Still current: **333** (the gadget bind is the trigger; the workaround is the
   device-mode-only call), **332** (dual-CPU `printascii` garble), **331** (power
   ruled out), **330** (the IPI is serviced), **327** (`nosmp` is not
@@ -406,57 +407,62 @@ catch a file the previous export missed.  Update `kernel/patches/README.md` and
 ## 7. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 66 (absolute; Linux-era 60)
+PlayBook (OMAP4430 "winchester") — session 67 (absolute; Linux-era 61)
 
 Workspace: this repository — a git checkout.  Map: docs/README.md.  The earlier
 work tree $HOME/rea-work is READ-ONLY.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 14-337, especially 333-337)
-and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 91-96, docs/reports/INDEX.md,
-reports 263, 262, 259-261, 257, and sessions/session-65.md.
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 14-338, especially 333-338)
+and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 91-97, docs/reports/INDEX.md,
+reports 264, 263, 262, 257, and sessions/session-66.md.
 
 WHERE IT STANDS: the unit runs Linux 7.3.3, dual-core at 1008 MHz, on the ARMv7
 image 0xC9FEE2D1 (#105 SMP), with the Nura root on hd3 (grown to 62.5 G, ARMv7
-modules installed); pvrsrvkm binds and catacomb runs.  The session-64
-device-mode-only MUSB workaround is still required: restoring the stock
-omap_musb_set_mailbox() call STILL PANICS on dual-core even with both callers
-serialized by a mutex (report 263).  The USB teardown (VUSB disabling by the
-TWL6030 comparator) is intermittent, not an idle timer (30 s / 90 s / not in
-376 s).
+modules installed); pvrsrvkm binds and catacomb runs.  The session-66 marker
+experiment identified the mailbox fault's bad indirect transfer: entry pointers
+are valid (otg->set_vbus = 0xc0729b94 = omap_usb_set_vbus text), then the
+otg_set_vbus() call jumps to 0xc2c05800 (a slab) inside omap_usb_set_vbus()'s
+tail call phy->comparator->set_vbus — a stale TWL6030 phy_companion (report 264,
+trap 338).  The device-mode-only MUSB workaround is still required until that
+comparator lifetime is fixed.  The USB link dropped ~60 s after the restore boot
+(the intermittent VUSB teardown, trap 337); the unit kept running on its panel.
 
-THE ONE EXPERIMENT: identify the bad indirect transfer in
-omap_musb_set_mailbox().  In the gitignored tree, remove the winchester early
-return from omap2430_musb_enable() (keep the set_mailbox_lock mutex), add a
-printascii() entry marker (cpu, status, glue, musb, xceiv, otg, otg->set_vbus,
-xceiv->notifier.head) and a second one before atomic_notifier_call_chain(), set
-panic=0 in the board DTS bootargs, rebuild zImage+DTB, wrap, flash region 0,
-boot.  Valid pointers at entry + a later fault => corruption during the call
-(marker before each branch); a wild pointer at entry => stale usb_phy/usb_otg,
-audit the PHY lifecycle.  Capture from the panel or the ring; with panic=0 a
-panic hangs, so a power cycle follows.  Do NOT use panic=10 (trap 335).
+THE ONE EXPERIMENT: audit the comparator lifetime — NOT more markers.  Static
+first: read omap_usb2_set_comparator() in drivers/phy/ti/phy-omap-usb2.c and its
+call from twl6030_usb_probe() (phy-twl6030-usb.c:358); look for a
+probe-deferral/rebind or a late omap_usb2_set_comparator(NULL) that frees the
+devm_kzalloc'd twl and leaves phy->comparator dangling (the twl6030_charger
+"vmax -22 imax: -22" probe is a clue).  Check the other writer cpcap-charger.c
+:921/940 does not clobber it.  Only if inconclusive, add one more marker set
+printing phy->comparator, comparator->set_vbus and otg->usb_phy at entry, and
+re-read otg->set_vbus after musb_set_peripheral(); use panic=0 + the read-back
+capture.  A fix must let the stock omap_musb_set_mailbox() call run on dual-core
+(3+ clean boots) before deleting the early return and re-exporting the patch.
 
-SECOND (only if the link drops): capture the VUSB teardown with
-local/work/kmsgcap.py — the only writer is twl6030_usb_irq() on a VBUS_DET=0
-read; a VBUS_DET/linkstat log in that handler would settle it (trap 337,
-docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md).
+SECOND (only if the link drops — it did at ~60 s this session): capture the
+VUSB teardown with local/work/kmsgcap.py — the only writer is twl6030_usb_irq()
+on a VBUS_DET=0 read; a VBUS_DET/linkstat log in that handler would settle it
+(trap 337, docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md).
 
 BENCH: region 0 = 0xC9FEE2D1 (0x825); region 1 = the BusyBox ext4 6f5b8ca7... at
 0x29000000 (fallback, not booted); hd3 = the Nura ext4 07555bde... at 0x4915,
 grown to 62.5 G.  SSH: PB_LINK=usb tools/pbssh.sh (the ACM shell is
 playbook:~#, not pb>; pbcon.py does not drive it).  Kernel printk goes to the
-panel; the console=ttyGS0 bootarg is inert.  BOOTCTR_FCTRY = 0x26
-(dmesg | grep pbrpmb).  Start the flasher, then reset/power on; the 626 MB hd3
-write takes ~20 min.  /tmp is tmpfs; re-push ringdump.  Read dmesg UNFILTERED.
-The eMMC WRITE-busy stall is live and has damaged the rw ext4 once — prefer
-clean reboots.  An agent NEVER writes RPMB; NVRAM read-only.  Never program WDT2
-from the chainloader (trap 322).  No .config change for a marker-only
-experiment.
+panel; the console=ttyGS0 bootarg is inert.  BOOTCTR_FCTRY not re-read at the
+session-66 close (last known 0x26; dmesg | grep pbrpmb on the next SSH boot).
+Start the flasher, then reset/power on; the 626 MB hd3 write takes ~20 min.
+/tmp is tmpfs; re-push ringdump.  Read dmesg UNFILTERED.  The eMMC WRITE-busy
+stall is live and has damaged the rw ext4 once — prefer clean reboots.  An agent
+NEVER writes RPMB; NVRAM read-only.  Never program WDT2 from the chainloader
+(trap 322).  No .config change for a marker-only experiment.
 
 PATCH: 65 files / 9 110 lines, sha256 6f9bef24..., verified 0 rejects / 65/65;
-re-export (and update kernel/patches/README.md + KERNEL-PORT.md) after any DTS
-or driver change, using the session-65 method (reconstruct the shipped files,
-strip diagnostics, diff -N, apply-and-compare) and the tree walk (trap 211).
+unchanged in session 66 (the diagnostic driver/DTS edits were reverted and the
+build tree proven clean).  Re-export (and update kernel/patches/README.md +
+KERNEL-PORT.md) after any DTS or driver change, using the session-65 method
+(reconstruct the shipped files, strip diagnostics, diff -N, apply-and-compare)
+and the tree walk (trap 211).
 
 SAFETY: read SAFETY.md first.  One variable per boot.  Flash region 0 only when
 only it changed; both regions in one bootrom session only when both changed.

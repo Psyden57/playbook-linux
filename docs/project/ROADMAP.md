@@ -303,15 +303,23 @@ flasher can replace at every point:
     **Session 65:** the dual-core soak passed — 6/6 clean boots and a 376 s run
     with the gadget link alive on the **ARMv7** image — and hd3 is the Nura root
     again.  Restoring the stock mailbox with both callers serialized by a mutex
-    **still panics**, so the device-mode-only workaround stays.  **Next (session
-    66):** (a) identify the bad indirect transfer — an entry marker in
-    `omap_musb_set_mailbox()` (CPU, `glue`, `musb`, `xceiv`, `otg`, `set_vbus`,
-    `notifier.head`) with `panic=0`, per HANDOFF §0a; (b) then the MPU OPP — the
+    **still panics**, so the device-mode-only workaround stays.  **Session 66
+    identified the bad indirect transfer (report 264, trap 338):** with `PBMBX`
+    markers and `panic=0`, the ring shows valid entry pointers (`status=4`,
+    `otg->set_vbus = 0xc0729b94` = `omap_usb_set_vbus` text) and the Oops at
+    `PC = 0xc2c05800` (a slab), `LR = omap_musb_set_mailbox+0x1e0` — the fault is
+    `omap_usb_set_vbus()`'s tail call `phy->comparator->set_vbus`, a stale
+    TWL6030 `phy_companion`; not the notifier chain and not a wild pointer at
+    entry.  **Next (session 67):** (a) audit the comparator lifetime
+    (`omap_usb2_set_comparator()` / probe-deferral/rebind and the
+    `cpcap-charger.c` writer of `phy->comparator`) — no more markers — and only
+    then restore the stock call for OTG host mode; (b) then the MPU OPP — the
     table exists in `omap443x.dtsi` (300/600/800/**1008** MHz, trap 312), what
     is missing is `cpu-supply`/`vdd_mpu` + `cpufreq-dt`, or a boot-time DPLL/VC
     write (report 257 §6); the boot log's `twl6030_uv_to_vsel: OUT OF RANGE`
     (1.375/1.41 V vs 1.31666 V) shows the present attempt fails; (c) the
-    intermittent USB teardown (trap 337) if it recurs — capture before the drop;
+    intermittent USB teardown (trap 337 — it recurred at ~60 s this session) —
+    capture before the drop;
     (d) shrink/pre-warm the drawer; (e) pursue hardware GL for Wayland clients
     (trap 314); (f) rebake the restorable hd3 base with `epitaph` r10005+, the
     llvmpipe files and the rules (the image on hd3 is the session-59 state).

@@ -1,0 +1,120 @@
+MUSB mailbox fault — DRAM ring evidence — 2026-11-19 (session 66)
+======================================================================
+
+Two boot attempts of an instrumented stock-mailbox kernel on the
+dual-core ARMv7 build. Region 0 was flashed with the marker image,
+the unit hung, then a warm reset + flash of the quiet read-back image
+preserved the DRAM ring (the chainloader hand-off, trap 321). Raw ring
+dumps were read with tools/bench/ringdump.c and decoded with
+tools/pb_ring.py. The lines below are verbatim decode output; the ring
+is shared by both CPUs via printascii and visibly corrupts some bytes
+(trap 332), so hex pointer values may have single-byte damage.
+
+Raw ring 1 (entry marker only build, 0xF1AA4568): local/work/r2-session66.bin
+  sha256 5cf01e6556888ac3ad9d9050b8079242215c2b949cf3f13c0d17103fe7a504c9
+Raw ring 2 (per-branch markers build, 0x405E8997): local/work/r2-session66-m2.bin
+  sha256 4125d5c23ee07ec3edd6bf3bc66d244d94568e5913fea5fe20b906ce3f78252f
+
+----------------------------------------------------------------------
+CAPTURE 1 — entry marker + Oops (build 0xF1AA4568)
+----------------------------------------------------------------------
+PBMJx ejt.x cp5.0.rtitus=4 gnue=c2.4e2c0 mwsb=c08ea.42 xkekv=c29d366  otg=j2c$d.c0 sv=.0729b)4 nh=000.00.0
+
+["   1..8.462] 8<-)- c}t hebe -.-
+
+[    1.38452:] Unable to handle ker.en executioj of(mUmory ap"vi.tua. address k2d4.600 .hen(ezecute
+
+K  ( 1.3:473%] [c2d49400] *pgd=8"k1143.(bhd(
+*{  .(1.3*4826] Int.znal ezror: Oop{: 8200.0.d [+!] SMP ARM
+*[ .  1.386.4:] Modules"link%d in:
+
+[    1.3.52.0] CPU:(1 UID: 0.PID: 1 Comm:"init.Jot tainte..7.3.3(+5.6.VKLUNTARY.
+
+[ !  1.385192Y Jab.ware na/e:.Keneri. nMAP4 (.latten.d Device.T.ee)
+
+[    1.38%314} PC i{ at :8b.d.9.00
+
+[.   1.38=406] LR is at n-ap.iusj_set_mailbo:+0xf8/0x3;0.
+[((  1.7:5728] pc :.[<c:d4).00>]   *lr*. [<c0a23d64:] .  p{r: a0000033
+
+[  . ..;8%681] sp : ..02dd60(.ip :  .0.000." .p(: 20008..0-.[ (  1.287:0.] b10: b2e2.c5c "r9 :"002..080" r8.:)#18eb..0
+
+[ . .0.2:5(94] .7*:(c2c4e0dc  r. : 00200028  z%.:.k2k.e0c0  r4 . c!8ea040-
+[    1.3(.0.7] r3(: k2.49400 .rr :"00000... .r1 : 00000000 (.0 :"c9(f;340..[    1.3:6999] Flaos: NzCv. IRQs on" FIQs on. Mode SVC_32( I[A ARM  Seg-ent.none-
+[ .  1.3.6352] Cont.ol: 10c1#8'd. T!ble: 8;31c0.!  DAC: 02000051
+...  (1..86474] Registe. r. infkrmat.on: shaj kmalloc-192 sta.t c0:d3300 rointer(o.fse..64 size 192.*[  " 1.;866:8] Regist%r.r1 info2ma4ion: N.LL poin.er.
+K " (1.326810.(Registez(r2.information: nULJ.pointe.
+
+[  . 1*.8690s] Zegmster r3 ijformati/n:.3lab kmal.oc-1k start c2d4940."p
+
+----------------------------------------------------------------------
+CAPTURE 2 — entry + per-branch markers + Oops (build 0x405E8997)
+----------------------------------------------------------------------
+PBMBX entry cpu=0 status=4 glue=c1e460c0 musb=c18ee040 xceiv=c2838440 otg=c1fd34c0 sv=c0729b94 nh=00000000
+
+PBMBX pre-periph xceiv=c2838440 otg=c1fd34c0 sv=c0729b94 nh=00000000 st=1
+
+PBMBX post-periph xceiv=c2838440 otg=c1fd34c0 sv=c0729b94 nh=00000000 st=1
+
+PBMBX pre-setvbus xceiv=c2838440 otg=c1fd34c0 sv=c0729b94 nh=00000000 st=1
+
+[    1.418945] 8<--- cut here ---
+
+[    1.419006] Unable to handle kernel execution of memory at virtual address c2c05800 when execute
+
+[    1.419189] [c2c05800] *pgd=82c1141e(bad)
+
+[    1.419311] Internal error: Oops: 8000000d [#1] SMP ARM
+
+[    1.419433] Modules linked in:
+
+[    1.419494] CPU: 0 UID: 0 PID: 1 Comm: init Not tainted 7.3.3 #107 VOLUNTARY 
+
+[    1.419677] Hardware name: Generic OMAP4 (Flattened Device Tree)
+
+[    1.419799] PC is at 0xc2c05800
+
+[    1.419891] LR is at omap_musb_set_mailbox+0x1e0/0x4bc
+
+[    1.420013] pc : [<c2c05800>]    lr : [<c0a23e4c>]    psr: a0000013
+
+[    1.420166] sp : f000dd60  ip : c159ae0f  fp : 00000000
+
+[    1.420288] r10: c0e26c5c  r9 : 00000000  r8 : 00000000
+
+[    1.420379] r7 : c1e460dc  r6 : c0729b94  r5 : c1e460c0  r4 : c18ee040
+
+[    1.420532] r3 : c2c05800  r2 : c1fd34c0  r1 : 00000000  r0 : c18d5280
+
+[    1.420684] Flags: NzCv  IRQs on  FIQs on  Mode SVC_32  ISA ARM  Segment none
+
+[    1.420837] Control: 10c5387d  Table: 82c1c04a  DAC: 00000051
+
+[    1.420959] Register r0 information: slab kmalloc-192 start c18d5240 pointer offset 64 size 192
+
+[    1.421173] Register r1 information: NULL pointer
+
+[    1.421295] Register r2 information: slab kmalloc-128 start c1fd3480 pointer offset 64 size 128
+
+[    1.421508] Register r3 information: slab kmalloc-1k start c2c05800 pointer offset 0 size 1024
+
+[    1.421691] Register r4 information: slab kmalloc-8k start c18ee000 pointer offset 64 size 8192
+
+[    1.421905] Register r5 information: slab kmalloc-128 start c1e46080 pointer offset 64 size 128
+
+[    1.422119] Register r6 information: non-slab/vmalloc memory
+
+[    1.422241] Register r7 information: slab kmalloc-128 start c1e46080 pointer offset 92 size 128
+
+[    1.422454] Register r8 information: NULL pointer
+
+[    1.422576] Register r9 information: NULL pointer
+
+[    1.422668] Register r10 information: non-slab/vmalloc memory
+
+[    1.422821] Register r11 information: NULL pointer
+
+[    1.422912] Register r12 information: non-slab/vmalloc memory
+
+[    1.423065] Process init (pid: 1, st
+

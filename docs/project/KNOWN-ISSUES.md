@@ -2997,6 +2997,31 @@ report 121 §3/§11/§12.
      link does **not** re-enumerate on a cable replug; the unit keeps running.
      (Session 65, report 263 §4/§4a.)
 
+338. **The bad indirect transfer in `omap_musb_set_mailbox()` is
+     `phy->comparator->set_vbus`, a stale TWL6030 `phy_companion`.**  Session 66
+     ran the marker experiment (`panic=0`, winchester early return removed, mutex
+     kept; images `0xF1AA4568` / `0x405E8997`): the DRAM ring, recovered via a
+     warm reset + read-back image, shows **valid** entry pointers — `status=4`
+     (`MUSB_VBUS_OFF`), valid `xceiv`/`otg`, and `otg->set_vbus = 0xc0729b94`,
+     which `System.map` resolves to `omap_usb_set_vbus` (kernel text).  Branch
+     markers show `sv` still valid immediately before `otg_set_vbus()`, then the
+     Oops: `PC = 0xc2c05800`, decoded as `kmalloc-1k … offset 0`, `LR =
+     omap_musb_set_mailbox+0x1e0`; there is no `PBMBX prechain`, so the notifier
+     chain is not the fault.  Disassembly pins it to `omap_usb_set_vbus()`'s
+     tail-call `phy->comparator->set_vbus` (`drivers/phy/ti/phy-omap-usb2.c`) —
+     the `struct phy_companion` registered into the `omap-usb2` PHY by
+     `twl6030_usb_probe()` (`phy-twl6030-usb.c:358`) holds a slab address where
+     `twl6030_set_vbus` text should be.  So the handoff's "stale object → audit
+     the PHY lifecycle" branch is right, but one level *below* `musb->xceiv`:
+     the comparator, not the top-level `usb_phy`.  The "wild pointer at entry"
+     reading and the session-64 "slab address in `otg->set_vbus`" are superseded
+     by this symbolisation.  **Next:** audit the comparator lifetime
+     (`omap_usb2_set_comparator()` / probe-deferral/rebind and the
+     `cpcap-charger.c` writer of `phy->comparator`), not more markers.  The
+     device-mode-only workaround stays until a fix restores the stock call for
+     OTG host mode.  (Session 66, report 264; capture
+     `docs/captures/musb-mailbox-fault-2026-11-19.txt`.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it
