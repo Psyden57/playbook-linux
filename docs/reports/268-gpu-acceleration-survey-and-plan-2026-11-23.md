@@ -27,6 +27,16 @@ consumer" (option B below).
 
 ## 1. The sources the operator supplied, and what each is worth to us
 
+The seven links, exactly as supplied (the letters match the subsections below):
+
+* **A.** https://github.com/zsavajji/pvr_sgx_rm696
+* **B.** https://github.com/zsavajji/linux_mainline_rm696
+* **C.** https://gitlab.com/pvrports/pvrports
+* **D.** https://github.com/The1TrueJoe/powervr_sgx
+* **E.** https://github.com/openpvrsgx-devgroup/linux_openpvrsgx
+* **F.** https://codeberg.org/Garnet/sgx540-reversing
+* **G.** https://e2e.ti.com/support/processors-group/processors/f/processors-forum/287992/powervr-sgx540-linux-drivers
+
 ### A. `zsavajji/pvr_sgx_rm696` — Nokia N9 (SGX530) on mainline 6.18 ★★★★★
 
 **The single most useful reference.**  Nokia's in-tree `drivers/gpu/pvr`
