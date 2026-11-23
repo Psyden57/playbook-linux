@@ -26,7 +26,7 @@ never given userspace work.
   OpenRC entries; PID 1 then runs `{0,1}`, `nproc` = 2, and a two-thread busy
   loop spreads load evenly (`cpu0` 2643 / `cpu1` 2622 user ticks).  Backups:
   `/etc/inittab.session67-orig` (OpenRC default) and `/etc/inittab.fixed`.
-  Verified 2 boots each way.  **Still owed: a kernel-side fix** for
+  Verified 2 boots with it and 3 without.  **Still owed: a kernel-side fix** for
   `sched_init_smp()`'s widening (see report 266 §1).
 * **`cpufreq-dt` is bound and scales** (`300000 600000 800000 1008000`,
   `ondemand`); the handoff's "no `cpufreq` policy" was stale.  The CPU **supply**
@@ -35,12 +35,13 @@ never given userspace work.
   `0x3A` = 1.35 V — the same voltage the chainloader commands.  SmartReflex MPU
   is present but idle (`autocomp = 0`).  [report 266 §2/§3]
 * **Region 1 and hd3 were read back this session, not assumed.**  Region 1
-  (64 MiB ext4 at raw `0x29000000`) now hashes **sha256 `20a5edd3…`** — drifted
-  from the recorded `6f5b8ca7…`, consistent with read-back boots having mounted
-  it rw (trap 320); it is not booted.  hd3 is still the Nura ext4: ext4 magic
-  `0x53EF` at `0x49000438`, `Block count 15273984 × 4096` = **62.56 GB**
-  (`df`'s 56.5 G is GiB of data blocks), mounted `/dev/loop0 on / type ext4
-  (rw,relatime,nobarrier)`.  No 626 MB write this session; no restore needed.
+  (64 MiB at raw `0x29000000`) now hashes **sha256 `20a5edd3…`** — drifted from
+  the recorded `6f5b8ca7…` (which itself drifted from `49e318bf…`), consistent
+  with read-back boots having mounted it rw; it is not booted.  hd3 is still the
+  Nura ext4: ext4 magic `0x53EF` at `0x49000438`, `Block count 15273984 × 4096`
+  = **62.56 GB** (`df`'s 56.5 G is usable blocks in GiB), mounted
+  `/dev/loop0 on / type ext4 (rw,relatime,nobarrier)`.  No 626 MB write this
+  session; no restore needed.
 * **Region 0 was re-verified on media this session**: its trailer read back from
   `/dev/mmcblk1` at raw `0x8100000 + 10448868 − 8` is `1f 2d c8 d7 13 d6 47 35`
   = CRC **`0x3547D613`**, byte-identical to `boot/chainloader/kernel.img`.
@@ -69,7 +70,7 @@ never given userspace work.
   wayland" claim was a bad grep and is withdrawn — it supports
   wayland/x11/gbm/surfaceless/device).  The kernel side is healthy: `pvrsrvkm`
   is loaded and `catacomb` maps `pvr_dri` + `gbm`.  **Session 68 is dedicated to
-  this**; the plan, the eight outside sources and their value are in
+  this**; the plan, the seven outside sources and their value are in
   **report 268**.
 
 ## Previous state — 2026-11-19 (session 66)
@@ -577,10 +578,10 @@ Do not boot `0x5E40C5C1` or `0xB9A1BC4F` (two lanes), or `0x3B04298E`
 | region-0 RCFS (`/base`) | **now the full 1917 RCFS at `0xC00000`** (`local/work/rcfs-1917.rcfs`, the modified one with the `/accounts/devuser/startup.sh` hook, sha256 `c4ab6e34…`): session 49 wrote it to recover root on a stock-TabletOS boot, and it sits **outside** the 7.3.3 test image (which ends at `0x9E0980`).  The pruned oracle RCFS is no longer on media — re-flash `local/work/minimal/setB.signed` for the minimal oracle (trap 227).  Not readable as `/base` without the 1917 IFS |
 | UFS (`/`) | **not on media** — hd3 has held Linux filesystems since session 63 and now the Nura ext4; the 1917 vendor `.5.ufs` with `autorun::0` (the session-27 set, `local/work/ufs-1917-devuser.ufs`, sha256 `482e0473…`) is on the host as the way back.  The BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
 | `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it last ran during the session-35 S3/S2 TabletOS bench and topped `BOOTCTR_FCTRY` back to `0x32` |
-| `BOOTCTR_FCTRY` | **`0x28`** at the session-67 wrap-up (`0x2a → 0x29 → 0x28` across the three validation boots, each `>= 0x1e` so `/init` did not write; the session-64 panic loop had drained it to `0x1c` and the recovery image topped it to `0x32`).  Block `0x3a` record@196.  **Read it on Linux with `dmesg \| grep pbrpmb`** (the top-up line carries the 4-byte LE record).  Self-replenishing: `/init` tops up at <`0x1e`, a TabletOS boot writes `0x32` (`SAFETY.md` §2, `DEVELOPMENT.md` §5) |
-| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`49e318bf…`** (`local/images/rootfs-region1-wl1283-bt.ext4`, session 52: the WLAN fixes, **`ccm`/`ctr`**, the per-unit NVS, the CAM+4-sr `wl12xx.ko` and the seven Bluetooth modules), **43 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus **`cfg80211`, `mac80211`, `wlcore`, `wlcore_sdio`, `wl12xx`, `libarc4`, `crc7`** and **`bluetooth`, `hci_uart`, `btbcm`, `crc-ccitt`, `ecdh_generic`, `ecc`, `kpp`**), `pbplay`, `pbmix`, **dropbear**, **`/usr/bin/iw`**, **`/usr/sbin/wpa_{supplicant,cli,passphrase}`**, and **`/lib/firmware/ti-connectivity/{wl128x-fw-4-sr.bin,wl128x-fw-5-sr.bin,wl128x-nvs.bin}`** plus the signed **`/lib/firmware/regulatory.db`/`.p7s`**; `rcS` loads the wireless stack and `bluetooth hci_uart`.  Earlier images: `…-wl1283-final.ext4` (`877c42c3…`), `…-wl1283-assoc.ext4` (`6c2cfb30…`), `a148c362…`, `7e067560…`, `88084b78…`, `a4e76b18…` and `0342ab06…`.  The modules in any of them can be checked by extracting them with `debugfs` (trap 163).  **Session 55: not booted.**  The region-0 image is the hd3-pointing `0xA8F0F30C`; it mounts hd3 (Nura) and never touches region 1.  This root remains the fallback; its `rcS`/dropbear/WLAN/BT are unchanged. |
-| TabletOS / OS | **NOT running** — the unit is on the **Nura root from hd3** (image `0x3547D613`, `#109 SMP` dual-core ARMv7, `0fca:8010`, console `playbook:~#` on the USB ACM, **sshd: dropbear on `169.254.0.1:22`**, `PB_LINK=usb tools/pbssh.sh` — it did **not** answer on the Nura root in session 67, so use the ACM; the root is the hd3 ext4 mounted **read-write**, grown to **62.5 G**, with the ARMv7 module set installed).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
-| hd3 (MCT `0x1C`, FS at loader block `0x4915` / raw `0x49000000`) | **the media was re-created on 2026-11-18 (session 65)** by flashing the baked Nura image `local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`, 625,999,872 B) at block `0x4915` (626,065,440 B, `FLASH_OK`), because the BusyBox ext4 that had been flashed there in session 63 was **damaged by power cycles** (`EXT4-fs: This should not happen!! Data will be lost`, corrupt inode bitmap).  First boot grew it to **62.5 G** (15,273,984 blocks) and installed dropbear; the ARMv7 module set was then installed over SSH and `depmod` run.  It is a rw ext4 with `barrier=0` + write-through, so power cuts can still damage it — prefer a clean `reboot`.  The same 625,999,872-byte image is the flasher-restorable base (`--component --dest-block 0x4915`).  Its content is the session-59 state: `tabula` 1.0.2, `epitaph` 1.4.0, `tzompantli` 1.2.0, `gorm` 1.2.1, `swayidle` 1.9.1, `foot` 1.28.0, `grim` 1.5.0, `slurp` 1.5.0, `tremor` 1.1.0, `netsurf` 3.11, `xournalpp` 1.3.8, the pvrports stack (`libglvnd`, `mesa-pvr-dri-classic`, `sgx-ddk-um{,-ti443x,-openrc}`, `gcompat`, `wayland-libs-server`), `MESA_LOADER_DRIVER_OVERRIDE=pvr`, the pvrsrvkm module in `/etc/modules`, wvkbd/DejaVu/pb-touchwake, the icon-theme fix and the no-suspend `/etc/catacomb/initrc`.  **It predates the session-60/61 fixes** (`epitaph` r10005, llvmpipe, the udev/polkit rules), which live only in the pmaports tree and the session-59 live root.  The pre-pvr images (`1fcf0cb0…`, `1f14915f…`), the pristine `076bafcf…` and the older `f7858110…` remain on the host.  See reports 249/250 and 263 §3. |
+| `BOOTCTR_FCTRY` | **`0x24`** at the session-67 wrap-up (measured on the unit).  The three mailbox validation boots read `0x2a → 0x29 → 0x28`, then the affinity half's four reboots took it to `0x24`; every read was `>= 0x1e, no write`.  (The session-64 panic loop had drained it to `0x1c`; the recovery image topped it to `0x32`.)  Block `0x3a` record@196.  **Read it on Linux with `dmesg \| grep pbrpmb`** (the top-up line carries the 4-byte LE record).  Self-replenishing: `/init` tops up at <`0x1e`, a TabletOS boot writes `0x32` (`SAFETY.md` §2, `DEVELOPMENT.md` §5) |
+| region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, on-media sha256 **`20a5edd3…`** (re-hashed at the session-67 close; earlier readings `6f5b8ca7…`, then the staged file `49e318bf…` = `local/images/rootfs-region1-wl1283-bt.ext4`, session 52: the WLAN fixes, **`ccm`/`ctr`**, the per-unit NVS, the CAM+4-sr `wl12xx.ko` and the seven Bluetooth modules), **43 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus **`cfg80211`, `mac80211`, `wlcore`, `wlcore_sdio`, `wl12xx`, `libarc4`, `crc7`** and **`bluetooth`, `hci_uart`, `btbcm`, `crc-ccitt`, `ecdh_generic`, `ecc`, `kpp`**), `pbplay`, `pbmix`, **dropbear**, **`/usr/bin/iw`**, **`/usr/sbin/wpa_{supplicant,cli,passphrase}`**, and **`/lib/firmware/ti-connectivity/{wl128x-fw-4-sr.bin,wl128x-fw-5-sr.bin,wl128x-nvs.bin}`** plus the signed **`/lib/firmware/regulatory.db`/`.p7s`**; `rcS` loads the wireless stack and `bluetooth hci_uart`.  Earlier images: `…-wl1283-final.ext4` (`877c42c3…`), `…-wl1283-assoc.ext4` (`6c2cfb30…`), `a148c362…`, `7e067560…`, `88084b78…`, `a4e76b18…` and `0342ab06…`.  The modules in any of them can be checked by extracting them with `debugfs` (trap 163).  **Session 55: not booted.**  The region-0 image is the hd3-pointing `0xA8F0F30C`; it mounts hd3 (Nura) and never touches region 1.  This root remains the fallback; its `rcS`/dropbear/WLAN/BT are unchanged. |
+| TabletOS / OS | **NOT running** — the unit is on the **Nura root from hd3** (image `0x3547D613`, `#109 SMP` dual-core ARMv7, `0fca:8010`, console `playbook:~#` on the USB ACM, **sshd: dropbear on `169.254.0.1:22`**, `PB_LINK=usb tools/pbssh.sh` — **this works** (verified at the session-67 close, ping ~0.4 ms); if it times out the cause is the **host** (WireGuard VPN, trap 341; `ufw`, trap 342), not the device; the root is the hd3 ext4 mounted **read-write**, grown to **62.5 G**, with the ARMv7 module set installed).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
+| hd3 (MCT `0x1C`, FS at loader block `0x4915` / raw `0x49000000`) | **the media was re-created on 2026-11-18 (session 65)** by flashing the baked Nura image `local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`, 625,999,872 B) at block `0x4915` (626,065,440 B, `FLASH_OK`), because the BusyBox ext4 that had been flashed there in session 63 was **damaged by power cycles** (`EXT4-fs: This should not happen!! Data will be lost`, corrupt inode bitmap).  First boot grew it to **62.5 G** (15,273,984 blocks) and installed dropbear; the ARMv7 module set was then installed over SSH and `depmod` run.  It is a rw ext4 with `barrier=0` + write-through, so power cuts can still damage it — prefer a clean `reboot`.  The same 625,999,872-byte image is the flasher-restorable base (`--component --dest-block 0x4915`).  Its content is the session-59 state: `tabula` 1.0.2, `epitaph` 1.4.0, `tzompantli` 1.2.0, `gorm` 1.2.1, `swayidle` 1.9.1, `foot` 1.28.0, `grim` 1.5.0, `slurp` 1.5.0, `tremor` 1.1.0, `netsurf` 3.11, `xournalpp` 1.3.8, the pvrports stack (`libglvnd`, `mesa-pvr-dri-classic`, `sgx-ddk-um{,-ti443x,-openrc}`, `gcompat`, `wayland-libs-server`), `MESA_LOADER_DRIVER_OVERRIDE=pvr`, the pvrsrvkm module in `/etc/modules`, wvkbd/DejaVu/pb-touchwake, the icon-theme fix and the no-suspend `/etc/catacomb/initrc`.  **The baked image predates the session-60/61 fixes** (the llvmpipe `swrast_dri.so`, the udev/polkit rules), and the live changes since — the inittab affinity line and `epitaph` r10005 — are **not** in it, so a reflash reverts them (trap 343).  The pre-pvr images (`1fcf0cb0…`, `1f14915f…`), the pristine `076bafcf…` and the older `f7858110…` remain on the host.  See reports 249/250 and 263 §3. |
 | device-side files | **persistent on hd3 (session 58: the root is writable and grown):** the initramfs installs `/usr/sbin/dropbear`, `/etc/dropbear/*`, `/root/.ssh/authorized_keys`, `/etc/local.d/pb-ssh.start` and `/etc/local.d/pb-grow.start` on first boot, and `/etc/pb-grown` marks the grow.  `/var`, `/home` and `/tmp` are now real directories on the 56.5 G FS, so the DE state and the SSH kit survive a reboot (the state files written before the switch are on the grown FS).  `memdump3`/`memw32`/`pbi2c` are outside the tree: push them (paced) after a reflash (trap 177).  The first-Nura-boot log is `docs/captures/playbook-live-2026-11-15-hd3-nura-boot.txt`.  Session 57's touch tools (`evcap.py`, `keylog.py`, `muninraw`) lived only in `/tmp`; the measured evidence is preserved in the captures.  **Session 59 deployed:** `wvkbd-mobintl` 0.21 (`/usr/sbin/wvkbd-mobintl`), `/usr/share/fonts/dejavu/DejaVuSans{, -Bold}.ttf`, `/usr/bin/pb-touchwake`, `/usr/share/icons/default/index.theme` (`Inherits=Adwaita,hicolor`), `adwaita-icon-theme` + `glycin-svg`, a hicolor netsurf PNG, the edited `/etc/catacomb/initrc` (no swayidle, wvkbd + pb-touchwake), and `playbook` in the `input` group (gid 23).  Tools/daemon sources are tracked in `tools/bench/`; the pmaport edits are under gitignored `local/work/nura/pmaports/`. |
 
 The factory boot budget is **self-maintaining in bench use**: every successful
@@ -698,25 +699,24 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 ## What is next
 
-0. **THE ACTIVE ITEM — the CPU: both cores now take userspace work; the MPU
-   voltage supply and a kernel-side affinity fix remain (session 67, reports
-   265/266, ROADMAP 7a).**  The unit runs **dual-core at 1008 MHz** on
-   `0x3547D613` (`#109 SMP`, `online=0-1`), with the **stock
-   `omap_musb_set_mailbox()` call restored** (the mailbox fault was a freed
-   TWL6030 `phy_companion`, report 265).  **New this session:** PID 1 was
-   affinity-masked to `{0}`, so all userspace ran on one core (`nproc` = 1);
-   the inittab workaround `::sysinit:/usr/sbin/taskset -p 3 1` fixes it
-   (`nproc` = 2, load balanced) — a **kernel-side fix in `sched_init_smp()` is
-   still owed** (report 266 §1).  `cpufreq-dt` **does** exist and scale; what is
-   missing is the CPU **supply**, and the `twl6030_uv_to_vsel` warnings are
-   startup VC init clamped to 1.35 V (report 266 §2/§3).
-   * **THE GPU (session 68, operator directive) — see report 268 for the plan.**
-     Measured: the SGX works on libEGL's **GBM/DRM** platform (12 window
-     configs, `PowerVR SGX 540`, dmabuf export), and only the **Wayland client**
-     path refuses it.  Session 68: (1) diagnose the wayland rejection with
-     `EGL_LOG_LEVEL=debug` (do not patch Mesa before that), (2) prove the
-     vendor-supported GBM path with pvrports' `phoc`, (3) decide with data,
-     (4) only then weigh the open-stack SGX540 port (`The1TrueJoe/powervr_sgx`).
+0. **THE ACTIVE ITEM FOR SESSION 68 — put the UI on the GPU (operator
+   directive; report 268 is the plan).**  Measured: the SGX works on libEGL's
+   **GBM/DRM** platform (12 window configs, `PowerVR SGX 540`, dmabuf export),
+   and only the **Wayland client** path refuses it.  Session 68: (1) diagnose the
+   wayland rejection with `EGL_LOG_LEVEL=debug` (do not patch Mesa before that),
+   (2) prove the vendor-supported GBM path with pvrports' `phoc`, (3) decide with
+   data, (4) only then weigh the open-stack SGX540 port
+   (`The1TrueJoe/powervr_sgx`).
+   * **Owed after the GPU — the CPU (session 67, reports 265/266, ROADMAP 7a).**
+     Both cores now take userspace work, and the **stock
+     `omap_musb_set_mailbox()` call is restored** (the mailbox fault was a freed
+     TWL6030 `phy_companion`, report 265).  PID 1 was affinity-masked to `{0}`,
+     so all userspace ran on one core (`nproc` = 1); the inittab workaround
+     `::sysinit:/usr/sbin/taskset -p 3 1` fixes it (`nproc` = 2, load balanced) —
+     a **kernel-side fix in `sched_init_smp()` is still owed** (report 266 §1).
+     `cpufreq-dt` **does** exist and scale; what is missing is the CPU
+     **supply**, and the `twl6030_uv_to_vsel` warnings are startup VC init
+     clamped to 1.35 V (report 266 §2/§3).
    * **Then the MPU OPP:** `cpufreq-dt` is bound and scales
      (`300000 600000 800000 1008000`, `ondemand`), so the old "no cpufreq
      policy" note is stale.  What remains is the CPU **supply** (no

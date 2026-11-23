@@ -37,7 +37,7 @@ What narrowed it:
 |---|---|---|
 | `ip -br addr` both ends | device `usb0 169.254.0.1/16` UP, host `enp8s0f3u1i2 169.254.0.2/16` UP | configuration is correct |
 | `ss` on device | dropbear listening `169.254.0.1:22` | the server is fine |
-| device→host ping | device `ip neigh` resolved the host `REACHABLE`, host `rx_packets` climbed | the USB/RNDIS link carries traffic |
+| device→host ping | the device's **ARP** resolved the host (`ip neigh` → `REACHABLE`) and host `rx_packets` climbed, but the ICMP echo itself did not come back | frames cross the link at L2; the host's routed **replies** go into the tunnel |
 | host→device ping | host `tx_packets` frozen, device `rx_packets` frozen | host never transmits |
 | `tcpdump -i enp8s0f3u1i2` during ping | **0 packets captured** | the frames never reach the netdev |
 | `arping -I enp8s0f3u1i2 169.254.0.1` | **unicast reply, 0.85 ms** | the link is fine; raw L2 bypasses routing |

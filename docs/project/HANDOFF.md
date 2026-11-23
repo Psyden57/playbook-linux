@@ -7,7 +7,7 @@ session-67 close.  See `docs/sessions/NUMBERING.md`.
 
 > **SESSION 68 IS THE GPU SESSION.**  The operator has directed it: get GPU
 > acceleration working for the UI.  **Read report 268 first** — it surveys the
-> eight outside sources the operator supplied, says what each is worth, and lays
+> seven outside sources the operator supplied, says what each is worth, and lays
 > out the ordered plan.  The key measured fact is that the SGX **works on the
 > GBM/DRM EGL platform** (dmabuf export included) and only the *Wayland client*
 > path does not select it, so the plan is: diagnose the wayland rejection
@@ -20,10 +20,11 @@ session-67 close.  See `docs/sessions/NUMBERING.md`.
 > so `nproc` read 1 with `online=0-1`; an inittab `taskset -p 3 1` fixes it
 > (report 266).  Image **`0x3547D613`** (`#109 SMP`, `panic=0`), 3/3 clean
 > dual-core boots; `cpufreq-dt` is bound and scales (no CPU supply attached);
-> region 1 `6f5b8ca7…`; hd3 `07555bde…` (62.5 G Nura, now with the inittab
-> line); patch **67 files / 9 136 lines**, sha256 `d19adff8…`;
-> `BOOTCTR_FCTRY = 0x24`.  **Next: re-measure throughput/UI on two real cores,
-> attach the CPU supply, and replace the inittab line with a kernel fix.**
+> region 1 `20a5edd3…` (drifted from the recorded `6f5b8ca7…`); hd3 `07555bde…`
+> (62.5 G Nura, now with the inittab line); patch **67 files / 9 136 lines**,
+> sha256 `d19adff8…`; `BOOTCTR_FCTRY = 0x24`.  **Next: session 68 is the GPU
+> session** (§0f, report 268); after it, the CPU supply, the kernel affinity
+> fix, the rebake, and the throughput re-measure.
 
 ## 0. The job, and where it stands
 
@@ -58,7 +59,8 @@ work** (report 266).  The **USB/VUSB teardown** is intermittent and open (§0d).
   `0xC9FEE2D1` (`#105`, device-mode-only workaround, `panic=10`) is the
   known-good fallback; the session-64 recovery image is
   `local/work/kernel-usbdev-cpu1.img` (`0xC675E206`).
-* **region 1 = `6f5b8ca7…`** (`49e318bf…` was the older copy), 64 MiB ext4 at
+* **region 1 = `20a5edd3…`** (measured at the session-67 close; the recorded
+  values were `6f5b8ca7…` and, before it, `49e318bf…`), 64 MiB ext4 at
   `0x29000000` — the BusyBox fallback root, **not booted**; its 43 modules
   mismatch the current kernel (trap 320).
 * **hd3 = the Nura ext4**, from `local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img`
@@ -155,10 +157,12 @@ boot then a ~60 s drop.  So it is intermittent, not an idle timer (trap 337;
 `docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md`).  Run
 `local/work/kmsgcap.py` (or a userspace `cat /dev/kmsg`) before the link dies
 and let it run through a drop; a `VBUS_DET`/`linkstat` log in that handler would
-settle it directly.  On the Nura root the RNDIS/usb0 path did not answer this
-session — the ACM (`playbook:~#`, `tools/pbraw.py`) was the console.
+settle it directly.  SSH **does** work on the Nura root (`PB_LINK=usb
+tools/pbssh.sh`, ping ~0.4–0.9 ms); when it times out the cause was the **host**,
+not the device — see §3 (VPN, trap 341; `ufw`, trap 342).  The ACM
+(`playbook:~#`, `tools/pbraw.py`) remains the fallback console.
 
-## 0e. THE ACTIVE ITEM — the CPU: both cores must take userspace work
+## 0e. Owed after the GPU — the CPU: both cores must take userspace work
 
 **The defect (report 266, trap 340).**  With `online = 0-1` and
 `SMP: Brought up 1 node, 2 CPUs`, **PID 1 was affinity-masked to `{0}`** —
@@ -168,8 +172,8 @@ CPU 1 was healthy and simply never scheduled userspace.  3/3 fresh boots.  This
 is why report 263 §4b's "two cores in parallel" showed no scaling and why the
 UI latency numbers are single-core numbers.
 
-**Workaround, in place and verified** (2 boots each way): on **hd3's root**,
-`/etc/inittab` has, before the OpenRC entries,
+**Workaround, in place and verified** (2 boots with it, 3 without): on **hd3's
+root**, `/etc/inittab` has, before the OpenRC entries,
 
 ```
 ::sysinit:/usr/sbin/taskset -p 3 1
@@ -318,7 +322,7 @@ minimal pair is `local/work/minimal/setB.signed`.
 * `local/kernel-tree/` — the 7.3.3 build tree (gitignored).  It carries the
   session-62/63/64 **diagnostics** that are deliberately not in the patch:
   `PBDBG` markers (`init/main.c`), `PBCPU`/`PBIPI1` (`arch/arm/kernel/smp.c`,
-  `arch/arm/mach-omap2/omap-smp.c`), `PBSMF` (`kernel/smp.c`), the `head.S`
+  `arch/arm/mach-omap2/omap-smp.c`), `PBSMF` (`local/kernel-tree/kernel/smp.c`), the `head.S`
   `CRR` stamp, and the `MINI4x6` font link (`lib/fonts/Makefile`).
 * `local/pristine/linux-7.3.3` — the pristine tree for exports and diffs
   (`local/pristine/linux-7.3.3.tar.xz`).
@@ -340,8 +344,10 @@ minimal pair is `local/work/minimal/setB.signed`.
 * `tools/bbusb.py`, `local/work/flash825.sh` — the flasher and the region-0
   wrapper; hd3 takes `--component … --dest-block 0x4915`.
 * `tools/build_kernel_image.py`, `tools/env.sh` — wrap and toolchains.
-* Reports **263** (current for the CPU/USB), 262 (MUSB), 259–261 (reference
-  core-up, `cpu_startnext`, panel/TCON), 257 (1008 MHz/OPP), 256/UUID; captures
+* Reports **268** (the GPU plan — current for session 68), **267** (host VPN +
+  the Wayland/SGX measurement), **266** (the CPU affinity), **265** (the
+  comparator fix), 264 (the Oops), 263, 262 (MUSB), 259–261 (reference core-up,
+  `cpu_startnext`, panel/TCON), 257 (1008 MHz/OPP), 256/UUID; captures
   `docs/captures/playbook-live-2026-11-18-nura-{armv7-boot,kmsg-stream}.txt`.
 
 ## 2. Build and flash (7.3.3)
@@ -422,8 +428,9 @@ Local helper/workspace this session: `local/work/export67/`.
 * **WLAN checks:** `lsmod` must show **`ccm` and `ctr`**;
   `ip link set wlan0 up` → `wlcore: firmware booted (Rev 7.3.5.0.98)`.
 * **WM8994:** `i2ctransfer` args are DECIMAL (trap 166); bus 4, addr `0x1a`.
-* **Old Nura image:** the panel's `epitaph` may still show the r10005 bug;
-  check before judging the desktop (§0f).
+* **`epitaph` on hd3 is now `1.4.0-r10005`** (installed this session; the `r0`
+  segfault is gone).  It still reports `softpipe`, not the GPU — §0f.  A reflash
+  of the session-59 image reverts it to the broken `r0` (trap 343).
 
 ## 4. Traps added last session (full list 14–344 in `KNOWN-ISSUES.md` §2)
 
@@ -463,8 +470,9 @@ Local helper/workspace this session: `local/work/export67/`.
   `nproc` → 1); every userspace process inherited it, only kernel threads had
   `0-1`, and `taskset -c 1 <work>` still worked.  3/3 fresh boots.  Fix on hd3's
   root: `::sysinit:/usr/sbin/taskset -p 3 1` in `/etc/inittab` before OpenRC
-  (verified 2 boots each way; `nproc` 2).  It is a root change, not an image
-  change.  A kernel fix in `sched_init_smp()` is owed (report 266, trap 340).
+  → PID 1 `{0,1}`, `nproc` 2 (verified 2 boots with it, 3 without).  It is a
+  root change, not an image change.  A kernel fix in `sched_init_smp()` is
+  owed (report 266, trap 340).
   **Check `nproc`, not just `online`,** after anything CPU-related.
 * **341.** A host **WireGuard VPN** blackholes the RNDIS link: `ip rule` at
   32765 sends unmarked traffic to `default dev utun420` before `lookup main`,
@@ -496,8 +504,8 @@ Local helper/workspace this session: `local/work/export67/`.
 |---|---|
 | safety before any write | `docs/project/SAFETY.md` |
 | build/flash/boot/console | `docs/project/DEVELOPMENT.md` |
-| **the active plan** | `docs/project/ROADMAP.md` item 7a, reports **266**, 265 |
-| **the CPU/USB evidence** | reports **266**, 265, 264, 263, 262, 259–261, 257, 256 |
+| **the active plan (session 68)** | **report 268** (GPU), `ROADMAP.md` item 7a |
+| **the GPU evidence** | reports **268**, 267, 266, 265, 264, 263, 262, 259–261, 257, 256 |
 | **the CPU-affinity workaround** | hd3 `/etc/inittab` (`::sysinit:/usr/sbin/taskset -p 3 1`); backups `.session67-orig`, `.fixed` |
 | kernel delta + config | `kernel/patches/`, `kernel/winchester-7.3.3.config` |
 | board DTS + patched drivers | `kernel/source/`, `local/kernel-tree/` |
@@ -509,7 +517,7 @@ Local helper/workspace this session: `local/work/export67/`.
 | the ARMv7 modules | `local/work/modstage/`, `…-armv7.tar.gz` |
 | BT service pack | `local/work/1917/base/lib/firmware/bluetooth/WL1283.bts` |
 | OSS player / mixer / BT probe | `rootfs/pbplay.c`, `rootfs/pbmix.c`, `rootfs/hci.c` |
-| reports / sessions | `docs/reports/` (266 current), `docs/sessions/session-67.md` |
+| reports / sessions | `docs/reports/` (268 current), `docs/sessions/session-67.md` |
 
 ## 6. Working rules
 
@@ -537,9 +545,10 @@ Workspace: this repository — a git checkout.  Map: docs/README.md.  The earlie
 work tree $HOME/rea-work is READ-ONLY.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 14-340, especially 333-340)
-and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 91-99, docs/reports/INDEX.md,
-reports 266, 265, 264, 263, 257, and sessions/session-67.md.
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 14-344, especially 333-344)
+and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 91-100,
+docs/reports/INDEX.md, reports 268, 267, 266, 265, 264, 263, 257, and
+sessions/session-67.md.
 
 WHERE IT STANDS: the unit runs Linux 7.3.3, dual-core at 1008 MHz, on the ARMv7
 image 0x3547D613 (#109 SMP), with the Nura root on hd3 (grown to 62.5 G, ARMv7
@@ -591,7 +600,8 @@ line; (f) re-measure the memory throughput (report 263 §4b) — the old number 
 single-core.
 
 BENCH: region 0 = 0x3547D613 (#109 SMP, stock mailbox + comparator fix,
-panic=0) at block 0x825; region 1 = the BusyBox ext4 6f5b8ca7... at 0x29000000
+panic=0) at block 0x825; region 1 = the BusyBox ext4 (sha256 20a5edd3..., was
+6f5b8ca7...) at 0x29000000
 (fallback, not booted); hd3 = the Nura ext4 07555bde... at 0x4915, grown to
 62.5 G, now with the inittab affinity line and `epitaph-1.4.0-r10005`.  SSH:
 PB_LINK=usb tools/pbssh.sh WORKS; if it times out check the host's VPN

@@ -3073,7 +3073,7 @@ report 121 §3/§11/§12.
       never scheduled userspace.  Reproduced on **3/3 fresh boots**; it is why
       report 263 §4b's "two cores in parallel" measured no scaling and why the
       UI/throughput numbers are single-core numbers.  **Workaround (verified,
-      2 boots each way):** on hd3's root, add to `/etc/inittab` before the
+      2 boots with it and 3 without):** on hd3's root, add to `/etc/inittab` before the
       OpenRC entries — `::sysinit:/usr/sbin/taskset -p 3 1` — which makes PID 1
       `{0,1}`; `nproc` then reads 2, a respawned shell is `0-1`, and a
       two-thread busy loop spreads load evenly (`cpu0` 2643 / `cpu1` 2622 user

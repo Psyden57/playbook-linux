@@ -16,7 +16,8 @@ Date: 2026-11-23 (session 67 continued, Linux-era 61).  Bench.
   `::sysinit:/usr/sbin/taskset -p 3 1` runs as PID 1's own child, a respawned
   shell has `Cpus_allowed_list: 0-1`, `nproc` = **2**, and a two-thread busy
   loop spreads load evenly (`cpu0` 2643 / `cpu1` 2622 user ticks).  Reverted →
-  reproduced the pin; restored → reproduced the fix.  **2 boots each way.**
+  reproduced the pin; restored → reproduced the fix.  **2 boots with it, 3
+  without.**
 * **This supersedes the "no `cpufreq` policy exists" line in HANDOFF/STATE.**
   `cpufreq-dt` is bound (`scaling_driver = cpufreq-dt`), all four OPPs are
   present (`300000 600000 800000 1008000`), and the governor (`ondemand`) *does*

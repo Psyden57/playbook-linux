@@ -321,20 +321,20 @@ flasher can replace at every point:
     (report 266, trap 340): PID 1 was affinity-masked to `{0}`, so every
     userspace process inherited `{0}` and `nproc` was 1 even with `online=0-1`.
     The inittab workaround (`::sysinit:/usr/sbin/taskset -p 3 1`) fixes it
-    (`nproc` 2, load spread evenly, 2 boots each way); a kernel-side fix in
-    `sched_init_smp()` is owed.  `cpufreq-dt` **does** exist and scale, so the
-    old "no cpufreq policy" note was stale.  **Session 67 also settled the GPU
-    question (report 267 §3, trap 314 + the mechanism):** a Wayland client
-    *cannot* reach the SGX — `libEGL_amber` advertises only the `wayland`
-    platform and `pvr_dri` exports no EGL symbols (it is a gallium DRI driver
-    loaded by libEGL's DRM loader), so `MESA_LOADER_DRIVER_OVERRIDE=pvr` does
-    nothing on the Wayland path (surfaceless → `PowerVR SGX 540`, Wayland client
-    → `softpipe`).  **Session 68 is dedicated to the GPU (operator directive;
-    report 268 has the plan, the source survey and the costs).**  Measured: the
-    SGX works on libEGL's **GBM/DRM** platform (12 window configs,
-    `PowerVR SGX 540`, `EGL_MESA_image_dma_buf_export`); only the
-    **Wayland-client** path refuses it, and *why* is not yet established.  Order:
-    (1) diagnose that rejection (`EGL_LOG_LEVEL=debug`); (2) prove the
+    (`nproc` 2, load spread evenly, 2 boots with it and 3 without); a kernel-side
+    fix in `sched_init_smp()` is owed.  `cpufreq-dt` **does** exist and scale, so
+    the old "no cpufreq policy" note was stale.  **Session 67 opened the GPU
+    question and session 68 owns it (report 268 is the plan, report 267 the
+    measurement).**  Measured: a Wayland client gets `swrast_dri`/`softpipe`
+    even with `MESA_LOADER_DRIVER_OVERRIDE=pvr`, while the **GBM/DRM** platform
+    *does* reach the SGX (12 window configs, `PowerVR SGX 540`,
+    `EGL_MESA_image_dma_buf_export`); the compositor (`catacomb`) already uses
+    that path.  **`libEGL_amber` is not wayland-only** — it advertises wayland,
+    x11, gbm, surfaceless and device (an earlier revision of this item said
+    otherwise; that came from a bad anchored `grep`, trap 344).  **Why** Mesa's
+    wayland platform refuses `pvr_dri` is the open question, and the first thing
+    session 68 measures.  Order: (1) diagnose that rejection
+    (`EGL_LOG_LEVEL=debug`, no Mesa patch before it); (2) prove the
     vendor-supported GBM path with pvrports' `phoc` (its supported UIs are Phosh
     and Plasma-Mobile, **not** catacomb); (3) decide with data; (4) only then
     weigh the open-stack SGX540 port (`The1TrueJoe/powervr_sgx` lists SGX540 as

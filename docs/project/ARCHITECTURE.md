@@ -190,7 +190,7 @@ works to `root@169.254.0.1` with legacy algorithms (`tools/pbssh.sh`, key
 | `0fca:0001` | — | boot ROM (USB recovery); flash now |
 | `0fca:8001` | — | ramloader; one `force_reset` gets the image on media booted |
 | `0fca:8010` | `RIM Network Device` | TabletOS running (RNDIS): the normal capture harness |
-| `0fca:8010` | `PlayBook (Linux bring-up)` | our kernel: use `/dev/ttyACM0`; SSH will not answer |
+| `0fca:8010` | `PlayBook (Linux bring-up)` | our kernel: `/dev/ttyACM0` for the console **and** RNDIS to the root (`PB_LINK=usb tools/pbssh.sh`, `169.254.0.1:22`) |
 
 ## 6. The QNX reference as an oracle
 

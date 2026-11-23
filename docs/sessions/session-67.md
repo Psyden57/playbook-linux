@@ -63,7 +63,7 @@ session.
   showed it accumulating ticks.  It was simply never scheduled userspace.
 * **The fix works and is durable** — `/etc/inittab` gains
   `::sysinit:/usr/sbin/taskset -p 3 1` before the OpenRC entries.  Verified
-  **2 boots each way**: with it, `taskset -p 1` → `3`, `nproc` → `2`, a
+  **2 boots with it and 3 without**: with it, `taskset -p 1` → `3`, `nproc` → `2`, a
   respawned shell is `0-1`, and a two-thread busy loop split `cpu0 2643` /
   `cpu1 2622` user ticks; removing it reproduces the pin.  [report 266 §1]
 * **`cpufreq-dt` is bound and scales**: `scaling_driver = cpufreq-dt`, OPPs
@@ -216,8 +216,10 @@ session.
   `linkstat` log in that handler would settle it.
 * **MPU voltage**: attach a supply or accept 1.35 V for all OPPs.  Open.
 * **Region-1 drift**: its sha256 now reads `20a5edd3…` against the recorded
-  `6f5b8ca7…` — consistent with read-back boots mounting it rw, but the exact
-  cause was not re-established this session (trap 320).
+  `6f5b8ca7…` (itself drifted from the session-52/55 reading `49e318bf…`) —
+  consistent with read-back boots mounting it rw, but the exact cause was not
+  re-established this session.  (The drift is a recorded observation, not a
+  trap; trap 320 is the separate region-1 *modules* mismatch.)
 
 ## Superseded / uncertain
 

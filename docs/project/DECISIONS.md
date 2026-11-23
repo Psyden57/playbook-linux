@@ -3447,7 +3447,7 @@ scheduler reported `SMP: Brought up 1 node, 2 CPUs` and `online = 0-1`, yet
 so every userspace process inherited `{0}` and only kernel threads had `0-1`.
 `taskset -c 1 <work>` worked, proving CPU 1 was healthy; it was simply never
 given userspace tasks.  Reproduced on 3/3 fresh boots.  The inittab line fixes
-it durably (2 boots each way: `nproc` 2, a respawned shell `0-1`, a two-thread
+it durably (2 boots with it, 3 without: `nproc` 2, a respawned shell `0-1`, a two-thread
 busy loop splitting `cpu0` 2643 / `cpu1` 2622 user ticks); removing it
 reproduces the pin.  Consequence: report 263 §4b's memory-throughput "no
 scaling with cores" and the UI-latency figures were measured with CPU 1 starved
