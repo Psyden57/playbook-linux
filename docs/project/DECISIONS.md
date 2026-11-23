@@ -3478,16 +3478,20 @@ GBM/pvr path — pvrports ships `phoc` for Phosh, which is its supported
 configuration and the smallest first step; or (c) a dmabuf bridge.  Keep
 `epitaph-1.4.0-r10005` installed in the meantime.
 
-**Why.**  Measured on the unit (report 267 §3): `libEGL_amber.so` advertises
-**only** the `wayland` platform, and `pvr_dri.so` exports **zero** EGL symbols
-(it is a Mesa gallium DRI driver that libEGL's DRM loader loads) with no
-Wayland glue — its only platform strings are `libdrm`/`drmGetNodeTypeFromFd`.
-So on the Wayland platform Mesa has only swrast to load:
-`MESA_LOADER_DRIVER_OVERRIDE=pvr` with a surfaceless display gives
-`GL_RENDERER = PowerVR SGX 540`, and the *same* override with a Wayland client
-(`epitaph` on `wayland-1`) still gives `swrast_dri.so` / `softpipe`.  The
-compositor (`catacomb`) reaches pvr because it uses GBM/DRM.  That is trap 314,
-now with its mechanism.
+**Why.**  Measured on the unit: a **Wayland client does not get the SGX** —
+`epitaph` on `wayland-1` maps `swrast_dri.so` and reports `softpipe`, and
+`MESA_LOADER_DRIVER_OVERRIDE=pvr` does not change that.  What *does* work is the
+**GBM/DRM** platform: `eglGetPlatformDisplay(EGL_PLATFORM_GBM_MESA, <renderD129>)`
+gives `EGL 1.4`, 12 window configs, `GL_RENDERER = PowerVR SGX 540`, and
+`EGL_MESA_image_dma_buf_export`; the compositor (`catacomb`) reaches pvr the
+same way (maps `pvr_dri` + `gbm`).  `pvr_dri.so` is a Mesa gallium DRI driver
+loaded *by* libEGL (it exports no EGL entry points), which is normal — `swrast`
+has the same shape.  **`libEGL_amber` is *not* wayland-only**: it advertises
+wayland, x11, gbm, surfaceless and device platforms.  (An earlier revision of
+this decision said it advertised only `wayland` and that `pvr_dri` had "no
+Wayland glue"; that came from a bad anchored `grep` and is withdrawn — trap
+344.)  **Why Mesa's wayland platform still refuses `pvr_dri` is not yet
+established**; that is the first thing session 68 must measure.
 
 **Constraint.**  All three options are code, not configuration; (b) has a
 vendor-supported configuration to copy but changes the desktop stack.  hd3 still
@@ -3495,8 +3499,10 @@ carries the amber softpipe `swrast_dri.so` (6.9 MB), so even the session-60
 llvmpipe improvement is absent until a rebake.  The compositor itself is already
 on the GPU (`catacomb` maps `pvr_dri` + `gbm`).
 
-**Evidence.**  Report 267 §2/§3; session-67 note; trap 314 (mechanism appended),
-traps 341–343; `local/work/egltest.py`.
+**Evidence.**  Reports 267 §2/§3 and **268** (§0 the GBM measurement, §1 the
+source survey, §3 the plan); session-67 note; trap 314 (mechanism appended) and
+trap 344 (the withdrawn claim); traps 341–343; `local/work/egltest.py` and
+`/tmp/gbmtest2.py`.
 
 ### Repository license
 

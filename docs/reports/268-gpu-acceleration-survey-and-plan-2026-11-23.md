@@ -98,7 +98,7 @@ Why it matters even though it does not do SGX540 yet:
   says the whole SGX family is "one kernel driver, one Mesa driver and one
   microkernel source; a new core is added as **data**, not as a copy of the
   code."
-* Its `docs/porting/` is a step-by-step bring-up method with pass criteria —
+* Its own porting guide (**in that repository, not this one**) is a step-by-step bring-up method with pass criteria —
   the best available checklist for "is my GPU actually working", independent of
   driver.
 * Its **`drm/` driver exposes EGL/GBM/GLX/DRI3 to ordinary clients**, i.e. it
@@ -180,7 +180,7 @@ no GPU hang in `dmesg`, and a before/after measure of a full-screen redraw.
 fall back to step 1's finding (fix the wayland rejection) or option C.
 
 **Step 4 (only if 2 and 3 stall) — the long route.**  Read
-`The1TrueJoe/powervr_sgx` `docs/porting/` properly and scope an SGX540 core
+the `The1TrueJoe/powervr_sgx` porting guide (external) and scope an SGX540 core
 port (fact sheet from `Garnet/sgx540-reversing`'s ISA work + our live register
 dumps).  This is a multi-session project, not a session task.
 
@@ -263,7 +263,7 @@ worth doing before blaming the blobs:
   supported UIs are Phosh (their `phoc`) and Plasma-Mobile.
 * `The1TrueJoe/powervr_sgx` — fully open SGX stack (DRM driver, open
   microkernel, Mesa gallium + NIR→USSE); SGX545 supported, **SGX540 wanted**;
-  `docs/porting/` is the bring-up method.
+  porting guide is the bring-up method.
 * `openpvrsgx-devgroup/linux_openpvrsgx` — the GPL kernel drivers we vendor;
   kernel-only by charter.
 * `Garnet/sgx540-reversing` — SGX540 ISA/PDS/microkernel RE tooling.

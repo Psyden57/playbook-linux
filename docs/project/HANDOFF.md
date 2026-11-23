@@ -182,7 +182,7 @@ the region-0 CRC is unchanged — but it must go into any hd3 rebake.
 
 **Owed — the kernel fix.**  `sched_init_smp()` widens init with
 `set_cpus_allowed_ptr(current, housekeeping_cpumask(HK_TYPE_DOMAIN))`, which is
-`cpu_possible_mask` (0-1) with no `isolcpus=`; `kernel/sched/core.c` and
+`cpu_possible_mask` (0-1) with no `isolcpus=`; `local/kernel-tree/kernel/sched/core.c` and
 `isolation.c` are byte-identical to pristine, and there is no `isolcpus=`/
 `nohz_full=` in `/proc/cmdline`.  The suspicion is that `cpu_active_mask` has
 not yet gained CPU 1 when the call runs (the `CPUHP_AP_ACTIVE` /
@@ -252,21 +252,47 @@ MESA_LOADER_DRIVER_OVERRIDE=pvr … epitaph`), (2) prove the vendor-supported
 eliminated: the PFN/`vm_pgoff` bug class from source A — `VM_MIXEDMAP` implies
 `PVR_MAKE_ALL_PFNS_SPECIAL`, so that code is compiled out.
 
-Old note:  hd3 now
-has `epitaph-1.4.0-r10005` (the segfault is gone) but it reports `softpipe`
-with the amber `swrast_dri.so`, so the session-60 llvmpipe replacement is
-missing from the image too.  More importantly, **a Wayland client cannot reach
-the SGX at all**: `libEGL_amber.so` advertises only the `wayland` platform and
-`pvr_dri.so` exports zero EGL symbols (a gallium DRI driver loaded by libEGL's
-DRM loader), so Mesa can only load swrast there —
-`MESA_LOADER_DRIVER_OVERRIDE=pvr` is powerless (surfaceless gives
-`PowerVR SGX 540`, a Wayland client gives `softpipe`).  The compositor reaches
-pvr through GBM/DRM.  **Getting the whole UI on the GPU is a project, not a
-toggle:** (a) a pvr Wayland EGL platform (`wl_drm`/`linux-dmabuf`), (b) a
-compositor that renders clients itself on the GBM/pvr path — pvrports ships
-`phoc` for Phosh, the vendor-supported configuration, and is the smallest first
-step, or (c) a dmabuf bridge.  **Kumo** needs a WPEWebKit/WebKit-fork build
-(not packaged, report 247 §4).
+**Current state of the desktop:** hd3 has `epitaph-1.4.0-r10005` (the segfault
+is gone) but it reports `softpipe` with the amber `swrast_dri.so`, so the
+session-60 llvmpipe replacement is missing from the image too.  The compositor
+is on the GPU (`catacomb` maps `pvr_dri` + `gbm`); the **clients** are not.
+
+### THE ONE EXPERIMENT for session 68 — why does Mesa's wayland platform refuse pvr?
+
+**Exact inputs** (no source change, no flash; one SSH session):
+
+```
+XDG_RUNTIME_DIR=/run/user/10000 WAYLAND_DISPLAY=wayland-1 \
+EGL_LOG_LEVEL=debug MESA_DEBUG=1 MESA_LOADER_DRIVER_OVERRIDE=pvr \
+  timeout 12 epitaph 2>&1 | tee /tmp/wayland-pvr.log
+```
+
+and the same **without** `MESA_LOADER_DRIVER_OVERRIDE` as the control, plus, for
+contrast, the surfaceless probe that already works (`local/work/egltest.py`,
+copied to `/tmp/egltest.py`) and the GBM probe (`/tmp/gbmtest2.py`).  Capture the
+`EGL_LOG_LEVEL`/`MESA_DEBUG` output in full.
+
+**What each result means:**
+
+| result | meaning | next action |
+|---|---|---|
+| loader rejects `pvr` for a **missing DRI/EGL extension** | a concrete capability gap | compare with `swrast_dri`'s DRI list (already dumped — the sets are near-identical, so it must be a *loader-level* check); weigh option C (dmabuf bridge) |
+| loader **never considers** `pvr` (straight to swrast) | platform driver-name selection, not a capability test | try `EGL_PLATFORM=…` and check `/etc/drirc`; weigh option B (GBM compositor) |
+| `pvr` loads but **context creation fails** | config/pbuffer/format negotiation — the most fixable kind | enumerate wayland-platform configs and compare with the 12 the GBM platform offers |
+| epitaph **renders and reports `PowerVR SGX 540`** | the platform-level conclusion was wrong | record it and remove trap 314's remaining caveat |
+
+**Then (step 2) prove the GBM path** by bringing up pvrports' `phoc` in place of
+catacomb; **step 3** decide with that data; **step 4** only then scope the
+open-stack SGX540 port (`The1TrueJoe/powervr_sgx`).  Report 268 §2 costs all four
+routes and §3 orders them.
+
+**Do not** patch Mesa before the diagnostic, and do not tune software rendering.
+
+**Already eliminated:** the PFN/`vm_pgoff` bug class from the N9 port —
+`VM_MIXEDMAP` implies `PVR_MAKE_ALL_PFNS_SPECIAL`, so that code is compiled out
+(report 268 §4).
+
+**Kumo** needs a WPEWebKit/WebKit-fork build (not packaged, report 247 §4).
 
 ## 0g. WM8994 audio, touch, sensors — closed
 

@@ -75,7 +75,7 @@ current->flags &= ~PF_NO_SETAFFINITY;
 `housekeeping_cpumask()` returns `cpu_possible_mask` unless
 `housekeeping_overridden` is enabled (i.e. unless `isolcpus=`/`nohz_full=` set
 it).  There is **no** such bootarg here (`/proc/cmdline` has neither), and
-`kernel/sched/isolation.c` and `kernel/sched/core.c` are **byte-identical to
+`local/kernel-tree/kernel/sched/isolation.c` and `.../sched/core.c` are **byte-identical to
 pristine 7.3.3**.  So in principle PID 1 should end up `{0,1}`.
 
 Empirically it does not: PID 1 is `{0}` after every boot until something

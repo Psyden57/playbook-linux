@@ -34,8 +34,16 @@ never given userspace work.
   `twl6030_uv_to_vsel: OUT OF RANGE` lines are startup VC init clamped to VSEL
   `0x3A` = 1.35 V — the same voltage the chainloader commands.  SmartReflex MPU
   is present but idle (`autocomp = 0`).  [report 266 §2/§3]
-* **Region 1 and the rest of hd3 are unchanged** (hd3 = the Nura ext4
-  `07555bde…`, 62.5 G, ARMv7 modules).  No 626 MB write, no restore needed.
+* **Region 1 and hd3 were read back this session, not assumed.**  Region 1
+  (64 MiB ext4 at raw `0x29000000`) now hashes **sha256 `20a5edd3…`** — drifted
+  from the recorded `6f5b8ca7…`, consistent with read-back boots having mounted
+  it rw (trap 320); it is not booted.  hd3 is still the Nura ext4: ext4 magic
+  `0x53EF` at `0x49000438`, `Block count 15273984 × 4096` = **62.56 GB**
+  (`df`'s 56.5 G is GiB of data blocks), mounted `/dev/loop0 on / type ext4
+  (rw,relatime,nobarrier)`.  No 626 MB write this session; no restore needed.
+* **Region 0 was re-verified on media this session**: its trailer read back from
+  `/dev/mmcblk1` at raw `0x8100000 + 10448868 − 8` is `1f 2d c8 d7 13 d6 47 35`
+  = CRC **`0x3547D613`**, byte-identical to `boot/chainloader/kernel.img`.
 * **`BOOTCTR_FCTRY = 0x24`** at the close (the mailbox validation boots read
   `0x2a → 0x29 → 0x28`; the affinity half's reboots took it to `0x24`, still
   above the `0x1e` top-up threshold).  `/init` tops up below `0x1e`.
@@ -59,8 +67,10 @@ never given userspace work.
   A Wayland client with `MESA_LOADER_DRIVER_OVERRIDE=pvr` still gets `swrast`;
   the reason is **not yet established** (an earlier "libEGL only supports
   wayland" claim was a bad grep and is withdrawn — it supports
-  wayland/x11/gbm/surfaceless/device).  **Session 68 is dedicated to this**;
-  the plan, the eight outside sources and their value are in **report 268**.
+  wayland/x11/gbm/surfaceless/device).  The kernel side is healthy: `pvrsrvkm`
+  is loaded and `catacomb` maps `pvr_dri` + `gbm`.  **Session 68 is dedicated to
+  this**; the plan, the eight outside sources and their value are in
+  **report 268**.
 
 ## Previous state — 2026-11-19 (session 66)
 

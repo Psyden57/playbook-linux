@@ -196,7 +196,7 @@ apply to a fresh pristine scratch and compare).  New export:
 * Tree-vs-pristine walk (trap 211): 100 differing source files; 67 are the
   patch, the rest are generated build artifacts plus the known excluded
   diagnostics (`arch/arm/kernel/smp.c`, `omap-smp.c`, `omap-smc.S` blank line,
-  `kernel/smp.c`, `lib/fonts/Makefile`, `include/linux/usb/otg.h`).  Nothing
+  `local/kernel-tree/kernel/smp.c`, `lib/fonts/Makefile`, `include/linux/usb/otg.h`).  Nothing
   functional was missed.
 
 ## 6. Open

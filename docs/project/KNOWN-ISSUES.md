@@ -2639,17 +2639,22 @@ report 121 §3/§11/§12.
        rendering via GBM+dmabuf, or an X/Wayland bridge — not started.  (Session
        60, report 253.)
 
-       **Mechanism measured (session 67, report 267 §3):** `libEGL_amber.so`
-       advertises **only** the `wayland` platform, and `pvr_dri.so` exports
-       **zero** EGL symbols — it is a Mesa gallium DRI driver loaded *by*
-       libEGL's DRM loader, with no Wayland glue (only
-       `libdrm`/`drmGetNodeTypeFromFd`).  So on the Wayland platform Mesa has
-       nothing but swrast to load, and `MESA_LOADER_DRIVER_OVERRIDE=pvr` cannot
-       help: surfaceless + the override gives `PowerVR SGX 540`, a Wayland
-       client + the same override gives `swrast_dri.so`/`softpipe`.  The
-       compositor reaches pvr through GBM/DRM.  Fix options, none a toggle: a
-       pvr Wayland EGL platform, a compositor that renders clients on the
-       GBM/pvr path (pvrports ships `phoc` for Phosh), or a dmabuf bridge.
+       **Mechanism measured (session 67, reports 267 §3 and 268 §0).**  What is
+       true: `pvr_dri.so` is a Mesa gallium DRI driver loaded *by* libEGL (it
+       exports no EGL entry points — normal; `swrast_dri` is the same shape), and
+       the **GBM/DRM** platform does work:
+       `eglGetPlatformDisplay(EGL_PLATFORM_GBM_MESA, <renderD129>)` → `EGL 1.4`,
+       12 window configs, `GL_RENDERER = PowerVR SGX 540`,
+       `EGL_MESA_image_dma_buf_export` present.  The Wayland-client path still
+       gets `swrast_dri.so`/`softpipe`, and `MESA_LOADER_DRIVER_OVERRIDE=pvr`
+       does **not** change that.  **`libEGL_amber` is not wayland-only** — an
+       earlier version of this entry said so, from a bad anchored `grep` (trap
+       344); it advertises wayland, x11, gbm, surfaceless and device.  Why
+       Mesa's wayland platform refuses `pvr_dri` is **not established**; that is
+       session 68's first measurement.  Fix options, none a toggle: a pvr Wayland
+       EGL platform, a compositor that renders clients on the GBM/pvr path
+       (pvrports ships `phoc` for Phosh), or a dmabuf bridge.  **Report 268**
+       costs them and orders the work.
 
 315. **CORRECTED TWICE (session 62): the SMP kernel used to die inside the
       loader's watchdog window, not at a statement — and the stop point moved
@@ -3075,7 +3080,7 @@ report 121 §3/§11/§12.
       ticks).  It is a root-filesystem change, so the region-0 CRC is unchanged.
       **Not yet explained in the kernel:** `sched_init_smp()` widens init with
       `housekeeping_cpumask(HK_TYPE_DOMAIN)` (= `cpu_possible_mask` with no
-      `isolcpus=`), and `kernel/sched/core.c` + `isolation.c` are byte-identical
+      `isolcpus=`), and `local/kernel-tree/kernel/sched/{core,isolation}.c` are byte-identical
       to pristine — the suspicion is that `cpu_active_mask` has not yet gained
       CPU 1 when the call runs (the `CPUHP_AP_ACTIVE`/`sched_cpu_activate`
       state), clamping the mask to CPU 0.  A kernel-side fix is owed.  (Session
