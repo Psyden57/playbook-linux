@@ -5,6 +5,15 @@ Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolut
 `N+6` — this handoff is for **absolute 68 = Linux-era 62**, written at the
 session-67 close.  See `docs/sessions/NUMBERING.md`.
 
+> **SESSION 68 IS THE GPU SESSION.**  The operator has directed it: get GPU
+> acceleration working for the UI.  **Read report 268 first** — it surveys the
+> eight outside sources the operator supplied, says what each is worth, and lays
+> out the ordered plan.  The key measured fact is that the SGX **works on the
+> GBM/DRM EGL platform** (dmabuf export included) and only the *Wayland client*
+> path does not select it, so the plan is: diagnose the wayland rejection
+> (cheap), prove the vendor-supported GBM path with pvrports' `phoc`, then
+> decide.  Do not tune software rendering.
+
 > **Session-67 result, in two lines.**  **The mailbox fault is fixed** (a
 > TWL6030 comparator freed by a failed probe — report 265), and **the second
 > core was doing no userspace work at all**: PID 1 was affinity-masked to `{0}`,
@@ -224,7 +233,26 @@ performance item (report 263 §4b): candidates are the 200 MHz L3/EMIF port, the
 conservative `tRP/tRCD = 20/17.5 ns` timings, or the measurement; a retune is a
 boot-time EMIF write, not a Linux setting.  A QNX comparison would settle it.
 
-**UI performance / hardware GL — the real GPU item (report 267 §3).**  hd3 now
+**UI performance / hardware GL — THE SESSION-68 FOCUS (report 268 is the plan;
+report 267 §3 is the measurement).**  Session 68 is dedicated to this.  The
+sources to read are listed in report 268 §1 with what each is worth; the short
+version: `zsavajji/pvr_sgx_rm696` is the best *method* reference (N9 SGX530
+forward-ported to 6.18 with the closed userspace kept — its bug list is our
+checklist), `pvrports` is where our blobs come from and its supported UIs are
+Phosh (their `phoc`) and Plasma-Mobile **not** catacomb, `The1TrueJoe/powervr_sgx`
+is a fully open stack with **SGX540 on its wanted list** (the long-term route),
+`Garnet/sgx540-reversing` is SGX540 ISA/PDS RE tooling.
+**The decisive measured fact:** the SGX **does** work through libEGL's
+**GBM/DRM** platform (12 window configs, `GL_RENDERER = PowerVR SGX 540`,
+`EGL_MESA_image_dma_buf_export` present) — it is the **Wayland-client** path
+that does not select it.  So the plan is (1) a cheap diagnostic of why Mesa's
+wayland platform rejects pvr (`EGL_LOG_LEVEL=debug MESA_DEBUG=1
+MESA_LOADER_DRIVER_OVERRIDE=pvr … epitaph`), (2) prove the vendor-supported
+**GBM** path by bringing up pvrports' `phoc`, (3) decide with data.  Already
+eliminated: the PFN/`vm_pgoff` bug class from source A — `VM_MIXEDMAP` implies
+`PVR_MAKE_ALL_PFNS_SPECIAL`, so that code is compiled out.
+
+Old note:  hd3 now
 has `epitaph-1.4.0-r10005` (the segfault is gone) but it reports `softpipe`
 with the amber `swrast_dri.so`, so the session-60 llvmpipe replacement is
 missing from the image too.  More importantly, **a Wayland client cannot reach
@@ -371,7 +399,7 @@ Local helper/workspace this session: `local/work/export67/`.
 * **Old Nura image:** the panel's `epitaph` may still show the r10005 bug;
   check before judging the desktop (§0f).
 
-## 4. Traps added last session (full list 14–343 in `KNOWN-ISSUES.md` §2)
+## 4. Traps added last session (full list 14–344 in `KNOWN-ISSUES.md` §2)
 
 * **334.** The kernel was built **`-march=armv6k`** because
   `CONFIG_ARCH_MULTI_V6=y` selects `CPU_ARM1176 → CPU_V6K → CPU_32v6`, and
@@ -422,6 +450,11 @@ Local helper/workspace this session: `local/work/export67/`.
   session-59 image (segfault ~120 ms in); install
   `epitaph-1.4.0-r10005.apk`.  The image also lacks the session-60 llvmpipe
   `swrast_dri.so` (it reports `softpipe`).
+* **344.** **Do not grep ELF strings with `^name$` anchors** — extension strings
+  are long space-separated runs, so anchored patterns miss them (this produced a
+  wrong "libEGL supports only wayland" claim in session 67).  Also: the unit has
+  **no binutils**, so `nm`/`readelf` there return nothing and every count reads
+  0 — pull the file to the host first.
 * Still current: **333** (the gadget bind is the trigger; the workaround is the
   device-mode-only call), **332** (dual-CPU `printascii` garble), **331** (power
   ruled out), **330** (the IPI is serviced), **327** (`nosmp` is not
@@ -497,13 +530,29 @@ way).  cpufreq-dt IS bound and scales (300000 600000 800000 1008000, ondemand);
 no CPU supply is attached, and the twl6030_uv_to_vsel OUT OF RANGE lines are
 startup VC init clamped to VSEL 0x3A = 1.35 V, the chainloader's own value.
 
-THE ACTIVE ITEMS, in the operator's priority order: (a) GET THE UI ON THE GPU —
-a Wayland client cannot reach the SGX because its EGL platform is `wayland`,
-where only swrast loads (`libEGL_amber` advertises only `wayland`; `pvr_dri`
-exports no EGL symbols and is reached only through libEGL's DRM/GBM path).  The
-options are a pvr Wayland EGL platform, a GBM-path compositor (pvrports ships
-`phoc` for Phosh — smallest first step), or a dmabuf bridge; see report 267 §3.
-Do NOT "fix" the UI by tuning software rendering.  (b) decide the CPU voltage:
+THIS SESSION IS THE GPU SESSION (operator directive).  Read report 268 first: it
+surveys these sources and says what each is worth —
+https://github.com/zsavajji/pvr_sgx_rm696 (N9 SGX530 on mainline 6.18 with the
+closed userspace kept; best method + bug checklist),
+https://github.com/zsavajji/linux_mainline_rm696 (its DT kernel),
+https://gitlab.com/pvrports/pvrports (our DDK 1.17 blobs; supported UIs are
+Phosh/their phoc and Plasma-Mobile, not catacomb),
+https://github.com/The1TrueJoe/powervr_sgx (fully open stack; SGX540 wanted;
+docs/porting is the bring-up method),
+https://github.com/openpvrsgx-devgroup/linux_openpvrsgx (the kernel driver we
+vendor; kernel-only by charter),
+https://codeberg.org/Garnet/sgx540-reversing (SGX540 ISA/PDS RE tooling),
+https://e2e.ti.com/support/processors-group/processors/f/processors-forum/287992/powervr-sgx540-linux-drivers
+(historical only).  MEASURED: the SGX works through libEGL's GBM/DRM platform
+(12 window configs, PowerVR SGX 540, EGL_MESA_image_dma_buf_export present);
+only the Wayland-client path does not select it.  PLAN: (1) diagnose why Mesa's
+wayland platform rejects pvr (EGL_LOG_LEVEL=debug MESA_DEBUG=1
+MESA_LOADER_DRIVER_OVERRIDE=pvr ... epitaph) — do not patch Mesa before this;
+(2) prove the vendor-supported GBM path by bringing up pvrports' phoc; (3)
+decide with data.  The PFN/vm_pgoff bug class is already eliminated
+(VM_MIXEDMAP => PVR_MAKE_ALL_PFNS_SPECIAL => compiled out).
+
+OTHER ACTIVE ITEMS, after the GPU: (b) decide the CPU voltage:
 attach a supply binding or keep 1.35 V for all OPPs and skip the out-of-range
 OPP entry (this TWL6030 revision cannot express >1.317 V except the hardcoded
 1.35 V; 1.2 GHz crashes, report 257); (c) replace the inittab affinity line with

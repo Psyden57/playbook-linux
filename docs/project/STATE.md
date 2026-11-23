@@ -52,11 +52,15 @@ never given userspace work.
 * **hd3's `epitaph` was the broken `r0`** (segfault ~120 ms in, trap 292's
   symptom); `epitaph-1.4.0-r10005` is now installed (trap 343), and it reports
   `softpipe` — the session-60 llvmpipe `swrast_dri.so` is still absent from hd3.
-* **A Wayland client cannot use the SGX** (trap 314, mechanism measured in
-  report 267 §3): its EGL platform is `wayland`, where only swrast is
-  loadable; `pvr_dri` needs the DRM/GBM path the compositor uses.  Fixing it is
-  a project (a pvr Wayland EGL platform, a phoc/Phosh GBM-path compositor, or a
-  dmabuf bridge) — the next real GPU step.
+* **The SGX works on the GBM/DRM EGL platform; only the Wayland-client path does
+  not select it** (report 267 §3, corrected): `eglGetPlatformDisplay(
+  EGL_PLATFORM_GBM_MESA, <renderD129>)` gives `EGL 1.4`, **12 window configs**,
+  `GL_RENDERER = PowerVR SGX 540`, and `EGL_MESA_image_dma_buf_export` present.
+  A Wayland client with `MESA_LOADER_DRIVER_OVERRIDE=pvr` still gets `swrast`;
+  the reason is **not yet established** (an earlier "libEGL only supports
+  wayland" claim was a bad grep and is withdrawn — it supports
+  wayland/x11/gbm/surfaceless/device).  **Session 68 is dedicated to this**;
+  the plan, the eight outside sources and their value are in **report 268**.
 
 ## Previous state — 2026-11-19 (session 66)
 
@@ -696,6 +700,13 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    still owed** (report 266 §1).  `cpufreq-dt` **does** exist and scale; what is
    missing is the CPU **supply**, and the `twl6030_uv_to_vsel` warnings are
    startup VC init clamped to 1.35 V (report 266 §2/§3).
+   * **THE GPU (session 68, operator directive) — see report 268 for the plan.**
+     Measured: the SGX works on libEGL's **GBM/DRM** platform (12 window
+     configs, `PowerVR SGX 540`, dmabuf export), and only the **Wayland client**
+     path refuses it.  Session 68: (1) diagnose the wayland rejection with
+     `EGL_LOG_LEVEL=debug` (do not patch Mesa before that), (2) prove the
+     vendor-supported GBM path with pvrports' `phoc`, (3) decide with data,
+     (4) only then weigh the open-stack SGX540 port (`The1TrueJoe/powervr_sgx`).
    * **Then the MPU OPP:** `cpufreq-dt` is bound and scales
      (`300000 600000 800000 1008000`, `ondemand`), so the old "no cpufreq
      policy" note is stale.  What remains is the CPU **supply** (no

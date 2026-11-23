@@ -213,6 +213,52 @@ USB Ethernet adapter, and both Linux `rndis_host` and QNX's RNDIS class driver
 speak the same control protocol (hence `PB_LINK=door` and `PB_LINK=usb` both
 reaching `169.254.0.1`).  Only the host side differs.
 
+## Fourth part — the GPU session is planned (report 268)
+
+The operator directed session 68 to GPU acceleration and supplied eight sources.
+I surveyed all of them and turned the result into an ordered plan (report 268).
+
+**Confirmed (measured this session, on the unit):**
+
+* **The SGX works on libEGL's GBM/DRM platform.**  `gbm_create_device` on
+  `/dev/dri/renderD129` (backend `drm`), then
+  `eglGetPlatformDisplay(EGL_PLATFORM_GBM_MESA, dev)` → `EGL 1.4`,
+  `eglChooseConfig` → **12 window configs**, context current,
+  `GL_VENDOR = Imagination Technologies`, `GL_RENDERER = PowerVR SGX 540`,
+  `GL_VERSION = OpenGL ES 2.0 build 1.17@4948957`, and
+  `EGL_MESA_image_dma_buf_export` **present**.  [report 268 §0]
+* **A Wayland client still gets `swrast_dri`/`softpipe` even with
+  `MESA_LOADER_DRIVER_OVERRIDE=pvr`**, and the override is visibly ignored.
+  [report 267 §3]
+* **A claim of mine from earlier in this session had to be withdrawn:** I said
+  `libEGL_amber` advertised *only* the `wayland` platform.  That was a grep with
+  `^anchor$` patterns against data that is not line-aligned — the real extension
+  string lists **wayland, x11, gbm, surfaceless and device** (plus
+  `EGL_WL_bind_wayland_display`).  Corrected in 267/268.  It also means
+  `pvr_dri`'s missing `wl_*` symbols are **not** the explanation: `swrast_dri`
+  has none either and works, because the winsys lives in libEGL.
+* **The PFN/`vm_pgoff` bug class from the N9 port does not apply to us**:
+  `mmap.h` defines `PVR_MAKE_ALL_PFNS_SPECIAL` whenever `VM_MIXEDMAP` is set, so
+  the `remap_pfn_range`-with-`vm_pgoff` path is compiled out and we use
+  `vmf_insert_mixed()`.  Hypothesis eliminated before spending bench time.
+  [report 268 §4]
+
+**Source value, one line each** (details in report 268 §1):
+`zsavajji/pvr_sgx_rm696` = best *method* (N9 SGX530 on mainline 6.18 with the
+closed userspace kept, a documented forward-port bug list and `check-abi.py`);
+`pvrports` = our blobs' origin, its supported UIs are Phosh (their `phoc`) and
+Plasma-Mobile, **not** catacomb; `The1TrueJoe/powervr_sgx` = fully open stack
+with **SGX540 explicitly wanted** (long-term route; `docs/porting/` is the
+bring-up method); `openpvrsgx-devgroup` = the kernel-only driver we vendor;
+`Garnet/sgx540-reversing` = SGX540 ISA/PDS/microkernel RE tooling; the TI E2E
+thread = historical only.
+
+**Plan for session 68:** (1) a one-boot diagnostic of *why* Mesa's wayland
+platform rejects pvr (`EGL_LOG_LEVEL=debug MESA_DEBUG=1
+MESA_LOADER_DRIVER_OVERRIDE=pvr … epitaph`) — **do not patch Mesa before
+that**; (2) prove the vendor-supported GBM path by bringing up pvrports'
+`phoc`; (3) decide with data; (4) only then scope the open-stack SGX540 port.
+
 ## Artefacts produced
 
 * Report **265** (`docs/reports/265-musb-comparator-lifetime-fix-2026-11-23.md`).
@@ -221,6 +267,7 @@ reaching `169.254.0.1`).  Only the host side differs.
   `::sysinit:/usr/sbin/taskset -p 3 1`; backups `/etc/inittab.session67-orig`
   and `/etc/inittab.fixed`.  No region-0 or region-1 change from this half.
 * Report **267** (`docs/reports/267-host-vpn-ssh-and-wayland-sgx-2026-11-23.md`).
+* Report **268** (`docs/reports/268-gpu-acceleration-survey-and-plan-2026-11-23.md`).
 * Device-side (hd3 root, bench): `epitaph` upgraded `1.4.0-r0` →
   `1.4.0-r10005` (from `local/work/nura/work/packages/edge/armv7/`); the fixed
   binary is the only durable device change from the third part.

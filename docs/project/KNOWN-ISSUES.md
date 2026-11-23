@@ -3113,6 +3113,20 @@ report 121 §3/§11/§12.
       reports `softpipe` and the file is the 6.9 MB amber build, not the 15.8 MB
       Alpine one.  (Session 67, report 267 §2.)
 
+344. **Do not grep for platform/extension names with `^name$` anchors.**  A
+      session-67 check of `libEGL_amber.so` used
+      `strings … | grep -iE "^(wayland|gbm|x11|surfaceless|drm)$"` and concluded
+      the library supported **only** `wayland`.  That is false: ELF `.rodata`
+      holds long space-separated extension strings, so anchored patterns miss
+      everything.  The real string is
+      `… EGL_EXT_platform_wayland … EGL_MESA_platform_gbm … platform_x11 …
+      platform_surfaceless … platform_device … EGL_WL_bind_wayland_display`.
+      The wrong conclusion propagated into a report and a decision before it
+      was caught.  **Grep for the bare substring, then read the whole line** —
+      and prefer `nm`/`readelf` on the pulled file (the unit has no binutils, so
+      `nm` there returns nothing and every count reads 0, another silent trap).
+      (Session 67, reports 267/268.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

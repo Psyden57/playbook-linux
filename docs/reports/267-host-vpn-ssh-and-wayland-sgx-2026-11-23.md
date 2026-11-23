@@ -95,23 +95,44 @@ llvmpipe replacement is not on hd3 either** — it reports `softpipe`, and
 | `epitaph` | wayland | no | `swrast_dri.so`, `softpipe` |
 | `catacomb` (compositor) | GBM/DRM | `pvr` | maps `pvr_dri`, `gbm` |
 
-Why the override cannot help:
+**Correction (same session, after pulling the libraries to the host).**  An
+earlier version of this section claimed `libEGL_amber` advertised *only* the
+`wayland` platform.  That was wrong — it was a grep with `^anchor$` patterns
+against data that is not line-aligned.  The extension string is really:
 
-* `strings /usr/lib/libEGL_amber.so.0.0.0` → the only platform name it
-  advertises is **`wayland`** (no `drm`, `gbm`, `surfaceless`, `x11` as
-  platform *names*; surfaceless still works via the platform-less default path).
-* `nm -D /usr/lib/xorg/modules/dri/pvr_dri.so | grep -i egl` → **0** symbols.
-  `pvr_dri.so` is a Mesa **gallium DRI** driver: it is loaded *by* libEGL's DRM
-  loader, it is not itself an EGL implementation.
-* Its only platform-ish strings are `libdrm.so.2` / `drmGetNodeTypeFromFd`, i.e.
-  the DRM render node (`/dev/dri/renderD129`) path — exactly what the
-  compositor uses.
-* `libGLESv2_PVR_MESA` is the vendor GLES blob; it is the *backend* behind
-  `pvr_dri`, not a way to get an EGL display for a Wayland surface.
+```
+EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11
+EGL_KHR_platform_x11 EGL_MESA_platform_xcb EGL_MESA_platform_gbm
+EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless EGL_EXT_platform_device
+EGL_WL_bind_wayland_display EGL_WL_create_wayland_buffer_from_image
+```
 
-So on the Wayland platform Mesa has nothing but swrast to load: the SGX is
-reachable from a **DRM/GBM** client, not from a Wayland-surface client.  That is
-what trap 314 recorded, and this session supplies the mechanism.
+so wayland, x11, gbm, surfaceless and device are all available.  What is
+actually true:
+
+* `pvr_dri.so` is a Mesa gallium DRI driver (`__driDriverGetExtensions_pvr`,
+  `__driDriverExtensions`, linked to `libglapi`/`libdrm` only) — it is loaded
+  *by* libEGL, not an EGL implementation, exactly like `swrast_dri`.
+* **The SGX works on the GBM platform.**  Opening `/dev/dri/renderD129`,
+  `gbm_create_device` → backend `drm`, then
+  `eglGetPlatformDisplay(EGL_PLATFORM_GBM_MESA, dev)`:
+  `EGL 1.4`, `eglChooseConfig` returns **12 window configs**, a context
+  current, and `GL_VENDOR = Imagination Technologies`,
+  `GL_RENDERER = PowerVR SGX 540`, `GL_VERSION = OpenGL ES 2.0 build
+  1.17@4948957`; `EGL_MESA_image_dma_buf_export` is **present**.  Test:
+  `/tmp/gbmtest2.py` (from `local/work/pvrdri/` analysis).
+* On the **wayland** platform a client still gets `swrast_dri.so` even with
+  `MESA_LOADER_DRIVER_OVERRIDE=pvr`, and the override is visibly ignored.
+
+So the accurate statement is: **the SGX is usable through libEGL's GBM/DRM
+platform (which is what a GBM-based compositor uses, dmabuf export included),
+while the Wayland-client path does not select it** — whether because Mesa's
+wayland platform refuses this driver or because the client's surface path needs
+a loader extension the driver lacks is **not yet established** (the DRI
+extension strings are near-identical between `pvr_dri` and `swrast_dri`, so it
+is not a simple missing-extension check).  This is the first thing to settle
+next session; `EGL_PLATFORM=wayland MESA_DEBUG=1 MESA_LOADER_DEBUG=` style
+logging and `EGL_LOG_LEVEL=debug` will name the rejection.
 
 ### What a real fix requires
 

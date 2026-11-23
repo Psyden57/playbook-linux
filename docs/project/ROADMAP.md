@@ -329,10 +329,17 @@ flasher can replace at every point:
     platform and `pvr_dri` exports no EGL symbols (it is a gallium DRI driver
     loaded by libEGL's DRM loader), so `MESA_LOADER_DRIVER_OVERRIDE=pvr` does
     nothing on the Wayland path (surfaceless → `PowerVR SGX 540`, Wayland client
-    → `softpipe`).  **Next (session 68), in the operator's order:** (a) **get
-    the UI on the GPU** — a pvr Wayland EGL platform (`wl_drm`/`linux-dmabuf`),
-    a GBM-path compositor (pvrports ships `phoc` for Phosh, the smallest first
-    step), or a dmabuf bridge; **not** more software-rendering tuning; (b)
+    → `softpipe`).  **Session 68 is dedicated to the GPU (operator directive;
+    report 268 has the plan, the source survey and the costs).**  Measured: the
+    SGX works on libEGL's **GBM/DRM** platform (12 window configs,
+    `PowerVR SGX 540`, `EGL_MESA_image_dma_buf_export`); only the
+    **Wayland-client** path refuses it, and *why* is not yet established.  Order:
+    (1) diagnose that rejection (`EGL_LOG_LEVEL=debug`); (2) prove the
+    vendor-supported GBM path with pvrports' `phoc` (its supported UIs are Phosh
+    and Plasma-Mobile, **not** catacomb); (3) decide with data; (4) only then
+    weigh the open-stack SGX540 port (`The1TrueJoe/powervr_sgx` lists SGX540 as
+    wanted; `Garnet/sgx540-reversing` has the ISA/PDS work).  **Not** more
+    software-rendering tuning.  **Next after the GPU:** (b)
     attach the CPU supply or confirm 1.35 V for all OPPs and settle the
     `twl6030_uv_to_vsel` clamp (report 266 §2/§3); (c) a kernel-side PID-1
     affinity fix to replace the inittab line; (d) the intermittent USB teardown
