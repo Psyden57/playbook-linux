@@ -3018,9 +3018,33 @@ report 121 §3/§11/§12.
      by this symbolisation.  **Next:** audit the comparator lifetime
      (`omap_usb2_set_comparator()` / probe-deferral/rebind and the
      `cpcap-charger.c` writer of `phy->comparator`), not more markers.  The
-     device-mode-only workaround stays until a fix restores the stock call for
-     OTG host mode.  (Session 66, report 264; capture
-     `docs/captures/musb-mailbox-fault-2026-11-19.txt`.)
+      device-mode-only workaround stays until a fix restores the stock call for
+      OTG host mode.  (Session 66, report 264; capture
+      `docs/captures/musb-mailbox-fault-2026-11-19.txt`.)  **Resolved in session
+      67 — see trap 339;** the device-mode-only workaround is gone and the stock
+      call runs on dual-core.
+
+339. **The dangling comparator is a TWL6030 probe-lifetime bug.**
+      `twl6030_usb_probe()` registers `&twl->comparator` in the `omap-usb2` PHY
+      (`omap_usb2_set_comparator()`, `phy-twl6030-usb.c:358`) **before**
+      `twl6030_usb_ldo_init()`, whose `regulator_get(dev, "usb")` (the board's
+      `usb-supply = <&vusb>`) can return `-EPROBE_DEFER`.  The code returned
+      `-ENODEV` for **every** regulator error, so a deferred `vusb` failed the
+      probe permanently; devres freed the `devm_kzalloc`'d `twl` and left
+      `phy->comparator` dangling.  A later slab reuse put a heap pointer in its
+      first word (`set_vbus`), and the stock `omap_musb_set_mailbox()` jumped
+      through it — the report-264 Oops.  The faulting `r0` is the tell: a
+      `kmalloc-192` **devm** object (`pointer offset 64` = `sizeof(struct
+      devres)`), whose word 0 is a `kmalloc-1k` address instead of
+      `twl6030_set_vbus` text; the workaround had only hidden the dereference.
+      **Fix:** return `PTR_ERR(twl->usb3v3)` so `-EPROBE_DEFER` propagates, add
+      a `devm_add_action_or_reset()` action that calls
+      `omap_usb2_set_comparator(NULL)` on any probe failure/remove, and
+      `usb_put_phy()` the reference `omap_usb2_set_comparator()` leaked.  The
+      other writer (`cpcap-charger.c:921/940`) is inert here
+      (`CONFIG_CHARGER_CPCAP=m`, no DT node).  Validated **3/3 clean dual-core
+      boots** with the stock call restored (image `0x3547D613`, `#109 SMP`).
+      (Session 67, report 265.)
 
 ## 3. Corrections to older reports
 
@@ -3346,6 +3370,18 @@ evdev `Y 577–591`, physical bottom → `Y 35–51` (X is correct).  The driver
 inverts the mapped Y (`panel_h - 1 - munin_map(...)`, kernel `#69`).  The
 calibration *values* are unchanged; only the axis direction was wrong on this
 pipeline.  Report 246 §4.
+
+**3.33 Report 264 stopped one level short: the "stale TWL6030 comparator" is a
+freed `devm` object from a failed probe, not corruption in place.**  Report
+264 §2/§3 correctly identified `phy->comparator->set_vbus` as the faulting
+transfer, but read the `kmalloc` address as a live object that had been
+corrupted.  Session 67's static audit (report 265) shows the object was
+**freed**: `twl6030_usb_probe()` stored `&twl->comparator` in the PHY before
+`twl6030_usb_ldo_init()`, and that function collapsed every `regulator_get()`
+error to `-ENODEV`, so a deferred `vusb` failed the probe permanently and
+devres freed `twl`.  The faulting `r0` being a `kmalloc-192` devm allocation
+(offset 64) with a heap pointer in word 0 is the evidence; no in-place writer
+exists.  Report 265 supersedes 264 §5's "audit the lifetime" with the answer.
 
 ## 4. Documentation and tree defects (not behavioural bugs)
 

@@ -310,20 +310,23 @@ flasher can replace at every point:
     `PC = 0xc2c05800` (a slab), `LR = omap_musb_set_mailbox+0x1e0` — the fault is
     `omap_usb_set_vbus()`'s tail call `phy->comparator->set_vbus`, a stale
     TWL6030 `phy_companion`; not the notifier chain and not a wild pointer at
-    entry.  **Next (session 67):** (a) audit the comparator lifetime
-    (`omap_usb2_set_comparator()` / probe-deferral/rebind and the
-    `cpcap-charger.c` writer of `phy->comparator`) — no more markers — and only
-    then restore the stock call for OTG host mode; (b) then the MPU OPP — the
-    table exists in `omap443x.dtsi` (300/600/800/**1008** MHz, trap 312), what
-    is missing is `cpu-supply`/`vdd_mpu` + `cpufreq-dt`, or a boot-time DPLL/VC
-    write (report 257 §6); the boot log's `twl6030_uv_to_vsel: OUT OF RANGE`
-    (1.375/1.41 V vs 1.31666 V) shows the present attempt fails; (c) the
-    intermittent USB teardown (trap 337 — it recurred at ~60 s this session) —
-    capture before the drop;
-    (d) shrink/pre-warm the drawer; (e) pursue hardware GL for Wayland clients
-    (trap 314); (f) rebake the restorable hd3 base with `epitaph` r10005+, the
-    llvmpipe files and the rules (the image on hd3 is the session-59 state).
-    Kumo needs a WPEWebKit build (report 247 §4).
+    entry.  **Session 67 closed it (report 265, trap 339):** the comparator was
+    a freed `devm` TWL6030 `twl` — `twl6030_usb_probe()` registered it in the
+    PHY before `twl6030_usb_ldo_init()`, and a deferred `vusb` regulator was
+    collapsed to `-ENODEV`, so the probe failed permanently and devres freed the
+    object while `phy->comparator` dangled.  The fix (propagate `PTR_ERR()`,
+    clear the comparator with a devm action, `usb_put_phy()`) and the restored
+    stock call gave **3/3 clean dual-core boots** on `0x3547D613`.  **Next
+    (session 68):** (a) the MPU OPP — the table exists in `omap443x.dtsi`
+    (300/600/800/**1008** MHz, trap 312); what is missing is
+    `cpu-supply`/`vdd_mpu` + `cpufreq-dt`, or a boot-time DPLL/VC write (report
+    257 §6), and the boot log's `twl6030_uv_to_vsel: OUT OF RANGE` (1.375/1.41 V
+    vs 1.31666 V) shows the present attempt fails; (b) the intermittent USB
+    teardown (trap 337) — capture before the drop; (c) shrink/pre-warm the
+    drawer; (d) pursue hardware GL for Wayland clients (trap 314); (e) rebake
+    the restorable hd3 base with `epitaph` r10005+, the llvmpipe files and the
+    rules (the image on hd3 is the session-59 state).  Kumo needs a WPEWebKit
+    build (report 247 §4).
 
 Step 3 is reversible at any time by re-flashing the same block range — which is
 the whole reason it beats an in-place mkfs.

@@ -1,6 +1,44 @@
 # Current state
 
-## Current state — 2026-11-19 (session 66)
+## Current state — 2026-11-23 (session 67)
+
+**The mailbox fault is a TWL6030 comparator lifetime bug, now fixed; the stock
+`omap_musb_set_mailbox()` call runs on dual-core.**  The static audit found the
+free: `twl6030_usb_probe()` stores `&twl->comparator` in the `omap-usb2` PHY
+before `twl6030_usb_ldo_init()`, and that function collapsed a deferred `vusb`
+regulator error (`-EPROBE_DEFER`) to `-ENODEV`, so the probe failed
+permanently, devres freed the `devm_kzalloc`'d `twl`, and `phy->comparator`
+dangled.  Report 264's faulting `r0` is exactly that: a `kmalloc-192` **devm**
+object (offset 64) whose first word is a `kmalloc-1k` heap pointer instead of
+`twl6030_set_vbus` text.  The device-mode-only workaround had been hiding the
+dangling pointer by never calling `otg_set_vbus()`.  The fix: propagate
+`PTR_ERR()` from the regulator lookup, clear the comparator with a devm action
+on any probe failure/remove, and `usb_put_phy()` the reference that
+`omap_usb2_set_comparator()` used to leak.  With the early return removed,
+image **`0x3547D613`** (`#109 SMP`) gave **3/3 clean dual-core boots** with the
+gadget bound and no Oops.  [report 265; session-67 note]
+
+* **Region 0 = `boot/chainloader/kernel.img`, CRC `0x3547D613`** (10,448,868 B,
+  sha256 `6ecd068d…`) — kernel `7.3.3 #109 SMP`, `-march=armv7-a`, no `maxcpus`,
+  **stock MUSB mailbox + comparator fix**, DSI-init TCON hook, inert
+  `console=ttyGS0`, `panic=0` (trap 335).  Flashed at block `0x825`
+  (`COMPLETE 0x40C0 -> cmd 0x4006`, `done`).  The previous `0xC9FEE2D1`
+  (`#105`, device-mode-only workaround, `panic=10`) is the known-good fallback
+  on the host.
+* **Region 1 and hd3 untouched** (hd3 = the Nura ext4 `07555bde…`, 62.5 G, ARMv7
+  modules).  No 626 MB write, no restore needed.
+* **`BOOTCTR_FCTRY = 0x28`** after the three validation boots (`0x2a → 0x29 →
+  0x28`, each `>= 0x1e, no write`).  `/init` tops up below `0x1e`.
+* **Patch = 67 files / 9 136 lines**, sha256 `d19adff8…`, 0 rejects / 67/67
+  identical; adds `phy-twl6030-usb.c` + `phy-omap-usb2.c`, and `omap2430.c` now
+  runs the stock call (mutex kept).  Tree walk (trap 211) clean outside the
+  known excluded diagnostics.  `kernel/source/` mirrors refreshed.
+* **Bench:** Linux/Nura on hd3; the USB link was up at the close (no VUSB drop
+  during the short checks).  The VUSB teardown (trap 337) is unchanged and open.
+  `PB_LINK=usb tools/pbssh.sh` was not answering this session (RNDIS/usb0), so
+  the ACM (`playbook:~#`, `tools/pbraw.py`) was the console.
+
+## Previous state — 2026-11-19 (session 66)
 
 **The mailbox fault's bad indirect transfer is identified; the working image is
 back on region 0.**  HANDOFF-65 §0d's one experiment was run: an instrumented
@@ -425,7 +463,7 @@ The per-session snapshots are in
 | Panel identity | **Hitachi (definitive)** | on TabletOS: `GPIO6_DATAIN = 0x00010800` (bit 16 = 1), slog `LCD is Hitachi`.  Report 127 §1 |
 | **Image on the panel** | **WORKING** | With `0x8C146805` (and the same source as `0x068C867F`) the panel shows a clean, stable image: solid white, solid red, and the kernel console as legible text.  The three necessary fixes were the bridge delivery (VC0/HS null packet), the LVDS porches + TCON table at bring-up, and the DISPC core clock. Report 133 |
 | QNX oracle tool | **`tools/qnx-dsiread.c` → `tools/pbdsi`** | Reads any TC358764 register over DSI from a TabletOS user process (generic read request `0x24` on hw VC1, BTA, RX FIFO pop; response is a generic long read, DT `0x1A`).  Read-only.  This is how the reference values in this document were obtained. Report 132 §2 |
-| Kernel patch + config | **7.3.3 (session 65 export)** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **9 110 lines / 65 files**, sha256 `6f9bef24…`, 0 rejects / 65/65 identical against pristine 7.3.3.  Session 65 adds `drivers/usb/musb/omap2430.c` (device-mode-only enable + `set_mailbox_lock`), the DSI-init TCON hook in `dsi.c`, and the board DTS without `maxcpus`; the session-62/63/64 markers, the `head.S` `CRR` stamp and the `MINI4x6` font link are not in it.  Session 58 fixes the Munin touch position ghost (`playbook-munin.c`: poll while the line is asserted + the fresh-down confirm; the board DTS gains `irq-gpios`; report 248).  Session 54 makes the `PB*` prints `pr_debug` (config `CONFIG_DYNAMIC_DEBUG=y`, `CONFIG_OVERLAY_FS=y`); the rebuilt image is `0xE84693A1` (built, not flashed).  Session 52 adds `drivers/usb/musb/musb_gadget.c` (the `quirk_avoids_skb_reserve` flag) and `drivers/usb/gadget/function/u_ether.c` (the TX realign); the 40 MHz experiment in `wl12xx/main.c` was reverted and is not in the patch.  Session 51 added `wl12xx/main.c` (CAM + the 4-sr firmware name) and `wl12xx.h` (the SR floor 7.3.5.0).  Session 49 added the report-220 board-DTS GPIO1 pad fix and `arch/arm/Kconfig.debug` (missing from every export since session 30 — the tree walk found it, trap 211 class).  Session 48 retires the two diagnostic blocks and adds `sound/soc/ti/omap-mcbsp-priv.h`, which every export since session 41 had omitted although `omap-mcbsp.c` reads the fields it declares (trap 211 — the patch could not compile from pristine until now).  Session 47 added the speaker path (line-output route, `spk`/`boost` GPIOs, the `disp-en-12-hog` removal); session 46 the `&l4_abe` ABE-refclk assignment, the E5 clock-role change, the McBSP3 two-link card and the `omap-mcbsp` channel-layout guard; session 39 the board machine driver (`sound/soc/ti/playbook-wm8994.c`, Kconfig/Makefile), the `wm8994-core.c` runtime-PM quirk and the board `sound` node/codec clocks, and it restored `drivers/input/touchscreen/{Kconfig,Makefile}`, which the 48-file export had silently omitted (trap 154).  Config: `kernel/winchester-7.3.3.config` (SMP, `CONFIG_NR_CPUS=2`, no `ARCH_MULTI_V6`; includes `CONFIG_CLK_TWL=y`, `CONFIG_CHARGER_ISL9519=y`, `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`, `CONFIG_KERNEL_XZ=y`, `CONFIG_SND_PCM_OSS=m`, `CONFIG_SND_MIXER_OSS=m`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
+| Kernel patch + config | **7.3.3 (session 67 export)** | `kernel/patches/0001-playbook-winchester-7.3.3.patch` is **9 136 lines / 67 files**, sha256 `d19adff8…`, 0 rejects / 67/67 identical against pristine 7.3.3.  Session 67 adds `drivers/usb/phy/phy-twl6030-usb.c` + `drivers/phy/ti/phy-omap-usb2.c` (the comparator lifetime fix) and restores the **stock `omap_musb_set_mailbox()` call** in `omap2430.c` (mutex kept); the board DTS moves to `panic=0`.  Session 65 added `drivers/usb/musb/omap2430.c` (device-mode-only enable + `set_mailbox_lock`), the DSI-init TCON hook in `dsi.c`, and the board DTS without `maxcpus`; the session-62/63/64 markers, the `head.S` `CRR` stamp and the `MINI4x6` font link are not in it.  Session 58 fixes the Munin touch position ghost (`playbook-munin.c`: poll while the line is asserted + the fresh-down confirm; the board DTS gains `irq-gpios`; report 248).  Session 54 makes the `PB*` prints `pr_debug` (config `CONFIG_DYNAMIC_DEBUG=y`, `CONFIG_OVERLAY_FS=y`); the rebuilt image is `0xE84693A1` (built, not flashed).  Session 52 adds `drivers/usb/musb/musb_gadget.c` (the `quirk_avoids_skb_reserve` flag) and `drivers/usb/gadget/function/u_ether.c` (the TX realign); the 40 MHz experiment in `wl12xx/main.c` was reverted and is not in the patch.  Session 51 added `wl12xx/main.c` (CAM + the 4-sr firmware name) and `wl12xx.h` (the SR floor 7.3.5.0).  Session 49 added the report-220 board-DTS GPIO1 pad fix and `arch/arm/Kconfig.debug` (missing from every export since session 30 — the tree walk found it, trap 211 class).  Session 48 retires the two diagnostic blocks and adds `sound/soc/ti/omap-mcbsp-priv.h`, which every export since session 41 had omitted although `omap-mcbsp.c` reads the fields it declares (trap 211 — the patch could not compile from pristine until now).  Session 47 added the speaker path (line-output route, `spk`/`boost` GPIOs, the `disp-en-12-hog` removal); session 46 the `&l4_abe` ABE-refclk assignment, the E5 clock-role change, the McBSP3 two-link card and the `omap-mcbsp` channel-layout guard; session 39 the board machine driver (`sound/soc/ti/playbook-wm8994.c`, Kconfig/Makefile), the `wm8994-core.c` runtime-PM quirk and the board `sound` node/codec clocks, and it restored `drivers/input/touchscreen/{Kconfig,Makefile}`, which the 48-file export had silently omitted (trap 154).  Config: `kernel/winchester-7.3.3.config` (SMP, `CONFIG_NR_CPUS=2`, no `ARCH_MULTI_V6`; includes `CONFIG_CLK_TWL=y`, `CONFIG_CHARGER_ISL9519=y`, `CONFIG_TOUCHSCREEN_PLAYBOOK_MUNIN=y`, `CONFIG_KERNEL_XZ=y`, `CONFIG_SND_PCM_OSS=m`, `CONFIG_SND_MIXER_OSS=m`).  The 6.15.11 patch (`5 703 lines / 34 files`) stays as the bisect reference; it is **incomplete** — it omits `cm3217.c`, `leds-fan5702.c`, `pbmon-pair.h`, `pbmon-page.h` and their Kconfig/Makefile lines (trap 106) |
 | **ISL9519 charger** | **WORKING under Linux (session 31)** | I²C1 `0x48070000`, slave `0x09`; VendorID `0x0049`, DeviceID `0x0003`.  `isl9519.c` (built-in, DTS `charger@9`) sets the four registers in RIM's order with the masked fields and refreshes every 5 s.  Measured **+358 → +397 mA**, 3.775 → 3.794 V, capacity 8 → 9 %, `Charging`; still on at 197 s (watchdog).  Registers read back `0x14=0x0280`, `0x15=0x1070`, `0x3E=0x0D00`, `0x3F=0x0180`.  Report 183 |
 | TWL6030 BCI | **probes after the session-31 fix; NOT the board's charger** | `twl6030_charger` probes with the `simple-battery` profile and sets `CONTROLLER_CTRL1=0x10`, `VOREG=0x21`, `VICHRG=0x08`, `CINLIMIT=0x09`, but the stock OS leaves the whole block at bootloader reset values — it charges through the ISL9519.  The BCI node/modules are inert; `twl6030_usb` reports `ONLINE=1`, VBUS 4.81–4.91 V |
 
@@ -437,7 +475,8 @@ the durable record is the CRC and what it demonstrated, not the file.
 
 | image | base | role |
 |---|---|---|
-| `0xC9FEE2D1` | 7.3.3 | **current region 0 — ARMv7 dual-core** (session 65: `0x9F74BC` B, `#105 SMP`, `-march=armv7-a`, no `maxcpus`, inert `console=ttyGS0`, device-mode-only mailbox workaround; 6/6 boots, 376 s soak with the gadget up) |
+| `0x3547D613` | 7.3.3 | **current region 0 — ARMv7 dual-core, stock MUSB mailbox** (session 67: 10,448,868 B, `#109 SMP`, `-march=armv7-a`, no `maxcpus`, inert `console=ttyGS0`, **comparator lifetime fix**, `panic=0`; 3/3 clean dual-core boots, gadget bound) |
+| `0xC9FEE2D1` | 7.3.3 | session-65 region 0 — `0x9F74BC` B, `#105 SMP`, device-mode-only mailbox workaround, `panic=10` (known-good fallback; 6/6 boots, 376 s soak) |
 | `0x158D8A85` | 7.3.3 | session-65 ARMv7 base (`0x9F74A8` B, same kernel/DTB without the console bootarg; 6/6 clean boots) |
 | `0x19E24D8F` | 7.3.3 | **rejected** session-65 mutex experiment — stock `omap_musb_set_mailbox` with a glue mutex still panics on dual-core (`panic=10` loop) |
 | `0xBEF06B78` | 7.3.3 | session-65 mutex build that booted single-core (DTB still had `maxcpus=1`) |
@@ -500,13 +539,13 @@ Do not boot `0x5E40C5C1` or `0xB9A1BC4F` (two lanes), or `0x3B04298E`
 | item | value |
 |---|---|
 | working units | **one: the reference (`0x50175127`)**, armed AND sealed.  The spare (`0x50176EC1`, BSN `1063043093`) is **down** with the 1-2-2 blink = error `0x5B` (report 153) and presents no USB.  Two 32 GB units are bricked and parked |
-| region-0 IFS on media | **the ARMv7 dual-core image `kernel-armv7-console-cpu1.img`, CRC `0xC9FEE2D1`** (`0x9F74BC` B, kernel `7.3.3 #105 SMP`, `-march=armv7-a`, the device-mode-only MUSB workaround, the DSI-init TCON hook), region 0.  The session-65 ARMv7 base is `0x158D8A85`; the session-64 known-good dual-core image is `0xC675E206`; the session-58 read-write/SSH image `0x294F8E36` (`0x9E0980` B, kernel `#77`) remains on the host.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier images (the `0xED58EF36`/`0xB9DD91E3` touch, `0xAB899C49` compositor, `0xE85217E5` overlay, `0x060B25F2`, `0xDD66D8C3`, …) remain on the host.  Earlier Linux images (region 0 only, block `0x825`): `0x23D88CBD`, `0x373674A4`, `0xA544A731`, `0xAB899C49`, `0xA8F0F30C`, `0xE85217E5`, `0xE84693A1`, `0x8B709950`, `0x50CD2A48`, `0x5C37F181`, `0x5A7F15D8`, `0x9712A086`, `0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`, `0x17C2E119`, `0xBAFD9B3B`, `0x91E22899`, `0x12C8C320`, `0xAD85DF0F`, `0xF8BADFF3`, `0x36597040`, `0xB43F169B`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A`, and the touch `0x04AF1433` |
+| region-0 IFS on media | **the ARMv7 dual-core image `boot/chainloader/kernel.img`, CRC `0x3547D613`** (10,448,868 B, kernel `7.3.3 #109 SMP`, `-march=armv7-a`, the **stock MUSB mailbox + comparator lifetime fix**, `panic=0`, the DSI-init TCON hook), region 0.  The previous `0xC9FEE2D1` (`#105`, device-mode-only workaround, `panic=10`) is the known-good fallback; the session-65 ARMv7 base is `0x158D8A85`; the session-64 known-good dual-core image is `0xC675E206`; the session-58 read-write/SSH image `0x294F8E36` (`0x9E0980` B, kernel `#77`) remains on the host.  The way back is the 1917 IFS (`local/work/ifs-shim-sealed.ifs`, 7,900,548 B, sha256 `b52195bb…`); the compressed `local/work/ifs1917-compressed.ifs` (sha256 `f14db207…`) is the alternative.  Earlier images (the `0xED58EF36`/`0xB9DD91E3` touch, `0xAB899C49` compositor, `0xE85217E5` overlay, `0x060B25F2`, `0xDD66D8C3`, …) remain on the host.  Earlier Linux images (region 0 only, block `0x825`): `0x23D88CBD`, `0x373674A4`, `0xA544A731`, `0xAB899C49`, `0xA8F0F30C`, `0xE85217E5`, `0xE84693A1`, `0x8B709950`, `0x50CD2A48`, `0x5C37F181`, `0x5A7F15D8`, `0x9712A086`, `0xF64A680D`, `0x53F7F97B`, `0x69CDAC94`, `0x17C2E119`, `0xBAFD9B3B`, `0x91E22899`, `0x12C8C320`, `0xAD85DF0F`, `0xF8BADFF3`, `0x36597040`, `0xB43F169B`, `0xB8830701`, `0xF97CD9C7`, `0x3B2ECFED`, `0x50842767`, `0x82FC0D35`, the Task-3 `0x0DC36A11`, `0x05819994`, the known-good `0xE36C679A`, and the touch `0x04AF1433` |
 | region-0 RCFS (`/base`) | **now the full 1917 RCFS at `0xC00000`** (`local/work/rcfs-1917.rcfs`, the modified one with the `/accounts/devuser/startup.sh` hook, sha256 `c4ab6e34…`): session 49 wrote it to recover root on a stock-TabletOS boot, and it sits **outside** the 7.3.3 test image (which ends at `0x9E0980`).  The pruned oracle RCFS is no longer on media — re-flash `local/work/minimal/setB.signed` for the minimal oracle (trap 227).  Not readable as `/base` without the 1917 IFS |
 | UFS (`/`) | **not on media** — hd3 has held Linux filesystems since session 63 and now the Nura ext4; the 1917 vendor `.5.ufs` with `autorun::0` (the session-27 set, `local/work/ufs-1917-devuser.ufs`, sha256 `482e0473…`) is on the host as the way back.  The BB10 `.0.4.ufs` is not on media.  (Not re-hashed this session) |
 | `/accounts/devuser/startup.sh` | the 1917 UFS carries the operator's script; it last ran during the session-35 S3/S2 TabletOS bench and topped `BOOTCTR_FCTRY` back to `0x32` |
-| `BOOTCTR_FCTRY` | **`0x26`** at the session-65 wrap-up (the boot read `26000000` = `0x26`, above the `0x1e` threshold so `/init` did not write; the session-64 panic loop had drained it to `0x1c` and the recovery image topped it to `0x32`).  Block `0x3a` record@196.  **Read it on Linux with `dmesg \| grep pbrpmb`** (the top-up line carries the 4-byte LE record).  Self-replenishing: `/init` tops up at <`0x1e`, a TabletOS boot writes `0x32` (`SAFETY.md` §2, `DEVELOPMENT.md` §5) |
+| `BOOTCTR_FCTRY` | **`0x28`** at the session-67 wrap-up (`0x2a → 0x29 → 0x28` across the three validation boots, each `>= 0x1e` so `/init` did not write; the session-64 panic loop had drained it to `0x1c` and the recovery image topped it to `0x32`).  Block `0x3a` record@196.  **Read it on Linux with `dmesg \| grep pbrpmb`** (the top-up line carries the 4-byte LE record).  Self-replenishing: `/init` tops up at <`0x1e`, a TabletOS boot writes `0x32` (`SAFETY.md` §2, `DEVELOPMENT.md` §5) |
 | region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, sha256 **`49e318bf…`** (`local/images/rootfs-region1-wl1283-bt.ext4`, session 52: the WLAN fixes, **`ccm`/`ctr`**, the per-unit NVS, the CAM+4-sr `wl12xx.ko` and the seven Bluetooth modules), **43 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus **`cfg80211`, `mac80211`, `wlcore`, `wlcore_sdio`, `wl12xx`, `libarc4`, `crc7`** and **`bluetooth`, `hci_uart`, `btbcm`, `crc-ccitt`, `ecdh_generic`, `ecc`, `kpp`**), `pbplay`, `pbmix`, **dropbear**, **`/usr/bin/iw`**, **`/usr/sbin/wpa_{supplicant,cli,passphrase}`**, and **`/lib/firmware/ti-connectivity/{wl128x-fw-4-sr.bin,wl128x-fw-5-sr.bin,wl128x-nvs.bin}`** plus the signed **`/lib/firmware/regulatory.db`/`.p7s`**; `rcS` loads the wireless stack and `bluetooth hci_uart`.  Earlier images: `…-wl1283-final.ext4` (`877c42c3…`), `…-wl1283-assoc.ext4` (`6c2cfb30…`), `a148c362…`, `7e067560…`, `88084b78…`, `a4e76b18…` and `0342ab06…`.  The modules in any of them can be checked by extracting them with `debugfs` (trap 163).  **Session 55: not booted.**  The region-0 image is the hd3-pointing `0xA8F0F30C`; it mounts hd3 (Nura) and never touches region 1.  This root remains the fallback; its `rcS`/dropbear/WLAN/BT are unchanged. |
-| TabletOS / OS | **NOT running** — the unit is on the **Nura root from hd3** (image `0xC9FEE2D1`, `#105 SMP` dual-core ARMv7, `0fca:8010`, console `playbook:~#` on the USB ACM, **sshd: dropbear on `169.254.0.1:22`**, `PB_LINK=usb tools/pbssh.sh`; the root is the hd3 ext4 mounted **read-write**, grown to **62.5 G**, with the ARMv7 module set installed).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
+| TabletOS / OS | **NOT running** — the unit is on the **Nura root from hd3** (image `0x3547D613`, `#109 SMP` dual-core ARMv7, `0fca:8010`, console `playbook:~#` on the USB ACM, **sshd: dropbear on `169.254.0.1:22`**, `PB_LINK=usb tools/pbssh.sh` — it did **not** answer on the Nura root in session 67, so use the ACM; the root is the hd3 ext4 mounted **read-write**, grown to **62.5 G**, with the ARMv7 module set installed).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
 | hd3 (MCT `0x1C`, FS at loader block `0x4915` / raw `0x49000000`) | **the media was re-created on 2026-11-18 (session 65)** by flashing the baked Nura image `local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`, 625,999,872 B) at block `0x4915` (626,065,440 B, `FLASH_OK`), because the BusyBox ext4 that had been flashed there in session 63 was **damaged by power cycles** (`EXT4-fs: This should not happen!! Data will be lost`, corrupt inode bitmap).  First boot grew it to **62.5 G** (15,273,984 blocks) and installed dropbear; the ARMv7 module set was then installed over SSH and `depmod` run.  It is a rw ext4 with `barrier=0` + write-through, so power cuts can still damage it — prefer a clean `reboot`.  The same 625,999,872-byte image is the flasher-restorable base (`--component --dest-block 0x4915`).  Its content is the session-59 state: `tabula` 1.0.2, `epitaph` 1.4.0, `tzompantli` 1.2.0, `gorm` 1.2.1, `swayidle` 1.9.1, `foot` 1.28.0, `grim` 1.5.0, `slurp` 1.5.0, `tremor` 1.1.0, `netsurf` 3.11, `xournalpp` 1.3.8, the pvrports stack (`libglvnd`, `mesa-pvr-dri-classic`, `sgx-ddk-um{,-ti443x,-openrc}`, `gcompat`, `wayland-libs-server`), `MESA_LOADER_DRIVER_OVERRIDE=pvr`, the pvrsrvkm module in `/etc/modules`, wvkbd/DejaVu/pb-touchwake, the icon-theme fix and the no-suspend `/etc/catacomb/initrc`.  **It predates the session-60/61 fixes** (`epitaph` r10005, llvmpipe, the udev/polkit rules), which live only in the pmaports tree and the session-59 live root.  The pre-pvr images (`1fcf0cb0…`, `1f14915f…`), the pristine `076bafcf…` and the older `f7858110…` remain on the host.  See reports 249/250 and 263 §3. |
 | device-side files | **persistent on hd3 (session 58: the root is writable and grown):** the initramfs installs `/usr/sbin/dropbear`, `/etc/dropbear/*`, `/root/.ssh/authorized_keys`, `/etc/local.d/pb-ssh.start` and `/etc/local.d/pb-grow.start` on first boot, and `/etc/pb-grown` marks the grow.  `/var`, `/home` and `/tmp` are now real directories on the 56.5 G FS, so the DE state and the SSH kit survive a reboot (the state files written before the switch are on the grown FS).  `memdump3`/`memw32`/`pbi2c` are outside the tree: push them (paced) after a reflash (trap 177).  The first-Nura-boot log is `docs/captures/playbook-live-2026-11-15-hd3-nura-boot.txt`.  Session 57's touch tools (`evcap.py`, `keylog.py`, `muninraw`) lived only in `/tmp`; the measured evidence is preserved in the captures.  **Session 59 deployed:** `wvkbd-mobintl` 0.21 (`/usr/sbin/wvkbd-mobintl`), `/usr/share/fonts/dejavu/DejaVuSans{, -Bold}.ttf`, `/usr/bin/pb-touchwake`, `/usr/share/icons/default/index.theme` (`Inherits=Adwaita,hicolor`), `adwaita-icon-theme` + `glycin-svg`, a hicolor netsurf PNG, the edited `/etc/catacomb/initrc` (no swayidle, wvkbd + pb-touchwake), and `playbook` in the `input` group (gid 23).  Tools/daemon sources are tracked in `tools/bench/`; the pmaport edits are under gitignored `local/work/nura/pmaports/`. |
 
@@ -521,25 +560,26 @@ and a failed/half-formed write or a flat pack is still a brick risk.
 
 ## Blockers in play
 
-**Session 66 — the open blockers are:** (1) the **mailbox fault** — the bad
-indirect transfer is now identified (`phy->comparator->set_vbus` inside
-`omap_usb_set_vbus()`, a stale TWL6030 `phy_companion`; report 264), but the
-device-mode-only workaround is still required until the comparator lifetime is
-fixed; (2) the **MPU OPP** — no
+**Session 67 — the open blockers are:** (1) the **MPU OPP** — no
 `cpufreq` policy, `twl6030_uv_to_vsel: OUT OF RANGE` for 1.375/1.41 V (report
-257 §6); (3) the remaining **UI performance** — llvmpipe's deferred `swap`
+257 §6); (2) the remaining **UI performance** — llvmpipe's deferred `swap`
 (420–550 ms per full-screen drawer frame) and its first-draw JIT, now on two
-cores at 1008 MHz; (4) **Kumo** needs a WPEWebKit/WebKit-fork build (not
-packaged, report 247 §4); (5) the **intermittent WRITE-busy stall** — not a
+cores at 1008 MHz; (3) **Kumo** needs a WPEWebKit/WebKit-fork build (not
+packaged, report 247 §4); (4) the **intermittent WRITE-busy stall** — not a
 cache flush (report 250 §1), mitigated by `barrier=0` + write-through, but it
 still fires during write bursts and can damage the rw ext4 if power is cut
-(trap 336); (6) the **intermittent USB teardown** (`VUSB` disabled by the TWL
-comparator; 30 s, 90 s or not in 6 min — trap 337, contradiction file);
-(7) the **memory read throughput** — the EMIF is correctly configured
+(trap 336); (5) the **intermittent USB teardown** (`VUSB` disabled by the TWL
+comparator's IRQ; 30 s, 90 s or not in 6 min — trap 337, contradiction file);
+(6) the **memory read throughput** — the EMIF is correctly configured
 (400 MHz LPDDR2-800, 32-bit, CL 6, power-down off, L3 200 MHz) and the CPU is
 at 1008 MHz, but a userspace benchmark reads only ~0.4–0.6 GB/s (writes
 ~2 GB/s; no scaling with streams or cores), 3–8× below the 3.2 GB/s peak
 (report 263 §4b; open).
+**Closed in session 67:** the **mailbox fault** — the bad indirect transfer was
+a freed TWL6030 `phy_companion` (a failed `twl6030_usb_probe()` on a deferred
+`vusb`), fixed by the comparator lifetime change; the stock
+`omap_musb_set_mailbox()` call now runs on dual-core (3/3 clean boots; report
+265, trap 339), so OTG host mode is reachable again.
 **Closed since session 60:** the CPU's second core (dual-core stable with the
 workaround), the ARMv6 codegen (now `-march=armv7-a`, trap 334), the
 **`epitaph` panel** (r10005 — report 251; trap 292); the panel's
@@ -596,9 +636,10 @@ ghost is gone.  The remaining backspace/enter repeat is squeekboard's, not the
 driver (trap 299).  The power/reset lines are still not driven by the driver;
 only cold boots need the GPIO pulse.
 
-**Media state: region 0 = `0xC9FEE2D1`** (kernel `7.3.3 #105 SMP`,
-`-march=armv7-a`, `0x9F74BC` B, no `maxcpus`, the device-mode-only MUSB
-workaround, the DSI-init TCON hook); region 1 = the WLAN+BT rootfs
+**Media state: region 0 = `0x3547D613`** (kernel `7.3.3 #109 SMP`,
+`-march=armv7-a`, 10,448,868 B, no `maxcpus`, the **stock MUSB mailbox** +
+comparator lifetime fix, `panic=0`, the DSI-init TCON hook); region 1 = the
+WLAN+BT rootfs
 **`49e318bf…`** (67,108,864 B, **43 modules** + both `wl128x` SR firmware files
 + the CAM/4-sr `wl12xx.ko` + the per-unit NVS +
 `iw`/`wpa_supplicant`/`wpa_cli`/`passphrase` + the signed `regulatory.db`;
@@ -619,19 +660,17 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 ## What is next
 
-0. **THE ACTIVE ITEM — the CPU: dual-core works; the mailbox fault's bad
-   indirect transfer is identified, the MPU OPP remains (session 66, report
-   264, ROADMAP 7a).**  The unit runs **dual-core at 1008 MHz** on `0xC9FEE2D1`
-   (`#105 SMP`, `online=0-1`, ARMv7 `-march=armv7-a`).  Session 66 ran the
-   marker experiment: the stock `omap_musb_set_mailbox()` call panics on
-   dual-core because `otg->set_vbus` → `omap_usb_set_vbus()` →
-   `phy->comparator->set_vbus` jumps to a slab address (a stale TWL6030
-   `phy_companion`); entry pointers are valid and the notifier chain is not
-   involved (report 264).  **Next: audit the comparator lifetime**
-   (`omap_usb2_set_comparator()` / `twl6030_usb_probe()` probe-deferral/rebind,
-   and the `cpcap-charger.c` writer of `phy->comparator`) — more branch markers
-   are not useful.  The device-mode-only workaround stays until that is fixed;
-   a fix must restore the stock call for OTG host mode.
+0. **THE ACTIVE ITEM — the CPU: the mailbox fault is fixed; the MPU OPP is next
+   (session 67, report 265, ROADMAP 7a).**  The unit runs **dual-core at
+   1008 MHz** on `0x3547D613` (`#109 SMP`, `online=0-1`, ARMv7
+   `-march=armv7-a`) with the **stock `omap_musb_set_mailbox()` call restored**.
+   The session-66 Oops was a freed TWL6030 `phy_companion`:
+   `twl6030_usb_probe()` registered the comparator before `ldo_init()`, and a
+   deferred `vusb` failed the probe permanently, freeing the devm `twl` and
+   leaving `phy->comparator` dangling (reports 264/265).  Fixed by propagating
+   `-EPROBE_DEFER`, clearing the comparator with a devm action, and
+   `usb_put_phy()`; **3/3 clean dual-core boots**.  The device-mode-only
+   workaround is gone, so OTG host mode is reachable (untested).
    * **Then the MPU OPP:** no `cpufreq` policy exists; boot logs
      `twl6030_uv_to_vsel: OUT OF RANGE` for 1.375/1.41 V against a 1.31666 V
      table max.  Measure the reference's `DPLL_MPU`/`PRM_VC` on the oracle,
@@ -649,8 +688,8 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
      gives `wlan0` a scan; `gorm` with `10-gorm.rules` lists ~10 APs (joining
      an AP is untried), and a cleanly launched `tzompantli` runs apps (an
      injected tap on Foot ran `foot`).  Traps 306–308.
-   * the **export is current**: 65 files / 9 110 lines (`6f9bef24…`), verified
-     0 rejects / 65/65 against pristine 7.3.3 in session 65, with the pvr
+   * the **export is current**: 67 files / 9 136 lines (`d19adff8…`), verified
+     0 rejects / 67/67 against pristine 7.3.3 in session 67, with the pvr
      driver vendored; the `local/kernel-tree` still carries the session-62/63/64
      diagnostics (not in the patch).  Re-export after any further kernel change.
    * **Build speed:** the armv7 package builds under qemu-user (`--no-cross`)

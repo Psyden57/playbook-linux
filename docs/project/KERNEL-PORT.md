@@ -5,13 +5,18 @@ boots it to the hd3 Nura root (now read-write and grown; report 249) and to the
 region-1 BusyBox userland.
 
 * Base: **upstream 7.3.3** (not the pmOS package, which is still `!armhf`).
-* Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **65 files /
-  9 110 lines**, sha256 `6f9bef24…`, verified 0 rejects / 65/65 byte-identical
-  against pristine 7.3.3 targets (session 65 export).  Session 65 adds
-  `drivers/usb/musb/omap2430.c` (device-mode-only enable path + the
-  `set_mailbox_lock` mutex), the DSI-init TCON hook in `dsi.c`, and the board
-  DTS without `maxcpus`; the session-62/63/64 markers, the `head.S` `CRR` stamp
-  and the `MINI4x6` font link are deliberately **not** in it.  It includes the
+* Patch: `kernel/patches/0001-playbook-winchester-7.3.3.patch`, **67 files /
+  9 136 lines**, sha256 `d19adff8…`, verified 0 rejects / 67/67 byte-identical
+  against pristine 7.3.3 targets (session 67 export).  Session 67 restores the
+  **stock `omap_musb_set_mailbox()` call** in `drivers/usb/musb/omap2430.c`
+  (the winchester early return is gone; the `set_mailbox_lock` mutex stays) and
+  adds `drivers/usb/phy/phy-twl6030-usb.c` + `drivers/phy/ti/phy-omap-usb2.c`
+  for the TWL6030 comparator lifetime (a failed probe used to free the devm
+  `twl` and leave `phy->comparator` dangling — report 265); the board DTS is
+  `panic=0` for the bring-up.  Session 65 added the device-mode-only enable
+  path, the DSI-init TCON hook in `dsi.c`, and the board DTS without `maxcpus`;
+  the session-62/63/64 markers, the `head.S` `CRR` stamp and the `MINI4x6`
+  font link are deliberately **not** in it.  It includes the
   SGX integration (`drivers/gpu/drm/{Kconfig,Makefile}`, `mm/vmalloc.c`, the DTS, the config),
   the session-56 Munin Y fix, the session-57 touch input model and audio
   print levels, and the session-58 position-ghost fix (`playbook-munin.c` +
@@ -44,9 +49,11 @@ region-1 BusyBox userland.
   mounted `rw` with `barrier=0`, a one-shot `resize2fs` grows it (`/etc/pb-grown`
   marks it), and the first boot installs the dropbear/SSH kit and the
   `/etc/local.d` scripts.  The overlay-root variant is historical (session 55).
-  The current region-0 image is `kernel-armv7-console-cpu1.img` (`0xC9FEE2D1`,
-  `0x9F74BC` B, kernel `#105 SMP`, `-march=armv7-a`, no `maxcpus`, the
-  device-mode-only MUSB workaround, the DSI-init TCON hook).
+  The current region-0 image is `boot/chainloader/kernel.img` (`0x3547D613`,
+  10,448,868 B, kernel `7.3.3 #109 SMP`, `-march=armv7-a`, no `maxcpus`, the
+  **stock MUSB mailbox** + comparator lifetime fix, `panic=0`, the DSI-init
+  TCON hook).  The previous `0xC9FEE2D1` (`#105`, device-mode-only workaround,
+  `panic=10`) is kept as a known-good fallback on the host.
 * Session 54's instrumentation change: the general MMC/GPIO/sysc/probe prints
   are `pr_debug` (`PBSIO`/`PBINI`/`PBX`/`PBM` in `omap_hsmmc.c`, `PBC` in
   `mmc/core/{core,host,mmc_ops}.c`, `PBR` in `drivers/base/dd.c`, `PBG` in

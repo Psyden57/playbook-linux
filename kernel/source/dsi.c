@@ -34,7 +34,10 @@
 #include <linux/of_platform.h>
 #include <linux/component.h>
 #include <linux/sys_soc.h>
+#include <linux/spi/spi.h>       /* session-64 experiment: early panel TCON, report 261 */
+#include <linux/device/bus.h>
 
+#include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_bridge.h>
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_panel.h>
@@ -455,14 +458,9 @@ static irqreturn_t omap_dsi_irq_handler(int irq, void *arg)
 		timer_delete(&dsi->te_timer);
 #endif
 
-	/* make a copy and unlock, so that isrs can unregister
-	 * themselves */
-	memcpy(&dsi->isr_tables_copy, &dsi->isr_tables,
-		sizeof(dsi->isr_tables));
+	dsi_handle_isrs(&dsi->isr_tables, irqstatus, vcstatus, ciostatus);
 
 	spin_unlock(&dsi->irq_lock);
-
-	dsi_handle_isrs(&dsi->isr_tables_copy, irqstatus, vcstatus, ciostatus);
 
 	dsi_handle_irq_errors(dsi, irqstatus, vcstatus, ciostatus);
 
@@ -1059,7 +1057,7 @@ static int dsi_dump_dsi_irqs(struct seq_file *s, void *p)
 	unsigned long flags;
 	struct dsi_irq_stats *stats;
 
-	stats = kmalloc(sizeof(*stats), GFP_KERNEL);
+	stats = kmalloc_obj(*stats);
 	if (!stats)
 		return -ENOMEM;
 
@@ -3820,6 +3818,19 @@ static void pb_bridge_dump(struct dsi_data *dsi)
 
 static struct dsi_data *pb_late_dsi;
 
+/*
+ * Boot-time DSI/bridge read probes.  They are diagnostic only: every generic
+ * read is a BTA turnaround, and the OMAP CIO reports ERRCONTENTIONLP1_2
+ * (bit 23) on each one, so the DSI error handler logs one line per read
+ * (report 140/141).  They proved what was needed; keep them off by default so
+ * a normal boot has no spurious DSI errors.  The essential PlayBook sequence
+ * (reset, VC setup, HS clock start, bridge programming) is NOT gated.
+ */
+static bool pb_probe;
+module_param(pb_probe, bool, 0644);
+MODULE_PARM_DESC(pb_probe, "PlayBook: run the boot-time DSI/bridge read probes (default off)");
+
+
 static void pb_late_check(struct work_struct *work)
 {
 	static const u16 regs[] = {
@@ -3924,6 +3935,61 @@ static void pb_late_check(struct work_struct *work)
 
 static DECLARE_DELAYED_WORK(pb_late_work, pb_late_check);
 
+/* ---- session-64 experiment: send the panel's Hitachi TCON table from the
+ * DSI init path, right after the bridge is programmed (the reference's
+ * winch_lcdctl 0x193c4 point), so a wedge before execve("/init") still shows
+ * console text on the panel.  initramfs/init.c:panel_tcon_init() normally does
+ * this much later, from userspace.  The spidev client device is not registered
+ * until ~1.97 s while DSI init is ~1.7 s, so retry briefly.  Report 261. */
+static const u16 pb_tcon_hitachi[] = {
+	0x0029, 0x0025, 0x0840, 0x00AD, 0x0430, 0x385F, 0x3CA4, 0x3409, 0x4041
+};
+static void pb_tcon_send(struct work_struct *work);
+static DECLARE_DELAYED_WORK(pb_tcon_work, pb_tcon_send);
+static int pb_tcon_tries;
+
+static void pb_tcon_send(struct work_struct *work)
+{
+	struct device *dev;
+	struct spi_device *spi;
+	struct spi_message msg;
+	struct spi_transfer xfer;
+	u8 buf[2];
+	int i, ret = 0, nw = ARRAY_SIZE(pb_tcon_hitachi);
+
+	dev = bus_find_device_by_name(&spi_bus_type, NULL, "spi3.0");
+	if (!dev) {
+		if (++pb_tcon_tries < 40) {
+			schedule_delayed_work(&pb_tcon_work, msecs_to_jiffies(25));
+			return;
+		}
+		pr_warn("PBTCON: spi3.0 never appeared; panel TCON not sent\n");
+		return;
+	}
+	spi = to_spi_device(dev);
+	for (i = 0; i < nw; i++) {
+		buf[0] = pb_tcon_hitachi[i] >> 8;  /* reference byte order */
+		buf[1] = pb_tcon_hitachi[i] & 0xff;
+		spi_message_init(&msg);
+		memset(&xfer, 0, sizeof(xfer));
+		xfer.tx_buf = buf;
+		xfer.len = 2;
+		xfer.speed_hz = 450000;
+		xfer.bits_per_word = 8;
+		spi_message_add_tail(&xfer, &msg);
+		ret = spi_sync(spi, &msg);
+		if (ret) {
+			pr_warn("PBTCON: word %d failed (%d)\n", i, ret);
+			break;
+		}
+		if (i == 0 || i == 2 || i == nw - 1)
+			msleep(100);
+	}
+	put_device(dev);
+	if (!ret)
+		pr_info("PBTCON: Hitachi table sent from DSI init path\n");
+}
+
 static void pb_bridge_program(struct dsi_data *dsi)
 {
 	/*
@@ -3966,17 +4032,20 @@ static void pb_bridge_program(struct dsi_data *dsi)
 
 	pb_vc_setup_lp(dsi);
 
-	pb_bridge_probe(dsi, "before-seq");
+	if (pb_probe)
+		pb_bridge_probe(dsi, "before-seq");
 
 	/* a failed BTA clears VC_EN behind our back; restore before writing */
 	pb_vc_setup_lp(dsi);
 
 	pb_bridge_send_seq(dsi);
 
-	pb_bridge_probe(dsi, "after-seq");
+	if (pb_probe) {
+		pb_bridge_probe(dsi, "after-seq");
 
-	pb_vc_setup_lp(dsi);
-	pb_bridge_dump(dsi);
+		pb_vc_setup_lp(dsi);
+		pb_bridge_dump(dsi);
+	}
 }
 
 /*
@@ -4115,6 +4184,19 @@ static ssize_t pb_reg_store(struct device *dev, struct device_attribute *attr,
 
 static DEVICE_ATTR_WO(pb_reg);
 
+/*
+ * Create pb_reg through the driver's group rather than a manual
+ * device_create_file() in probe: the encoder is probed twice (the DT
+ * dependency cycle defers the first probe), and a manual create made the
+ * second one hit sysfs_warn_dup() and taint the kernel.  A driver group is
+ * created once by the driver core and is removed/restored with the device.
+ */
+static struct attribute *dsi_pb_attrs[] = {
+	&dev_attr_pb_reg.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(dsi_pb);
+
 static int dsi_init_dsi(struct dsi_data *dsi)
 {
 	int r;
@@ -4186,9 +4268,15 @@ static int dsi_init_dsi(struct dsi_data *dsi)
 	if (of_machine_is_compatible("blackberry,omap4-winchester")) {
 		pb_bridge_program(dsi);
 
+		/* session-64 experiment (report 261): program the panel TCON
+		 * here, after the bridge/HS clock, but the spidev client only
+		 * registers slightly later, so retry from a delayed work. */
+		schedule_delayed_work(&pb_tcon_work, msecs_to_jiffies(25));
+
 		/* read the bridge's DSI-RX state once the video stream is up */
 		pb_late_dsi = dsi;
-		schedule_delayed_work(&pb_late_work, msecs_to_jiffies(6000));
+		if (pb_probe)
+			schedule_delayed_work(&pb_late_work, msecs_to_jiffies(6000));
 	}
 
 	dsi_setup_dsi_vcs(dsi);
@@ -5435,6 +5523,7 @@ static const struct component_ops dsi_component_ops = {
  */
 
 static int dsi_bridge_attach(struct drm_bridge *bridge,
+			     struct drm_encoder *encoder,
 			     enum drm_bridge_attach_flags flags)
 {
 	struct dsi_data *dsi = drm_bridge_to_dsi(bridge);
@@ -5442,7 +5531,7 @@ static int dsi_bridge_attach(struct drm_bridge *bridge,
 	if (!(flags & DRM_BRIDGE_ATTACH_NO_CONNECTOR))
 		return -EINVAL;
 
-	return drm_bridge_attach(bridge->encoder, dsi->output.next_bridge,
+	return drm_bridge_attach(encoder, dsi->output.next_bridge,
 				 bridge, flags);
 }
 
@@ -5471,7 +5560,8 @@ static void dsi_bridge_mode_set(struct drm_bridge *bridge,
 	dsi_set_config(&dsi->output, adjusted_mode);
 }
 
-static void dsi_bridge_enable(struct drm_bridge *bridge)
+static void dsi_bridge_enable(struct drm_bridge *bridge,
+			      struct drm_atomic_commit *commit)
 {
 	struct dsi_data *dsi = drm_bridge_to_dsi(bridge);
 	struct omap_dss_device *dssdev = &dsi->output;
@@ -5490,7 +5580,8 @@ static void dsi_bridge_enable(struct drm_bridge *bridge)
 	dsi_bus_unlock(dsi);
 }
 
-static void dsi_bridge_disable(struct drm_bridge *bridge)
+static void dsi_bridge_disable(struct drm_bridge *bridge,
+			       struct drm_atomic_commit *commit)
 {
 	struct dsi_data *dsi = drm_bridge_to_dsi(bridge);
 	struct omap_dss_device *dssdev = &dsi->output;
@@ -5509,16 +5600,18 @@ static void dsi_bridge_disable(struct drm_bridge *bridge)
 }
 
 static const struct drm_bridge_funcs dsi_bridge_funcs = {
+	.atomic_create_state = drm_atomic_helper_bridge_create_state,
+	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,
+	.atomic_duplicate_state = drm_atomic_helper_bridge_duplicate_state,
 	.attach = dsi_bridge_attach,
 	.mode_valid = dsi_bridge_mode_valid,
 	.mode_set = dsi_bridge_mode_set,
-	.enable = dsi_bridge_enable,
-	.disable = dsi_bridge_disable,
+	.atomic_enable = dsi_bridge_enable,
+	.atomic_disable = dsi_bridge_disable,
 };
 
 static void dsi_bridge_init(struct dsi_data *dsi)
 {
-	dsi->bridge.funcs = &dsi_bridge_funcs;
 	dsi->bridge.of_node = dsi->host.dev->of_node;
 	dsi->bridge.type = DRM_MODE_CONNECTOR_DSI;
 
@@ -5711,9 +5804,9 @@ static int dsi_probe(struct platform_device *pdev)
 	unsigned int i;
 	int r;
 
-	dsi = devm_kzalloc(dev, sizeof(*dsi), GFP_KERNEL);
-	if (!dsi)
-		return -ENOMEM;
+	dsi = devm_drm_bridge_alloc(dev, struct dsi_data, bridge, &dsi_bridge_funcs);
+	if (IS_ERR(dsi))
+		return PTR_ERR(dsi);
 
 	dsi->dev = dev;
 	dev_set_drvdata(dev, dsi);
@@ -5806,9 +5899,6 @@ static int dsi_probe(struct platform_device *pdev)
 		dsi->syscon = syscon_node_to_regmap(np);
 		of_node_put(np);
 	}
-
-	if (of_machine_is_compatible("blackberry,omap4-winchester"))
-		device_create_file(dev, &dev_attr_pb_reg);
 
 	/* DSI VCs initialization */
 	for (i = 0; i < ARRAY_SIZE(dsi->vc); i++)
@@ -5920,5 +6010,6 @@ struct platform_driver omap_dsihw_driver = {
 		.pm	= &dsi_pm_ops,
 		.of_match_table = dsi_of_match,
 		.suppress_bind_attrs = true,
+		.dev_groups = dsi_pb_groups,
 	},
 };

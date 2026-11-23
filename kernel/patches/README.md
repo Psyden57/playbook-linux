@@ -3,15 +3,24 @@
 ## Current base: 7.3.3 (session 30)
 
 `0001-playbook-winchester-7.3.3.patch` is the patch the project builds today:
-**9 110 lines / 65 files** against pristine **linux-7.3.3**
-(sha256 `6f9bef24…`, session-65 export).  It was verified by applying it to
-pristine 7.3.3 targets and comparing all 65 files byte-for-byte with the
-intended contents — 0 rejects, 65/65 identical.  **Session 65** re-exports it
-after the dual-core work.  It adds `drivers/usb/musb/omap2430.c` (the
-winchester device-mode-only enable path — the bind-time `omap_musb_set_mailbox()`
-call is skipped — plus the `set_mailbox_lock` mutex), the DSI-init TCON hook in
-`drivers/gpu/drm/omapdrm/dss/dsi.c`, and updates the board DTS (`maxcpus=1`
-removed; an inert `console=ttyGS0,115200`).  The **session-62/63/64 diagnostics
+**9 136 lines / 67 files** against pristine **linux-7.3.3**
+(sha256 `d19adff8…`, session-67 export).  It was verified by applying it to
+pristine 7.3.3 targets and comparing all 67 files byte-for-byte with the
+intended contents — 0 rejects, 67/67 identical.  **Session 67** re-exports it:
+`drivers/usb/musb/omap2430.c` now keeps the `set_mailbox_lock` mutex **and runs
+the stock `omap_musb_set_mailbox()` call** (the winchester device-mode-only
+early return is gone), and two files are added — `drivers/usb/phy/phy-twl6030-usb.c`
+(the TWL6030 comparator is registered only after the probe can still fail; a
+devm action clears it on probe failure/remove, and a deferred `vusb` regulator
+now propagates `-EPROBE_DEFER` instead of failing the probe) and
+`drivers/phy/ti/phy-omap-usb2.c` (`omap_usb2_set_comparator()` drops its
+`usb_get_phy()` reference).  That is the report-264 fault: a failed
+`twl6030_usb_probe()` freed the devm `twl` and left `phy->comparator` dangling
+(report 265).  The board DTS also moves to `panic=0` for the bring-up (trap 335;
+restore `panic=10` once deliberate-fault images are done).  It keeps the
+DSI-init TCON hook in `drivers/gpu/drm/omapdrm/dss/dsi.c` and the board-DTS
+`maxcpus=1` removal and inert `console=ttyGS0,115200`.  **Session 65** exported
+the previous 65-file version after the dual-core work.  The **session-62/63/64 diagnostics
 are not in the patch**: the `PBDBG` markers in `init/main.c`, the
 `PBCPU`/`PBIPI1`/`PBSMF` markers in `arch/arm/kernel/smp.c`,
 `arch/arm/mach-omap2/omap-smp.c` and `kernel/smp.c`, the `head.S` `CRR` stamp,

@@ -3387,6 +3387,51 @@ restored `0xC9FEE2D1`; source backups
 `arm-linux-objdump -d local/kernel-tree/vmlinux` at `c0a23c6c`/`c0729b94`;
 trap 338; DECISIONS §93/§95.
 
+## 98. Fix the TWL6030 comparator lifetime and restore the stock mailbox (session 67)
+
+**Decision.**  Fix the dangling comparator at its source and **delete the
+winchester device-mode-only early return** in `omap2430_musb_enable()`; the
+stock `omap_musb_set_mailbox()` call runs on dual-core.  The `set_mailbox_lock`
+mutex stays as hardening.  The fix has three parts:
+`twl6030_usb_ldo_init()` returns `PTR_ERR(twl->usb3v3)` so a `-EPROBE_DEFER` is
+honoured; a `devm_add_action_or_reset()` action clears the PHY comparator
+(`omap_usb2_set_comparator(NULL)`) on any probe failure and on remove; and
+`omap_usb2_set_comparator()` drops the `usb_get_phy()` reference with
+`usb_put_phy()`.  The board DTS uses `panic=0` for the bring-up (trap 335).
+Region 0 is `0x3547D613` (`#109 SMP`); the patch is 67 files / 9 136 lines
+(`d19adff8…`).
+
+**Why.**  The report-264 Oops is not corruption in place: the comparator object
+is a `kmalloc-192` **devm** allocation (the kernel reports `pointer offset 64`,
+i.e. `sizeof(struct devres)`) whose first word — `set_vbus` — is a `kmalloc-1k`
+heap pointer instead of `twl6030_set_vbus` text.  `twl6030_usb_probe()` stores
+`&twl->comparator` in the `omap-usb2` PHY before `twl6030_usb_ldo_init()`, and
+`ldo_init()`'s `regulator_get(dev, "usb")` (the board's `usb-supply = <&vusb>`)
+collapsed every error to `-ENODEV`.  A deferred `vusb` therefore failed the
+probe permanently (no retry), devres freed `twl`, and `phy->comparator` dangled.
+The workaround had only hidden the dereference by skipping `otg_set_vbus()`.
+The other `phy->comparator` writer (`cpcap-charger.c`) does not probe on this
+board.  The three-part fix removes both the free-while-registered path and the
+pre-existing `usb_get_phy()` leak (which a deferral retry would otherwise
+multiply).
+
+**Bench.**  Image `0x3547D613` (`7.3.3 #109 SMP`, armv7l), flashed at block
+`0x825`; **3/3 clean dual-core boots** (`online=0-1`), gadget
+`binding gadget driver [g1]` at ~1.41 s, `twl6030_usb … Initialized` at ~0.8 s,
+no Oops/panic; `BOOTCTR_FCTRY 0x2a → 0x29 → 0x28`.  This meets §97's success
+criterion and the handoff's "3+ clean boots before deleting the early return".
+
+**Constraint.**  `panic=0` is a bring-up setting (trap 335); restore
+`panic=10` once deliberate-fault images are done.  OTG host mode is reachable
+again but untested.  The VUSB teardown (trap 337) is a separate fault and is
+still open.  The PHY drivers are new to the patch, so a build from the patch
+alone now includes them.
+
+**Evidence.**  Report 265; session-67 note; `local/work/flash-session67.log`;
+`local/work/session67-boot3-evidence.txt`; source backups
+`local/work/{phy-twl6030-usb.c,phy-omap-usb2.c,omap2430.c,omap4-winchester.dts}.session67-orig`;
+`local/work/export67/`; trap 339; DECISIONS §95/§97.
+
 ### Repository license
 
 **Decided (session 23): GPL-3.0-or-later.**  The project's own code and

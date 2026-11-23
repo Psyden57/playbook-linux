@@ -1,22 +1,22 @@
-# Handoff — session 66 (absolute) → session 67
+# Handoff — session 67 (absolute) → session 68
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§7).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — this handoff is for **absolute 67 = Linux-era 61**, written at the
-session-66 close.  See `docs/sessions/NUMBERING.md`.
+`N+6` — this handoff is for **absolute 68 = Linux-era 62**, written at the
+session-67 close.  See `docs/sessions/NUMBERING.md`.
 
-> **Session-66 result, in two lines.**  **The mailbox fault's bad indirect
-> transfer is identified:** `omap_musb_set_mailbox()` enters with valid
-> pointers (`otg->set_vbus = 0xc0729b94` = `omap_usb_set_vbus` text), then the
-> `otg_set_vbus()` call faults at `PC = 0xc2c05800` (a `kmalloc-1k` slab) —
-> the fault is `omap_usb_set_vbus()`'s tail-call `phy->comparator->set_vbus`, a
-> stale TWL6030 `phy_companion`, not the notifier chain or the two-caller race.
-> **Next: audit the comparator lifetime**; the device-mode-only workaround
-> stays until fixed.  Region 0 restored to `0xC9FEE2D1`; region 1 `6f5b8ca7…`;
-> hd3 `07555bde…` (62.5 G Nura); patch **65 files / 9 110 lines**, sha256
-> `6f9bef24…` (unchanged — the diagnostics were reverted).  `BOOTCTR_FCTRY` not
-> re-read at the close (last known `0x26`); the USB link dropped ~60 s after the
-> restore boot while the unit kept running.
+> **Session-67 result, in two lines.**  **The mailbox fault is a TWL6030
+> comparator lifetime bug, and it is fixed.**  `twl6030_usb_probe()` registered
+> `&twl->comparator` in the PHY before `ldo_init()`; a deferred `vusb`
+> regulator was collapsed to `-ENODEV`, the probe failed permanently, devres
+> freed the 120-byte `devm` `twl`, and `phy->comparator` dangled — the report-264
+> slab pointer.  The fix (propagate `-EPROBE_DEFER`, clear the comparator with a
+> devm action, `usb_put_phy()`) plus the restored stock
+> `omap_musb_set_mailbox()` call gave **3/3 clean dual-core boots** on image
+> **`0x3547D613`** (`#109 SMP`, `panic=0`).  Region 1 `6f5b8ca7…`; hd3
+> `07555bde…` (62.5 G Nura); patch **67 files / 9 136 lines**, sha256
+> `d19adff8…`; `BOOTCTR_FCTRY = 0x28`.  **Next: the MPU OPP**, then the USB
+> teardown capture and the UI/throughput items.
 
 ## 0. The job, and where it stands
 
@@ -35,20 +35,21 @@ audio** (headphones + both speakers, 48 kHz), and the **WL1283 WLAN**
 (associates, DHCP, traffic).  The WL1283 **BT core** works (real inquiry; `hci0`
 registers with mgmt) with the controller-open parked (§0c).
 
-**What is left, in order:** the mailbox fault (§0d — bad transfer identified,
-comparator-lifetime audit next), then the MPU OPP (§0e), then UI performance /
-hardware GL and the rebake (§0f).  The USB/VUSB teardown is intermittent and
-open (§0d, second experiment).
+**What is left, in order:** the **MPU OPP** (§0e — now the active item), then
+UI performance / hardware GL and the rebake (§0f).  The **mailbox fault is
+fixed** (report 265) and the stock `omap_musb_set_mailbox()` call now runs on
+dual-core; the **USB/VUSB teardown** is intermittent and open (§0d, second item).
 
 ## 0a. The media, and the way back
 
-* **region 0 = `0xC9FEE2D1`** — `local/work/kernel-armv7-console-cpu1.img`
-  (10,450,108 B): kernel `7.3.3 #105 SMP`, `-march=armv7-a`, the fast
+* **region 0 = `0x3547D613`** — `boot/chainloader/kernel.img` (10,448,868 B,
+  sha256 `6ecd068d…`): kernel `7.3.3 #109 SMP`, `-march=armv7-a`, the fast
   chainloader, the loud DTB **without `maxcpus`**, the DSI-init TCON hook, the
-  device-mode-only MUSB workaround, and an inert `console=ttyGS0,115200`.
-  The same zImage without the console bootarg is `0x158D8A85`; the session-64
-  known-good recovery image is `local/work/kernel-usbdev-cpu1.img`
-  (`0xC675E206`).
+  **stock MUSB mailbox + comparator lifetime fix**, an inert
+  `console=ttyGS0,115200`, and **`panic=0`**.  The previous
+  `0xC9FEE2D1` (`#105`, device-mode-only workaround, `panic=10`) is the
+  known-good fallback; the session-64 recovery image is
+  `local/work/kernel-usbdev-cpu1.img` (`0xC675E206`).
 * **region 1 = `6f5b8ca7…`** (`49e318bf…` was the older copy), 64 MiB ext4 at
   `0x29000000` — the BusyBox fallback root, **not booted**; its 43 modules
   mismatch the current kernel (trap 320).
@@ -115,73 +116,41 @@ to 6.13 and removed it; a forward port is the route.  **GPS:** no mainline
 driver; the operator has a 2024 LKML patch to evaluate, the reference's own path
 is the fallback.
 
-## 0d. THE ACTIVE ITEM — the MUSB mailbox fault (report 264)
+## 0d. CLOSED — the MUSB mailbox fault (reports 264/265)
 
-### Where it stands — the bad indirect transfer is identified
+**The fault was a freed TWL6030 `phy_companion`, not corruption of
+`musb->xceiv`.**  `twl6030_usb_probe()` stores `&twl->comparator` in the
+`omap-usb2` PHY *before* `twl6030_usb_ldo_init()`; the ldo init's
+`regulator_get(dev, "usb")` (the board's `vusb`) can return `-EPROBE_DEFER`,
+but the code returned `-ENODEV` for **every** error.  The probe therefore failed
+permanently, devres freed the `devm_kzalloc`'d `twl`, and the PHY kept a
+dangling `phy->comparator`; a later reuse put a heap pointer in its first word
+(`set_vbus`), and the stock `omap_musb_set_mailbox()` jumped through it.  The
+device-mode-only workaround had only hidden the dereference.  [report 264 for
+the Oops, **report 265 for the cause and fix**]
 
-Session 66 ran the HANDOFF-65 marker experiment to completion.  With the
-winchester early return removed (mutex kept) and `panic=0`, an instrumented
-stock-mailbox kernel was booted twice on dual-core (`0xF1AA4568`,
-`0x405E8997`); the hung boot's DRAM ring was recovered via a warm reset + the
-quiet read-back image.  [report 264; capture
-`docs/captures/musb-mailbox-fault-2026-11-19.txt`]
+The fix, now in the patch: propagate `PTR_ERR()` from the regulator lookup;
+clear the comparator with a `devm_add_action_or_reset()` action on any probe
+failure/remove; `usb_put_phy()` the reference `omap_usb2_set_comparator()`
+leaked.  The winchester early return is removed (the `set_mailbox_lock` mutex
+stays), and the stock call runs.  **Validated: image `0x3547D613` (`#109 SMP`),
+3/3 clean dual-core boots, gadget bound at ~1.41 s, no Oops.**  OTG host mode
+is reachable again (untested).
 
-* **Entry pointers are valid.** `status=4` (`MUSB_VBUS_OFF`), valid `xceiv`/
-  `otg`, and `otg->set_vbus = 0xc0729b94` = `omap_usb_set_vbus` **kernel text**.
-  The "stale `usb_phy` at entry" branch is ruled out at the `musb->xceiv` level.
-* **The fault is one level down.** Branch markers show `sv` still valid right
-  before `otg_set_vbus()`; the Oops follows immediately at `PC = 0xc2c05800`, a
-  `kmalloc-1k` slab address, `LR = omap_musb_set_mailbox+0x1e0`.  There is **no**
-  `PBMBX prechain`, so it is not the notifier chain.
-* **The exact transfer:** `otg_set_vbus()` → `omap_usb_set_vbus()` → its tail
-  call `phy->comparator->set_vbus`.  The `struct phy_companion` registered into
-  the `omap-usb2` PHY by `twl6030_usb_probe()` is stale/corrupt — its `set_vbus`
-  word holds a slab address where `twl6030_set_vbus` text should be.  So this is
-  a **PHY-lifecycle** fault, as the old handoff's second branch suspected, but
-  in the TWL6030 comparator, not in `musb->xceiv` itself.
-* The device-mode-only workaround stays until that is fixed; the stock call is
-  also needed for OTG host mode.  The session-64 "slab address in
-  `otg->set_vbus`" observation was probably this nested pointer, mis-symbolised.
-
-### THE ONE EXPERIMENT: audit the comparator lifetime (no more markers)
-
-The instrumentation question is answered; additional `PBMBX` branches have no
-value.  The next step is a **static + targeted lifecycle audit**, on the
-gitignored tree first (no `.config` change, no module rebuild):
-
-1. Read `omap_usb2_set_comparator()` in `drivers/phy/ti/phy-omap-usb2.c` and its
-   call from `twl6030_usb_probe()` (`drivers/usb/phy/phy-twl6030-usb.c:358`).
-   `twl` is `devm_kzalloc`'d; look for a probe-deferral/rebind or a late
-   `omap_usb2_set_comparator(NULL)` that frees `twl` while leaving
-   `phy->comparator` dangling.  The `twl6030_charger … vmax -22 imax: -22`
-   probe (report 263 §4a) is a live clue that this PMIC block has more than one
-   driver.
-2. Check the other writer: `cpcap-charger.c:921/940` calls
-   `omap_usb2_set_comparator(&ddata->comparator)` / `(NULL)`.  Confirm it does
-   not probe on this board and clobber the pointer.
-3. Only if the audit is inconclusive, add one more marker set printing
-   `phy->comparator`, `phy->comparator->set_vbus` and `xceiv->otg->usb_phy` at
-   entry, and re-read `otg->set_vbus` after `musb_set_peripheral()`, to catch an
-   in-call write.  Use `panic=0` and the read-back capture procedure.
-
-**Success criterion for a fix:** the stock `omap_musb_set_mailbox()` call runs
-on dual-core with no Oops, the gadget comes up, and the device-mode-only early
-return can be deleted.  Re-verify with 3+ clean dual-core boots before changing
-the kernel patch (re-export via the session-65 method, trap 211/161).
-
-### SECOND EXPERIMENT (only if the link drops): the VUSB teardown
+### Still open: the VUSB teardown (second item)
 
 The only writer of `VUSB: disabling` is `twl6030_usb_irq()` in
 `drivers/usb/phy/phy-twl6030-usb.c`, on a `CONTROLLER_STAT1.VBUS_DET` read of 0.
 Measured timings: BusyBox root, a command every 15 s → link dead at ~30 s; Nura,
-SSH traffic → ~90 s; final session-65 boot, 240 s of continuous ACM reads plus
-90 s idle → **still up at 376 s**, no VUSB message.  So it is intermittent, not
-an idle timer (trap 337; `docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md`).
-Run `local/work/kmsgcap.py` (or a userspace `cat /dev/kmsg`) before the link dies
+SSH traffic → ~90 s; some boots survive >6 min, and session 65/66 saw a 376 s
+boot then a ~60 s drop.  So it is intermittent, not an idle timer (trap 337;
+`docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md`).  Run
+`local/work/kmsgcap.py` (or a userspace `cat /dev/kmsg`) before the link dies
 and let it run through a drop; a `VBUS_DET`/`linkstat` log in that handler would
-settle it directly.
+settle it directly.  On the Nura root the RNDIS/usb0 path did not answer this
+session — the ACM (`playbook:~#`, `tools/pbraw.py`) was the console.
 
-## 0e. The MPU OPP (after the mailbox)
+## 0e. The MPU OPP (the active item)
 
 No `cpufreq` policy exists, and the boot log shows
 `twl6030_uv_to_vsel: OUT OF RANGE! non mapped vsel for 1375000 Vs max 1316660`
@@ -244,9 +213,11 @@ minimal pair is `local/work/minimal/setB.signed`.
   `CRR` stamp, and the `MINI4x6` font link (`lib/fonts/Makefile`).
 * `local/pristine/linux-7.3.3` — the pristine tree for exports and diffs
   (`local/pristine/linux-7.3.3.tar.xz`).
-* `local/work/kernel-armv7-console-cpu1.img` (`0xC9FEE2D1`) — the current
-  region-0 image; `kernel-armv7-cpu1.img` (`0x158D8A85`) and
-  `kernel-usbdev-cpu1.img` (`0xC675E206`, recovery) beside it.
+* `boot/chainloader/kernel.img` (`0x3547D613`) — the current region-0 image
+  (stock mailbox + comparator fix, `panic=0`); the previous
+  `local/work/kernel-armv7-console-cpu1.img` (`0xC9FEE2D1`),
+  `kernel-armv7-cpu1.img` (`0x158D8A85`) and the recovery
+  `kernel-usbdev-cpu1.img` (`0xC675E206`) are beside it.
 * `local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img`
   (`07555bde…`, 625,999,872 B) — the hd3 root and its flasher-restorable base.
 * `local/work/modstage/lib/modules/7.3.3` and
@@ -294,16 +265,17 @@ module.  The tracked `kernel/winchester-7.3.3.config` now matches the bench
 Start the flasher first, then reset/power on; the power-on bootrom is caught
 reliably (trap 323: it can hold ~20 s).  Region-1-only flashes are at `0x2915`.
 
-**Patch export (traps 161/211).**  Current: **65 files / 9 110 lines**, sha256
-`6f9bef24…`, verified **0 rejects / 65/65** against pristine 7.3.3 (session 65).
-The session-65 method is the reliable one: reconstruct the previously shipped
-files, strip the diagnostics (session-62/63/64 markers, `head.S` stamp, font
-link, any reverted guard), apply the intended functional deltas (`omap2430.c`,
-`dsi.c`, the DTS), generate with `diff -u -N --label a/… --label b/…`, then
-apply to pristine copies and compare every file byte-for-byte.  Also run the
-tree-vs-pristine walk (trap 211, filtering `Kconfig.*` and build artifacts) to
-catch a file the previous export missed.  Update `kernel/patches/README.md` and
-`KERNEL-PORT.md`.
+**Patch export (traps 161/211).**  Current: **67 files / 9 136 lines**, sha256
+`d19adff8…`, verified **0 rejects / 67/67** against pristine 7.3.3 (session 67).
+Method used (reliable): start a scratch tree from pristine + the *previous*
+patch (it applies 0 rejects), overwrite the files whose functional delta you
+intend (here `omap2430.c`, the DTS, and the two PHY drivers), regenerate with
+`diff -u -N --label a/… --label b/…` over the file list, then apply the new
+patch to a fresh pristine scratch and `cmp` every file byte-for-byte.  Also run
+the tree-vs-pristine walk (trap 211, filtering `Kconfig.*`, the vendored
+`pvrsgx/`, and build artifacts) and confirm every remaining difference is a
+known diagnostic.  Update `kernel/patches/README.md` and `KERNEL-PORT.md`.
+Local helper/workspace this session: `local/work/export67/`.
 
 ## 3. Bench
 
@@ -316,13 +288,15 @@ catch a file the previous export missed.  Update `kernel/patches/README.md` and
   `console=ttyGS0,115200` is **inert** — the gadget serial driver has no
   kernel-console write path (verified: no `console [ttyGS0] enabled`).  Read the
   panel, or `cat /dev/kmsg` from the shell.
-* **Reboot:** `tools/pbssh.sh 'reboot'` (clean shutdown; the Nura root is ext4
-  with `barrier=0`, so prefer this over a power cut).  A `reboot -f` wedge is
-  trap 224; use `echo b > /proc/sysrq-trigger`.
+* **Reboot:** on the Nura root use **`reboot -f`** (the normal `reboot` is very
+  slow there).  A `reboot -f` wedge is trap 224; use
+  `echo b > /proc/sysrq-trigger`.  The root is ext4 with `barrier=0`, so a
+  clean reboot still beats a power cut.
 * **`BOOTCTR_FCTRY` is readable on our image:**
-  `tools/pbssh.sh 'dmesg | grep pbrpmb'` → `… record@196 = <4 bytes LE>` then
-  `0x<v> >= threshold 0x1e, no write`.  It read **`0x26`** at the session-65
-  close.  A logged read, not an RPMB access (`SAFETY.md` §2).
+  `tools/pbssh.sh 'dmesg | grep pbrpmb'` (or the ACM) → `… record@196 = <4
+  bytes LE>` then `0x<v> >= threshold 0x1e, no write`.  It read **`0x28`** at
+  the session-67 close (`0x2a → 0x29 → 0x28` over the three validation boots).
+  A logged read, not an RPMB access (`SAFETY.md` §2).
 * **The eMMC WRITE-busy stall is live:** `mmc1: Card stuck being busy` plus a
   lost async WRITE during write bursts (27 s/33 s in the Nura boots).  It has
   already damaged the rw ext4 once (trap 336); prefer clean reboots.
@@ -335,7 +309,7 @@ catch a file the previous export missed.  Update `kernel/patches/README.md` and
 * **Old Nura image:** the panel's `epitaph` may still show the r10005 bug;
   check before judging the desktop (§0f).
 
-## 4. Traps added last session (full list 14–338 in `KNOWN-ISSUES.md` §2)
+## 4. Traps added last session (full list 14–339 in `KNOWN-ISSUES.md` §2)
 
 * **334.** The kernel was built **`-march=armv6k`** because
   `CONFIG_ARCH_MULTI_V6=y` selects `CPU_ARM1176 → CPU_V6K → CPU_32v6`, and
@@ -356,8 +330,18 @@ catch a file the previous export missed.  Update `kernel/patches/README.md` and
 * **338.** The mailbox fault's **bad indirect transfer is
   `phy->comparator->set_vbus`**, a stale TWL6030 `phy_companion`, **not** a wild
   `otg->set_vbus` at entry: entry `sv = 0xc0729b94` is valid kernel text, and the
-  Oops jumps to `0xc2c05800` (slab) inside `omap_usb_set_vbus()`'s tail call.
-  Next is a PHY-lifecycle audit, not more markers (report 264).
+  Oops jumps to `0xc2c05800` (slab) inside `omap_usb_set_vbus()`'s tail call
+  (report 264).  **Resolved in session 67** — see trap 339.
+* **339.** `twl6030_usb_probe()` stored `&twl->comparator` in the `omap-usb2`
+  PHY **before** `twl6030_usb_ldo_init()`; the ldo init returned `-ENODEV` for
+  **every** `regulator_get(dev, "usb")` error, so a deferred `vusb` failed the
+  probe permanently, devres freed the `devm_kzalloc`'d `twl`, and
+  `phy->comparator` dangled (the report-264 `kmalloc-192` devm object whose
+  first word was a `kmalloc-1k` heap pointer).  The device-mode-only workaround
+  only hid the dereference.  Fix: propagate `PTR_ERR()`, clear the comparator
+  with a `devm_add_action_or_reset()` action on probe failure/remove, and
+  `usb_put_phy()` the reference `omap_usb2_set_comparator()` leaked.  Validated
+  3/3 clean dual-core boots with the stock call restored (report 265).
 * Still current: **333** (the gadget bind is the trigger; the workaround is the
   device-mode-only call), **332** (dual-CPU `printascii` garble), **331** (power
   ruled out), **330** (the IPI is serviced), **327** (`nosmp` is not
@@ -373,8 +357,8 @@ catch a file the previous export missed.  Update `kernel/patches/README.md` and
 |---|---|
 | safety before any write | `docs/project/SAFETY.md` |
 | build/flash/boot/console | `docs/project/DEVELOPMENT.md` |
-| **the active plan** | `docs/project/ROADMAP.md` item 7a, report **263** |
-| **the CPU/USB evidence** | reports **263**, 262, 259–261, 257, 256 |
+| **the active plan** | `docs/project/ROADMAP.md` item 7a, report **265** |
+| **the CPU/USB evidence** | reports **265**, 264, 263, 262, 259–261, 257, 256 |
 | kernel delta + config | `kernel/patches/`, `kernel/winchester-7.3.3.config` |
 | board DTS + patched drivers | `kernel/source/`, `local/kernel-tree/` |
 | initramfs root selection | `initramfs/init.c` `ROOTFS_RAW_OFF` (hd3) |
@@ -385,7 +369,7 @@ catch a file the previous export missed.  Update `kernel/patches/README.md` and
 | the ARMv7 modules | `local/work/modstage/`, `…-armv7.tar.gz` |
 | BT service pack | `local/work/1917/base/lib/firmware/bluetooth/WL1283.bts` |
 | OSS player / mixer / BT probe | `rootfs/pbplay.c`, `rootfs/pbmix.c`, `rootfs/hci.c` |
-| reports / sessions | `docs/reports/` (263 current), `docs/sessions/session-65.md` |
+| reports / sessions | `docs/reports/` (265 current), `docs/sessions/session-67.md` |
 
 ## 6. Working rules
 
@@ -407,62 +391,61 @@ catch a file the previous export missed.  Update `kernel/patches/README.md` and
 ## 7. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 67 (absolute; Linux-era 61)
+PlayBook (OMAP4430 "winchester") — session 68 (absolute; Linux-era 62)
 
 Workspace: this repository — a git checkout.  Map: docs/README.md.  The earlier
 work tree $HOME/rea-work is READ-ONLY.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 14-338, especially 333-338)
-and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 91-97, docs/reports/INDEX.md,
-reports 264, 263, 262, 257, and sessions/session-66.md.
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 14-339, especially 333-339)
+and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 91-98, docs/reports/INDEX.md,
+reports 265, 264, 263, 262, 257, and sessions/session-67.md.
 
 WHERE IT STANDS: the unit runs Linux 7.3.3, dual-core at 1008 MHz, on the ARMv7
-image 0xC9FEE2D1 (#105 SMP), with the Nura root on hd3 (grown to 62.5 G, ARMv7
-modules installed); pvrsrvkm binds and catacomb runs.  The session-66 marker
-experiment identified the mailbox fault's bad indirect transfer: entry pointers
-are valid (otg->set_vbus = 0xc0729b94 = omap_usb_set_vbus text), then the
-otg_set_vbus() call jumps to 0xc2c05800 (a slab) inside omap_usb_set_vbus()'s
-tail call phy->comparator->set_vbus — a stale TWL6030 phy_companion (report 264,
-trap 338).  The device-mode-only MUSB workaround is still required until that
-comparator lifetime is fixed.  The USB link dropped ~60 s after the restore boot
-(the intermittent VUSB teardown, trap 337); the unit kept running on its panel.
+image 0x3547D613 (#109 SMP), with the Nura root on hd3 (grown to 62.5 G, ARMv7
+modules installed); pvrsrvkm binds and catacomb runs.  THE MAILBOX FAULT IS
+FIXED (report 265, trap 339): the Oops was a freed TWL6030 phy_companion —
+twl6030_usb_probe() registered &twl->comparator before ldo_init(), and a
+deferred vusb regulator was collapsed to -ENODEV, so the probe failed
+permanently and devres freed the devm twl while phy->comparator dangled.  The
+fix propagates PTR_ERR, clears the comparator with a devm action on
+probe-failure/remove, and usb_put_phy()s; the winchester early return is gone
+and the stock omap_musb_set_mailbox() call runs on dual-core (3/3 clean boots).
+The VUSB teardown is still intermittent and open (trap 337).
 
-THE ONE EXPERIMENT: audit the comparator lifetime — NOT more markers.  Static
-first: read omap_usb2_set_comparator() in drivers/phy/ti/phy-omap-usb2.c and its
-call from twl6030_usb_probe() (phy-twl6030-usb.c:358); look for a
-probe-deferral/rebind or a late omap_usb2_set_comparator(NULL) that frees the
-devm_kzalloc'd twl and leaves phy->comparator dangling (the twl6030_charger
-"vmax -22 imax: -22" probe is a clue).  Check the other writer cpcap-charger.c
-:921/940 does not clobber it.  Only if inconclusive, add one more marker set
-printing phy->comparator, comparator->set_vbus and otg->usb_phy at entry, and
-re-read otg->set_vbus after musb_set_peripheral(); use panic=0 + the read-back
-capture.  A fix must let the stock omap_musb_set_mailbox() call run on dual-core
-(3+ clean boots) before deleting the early return and re-exporting the patch.
+THE ACTIVE ITEM: the MPU OPP.  There is no cpufreq policy and the boot log
+shows twl6030_uv_to_vsel: OUT OF RANGE for 1.375/1.41 V (table max 1.31666 V).
+The OPP table is already in omap443x.dtsi (300/600/800/1008 MHz); what is
+missing is cpu-supply/vdd_mpu + cpufreq-dt, or a boot-time DPLL/VC write.
+Measure the reference's DPLL_MPU/PRM_VC on the oracle first; 1.2 GHz crashes
+(rejected, report 257).  Thermal-check (trap 312).
 
-SECOND (only if the link drops — it did at ~60 s this session): capture the
-VUSB teardown with local/work/kmsgcap.py — the only writer is twl6030_usb_irq()
-on a VBUS_DET=0 read; a VBUS_DET/linkstat log in that handler would settle it
-(trap 337, docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md).
+SECOND (only if the link drops): capture the VUSB teardown with
+local/work/kmsgcap.py — the only writer is twl6030_usb_irq() on a VBUS_DET=0
+read; a VBUS_DET/linkstat log in that handler would settle it (trap 337,
+docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md).
 
-BENCH: region 0 = 0xC9FEE2D1 (0x825); region 1 = the BusyBox ext4 6f5b8ca7... at
-0x29000000 (fallback, not booted); hd3 = the Nura ext4 07555bde... at 0x4915,
-grown to 62.5 G.  SSH: PB_LINK=usb tools/pbssh.sh (the ACM shell is
-playbook:~#, not pb>; pbcon.py does not drive it).  Kernel printk goes to the
-panel; the console=ttyGS0 bootarg is inert.  BOOTCTR_FCTRY not re-read at the
-session-66 close (last known 0x26; dmesg | grep pbrpmb on the next SSH boot).
-Start the flasher, then reset/power on; the 626 MB hd3 write takes ~20 min.
-/tmp is tmpfs; re-push ringdump.  Read dmesg UNFILTERED.  The eMMC WRITE-busy
-stall is live and has damaged the rw ext4 once — prefer clean reboots.  An agent
-NEVER writes RPMB; NVRAM read-only.  Never program WDT2 from the chainloader
-(trap 322).  No .config change for a marker-only experiment.
+BENCH: region 0 = 0x3547D613 (#109 SMP, stock mailbox + comparator fix,
+panic=0) at block 0x825; region 1 = the BusyBox ext4 6f5b8ca7... at 0x29000000
+(fallback, not booted); hd3 = the Nura ext4 07555bde... at 0x4915, grown to
+62.5 G.  SSH: PB_LINK=usb tools/pbssh.sh; it did not answer on the Nura root
+this session (RNDIS/usb0), so the ACM (playbook:~#, not pb>) via
+tools/pbraw.py is the fallback.  Kernel printk goes to the panel; the
+console=ttyGS0 bootarg is inert.  Use `reboot -f` on the Nura root (plain
+reboot is very slow).  BOOTCTR_FCTRY = 0x28 at the session-67 close; read it
+with dmesg | grep pbrpmb.  Start the flasher, then reset/power on (the
+power-on bootrom holds ~20 s); the 626 MB hd3 write takes ~20 min.  /tmp is
+tmpfs; re-push ringdump.  Read dmesg UNFILTERED.  The eMMC WRITE-busy stall is
+live and has damaged the rw ext4 once — prefer clean reboots.  An agent NEVER
+writes RPMB; NVRAM read-only.  Never program WDT2 from the chainloader (trap
+322).
 
-PATCH: 65 files / 9 110 lines, sha256 6f9bef24..., verified 0 rejects / 65/65;
-unchanged in session 66 (the diagnostic driver/DTS edits were reverted and the
-build tree proven clean).  Re-export (and update kernel/patches/README.md +
-KERNEL-PORT.md) after any DTS or driver change, using the session-65 method
-(reconstruct the shipped files, strip diagnostics, diff -N, apply-and-compare)
-and the tree walk (trap 211).
+PATCH: 67 files / 9 136 lines, sha256 d19adff8..., verified 0 rejects / 67/67
+against pristine 7.3.3 (session 67).  Re-export (and update
+kernel/patches/README.md + KERNEL-PORT.md) after any DTS or driver change.  The
+reliable method is in §2: pristine + the previous patch, overwrite the intended
+files, diff -u -N, apply to a fresh pristine scratch and cmp every file; run the
+tree walk (trap 211).  `local/work/export67/` is the working example.
 
 SAFETY: read SAFETY.md first.  One variable per boot.  Flash region 0 only when
 only it changed; both regions in one bootrom session only when both changed.
