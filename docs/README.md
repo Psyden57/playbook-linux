@@ -22,7 +22,7 @@ have not read in full.  (Trap 200 in `project/KNOWN-ISSUES.md`.)
 | `project/STATE.md` | **the** current state, the blockers in play, the unit, the current images, the next step | per-session history (that is in `history/`) |
 | `project/HANDOFF.md` | the next-session kickoff, copied at wrap-up | anything not needed to start |
 | `project/OVERVIEW.md` | what/why, hardware, boot chain | status tables, unit state, "what works" |
-| `project/ROADMAP.md` | open work only, and what closes it | closed-item prose (that is in `history/`) |
+| `project/ROADMAP.md` | open work only, and what closes it | closed-item prose (that is in `history/`), except completed steps kept inline as an open item's sequence |
 | `project/ARCHITECTURE.md` | components and how they interact | status |
 | `project/KNOWN-ISSUES.md` | open traps, current corrections, documentation defects | resolved display history and fixed ledgers (those are in `history/`) |
 | `project/FACTORY-PATH.md` | the product/ECDSA vs factory/CRC paths and the switch procedure | current unit state |
@@ -96,6 +96,7 @@ are never committed.
 | folder | what |
 |---|---|
 | `reference/startup-playbook/` | the 1917 `proc/boot/startup-playbook` board bring-up: the board/silicon identity, the 75-record GPIO table, the WLAN/BT pin selection, the SCRM `AUXCLK1` programming, the WDT2 policy and the MMIO map |
+| `reference/qnx-hwio/` | the reference's hardware-interface tables as CSV: `gpio-table-winchester.csv` and `pad-table-winchester.csv` (the GPIO/pad muxing the vendor OS applies) |
 
 ## `reports/` — the analysis this is built on
 

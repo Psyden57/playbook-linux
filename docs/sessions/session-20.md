@@ -184,7 +184,8 @@ the rest of the session was the static RE that explains the failure (150–154).
   *absent* one only … it has no write path") — contradicted by the measured
   decrement: the bootloader **rewrites** the record every factory boot (reports
   89 §4, 95 §4, 150 §2, 154).  See
-  `docs/contradictions/bootloader-writes-the-record.md`.
+  `docs/contradictions/71-bootctr-stage-decrement-vs-provision-only.md`
+  (`FACTORY-PATH.md` §2 is current; it points at the same file).
 * **Report 71 §2's selector call site** (`0x80014254`/`0x80014260`) — report 150
   puts the call at `0x800142B0`; those two are the SHA-512/CRC branch points.
 * **Report 146 §0's `bootblob_arm9000.bin` range** (`[0x9000:0xe9000]`) — it is

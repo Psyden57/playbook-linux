@@ -1,6 +1,9 @@
 # The USB/VUSB drop: "idle runtime PM at ~32 s" vs "intermittent"
 
-**Status: open.**  Two readings of the same event, with different consequences.
+**Status: open for the *trigger*; the classification is settled.**  The event is
+**intermittent, not an idle timer** — Claim A's idleness attribution is refuted
+by Claim B's measurements below, and the project treats it that way (trap 337).
+What remains open is *what fires* the teardown, not whether idleness does.
 
 ## Claim A (session 64, report 262 §3a and the session-64 note)
 

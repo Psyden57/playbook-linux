@@ -3291,6 +3291,11 @@ pair must be re-exported before it is published as a reproducible build.
 
 ## 95. Keep the device-mode-only MUSB workaround; do not restore the stock mailbox yet (session 65)
 
+> **Superseded by §98 (session 67).**  The fault was identified (a freed TWL6030
+> comparator) and fixed; the stock `omap_musb_set_mailbox()` call is restored and
+> validated on dual-core.  This entry records why the workaround was kept at the
+> time, not a live instruction.
+
 **Decision.**  `omap2430_musb_enable()` keeps the winchester early return that
 calls only `omap_control_usb_set_mode(glue->control_otghs, USB_MODE_DEVICE)`.
 The glue mutex (`set_mailbox_lock`) stays as hardening for the remaining callers.
@@ -3344,6 +3349,10 @@ ARMv7 module install (`depmod` OK, 0 module-size mismatches, `pvrsrvkm` bound,
 `catacomb` running).
 
 ## 97. The mailbox fault is a stale comparator; audit its lifetime, keep the workaround (session 66)
+
+> **Superseded by §98 (session 67).**  The audit was carried out and found the
+> freed-comparator cause; the fix is in, and the workaround is gone.  This entry
+> records the session-66 position and the audit it called for.
 
 **Decision.**  Keep the device-mode-only `omap2430_musb_enable()` workaround and
 the `set_mailbox_lock` mutex.  The next work on the mailbox is a **PHY-lifecycle

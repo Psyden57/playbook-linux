@@ -2583,8 +2583,8 @@ report 121 §3/§11/§12.
       **420–550 ms in `swap`** for a 1024×585 frame.  Pre-warm the shaders at
       start if the hitch matters; shrinking the drawer surface to its visible
       height (or damaging only the slider row) roughly halves the swap.
-      llvmpipe is single-threaded because the kernel boots `maxcpus=1`.
-      (Session 60, report 253.)
+      llvmpipe was single-threaded because the kernel then booted `maxcpus=1`
+      (now dual-core; trap 313 resolved).  (Session 60, report 253.)
 
 311. **The `PBGL_PROFILE` byte counter wraps.**  `KiB/s` prints huge values
       (`8589936748`) while `import/s`, `texsub/s`, `rects/s`, `avg_us` and
@@ -2593,8 +2593,14 @@ report 121 §3/§11/§12.
       the profile patch (`w.max(0)`/`h.max(0)` + saturating arithmetic) before
       trusting the byte rate.  (Session 60.)
 
-312. **The MPU runs at 400 MHz with no cpufreq/OPP — but the OPP *table* is
-      already there, from the SoC dtsi.**  Measured (session 60, re-read live in
+312. **RESOLVED (session 67, report 266): the MPU runs at 1008 MHz and
+      `cpufreq-dt` is bound and scaling** (OPPs `300000 600000 800000 1008000`,
+      `ondemand`; verified up and down).  Only the **unattached CPU supply**
+      remains (`vdd_mpu`; no `supply-*` in the OPP debug dirs), so the OPP
+      voltages are still not applied.  The text below is the session-60/62
+      measurement that preceded the fix, kept for its OPP-table provenance.
+      **Then, the MPU ran at 400 MHz with no cpufreq/OPP — but the OPP *table*
+      is already there, from the SoC dtsi.**  Measured (session 60, re-read live in
       session 62): `clk_summary` shows `dpll_mpu_ck = 400000000`,
       `dpll_mpu_m2_ck = 400000000`, `div_mpu_hs_clk = 400000000`; BogoMIPS
       795.44; there is no `/sys/devices/system/cpu/cpu0/cpufreq/`.  The board
@@ -2615,8 +2621,12 @@ report 121 §3/§11/§12.
       boot, and check the thermal zone (`cpu_thermal` read 65.0 °C idle at
       400 MHz).  (Session 60, report 253; table located session 62.)
 
-313. **Only CPU0 is online: the kernel is built `CONFIG_SMP=n`, and the DTS
-      also sets `maxcpus=1`.**  `dmesg` reports `Unknown kernel command line
+313. **RESOLVED (session 67, report 266): both CPUs are online, userspace
+      included.**  `CONFIG_SMP=y`, `CONFIG_NR_CPUS=2`, no `maxcpus=1`; the
+      remaining defect was **PID 1's affinity mask** (trap 340), not the build.
+      The text below is the session-60 state and the procedure that was followed.
+      **Only CPU0 was online: the kernel was built `CONFIG_SMP=n`, and the DTS
+      also set `maxcpus=1`.**  `dmesg` reported `Unknown kernel command line
       parameters "maxcpus=1"` and `DT /cpu 2 nodes greater than max cores 1,
       capping them`; `online=0`, `nproc=1`.  Enabling the second core needs
       **`CONFIG_SMP=y` (+ `CONFIG_NR_CPUS=2`)** *and* removing `maxcpus=1`
@@ -3468,6 +3478,22 @@ error to `-ENODEV`, so a deferred `vusb` failed the probe permanently and
 devres freed `twl`.  The faulting `r0` being a `kmalloc-192` devm allocation
 (offset 64) with a heap pointer in word 0 is the evidence; no in-place writer
 exists.  Report 265 supersedes 264 §5's "audit the lifetime" with the answer.
+
+**3.34 Report 263's "no `cpufreq` policy exists" is wrong: `cpufreq-dt` is bound
+and scales.**  Report 263 §3/§4 recorded no cpufreq policy and left the MPU at
+the loader's 400 MHz.  Session 67's live read (report 266 §2) shows
+`scaling_driver = cpufreq-dt`, OPPs `300000 600000 800000 1008000`, governor
+`ondemand`, and `scaling_max_freq` drops the clock and restoring it returns
+1008000.  What is actually missing is the **CPU supply** (`vdd_mpu`), so the OPP
+voltages are not applied.  Reports 266/HANDOFF/STATE are current; see traps
+312 (resolved) and 340.
+
+**3.35 Report 263 §4b's "two cores in parallel: no scaling" and its UI-latency
+figures were single-core measurements.**  Session 67 found PID 1 affinity-masked
+to `{0}`, so every userspace process — including the benchmark and the UI —
+ran on CPU 0 only, while `online` read `0-1` (report 266 §1, trap 340).  The
+throughput and latency numbers must be re-measured on two real cores before they
+are used; they are not evidence against dual-core scaling.
 
 ## 4. Documentation and tree defects (not behavioural bugs)
 

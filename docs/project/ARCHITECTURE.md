@@ -76,10 +76,12 @@ the kernel at `zreladdr = PHYS_OFFSET + 0x8000 = 0x80008000`; the DTS pushes its
 DTS:
 
 ```
-earlyprintk keep_bootcon ignore_loglevel maxcpus=1 clk_ignore_unused panic=10 fw_devlink=permissive
+earlyprintk keep_bootcon ignore_loglevel console=ttyGS0,115200 clk_ignore_unused panic=0 fw_devlink=permissive
 ```
 
-`clk_ignore_unused` keeps WDT2's clock alive so a hung kernel still self-resets;
+(The dual-core bring-up removed the old `maxcpus=1` and set `panic=0`; the
+`console=ttyGS0` is inert — the gadget serial driver has no kernel-console write
+path — and `panic=0` is a bring-up setting, trap 335.)  `clk_ignore_unused` keeps WDT2's clock alive so a hung kernel still self-resets;
 `ignore_loglevel` exists because `loglevel=0` hid a kernel panic for two
 sessions (report 109). There is no `stdout-path` on purpose — it would register
 `ttyS2` as a second console writing to a dead UART (DTS comment).

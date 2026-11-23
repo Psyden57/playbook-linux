@@ -678,8 +678,8 @@ only cold boots need the GPIO pulse.
 **Media state: region 0 = `0x3547D613`** (kernel `7.3.3 #109 SMP`,
 `-march=armv7-a`, 10,448,868 B, no `maxcpus`, the **stock MUSB mailbox** +
 comparator lifetime fix, `panic=0`, the DSI-init TCON hook); region 1 = the
-WLAN+BT rootfs
-**`49e318bf…`** (67,108,864 B, **43 modules** + both `wl128x` SR firmware files
+WLAN+BT rootfs, **on-media sha256 `20a5edd3…`** (the staged file
+`49e318bf…` is 67,108,864 B: **43 modules** + both `wl128x` SR firmware files
 + the CAM/4-sr `wl12xx.ko` + the per-unit NVS +
 `iw`/`wpa_supplicant`/`wpa_cli`/`passphrase` + the signed `regulatory.db`;
 `local/images/rootfs-region1-wl1283-bt.ext4`); hd3 = the **Nura** ext4 from
@@ -809,16 +809,17 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
    26 MHz ref/TCXO), the stack probes, and the firmware stays up; the only
    remaining node-level item is the **per-unit `wl128x-nvs.bin`** from the `hd5`
    calibration (report 197), to replace the generic NVS.
-5. **The unit is on the Nura overlay root from hd3** (image `0xED58EF36`), with
-   the lower read-only and every write in the tmpfs upper; **no sshd** — use the
-   `ttyGS0` shell on the USB ACM (`/dev/ttyACM0`, `playbook:~#`; note
-   `tools/pbcon.py` expects `pb> ` and does not drive this shell — trap 274).
-   `usb0` is `169.254.0.1/16` (RNDIS); the host is `169.254.0.2/16`.  To return
-   to TabletOS, flash the 1917 IFS at block `0x825`; the region-1 root and the
-   earlier images remain.
-6. **On the old region-1 root, use ssh** (`tools/pbssh.sh`); the Nura root has
-   no sshd, so the ACM is its software console.  The QNX door uses
-   `PB_LINK=door`.
+5. **The unit is on the Nura read-write ext4 root on hd3** (region 0
+   `0x3547D613`), grown to 62.5 G — not the old session-58 overlay.  **SSH
+   works:** `PB_LINK=usb tools/pbssh.sh` (`169.254.0.1:22`, key-only; the host
+   is `169.254.0.2/16` on `enp8s0f3u1i2`).  If it times out the cause is the
+   **host** — WireGuard VPN (trap 341) or `ufw` (trap 342) — not the device.
+   The `ttyGS0` shell on the USB ACM (`/dev/ttyACM0`, `playbook:~#`) remains the
+   fallback; note `tools/pbcon.py` expects `pb> ` and does not drive it
+   (trap 274).  To return to TabletOS, flash the 1917 IFS at block `0x825`.
+6. **The QNX door** uses `PB_LINK=door tools/pbssh.sh` (qconn on
+   `169.254.0.1:9090`, root ssh); the minimal oracle is
+   `local/work/minimal/setB.signed`.
 
 ## Workspace location
 

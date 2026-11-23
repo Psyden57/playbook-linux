@@ -40,8 +40,10 @@ handoff §3). The toolchain is Buildroot 2021.11 — gcc 14.3.0, binutils 2.43.1
 (report 103 §4.1).
 
 Host-side build prerequisites (the host is Arch; `pacman -S bc` was the one
-missing package, report 103 §4.1): `bc` — required by `kernel/time/timeconst.h`,
-without it the build stops at `Kbuild:21` — plus `flex`, `bison`, `pahole`,
+missing package, report 103 §4.1): `bc` — required by
+`local/kernel-tree/kernel/time/timeconst.bc` (which generates
+`include/generated/timeconst.h`), without it the build stops at
+`Kbuild:21` — plus `flex`, `bison`, `pahole`,
 `dtc`, OpenSSL and libelf. Host python is 3 with `pyusb` (§6). A full `zImage`
 build takes `-j12`-level parallelism; the **XZ** `zImage` is ≈ 6.57 MB and the
 assembled chainloader image is 0x91AB20 (inside the `0xB00000` region-0 slot).
