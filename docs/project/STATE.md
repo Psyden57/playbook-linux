@@ -2,21 +2,17 @@
 
 ## Current state — 2026-11-23 (session 67)
 
-**The mailbox fault is a TWL6030 comparator lifetime bug, now fixed; the stock
-`omap_musb_set_mailbox()` call runs on dual-core.**  The static audit found the
-free: `twl6030_usb_probe()` stores `&twl->comparator` in the `omap-usb2` PHY
-before `twl6030_usb_ldo_init()`, and that function collapsed a deferred `vusb`
-regulator error (`-EPROBE_DEFER`) to `-ENODEV`, so the probe failed
-permanently, devres freed the `devm_kzalloc`'d `twl`, and `phy->comparator`
-dangled.  Report 264's faulting `r0` is exactly that: a `kmalloc-192` **devm**
-object (offset 64) whose first word is a `kmalloc-1k` heap pointer instead of
-`twl6030_set_vbus` text.  The device-mode-only workaround had been hiding the
-dangling pointer by never calling `otg_set_vbus()`.  The fix: propagate
-`PTR_ERR()` from the regulator lookup, clear the comparator with a devm action
-on any probe failure/remove, and `usb_put_phy()` the reference that
-`omap_usb2_set_comparator()` used to leak.  With the early return removed,
-image **`0x3547D613`** (`#109 SMP`) gave **3/3 clean dual-core boots** with the
-gadget bound and no Oops.  [report 265; session-67 note]
+**The second core was doing no userspace work at all — fixed; the mailbox fault
+is fixed too.**  Two findings this session, in order.  First, the mailbox fault
+was a TWL6030 comparator lifetime bug: `twl6030_usb_probe()` stored
+`&twl->comparator` in the PHY before `ldo_init()`, a deferred `vusb` was
+collapsed to `-ENODEV`, the probe failed permanently, devres freed the `twl`,
+and `phy->comparator` dangled (report 265).  Then, looking at the live unit,
+**PID 1 was affinity-masked to `{0}`**, so every userspace process inherited
+`{0}` and `nproc` reported **1** even though `online = 0-1` and
+`SMP: Brought up 1 node, 2 CPUs` (report 266).  Only kernel threads had `0-1`.
+This is why report 263 §4b's "two cores in parallel" scaled flat — CPU 1 was
+never given userspace work.
 
 * **Region 0 = `boot/chainloader/kernel.img`, CRC `0x3547D613`** (10,448,868 B,
   sha256 `6ecd068d…`) — kernel `7.3.3 #109 SMP`, `-march=armv7-a`, no `maxcpus`,
@@ -25,18 +21,31 @@ gadget bound and no Oops.  [report 265; session-67 note]
   (`COMPLETE 0x40C0 -> cmd 0x4006`, `done`).  The previous `0xC9FEE2D1`
   (`#105`, device-mode-only workaround, `panic=10`) is the known-good fallback
   on the host.
-* **Region 1 and hd3 untouched** (hd3 = the Nura ext4 `07555bde…`, 62.5 G, ARMv7
-  modules).  No 626 MB write, no restore needed.
-* **`BOOTCTR_FCTRY = 0x28`** after the three validation boots (`0x2a → 0x29 →
-  0x28`, each `>= 0x1e, no write`).  `/init` tops up below `0x1e`.
+* **The CPU-affinity workaround is on hd3's root, not in the image.**
+  `/etc/inittab` carries `::sysinit:/usr/sbin/taskset -p 3 1` **before** the
+  OpenRC entries; PID 1 then runs `{0,1}`, `nproc` = 2, and a two-thread busy
+  loop spreads load evenly (`cpu0` 2643 / `cpu1` 2622 user ticks).  Backups:
+  `/etc/inittab.session67-orig` (OpenRC default) and `/etc/inittab.fixed`.
+  Verified 2 boots each way.  **Still owed: a kernel-side fix** for
+  `sched_init_smp()`'s widening (see report 266 §1).
+* **`cpufreq-dt` is bound and scales** (`300000 600000 800000 1008000`,
+  `ondemand`); the handoff's "no `cpufreq` policy" was stale.  The CPU **supply**
+  is still unattached (no `supply-*` in the OPP debug dirs), and the
+  `twl6030_uv_to_vsel: OUT OF RANGE` lines are startup VC init clamped to VSEL
+  `0x3A` = 1.35 V — the same voltage the chainloader commands.  SmartReflex MPU
+  is present but idle (`autocomp = 0`).  [report 266 §2/§3]
+* **Region 1 and the rest of hd3 are unchanged** (hd3 = the Nura ext4
+  `07555bde…`, 62.5 G, ARMv7 modules).  No 626 MB write, no restore needed.
+* **`BOOTCTR_FCTRY = 0x24`** at the close (the mailbox validation boots read
+  `0x2a → 0x29 → 0x28`; the affinity half's reboots took it to `0x24`, still
+  above the `0x1e` top-up threshold).  `/init` tops up below `0x1e`.
 * **Patch = 67 files / 9 136 lines**, sha256 `d19adff8…`, 0 rejects / 67/67
   identical; adds `phy-twl6030-usb.c` + `phy-omap-usb2.c`, and `omap2430.c` now
   runs the stock call (mutex kept).  Tree walk (trap 211) clean outside the
   known excluded diagnostics.  `kernel/source/` mirrors refreshed.
-* **Bench:** Linux/Nura on hd3; the USB link was up at the close (no VUSB drop
-  during the short checks).  The VUSB teardown (trap 337) is unchanged and open.
-  `PB_LINK=usb tools/pbssh.sh` was not answering this session (RNDIS/usb0), so
-  the ACM (`playbook:~#`, `tools/pbraw.py`) was the console.
+* **Bench:** Linux/Nura on hd3; `PB_LINK=usb tools/pbssh.sh` did **not** answer
+  this session (RNDIS/usb0), so the ACM (`playbook:~#`, `local/work/pbcmd.py`)
+  was the console.  The VUSB teardown (trap 337) is unchanged and open.
 
 ## Previous state — 2026-11-19 (session 66)
 
@@ -560,11 +569,13 @@ and a failed/half-formed write or a flat pack is still a brick risk.
 
 ## Blockers in play
 
-**Session 67 — the open blockers are:** (1) the **MPU OPP** — no
-`cpufreq` policy, `twl6030_uv_to_vsel: OUT OF RANGE` for 1.375/1.41 V (report
-257 §6); (2) the remaining **UI performance** — llvmpipe's deferred `swap`
-(420–550 ms per full-screen drawer frame) and its first-draw JIT, now on two
-cores at 1008 MHz; (3) **Kumo** needs a WPEWebKit/WebKit-fork build (not
+**Session 67 — the open blockers are:** (1) the **CPU voltage/Opp** — `cpufreq-dt`
+exists and scales, but the CPU supply is unattached and the VC init clamps to
+1.35 V (report 266 §2/§3); (2) the remaining **UI performance** — was measured
+with CPU 1 starved of userspace (see the closed item), so it needs re-measuring
+before it can be worked; llvmpipe's deferred `swap` (420–550 ms per full-screen
+drawer frame) and its first-draw JIT are the known costs; (3) **Kumo** needs a
+WPEWebKit/WebKit-fork build (not
 packaged, report 247 §4); (4) the **intermittent WRITE-busy stall** — not a
 cache flush (report 250 §1), mitigated by `barrier=0` + write-through, but it
 still fires during write bursts and can damage the rw ext4 if power is cut
@@ -572,14 +583,16 @@ still fires during write bursts and can damage the rw ext4 if power is cut
 comparator's IRQ; 30 s, 90 s or not in 6 min — trap 337, contradiction file);
 (6) the **memory read throughput** — the EMIF is correctly configured
 (400 MHz LPDDR2-800, 32-bit, CL 6, power-down off, L3 200 MHz) and the CPU is
-at 1008 MHz, but a userspace benchmark reads only ~0.4–0.6 GB/s (writes
-~2 GB/s; no scaling with streams or cores), 3–8× below the 3.2 GB/s peak
-(report 263 §4b; open).
+at 1008 MHz, but a userspace benchmark reads only ~0.4–0.6 GB/s — **that was
+measured single-core, so it must be redone** (report 263 §4b; open).
 **Closed in session 67:** the **mailbox fault** — the bad indirect transfer was
 a freed TWL6030 `phy_companion` (a failed `twl6030_usb_probe()` on a deferred
 `vusb`), fixed by the comparator lifetime change; the stock
 `omap_musb_set_mailbox()` call now runs on dual-core (3/3 clean boots; report
-265, trap 339), so OTG host mode is reachable again.
+265, trap 339), so OTG host mode is reachable again.  Also **the second core
+now takes userspace work** — PID 1 was affinity-masked to `{0}` (report 266,
+trap 340); the inittab workaround is in place and verified, with a kernel-side
+fix still owed.
 **Closed since session 60:** the CPU's second core (dual-core stable with the
 workaround), the ARMv6 codegen (now `-march=armv7-a`, trap 334), the
 **`epitaph` panel** (r10005 — report 251; trap 292); the panel's
@@ -660,25 +673,32 @@ NVRAM and the MCT remain unwritable, and an agent never writes RPMB
 
 ## What is next
 
-0. **THE ACTIVE ITEM — the CPU: the mailbox fault is fixed; the MPU OPP is next
-   (session 67, report 265, ROADMAP 7a).**  The unit runs **dual-core at
-   1008 MHz** on `0x3547D613` (`#109 SMP`, `online=0-1`, ARMv7
-   `-march=armv7-a`) with the **stock `omap_musb_set_mailbox()` call restored**.
-   The session-66 Oops was a freed TWL6030 `phy_companion`:
-   `twl6030_usb_probe()` registered the comparator before `ldo_init()`, and a
-   deferred `vusb` failed the probe permanently, freeing the devm `twl` and
-   leaving `phy->comparator` dangling (reports 264/265).  Fixed by propagating
-   `-EPROBE_DEFER`, clearing the comparator with a devm action, and
-   `usb_put_phy()`; **3/3 clean dual-core boots**.  The device-mode-only
-   workaround is gone, so OTG host mode is reachable (untested).
-   * **Then the MPU OPP:** no `cpufreq` policy exists; boot logs
-     `twl6030_uv_to_vsel: OUT OF RANGE` for 1.375/1.41 V against a 1.31666 V
-     table max.  Measure the reference's `DPLL_MPU`/`PRM_VC` on the oracle,
-     then add the `cpu-supply`/`vdd_mpu` + `cpufreq-dt` path (or a boot-time
-     write) and thermal-check (trap 312; report 257 §6).
-   * **Then:** shrink/pre-warm the drawer (the swap) and pursue a hardware GL
-     path for Wayland clients (trap 314).  Remove the r10006 draw timing and
-     the `PBGL_PROFILE` env before the final image.
+0. **THE ACTIVE ITEM — the CPU: both cores now take userspace work; the MPU
+   voltage supply and a kernel-side affinity fix remain (session 67, reports
+   265/266, ROADMAP 7a).**  The unit runs **dual-core at 1008 MHz** on
+   `0x3547D613` (`#109 SMP`, `online=0-1`), with the **stock
+   `omap_musb_set_mailbox()` call restored** (the mailbox fault was a freed
+   TWL6030 `phy_companion`, report 265).  **New this session:** PID 1 was
+   affinity-masked to `{0}`, so all userspace ran on one core (`nproc` = 1);
+   the inittab workaround `::sysinit:/usr/sbin/taskset -p 3 1` fixes it
+   (`nproc` = 2, load balanced) — a **kernel-side fix in `sched_init_smp()` is
+   still owed** (report 266 §1).  `cpufreq-dt` **does** exist and scale; what is
+   missing is the CPU **supply**, and the `twl6030_uv_to_vsel` warnings are
+   startup VC init clamped to 1.35 V (report 266 §2/§3).
+   * **Then the MPU OPP:** `cpufreq-dt` is bound and scales
+     (`300000 600000 800000 1008000`, `ondemand`), so the old "no cpufreq
+     policy" note is stale.  What remains is the CPU **supply** (no
+     `supply-*` under `/sys/kernel/debug/opp/cpu0/`, so OPP voltages are not
+     applied) and the `twl6030_uv_to_vsel: OUT OF RANGE` lines, which are
+     startup VC init (`omap4_mpu_vc_data.on` 1.375 V vs the TWL's 1.31666 V
+     ceiling) clamped to VSEL `0x3A` = 1.35 V — the chainloader's own value.
+     Decide 1.35 V-for-all-OPPs vs a supply binding; SmartReflex MPU is present
+     but idle (`autocomp = 0`).  Thermal-check (trap 312; report 266 §2/§3).
+   * **Then re-measure:** the memory-throughput numbers (report 263 §4b) and the
+     UI latency were taken with CPU 1 starved of userspace; redo them now that
+     both cores take load, then shrink/pre-warm the drawer (the swap) and pursue
+     a hardware GL path for Wayland clients (trap 314).  Remove the r10006 draw
+     timing and the `PBGL_PROFILE` env before the final image.
    * **Durable:** the llvmpipe files live on the live root only; the
      flasher-restorable hd3 image must be rebaked with them
      (`swrast_dri.so` + `libLLVM-13.so` + `libdrm_amdgpu`/`nouveau`) and with

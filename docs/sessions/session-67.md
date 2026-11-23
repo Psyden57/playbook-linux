@@ -115,9 +115,68 @@ clean boots.
   is kept as hardening but is not the fix.
 * Nothing else this session contradicts a newer document.
 
+## Second half — the CPU was effectively single-core (report 266)
+
+After the mailbox fix, the operator asked to continue to the MPU OPP.  Looking at
+the live unit first produced a much bigger finding.
+
+**Confirmed:**
+
+* **PID 1 was affinity-masked to `{0}`, so no userspace ever ran on CPU 1.**
+  `online = 0-1` and `SMP: Brought up 1 node, 2 CPUs`, but `taskset -p 1` → `1`,
+  `nproc` → `1`, and every userspace process (init, OpenRC, dropbear, the
+  console shell) had `Cpus_allowed_list: 0`; only kernel threads had `0-1`.
+  Reproduced on **3/3 fresh boots**; `taskset -c 1 <work>` always worked, so
+  CPU 1 was functional and simply starved of userspace tasks.  [report 266 §1]
+* **The fix is an inittab line** — `::sysinit:/usr/sbin/taskset -p 3 1` before
+  the OpenRC entries.  Verified across two boots each way: with it, PID 1 is
+  `3`, `nproc` is `2`, a respawned shell is `0-1`, and a two-thread busy loop
+  spreads load evenly (`cpu0` 2643 / `cpu1` 2622 user ticks); without it the pin
+  returns.  It is a root-filesystem change on hd3, so the region-0 CRC is
+  unchanged.  [report 266 §1]
+* **`cpufreq-dt` is bound and scaling works** — the handoff's "no `cpufreq`
+  policy exists" is stale.  `scaling_driver = cpufreq-dt`, OPPs `300000 600000
+  800000 1008000`, governor `ondemand`; max 300000 → cur 300000, restore →
+  1008000.  What is missing is the CPU **supply**: no `supply-*` entries under
+  `/sys/kernel/debug/opp/cpu0/`.  [report 266 §2]
+* **The `twl6030_uv_to_vsel: OUT OF RANGE` lines are startup VC init**, not a
+  runtime cpufreq fault: `omap4_mpu_vc_data.on = 1375000` and
+  `OMAP4_VP_MPU_VLIMITTO_VDDMAX = 1410000` exceed `twl6030_vsel_to_uv(0x39)` =
+  1316660, and the function clamps to VSEL `0x3A` = 1.35 V — the same 1.35 V the
+  chainloader commands (`PRM_VC_VAL_BYPASS = 0x003A5512`).  So 1008 MHz @ 1.35 V
+  is consistent and intended; only the table-driven voltage path is unbuilt.
+  [report 266 §3]
+* **SmartReflex MPU is present but idle** (`autocomp = 0`, Class3 init only).
+  [report 266 §2]
+
+**Inferred:** the widening in `sched_init_smp()`
+(`set_cpus_allowed_ptr(current, housekeeping_cpumask(HK_TYPE_DOMAIN))`) is being
+clamped to CPU 0 because `cpu_active_mask` has not yet gained CPU 1 when it runs
+(the `CPUHP_AP_ACTIVE`/`sched_cpu_activate` state is set during secondary
+bring-up).  `kernel/sched/core.c` and `isolation.c` are byte-identical to
+pristine and there is no `isolcpus=`/`nohz_full=` in `/proc/cmdline`, so nothing
+in our patch explains it; a single instrumented boot printing
+`cpu_active_mask`/`cpu_online_mask` at `sched_init_smp()` entry would settle it.
+[report 266 §1]
+
+**Why it matters:** report 263 §4b's "two cores in parallel: 0.38 GB/s, no
+scaling" and the UI-latency numbers were measured with the second core starved
+of userspace.  Those items should be re-measured.
+
+**Also this half:** the earlier session-66/67 observation that SSH/RNDIS does
+not answer on the Nura root was confirmed again; the ACM (`local/work/pbcmd.py`)
+was the console throughout.
+
 ## Artefacts produced
 
 * Report **265** (`docs/reports/265-musb-comparator-lifetime-fix-2026-11-23.md`).
+* Report **266** (`docs/reports/266-cpu-affinity-pinned-to-cpu0-2026-11-23.md`).
+* Device-side (hd3 root, bench): `/etc/inittab` gains
+  `::sysinit:/usr/sbin/taskset -p 3 1`; backups `/etc/inittab.session67-orig`
+  and `/etc/inittab.fixed`.  No region-0 or region-1 change from this half.
+* Evidence (gitignored): `local/work/{pbcmd.py,reboot_verify.py}`,
+  `local/work/session67-{cpuaffinity,state}.txt`, `session67-boot3-evidence.txt`,
+  `local/work/flash-session67.log`, `local/work/export67/`.
 * Patch re-export: **67 files / 9 136 lines**, sha256 `d19adff8…`;
   `kernel/source/` mirrors refreshed (`omap4-winchester.dts`,
   `phy-twl6030-usb.c`, `phy-omap-usb2.c`) and two stale ones corrected

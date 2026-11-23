@@ -3046,6 +3046,29 @@ report 121 §3/§11/§12.
       boots** with the stock call restored (image `0x3547D613`, `#109 SMP`).
       (Session 67, report 265.)
 
+340. **On the SMP image the second core took no userspace work: PID 1 was
+      affinity-masked to `{0}`.**  `online`, `present` and `possible` all read
+      `0-1`, `SMP: Brought up 1 node, 2 CPUs`, and `/sys/devices/system/cpu/
+      cpu1/online` was 1 — but `taskset -p 1` read `1`, `nproc` read **1**, and
+      every userspace process (init, OpenRC, dropbear, getty, the console shell)
+      had `Cpus_allowed_list: 0`, while kernel threads had `0-1`.
+      `taskset -c 1 <work>` always worked, so CPU 1 was functional and simply
+      never scheduled userspace.  Reproduced on **3/3 fresh boots**; it is why
+      report 263 §4b's "two cores in parallel" measured no scaling and why the
+      UI/throughput numbers are single-core numbers.  **Workaround (verified,
+      2 boots each way):** on hd3's root, add to `/etc/inittab` before the
+      OpenRC entries — `::sysinit:/usr/sbin/taskset -p 3 1` — which makes PID 1
+      `{0,1}`; `nproc` then reads 2, a respawned shell is `0-1`, and a
+      two-thread busy loop spreads load evenly (`cpu0` 2643 / `cpu1` 2622 user
+      ticks).  It is a root-filesystem change, so the region-0 CRC is unchanged.
+      **Not yet explained in the kernel:** `sched_init_smp()` widens init with
+      `housekeeping_cpumask(HK_TYPE_DOMAIN)` (= `cpu_possible_mask` with no
+      `isolcpus=`), and `kernel/sched/core.c` + `isolation.c` are byte-identical
+      to pristine — the suspicion is that `cpu_active_mask` has not yet gained
+      CPU 1 when the call runs (the `CPUHP_AP_ACTIVE`/`sched_cpu_activate`
+      state), clamping the mask to CPU 0.  A kernel-side fix is owed.  (Session
+      67, report 266 §1.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

@@ -316,17 +316,23 @@ flasher can replace at every point:
     collapsed to `-ENODEV`, so the probe failed permanently and devres freed the
     object while `phy->comparator` dangled.  The fix (propagate `PTR_ERR()`,
     clear the comparator with a devm action, `usb_put_phy()`) and the restored
-    stock call gave **3/3 clean dual-core boots** on `0x3547D613`.  **Next
-    (session 68):** (a) the MPU OPP — the table exists in `omap443x.dtsi`
-    (300/600/800/**1008** MHz, trap 312); what is missing is
-    `cpu-supply`/`vdd_mpu` + `cpufreq-dt`, or a boot-time DPLL/VC write (report
-    257 §6), and the boot log's `twl6030_uv_to_vsel: OUT OF RANGE` (1.375/1.41 V
-    vs 1.31666 V) shows the present attempt fails; (b) the intermittent USB
-    teardown (trap 337) — capture before the drop; (c) shrink/pre-warm the
-    drawer; (d) pursue hardware GL for Wayland clients (trap 314); (e) rebake
-    the restorable hd3 base with `epitaph` r10005+, the llvmpipe files and the
-    rules (the image on hd3 is the session-59 state).  Kumo needs a WPEWebKit
-    build (report 247 §4).
+    stock call gave **3/3 clean dual-core boots** on `0x3547D613`.  **Later in
+    session 67 the second core turned out to be doing no userspace work at all**
+    (report 266, trap 340): PID 1 was affinity-masked to `{0}`, so every
+    userspace process inherited `{0}` and `nproc` was 1 even with `online=0-1`.
+    The inittab workaround (`::sysinit:/usr/sbin/taskset -p 3 1`) fixes it
+    (`nproc` 2, load spread evenly, 2 boots each way); a kernel-side fix in
+    `sched_init_smp()` is owed.  `cpufreq-dt` **does** exist and scale, so the
+    old "no cpufreq policy" note was stale.  **Next (session 68):** (a) attach
+    the CPU supply or confirm 1.35 V for all OPPs, and settle the
+    `twl6030_uv_to_vsel` clamp (report 266 §2/§3); (b) a kernel-side PID-1
+    affinity fix to replace the inittab line; (c) **re-measure** the memory
+    throughput and UI latency now that both cores take userspace work; (d) the
+    intermittent USB teardown (trap 337) — capture before the drop; (e)
+    shrink/pre-warm the drawer and pursue hardware GL for Wayland clients (trap
+    314); (f) rebake the restorable hd3 base with `epitaph` r10005+, the
+    llvmpipe files, the rules **and the inittab line** (the image on hd3 is the
+    session-59 state).  Kumo needs a WPEWebKit build (report 247 §4).
 
 Step 3 is reversible at any time by re-flashing the same block range — which is
 the whole reason it beats an in-place mkfs.

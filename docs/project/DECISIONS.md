@@ -3432,6 +3432,42 @@ alone now includes them.
 `local/work/{phy-twl6030-usb.c,phy-omap-usb2.c,omap2430.c,omap4-winchester.dts}.session67-orig`;
 `local/work/export67/`; trap 339; DECISIONS §95/§97.
 
+## 99. Both cores must take userspace work: verify `nproc`/PID-1 affinity, keep the inittab widening until the kernel fix (session 67)
+
+**Decision.**  Treat "`nproc` = 2 and PID 1's mask is `{0,1}`" as the definition
+of the CPU item being done, not "`online = 0-1`".  Ship the bench-root
+workaround in `/etc/inittab` —
+`::sysinit:/usr/sbin/taskset -p 3 1` before the OpenRC entries — and carry it
+into any hd3 rebake.  A kernel-side fix in `sched_init_smp()` replaces it later;
+until then this is the verified state.
+
+**Why.**  On `0x3547D613` (`#109 SMP`, the image with the mailbox fix) the
+scheduler reported `SMP: Brought up 1 node, 2 CPUs` and `online = 0-1`, yet
+**PID 1 was affinity-masked to `{0}`** — `taskset -p 1` → `1`, `nproc` → `1` —
+so every userspace process inherited `{0}` and only kernel threads had `0-1`.
+`taskset -c 1 <work>` worked, proving CPU 1 was healthy; it was simply never
+given userspace tasks.  Reproduced on 3/3 fresh boots.  The inittab line fixes
+it durably (2 boots each way: `nproc` 2, a respawned shell `0-1`, a two-thread
+busy loop splitting `cpu0` 2643 / `cpu1` 2622 user ticks); removing it
+reproduces the pin.  Consequence: report 263 §4b's memory-throughput "no
+scaling with cores" and the UI-latency figures were measured with CPU 1 starved
+of userspace and must be re-taken.  The mechanism is not yet pinned down:
+`sched_init_smp()` widens init to `housekeeping_cpumask(HK_TYPE_DOMAIN)` (=
+`cpu_possible_mask` with no `isolcpus=`), and the scheduler/isolation sources
+are byte-identical to pristine, so the suspicion is a `cpu_active_mask` timing
+issue at that call.
+
+**Constraint.**  The inittab change is on hd3's root, not in the region-0 image,
+so it does not change the image CRC and does not survive a reflash of hd3 unless
+the rebake includes it.  `cpufreq-dt` is bound and scales
+(`300000 600000 800000 1008000`); the CPU supply is still unattached, and the
+`twl6030_uv_to_vsel: OUT OF RANGE` lines are startup VC init clamped to VSEL
+`0x3A` = 1.35 V (the chainloader's own value), not a cpufreq fault.
+
+**Evidence.**  Report 266; session-67 note (§"Second half");
+`local/work/session67-cpuaffinity.txt`, `local/work/session67-state.txt`;
+`local/work/pbcmd.py`; trap 340.
+
 ### Repository license
 
 **Decided (session 23): GPL-3.0-or-later.**  The project's own code and

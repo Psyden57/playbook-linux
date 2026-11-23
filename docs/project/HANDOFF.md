@@ -5,18 +5,16 @@ Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolut
 `N+6` — this handoff is for **absolute 68 = Linux-era 62**, written at the
 session-67 close.  See `docs/sessions/NUMBERING.md`.
 
-> **Session-67 result, in two lines.**  **The mailbox fault is a TWL6030
-> comparator lifetime bug, and it is fixed.**  `twl6030_usb_probe()` registered
-> `&twl->comparator` in the PHY before `ldo_init()`; a deferred `vusb`
-> regulator was collapsed to `-ENODEV`, the probe failed permanently, devres
-> freed the 120-byte `devm` `twl`, and `phy->comparator` dangled — the report-264
-> slab pointer.  The fix (propagate `-EPROBE_DEFER`, clear the comparator with a
-> devm action, `usb_put_phy()`) plus the restored stock
-> `omap_musb_set_mailbox()` call gave **3/3 clean dual-core boots** on image
-> **`0x3547D613`** (`#109 SMP`, `panic=0`).  Region 1 `6f5b8ca7…`; hd3
-> `07555bde…` (62.5 G Nura); patch **67 files / 9 136 lines**, sha256
-> `d19adff8…`; `BOOTCTR_FCTRY = 0x28`.  **Next: the MPU OPP**, then the USB
-> teardown capture and the UI/throughput items.
+> **Session-67 result, in two lines.**  **The mailbox fault is fixed** (a
+> TWL6030 comparator freed by a failed probe — report 265), and **the second
+> core was doing no userspace work at all**: PID 1 was affinity-masked to `{0}`,
+> so `nproc` read 1 with `online=0-1`; an inittab `taskset -p 3 1` fixes it
+> (report 266).  Image **`0x3547D613`** (`#109 SMP`, `panic=0`), 3/3 clean
+> dual-core boots; `cpufreq-dt` is bound and scales (no CPU supply attached);
+> region 1 `6f5b8ca7…`; hd3 `07555bde…` (62.5 G Nura, now with the inittab
+> line); patch **67 files / 9 136 lines**, sha256 `d19adff8…`;
+> `BOOTCTR_FCTRY = 0x24`.  **Next: re-measure throughput/UI on two real cores,
+> attach the CPU supply, and replace the inittab line with a kernel fix.**
 
 ## 0. The job, and where it stands
 
@@ -35,10 +33,11 @@ audio** (headphones + both speakers, 48 kHz), and the **WL1283 WLAN**
 (associates, DHCP, traffic).  The WL1283 **BT core** works (real inquiry; `hci0`
 registers with mgmt) with the controller-open parked (§0c).
 
-**What is left, in order:** the **MPU OPP** (§0e — now the active item), then
-UI performance / hardware GL and the rebake (§0f).  The **mailbox fault is
-fixed** (report 265) and the stock `omap_musb_set_mailbox()` call now runs on
-dual-core; the **USB/VUSB teardown** is intermittent and open (§0d, second item).
+**What is left, in order:** re-measure the throughput/UI numbers on two *real*
+cores (§0e — they were taken single-core), attach the CPU supply and settle the
+1.35 V clamp (§0e), replace the inittab affinity line with a kernel fix (§0e),
+then UI performance / hardware GL and the rebake (§0f).  The **mailbox fault is
+fixed** (report 265).  The **USB/VUSB teardown** is intermittent and open (§0d).
 
 ## 0a. The media, and the way back
 
@@ -150,15 +149,61 @@ and let it run through a drop; a `VBUS_DET`/`linkstat` log in that handler would
 settle it directly.  On the Nura root the RNDIS/usb0 path did not answer this
 session — the ACM (`playbook:~#`, `tools/pbraw.py`) was the console.
 
-## 0e. The MPU OPP (the active item)
+## 0e. THE ACTIVE ITEM — the CPU: both cores must take userspace work
 
-No `cpufreq` policy exists, and the boot log shows
-`twl6030_uv_to_vsel: OUT OF RANGE! non mapped vsel for 1375000 Vs max 1316660`
-(×6) and one for 1410000 — the OPP voltages request more than the TWL table's
-maximum.  The OPP table itself is in `omap443x.dtsi` (300/600/800/**1008** MHz);
-what is missing is `cpu-supply`/`vdd_mpu` + `cpufreq-dt`, or a boot-time
-DPLL/VC write (report 257 §6).  Measure the reference's `DPLL_MPU`/`PRM_VC` on
-the oracle first; 1.2 GHz crashes the unit (rejected, report 257 §2).
+**The defect (report 266, trap 340).**  With `online = 0-1` and
+`SMP: Brought up 1 node, 2 CPUs`, **PID 1 was affinity-masked to `{0}`** —
+`taskset -p 1` → `1`, `nproc` → `1` — so every userspace process inherited
+`{0}`; only kernel threads had `0-1`.  `taskset -c 1 <work>` always worked, so
+CPU 1 was healthy and simply never scheduled userspace.  3/3 fresh boots.  This
+is why report 263 §4b's "two cores in parallel" showed no scaling and why the
+UI latency numbers are single-core numbers.
+
+**Workaround, in place and verified** (2 boots each way): on **hd3's root**,
+`/etc/inittab` has, before the OpenRC entries,
+
+```
+::sysinit:/usr/sbin/taskset -p 3 1
+```
+
+→ PID 1 `{0,1}`, `nproc` 2, a respawned shell `0-1`, a two-thread busy loop
+splitting `cpu0` 2643 / `cpu1` 2622 user ticks.  Backups on the unit:
+`/etc/inittab.session67-orig`, `/etc/inittab.fixed`.  It is a root change, so
+the region-0 CRC is unchanged — but it must go into any hd3 rebake.
+
+**Owed — the kernel fix.**  `sched_init_smp()` widens init with
+`set_cpus_allowed_ptr(current, housekeeping_cpumask(HK_TYPE_DOMAIN))`, which is
+`cpu_possible_mask` (0-1) with no `isolcpus=`; `kernel/sched/core.c` and
+`isolation.c` are byte-identical to pristine, and there is no `isolcpus=`/
+`nohz_full=` in `/proc/cmdline`.  The suspicion is that `cpu_active_mask` has
+not yet gained CPU 1 when the call runs (the `CPUHP_AP_ACTIVE` /
+`sched_cpu_activate` state during secondary bring-up), so
+`cpumask_any_and_distribute(cpu_valid_mask, new_mask)` clamps to CPU 0.  **One
+instrumented boot** printing `cpu_active_mask`/`cpu_online_mask` at the top of
+`sched_init_smp()` and PID 1's `cpus_mask` immediately after the call settles
+it; the `PBCPU`/`PBDBG` `printascii` markers are already in
+`local/kernel-tree/init/main.c` (and are deliberately not in the patch).
+
+**cpufreq — corrected.**  `cpufreq-dt` **is** bound and scales:
+`scaling_driver = cpufreq-dt`, OPPs `300000 600000 800000 1008000`, governor
+`ondemand`; setting `scaling_max_freq = 300000` drops the clock to 300000 and
+restoring it returns 1008000.  The old "no `cpufreq` policy exists" note was
+stale.  **What is missing is the CPU supply**: no `supply-*` entries under
+`/sys/kernel/debug/opp/cpu0/`, so the OPP voltages are never applied.  The
+`twl6030_uv_to_vsel: OUT OF RANGE` lines are **startup VC init**, not a runtime
+cpufreq fault: `omap4_mpu_vc_data.on = 1375000` and
+`OMAP4_VP_MPU_VLIMITTO_VDDMAX = 1410000` exceed `twl6030_vsel_to_uv(0x39)` =
+1316660, and the function clamps to VSEL `0x3A` = 1.35 V — exactly the value the
+chainloader commands (`PRM_VC_VAL_BYPASS = 0x003A5512`, `vsel 0x3A`, `reg 0x55`,
+slave `0x12`).  So 1008 MHz @ 1.35 V is consistent and intended; decide
+"1.35 V for all OPPs" (silence/skip the out-of-range entry) vs a real supply
+binding — this TWL6030 revision cannot express >1.317 V except the hardcoded
+1.35 V.  **1.2 GHz crashes the unit** (report 257).  SmartReflex MPU is present
+but idle (`autocomp = 0`; Class3 init only) — that is the next lever (report 219
+§5, report 257 §6).
+
+**Then re-measure** the memory throughput (report 263 §4b) and the UI latency
+now that CPU 1 takes userspace work.
 
 ## 0f. SGX540, the desktop, and what is owed
 
@@ -294,9 +339,11 @@ Local helper/workspace this session: `local/work/export67/`.
   clean reboot still beats a power cut.
 * **`BOOTCTR_FCTRY` is readable on our image:**
   `tools/pbssh.sh 'dmesg | grep pbrpmb'` (or the ACM) → `… record@196 = <4
-  bytes LE>` then `0x<v> >= threshold 0x1e, no write`.  It read **`0x28`** at
-  the session-67 close (`0x2a → 0x29 → 0x28` over the three validation boots).
-  A logged read, not an RPMB access (`SAFETY.md` §2).
+  bytes LE>` then `0x<v> >= threshold 0x1e, no write`.  It read **`0x24`** at
+  the session-67 close.  A logged read, not an RPMB access (`SAFETY.md` §2).
+* **Check `nproc` after every boot**, not just `online`: on the SMP image they
+  disagreed until the inittab widening (trap 340).  `taskset -p 1` should read
+  `3`; if it reads `1`, the affinity line is missing.
 * **The eMMC WRITE-busy stall is live:** `mmc1: Card stuck being busy` plus a
   lost async WRITE during write bursts (27 s/33 s in the Nura boots).  It has
   already damaged the rw ext4 once (trap 336); prefer clean reboots.
@@ -309,7 +356,7 @@ Local helper/workspace this session: `local/work/export67/`.
 * **Old Nura image:** the panel's `epitaph` may still show the r10005 bug;
   check before judging the desktop (§0f).
 
-## 4. Traps added last session (full list 14–339 in `KNOWN-ISSUES.md` §2)
+## 4. Traps added last session (full list 14–340 in `KNOWN-ISSUES.md` §2)
 
 * **334.** The kernel was built **`-march=armv6k`** because
   `CONFIG_ARCH_MULTI_V6=y` selects `CPU_ARM1176 → CPU_V6K → CPU_32v6`, and
@@ -342,6 +389,14 @@ Local helper/workspace this session: `local/work/export67/`.
   with a `devm_add_action_or_reset()` action on probe failure/remove, and
   `usb_put_phy()` the reference `omap_usb2_set_comparator()` leaked.  Validated
   3/3 clean dual-core boots with the stock call restored (report 265).
+* **340.** **`online=0-1` does not mean both cores take userspace work.**  On
+  the SMP image PID 1 was affinity-masked to `{0}` (`taskset -p 1` → 1,
+  `nproc` → 1); every userspace process inherited it, only kernel threads had
+  `0-1`, and `taskset -c 1 <work>` still worked.  3/3 fresh boots.  Fix on hd3's
+  root: `::sysinit:/usr/sbin/taskset -p 3 1` in `/etc/inittab` before OpenRC
+  (verified 2 boots each way; `nproc` 2).  It is a root change, not an image
+  change.  A kernel fix in `sched_init_smp()` is owed (report 266, trap 340).
+  **Check `nproc`, not just `online`,** after anything CPU-related.
 * Still current: **333** (the gadget bind is the trigger; the workaround is the
   device-mode-only call), **332** (dual-CPU `printascii` garble), **331** (power
   ruled out), **330** (the IPI is serviced), **327** (`nosmp` is not
@@ -357,8 +412,9 @@ Local helper/workspace this session: `local/work/export67/`.
 |---|---|
 | safety before any write | `docs/project/SAFETY.md` |
 | build/flash/boot/console | `docs/project/DEVELOPMENT.md` |
-| **the active plan** | `docs/project/ROADMAP.md` item 7a, report **265** |
-| **the CPU/USB evidence** | reports **265**, 264, 263, 262, 259–261, 257, 256 |
+| **the active plan** | `docs/project/ROADMAP.md` item 7a, reports **266**, 265 |
+| **the CPU/USB evidence** | reports **266**, 265, 264, 263, 262, 259–261, 257, 256 |
+| **the CPU-affinity workaround** | hd3 `/etc/inittab` (`::sysinit:/usr/sbin/taskset -p 3 1`); backups `.session67-orig`, `.fixed` |
 | kernel delta + config | `kernel/patches/`, `kernel/winchester-7.3.3.config` |
 | board DTS + patched drivers | `kernel/source/`, `local/kernel-tree/` |
 | initramfs root selection | `initramfs/init.c` `ROOTFS_RAW_OFF` (hd3) |
@@ -369,7 +425,7 @@ Local helper/workspace this session: `local/work/export67/`.
 | the ARMv7 modules | `local/work/modstage/`, `…-armv7.tar.gz` |
 | BT service pack | `local/work/1917/base/lib/firmware/bluetooth/WL1283.bts` |
 | OSS player / mixer / BT probe | `rootfs/pbplay.c`, `rootfs/pbmix.c`, `rootfs/hci.c` |
-| reports / sessions | `docs/reports/` (265 current), `docs/sessions/session-67.md` |
+| reports / sessions | `docs/reports/` (266 current), `docs/sessions/session-67.md` |
 
 ## 6. Working rules
 
@@ -397,42 +453,47 @@ Workspace: this repository — a git checkout.  Map: docs/README.md.  The earlie
 work tree $HOME/rea-work is READ-ONLY.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 14-339, especially 333-339)
-and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 91-98, docs/reports/INDEX.md,
-reports 265, 264, 263, 262, 257, and sessions/session-67.md.
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 14-340, especially 333-340)
+and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 91-99, docs/reports/INDEX.md,
+reports 266, 265, 264, 263, 257, and sessions/session-67.md.
 
 WHERE IT STANDS: the unit runs Linux 7.3.3, dual-core at 1008 MHz, on the ARMv7
 image 0x3547D613 (#109 SMP), with the Nura root on hd3 (grown to 62.5 G, ARMv7
 modules installed); pvrsrvkm binds and catacomb runs.  THE MAILBOX FAULT IS
 FIXED (report 265, trap 339): the Oops was a freed TWL6030 phy_companion —
-twl6030_usb_probe() registered &twl->comparator before ldo_init(), and a
-deferred vusb regulator was collapsed to -ENODEV, so the probe failed
-permanently and devres freed the devm twl while phy->comparator dangled.  The
-fix propagates PTR_ERR, clears the comparator with a devm action on
-probe-failure/remove, and usb_put_phy()s; the winchester early return is gone
-and the stock omap_musb_set_mailbox() call runs on dual-core (3/3 clean boots).
-The VUSB teardown is still intermittent and open (trap 337).
+twl6030_usb_probe() registered &twl->comparator before ldo_init(), a deferred
+vusb was collapsed to -ENODEV, the probe failed permanently and devres freed
+the devm twl while phy->comparator dangled; the winchester early return is gone
+and the stock omap_musb_set_mailbox() call runs (3/3 clean boots).  AND THE
+SECOND CORE WAS DOING NO USERSPACE WORK (report 266, trap 340): PID 1 was
+affinity-masked to {0}, so nproc read 1 with online=0-1; hd3's /etc/inittab now
+has ::sysinit:/usr/sbin/taskset -p 3 1 (nproc 2, load balanced, 2 boots each
+way).  cpufreq-dt IS bound and scales (300000 600000 800000 1008000, ondemand);
+no CPU supply is attached, and the twl6030_uv_to_vsel OUT OF RANGE lines are
+startup VC init clamped to VSEL 0x3A = 1.35 V, the chainloader's own value.
 
-THE ACTIVE ITEM: the MPU OPP.  There is no cpufreq policy and the boot log
-shows twl6030_uv_to_vsel: OUT OF RANGE for 1.375/1.41 V (table max 1.31666 V).
-The OPP table is already in omap443x.dtsi (300/600/800/1008 MHz); what is
-missing is cpu-supply/vdd_mpu + cpufreq-dt, or a boot-time DPLL/VC write.
-Measure the reference's DPLL_MPU/PRM_VC on the oracle first; 1.2 GHz crashes
-(rejected, report 257).  Thermal-check (trap 312).
-
-SECOND (only if the link drops): capture the VUSB teardown with
-local/work/kmsgcap.py — the only writer is twl6030_usb_irq() on a VBUS_DET=0
-read; a VBUS_DET/linkstat log in that handler would settle it (trap 337,
-docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md).
+THE ACTIVE ITEMS: (a) re-measure the memory throughput (report 263 §4b) and the
+UI latency now that CPU 1 actually takes userspace work — the old numbers are
+single-core numbers; (b) decide the CPU voltage: attach a supply binding or keep
+1.35 V for all OPPs and skip the out-of-range OPP entry (this TWL6030 revision
+cannot express >1.317 V except the hardcoded 1.35 V; 1.2 GHz crashes, report
+257); (c) replace the inittab affinity line with a kernel fix — one
+instrumented boot printing cpu_active_mask/cpu_online_mask at the top of
+sched_init_smp() and PID 1's cpus_mask after the call would settle it (the
+PBCPU/PBDBG markers are already in local/kernel-tree/init/main.c); (d) the
+intermittent USB teardown (trap 337) — capture before the drop; (e) rebake the
+hd3 base with epitaph r10005+, the llvmpipe files, the rules AND the inittab
+line.
 
 BENCH: region 0 = 0x3547D613 (#109 SMP, stock mailbox + comparator fix,
 panic=0) at block 0x825; region 1 = the BusyBox ext4 6f5b8ca7... at 0x29000000
 (fallback, not booted); hd3 = the Nura ext4 07555bde... at 0x4915, grown to
-62.5 G.  SSH: PB_LINK=usb tools/pbssh.sh; it did not answer on the Nura root
-this session (RNDIS/usb0), so the ACM (playbook:~#, not pb>) via
-tools/pbraw.py is the fallback.  Kernel printk goes to the panel; the
+62.5 G, now with the inittab affinity line.  SSH: PB_LINK=usb tools/pbssh.sh
+DID NOT ANSWER on the Nura root this session (RNDIS/usb0); the ACM
+(playbook:~#, not pb>) drives it — local/work/pbcmd.py runs one command and
+waits for its own marker.  Kernel printk goes to the panel; the
 console=ttyGS0 bootarg is inert.  Use `reboot -f` on the Nura root (plain
-reboot is very slow).  BOOTCTR_FCTRY = 0x28 at the session-67 close; read it
+reboot is very slow).  BOOTCTR_FCTRY = 0x24 at the session-67 close; read it
 with dmesg | grep pbrpmb.  Start the flasher, then reset/power on (the
 power-on bootrom holds ~20 s); the 626 MB hd3 write takes ~20 min.  /tmp is
 tmpfs; re-push ringdump.  Read dmesg UNFILTERED.  The eMMC WRITE-busy stall is
@@ -445,7 +506,9 @@ against pristine 7.3.3 (session 67).  Re-export (and update
 kernel/patches/README.md + KERNEL-PORT.md) after any DTS or driver change.  The
 reliable method is in §2: pristine + the previous patch, overwrite the intended
 files, diff -u -N, apply to a fresh pristine scratch and cmp every file; run the
-tree walk (trap 211).  `local/work/export67/` is the working example.
+tree walk (trap 211).  `local/work/export67/` is the working example.  No kernel
+change was needed for the affinity workaround (it is on hd3), so the patch is
+unchanged by it.
 
 SAFETY: read SAFETY.md first.  One variable per boot.  Flash region 0 only when
 only it changed; both regions in one bootrom session only when both changed.
