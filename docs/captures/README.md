@@ -187,5 +187,18 @@ pair only when a report needs a before/after comparison.
 | `wlan-linux-state-2026-11-14.txt` | the same ranges on our Linux boot, for the report-218 diff; report 225 reads its `CM2` domain modes |
 | `ring-handoff-2026-11-16.txt` | the DEBUG_LL ring hand-off: the proof that `+0x1000` is the character array at #3840, the per-boot segmentation of one ring (3208/3943/4211 characters), the recovered `rcu2` log showing **`rcu_init()` completes**, the watchdog timing decode (kernel entry at 7.450 s of 7.812 s) and the first SMP boot to userspace; report 255 |
 
+## GPU client presentation (session 68)
+
+`grim` captures of the catacomb compositor (1024x600) after the PRIME-only
+`wl_drm` patch (catacomb `1.5.0-r10002`).  They are **PNG screencopies**, not
+register dumps.
+
+| file | what it shows |
+|---|---|
+| `session68-screen-black.png` | the compositor frame with **only its gesture bar**: the pvr dmabuf client surfaces (`epitaph` bar, `tabula` wallpaper) are missing — the presentation failure |
+| `session68-screen-restored.png` | the safe state after `/etc/catacomb/initrc` unsets `MESA_LOADER_DRIVER_OVERRIDE` for the clients: wallpaper, status bar and keyboard display (clients on `wl_shm`, compositor still on the SGX) |
+
+Report 269 §4e–§4f; traps 345/346.
+
 `docs/reports/data/` is indexed by the reports that produced it; the report
 INDEX (`docs/reports/INDEX.md`) says which report is current for a topic.

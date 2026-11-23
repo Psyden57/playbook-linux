@@ -1,0 +1,432 @@
+diff -ruN a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock	2026-04-16 01:57:51.000000000 -0300
++++ b/Cargo.lock	2026-11-23 19:17:36.000000000 -0300
+@@ -225,6 +225,9 @@
+  "tracing",
+  "tracing-subscriber",
+  "udev",
++ "wayland-backend",
++ "wayland-scanner",
++ "wayland-server",
+  "zbus",
+ ]
+ 
+diff -ruN a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml	2026-04-16 01:57:51.000000000 -0300
++++ b/Cargo.toml	2026-11-23 19:17:26.000000000 -0300
+@@ -45,6 +45,9 @@
+ tracing = "0.1.37"
+ tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
+ udev = "0.9.1"
++wayland-backend = "0.3"
++wayland-scanner = "0.31"
++wayland-server = "0.31"
+ zbus = { version = "5.14.0", default-features = false, features = ["tokio"], optional = true }
+ 
+ [dependencies.catacomb_common]
+diff -ruN a/protocols/wayland-drm.xml b/protocols/wayland-drm.xml
+--- a/protocols/wayland-drm.xml	1969-12-31 21:00:00.000000000 -0300
++++ b/protocols/wayland-drm.xml	2026-11-23 19:17:03.000000000 -0300
+@@ -0,0 +1,189 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<protocol name="drm">
++
++  <copyright>
++    Copyright © 2008-2011 Kristian Høgsberg
++    Copyright © 2010-2011 Intel Corporation
++
++    Permission to use, copy, modify, distribute, and sell this
++    software and its documentation for any purpose is hereby granted
++    without fee, provided that\n the above copyright notice appear in
++    all copies and that both that copyright notice and this permission
++    notice appear in supporting documentation, and that the name of
++    the copyright holders not be used in advertising or publicity
++    pertaining to distribution of the software without specific,
++    written prior permission.  The copyright holders make no
++    representations about the suitability of this software for any
++    purpose.  It is provided "as is" without express or implied
++    warranty.
++
++    THE COPYRIGHT HOLDERS DISCLAIM ALL WARRANTIES WITH REGARD TO THIS
++    SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
++    FITNESS, IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY
++    SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
++    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
++    AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
++    ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
++    THIS SOFTWARE.
++  </copyright>
++
++  <!-- drm support. This object is created by the server and published
++       using the display's global event. -->
++  <interface name="wl_drm" version="2">
++    <enum name="error">
++      <entry name="authenticate_fail" value="0"/>
++      <entry name="invalid_format" value="1"/>
++      <entry name="invalid_name" value="2"/>
++    </enum>
++
++    <enum name="format">
++      <!-- The drm format codes match the #defines in drm_fourcc.h.
++           The formats actually supported by the compositor will be
++           reported by the format event. New codes must not be added,
++           unless directly taken from drm_fourcc.h. -->
++      <entry name="c8" value="0x20203843"/>
++      <entry name="rgb332" value="0x38424752"/>
++      <entry name="bgr233" value="0x38524742"/>
++      <entry name="xrgb4444" value="0x32315258"/>
++      <entry name="xbgr4444" value="0x32314258"/>
++      <entry name="rgbx4444" value="0x32315852"/>
++      <entry name="bgrx4444" value="0x32315842"/>
++      <entry name="argb4444" value="0x32315241"/>
++      <entry name="abgr4444" value="0x32314241"/>
++      <entry name="rgba4444" value="0x32314152"/>
++      <entry name="bgra4444" value="0x32314142"/>
++      <entry name="xrgb1555" value="0x35315258"/>
++      <entry name="xbgr1555" value="0x35314258"/>
++      <entry name="rgbx5551" value="0x35315852"/>
++      <entry name="bgrx5551" value="0x35315842"/>
++      <entry name="argb1555" value="0x35315241"/>
++      <entry name="abgr1555" value="0x35314241"/>
++      <entry name="rgba5551" value="0x35314152"/>
++      <entry name="bgra5551" value="0x35314142"/>
++      <entry name="rgb565" value="0x36314752"/>
++      <entry name="bgr565" value="0x36314742"/>
++      <entry name="rgb888" value="0x34324752"/>
++      <entry name="bgr888" value="0x34324742"/>
++      <entry name="xrgb8888" value="0x34325258"/>
++      <entry name="xbgr8888" value="0x34324258"/>
++      <entry name="rgbx8888" value="0x34325852"/>
++      <entry name="bgrx8888" value="0x34325842"/>
++      <entry name="argb8888" value="0x34325241"/>
++      <entry name="abgr8888" value="0x34324241"/>
++      <entry name="rgba8888" value="0x34324152"/>
++      <entry name="bgra8888" value="0x34324142"/>
++      <entry name="xrgb2101010" value="0x30335258"/>
++      <entry name="xbgr2101010" value="0x30334258"/>
++      <entry name="rgbx1010102" value="0x30335852"/>
++      <entry name="bgrx1010102" value="0x30335842"/>
++      <entry name="argb2101010" value="0x30335241"/>
++      <entry name="abgr2101010" value="0x30334241"/>
++      <entry name="rgba1010102" value="0x30334152"/>
++      <entry name="bgra1010102" value="0x30334142"/>
++      <entry name="yuyv" value="0x56595559"/>
++      <entry name="yvyu" value="0x55595659"/>
++      <entry name="uyvy" value="0x59565955"/>
++      <entry name="vyuy" value="0x59555956"/>
++      <entry name="ayuv" value="0x56555941"/>
++      <entry name="xyuv8888" value="0x56555958"/>
++      <entry name="nv12" value="0x3231564e"/>
++      <entry name="nv21" value="0x3132564e"/>
++      <entry name="nv16" value="0x3631564e"/>
++      <entry name="nv61" value="0x3136564e"/>
++      <entry name="yuv410" value="0x39565559"/>
++      <entry name="yvu410" value="0x39555659"/>
++      <entry name="yuv411" value="0x31315559"/>
++      <entry name="yvu411" value="0x31315659"/>
++      <entry name="yuv420" value="0x32315559"/>
++      <entry name="yvu420" value="0x32315659"/>
++      <entry name="yuv422" value="0x36315559"/>
++      <entry name="yvu422" value="0x36315659"/>
++      <entry name="yuv444" value="0x34325559"/>
++      <entry name="yvu444" value="0x34325659"/>
++      <entry name="abgr16f" value="0x48344241"/>
++      <entry name="xbgr16f" value="0x48344258"/>
++    </enum>
++
++    <!-- Call this request with the magic received from drmGetMagic().
++         It will be passed on to the drmAuthMagic() or
++         DRIAuthConnection() call.  This authentication must be
++         completed before create_buffer could be used. -->
++    <request name="authenticate">
++      <arg name="id" type="uint"/>
++    </request>
++
++    <!-- Create a wayland buffer for the named DRM buffer.  The DRM
++         surface must have a name using the flink ioctl -->
++    <request name="create_buffer">
++      <arg name="id" type="new_id" interface="wl_buffer"/>
++      <arg name="name" type="uint"/>
++      <arg name="width" type="int"/>
++      <arg name="height" type="int"/>
++      <arg name="stride" type="uint"/>
++      <arg name="format" type="uint"/>
++    </request>
++
++    <!-- Create a wayland buffer for the named DRM buffer.  The DRM
++         surface must have a name using the flink ioctl -->
++    <request name="create_planar_buffer">
++      <arg name="id" type="new_id" interface="wl_buffer"/>
++      <arg name="name" type="uint"/>
++      <arg name="width" type="int"/>
++      <arg name="height" type="int"/>
++      <arg name="format" type="uint"/>
++      <arg name="offset0" type="int"/>
++      <arg name="stride0" type="int"/>
++      <arg name="offset1" type="int"/>
++      <arg name="stride1" type="int"/>
++      <arg name="offset2" type="int"/>
++      <arg name="stride2" type="int"/>
++    </request>
++
++    <!-- Notification of the path of the drm device which is used by
++         the server.  The client should use this device for creating
++         local buffers.  Only buffers created from this device should
++         be be passed to the server using this drm object's
++         create_buffer request. -->
++    <event name="device">
++      <arg name="name" type="string"/>
++    </event>
++
++    <event name="format">
++      <arg name="format" type="uint"/>
++    </event>
++
++    <!-- Raised if the authenticate request succeeded -->
++    <event name="authenticated"/>
++
++    <enum name="capability" since="2">
++      <description summary="wl_drm capability bitmask">
++        Bitmask of capabilities.
++      </description>
++      <entry name="prime" value="1" summary="wl_drm prime available"/>
++    </enum>
++
++    <event name="capabilities">
++      <arg name="value" type="uint"/>
++    </event>
++
++    <!-- Version 2 additions -->
++
++    <!-- Create a wayland buffer for the prime fd.  Use for regular and planar
++         buffers.  Pass 0 for offset and stride for unused planes. -->
++    <request name="create_prime_buffer" since="2">
++      <arg name="id" type="new_id" interface="wl_buffer"/>
++      <arg name="name" type="fd"/>
++      <arg name="width" type="int"/>
++      <arg name="height" type="int"/>
++      <arg name="format" type="uint"/>
++      <arg name="offset0" type="int"/>
++      <arg name="stride0" type="int"/>
++      <arg name="offset1" type="int"/>
++      <arg name="stride1" type="int"/>
++      <arg name="offset2" type="int"/>
++      <arg name="stride2" type="int"/>
++    </request>
++
++  </interface>
++
++</protocol>
+diff -ruN a/src/protocols/mod.rs b/src/protocols/mod.rs
+--- a/src/protocols/mod.rs	2026-04-16 01:57:51.000000000 -0300
++++ b/src/protocols/mod.rs	2026-11-23 19:17:22.000000000 -0300
+@@ -1 +1,2 @@
+ pub mod screencopy;
++pub mod wl_drm;
+diff -ruN a/src/protocols/wl_drm.rs b/src/protocols/wl_drm.rs
+--- a/src/protocols/wl_drm.rs	1969-12-31 21:00:00.000000000 -0300
++++ b/src/protocols/wl_drm.rs	2026-11-23 19:17:46.000000000 -0300
+@@ -0,0 +1,187 @@
++//! Legacy `wl_drm` protocol, PRIME-only.
++//!
++//! Mesa's Wayland EGL platform obtains the DRM fd **only** through `wl_drm`
++//! (report 269): without it `eglInitialize()` silently falls back to
++//! `swrast_dri`.  catacomb is a Smithay compositor and serves no `wl_drm`, so
++//! every unmodified Mesa client (Qt, GTK, WPE WebKit, …) was software-rendered.
++//!
++//! This module exposes a minimal `wl_drm` global backed by the compositor's
++//! existing dmabuf import path ([`smithay::backend::renderer::buffer_type`]):
++//! it advertises the render node and the PRIME capability, and turns
++//! `create_prime_buffer` into a `wl_buffer` carrying a
++//! [`Dmabuf`][smithay::backend::allocator::dmabuf::Dmabuf] as user data, which
++//! [`smithay::backend::renderer::ImportBuffer`] recognises exactly like a
++//! `zwp_linux_dmabuf_v1` buffer.  The legacy GEM-name requests are rejected;
++//! Mesa uses PRIME when the capability is advertised.
++
++use std::os::fd::OwnedFd;
++
++use smithay::backend::allocator::dmabuf::{Dmabuf, DmabufFlags};
++use smithay::backend::allocator::{Fourcc, Modifier};
++use smithay::backend::drm::{DrmNode, NodeType};
++use smithay::reexports::wayland_server::{
++    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
++};
++
++use crate::catacomb::Catacomb;
++
++pub mod protocol {
++    //! Server bindings generated from `protocols/wayland-drm.xml`.
++    pub use wayland_server;
++
++    use wayland_server::protocol::*;
++
++    pub mod __interfaces {
++        use wayland_server::protocol::__interfaces::*;
++
++        wayland_scanner::generate_interfaces!("protocols/wayland-drm.xml");
++    }
++
++    use self::__interfaces::*;
++
++    wayland_scanner::generate_server_code!("protocols/wayland-drm.xml");
++}
++
++use protocol::wl_drm::{self, WlDrm};
++
++/// Version of the `wl_drm` global we advertise (version 2 adds PRIME).
++const WL_DRM_VERSION: u32 = 2;
++
++/// `wl_drm` error code: invalid format.
++const ERROR_INVALID_FORMAT: u32 = 1;
++/// `wl_drm` error code: invalid name (used for the unsupported GEM path).
++const ERROR_INVALID_NAME: u32 = 2;
++
++/// Register the `wl_drm` global on the compositor display.
++pub fn init(display: &DisplayHandle) {
++    display.create_global::<Catacomb, WlDrm, ()>(WL_DRM_VERSION, ());
++}
++
++impl GlobalDispatch<WlDrm, ()> for Catacomb {
++    fn bind(
++        state: &mut Self,
++        _handle: &DisplayHandle,
++        _client: &Client,
++        resource: New<WlDrm>,
++        _global_data: &(),
++        data_init: &mut DataInit<'_, Self>,
++    ) {
++        let resource = data_init.init(resource, ());
++
++        // Point the client at the render node: Mesa skips authentication for a
++        // render node and loads the driver from the fd.
++        let path = state.dmabuf_node.as_ref().and_then(|node: &DrmNode| {
++            node.dev_path_with_type(NodeType::Render).or_else(|| node.dev_path())
++        });
++        if let Some(path) = path {
++            let _ = resource.send_event(wl_drm::Event::Device {
++                name: path.to_string_lossy().into_owned(),
++            });
++        }
++
++        // Formats the renderer can import.
++        for format in [Fourcc::Argb8888, Fourcc::Xrgb8888] {
++            let _ = resource.send_event(wl_drm::Event::Format { format: format as u32 });
++        }
++
++        // PRIME capability (wl_drm version 2).
++        if resource.version() >= 2 {
++            let _ = resource.send_event(wl_drm::Event::Capabilities {
++                value: wl_drm::Capability::Prime as u32,
++            });
++        }
++    }
++}
++
++impl Dispatch<WlDrm, ()> for Catacomb {
++    fn request(
++        state: &mut Self,
++        _client: &Client,
++        resource: &WlDrm,
++        request: wl_drm::Request,
++        _data: &(),
++        _display: &DisplayHandle,
++        data_init: &mut DataInit<'_, Self>,
++    ) {
++        match request {
++            wl_drm::Request::Authenticate { .. } => {
++                // A render-node device needs no authentication.
++                let _ = resource.send_event(wl_drm::Event::Authenticated);
++            }
++            wl_drm::Request::CreatePrimeBuffer {
++                id,
++                name,
++                width,
++                height,
++                format,
++                offset0,
++                stride0,
++                offset1,
++                stride1,
++                offset2,
++                stride2,
++            } => {
++                let planes = [(offset0, stride0), (offset1, stride1), (offset2, stride2)];
++                match build_dmabuf(state, name, width, height, format, planes) {
++                    Some(buffer) => {
++                        data_init.init(id, buffer);
++                    }
++                    None => data_init.post_error(id, ERROR_INVALID_FORMAT, "unsupported dmabuf"),
++                }
++            }
++            // We advertise PRIME only; Mesa does not use the legacy GEM path.
++            wl_drm::Request::CreateBuffer { id, .. }
++            | wl_drm::Request::CreatePlanarBuffer { id, .. } => {
++                data_init.post_error(id, ERROR_INVALID_NAME, "GEM names unsupported; use PRIME")
++            }
++        }
++    }
++}
++
++/// Build a [`Dmabuf`] from a `wl_drm` PRIME request.
++fn build_dmabuf(
++    state: &Catacomb,
++    fd: OwnedFd,
++    width: i32,
++    height: i32,
++    format: u32,
++    planes: [(i32, i32); 3],
++) -> Option<Dmabuf> {
++    if width <= 0 || height <= 0 {
++        return None;
++    }
++
++    let format = Fourcc::try_from(format).ok()?;
++    let mut builder =
++        Dmabuf::builder((width, height), format, Modifier::Invalid, DmabufFlags::empty());
++
++    if let Some(node) = state.dmabuf_node {
++        builder.set_node(node);
++    }
++
++    // `wl_drm` passes one fd for all planes of a planar buffer.
++    let mut fd = Some(fd);
++    let mut added = false;
++    for (idx, (offset, stride)) in planes.into_iter().enumerate() {
++        if stride <= 0 {
++            continue;
++        }
++
++        let plane_fd = if added {
++            fd.as_ref()?.try_clone().ok()?
++        } else {
++            fd.take()?
++        };
++
++        if !builder.add_plane(plane_fd, idx as u32, offset.max(0) as u32, stride as u32) {
++            return None;
++        }
++        added = true;
++    }
++
++    if !added {
++        return None;
++    }
++
++    builder.build()
++}
+diff -ruN a/src/udev.rs b/src/udev.rs
+--- a/src/udev.rs	2026-04-16 01:57:51.000000000 -0300
++++ b/src/udev.rs	2026-11-23 19:17:32.000000000 -0300
+@@ -115,6 +115,12 @@
+     );
+     catacomb.dmabuf_node = Some(drm_node);
+ 
++    // Expose the legacy wl_drm global so Mesa's Wayland EGL platform can open
++    // the render node and load the hardware driver (report 269).  This makes
++    // unmodified Mesa clients GPU-accelerated instead of silently falling back
++    // to swrast.
++    crate::protocols::wl_drm::init(&catacomb.display_handle);
++
+     // Handle device events.
+     event_loop
+         .handle()

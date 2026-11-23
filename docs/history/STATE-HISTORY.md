@@ -29,6 +29,84 @@ method section is **superseded** by report 255 (the window was the ring's own
 character array at #3840).  The full session-61 record is
 `docs/sessions/session-61.md`.
 
+## Previous state — 2026-11-16 (session 60)
+
+> Moved here from `docs/project/STATE.md` at the session-68 wrap-up (it was the
+> oldest full snapshot still in the canonical file).
+
+**THE `epitaph` PANEL IS FIXED — IT STARTS, STAYS UP, AND RENDERS ITS TEXT AND
+ICONS (r10005).**  Two client bugs, both measured: the lazy renderer built the
+4096×4096 glyph atlas before any EGL context existed (GL calls are silent
+no-ops, so the texture was undefined; the first `TexSubImage2D` failed with
+`GL_INVALID_OPERATION`, invalid texture level 0, and sampling it crashed
+softpipe), and the text shader's dual-source
+(`GL_EXT_blend_func_extended`/`gl_SecondaryFragColorEXT`) draw segfaults
+softpipe even though the extension is advertised and the shader links.  The
+local `epitaph` 1.4.0 package (`pkgrel=10005`) creates the rasterizer with the
+EGL context, caps the atlas at `GL_MAX_TEXTURE_SIZE`, and uses a single-output
+premultiplied shader.  `timeout 6 epitaph` → `RC=143`; the bar shows `Thu. 1`,
+`03:20` and the signal/Wi-Fi/battery icons.  [report 251; trap 292 fixed,
+traps 303–305; DECISIONS §86]
+
+* **Region 0 = `0x294F8E36`** (unchanged; kernel `7.3.3 #77`).
+* **hd3 (media)** = the grown read-write root with the SSH kit (unchanged);
+  the flasher-restorable base is still `f7858110…` (625 999 872 B).  The baked
+  `blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`) still carries the old
+  `epitaph` and does **not** have the udev/polkit rules — rebake before
+  flashing if media should match.
+* **Region 1 = `49e318bf…`** (fallback, not booted).
+* **Bench:** `PB_LINK=usb tools/pbssh.sh`; pace bulk pushes (8 KiB/5 ms).
+  `BOOTCTR_FCTRY` read `0x27` at boot (`27000000`, above the `0x1e` threshold,
+  no write).
+* **Panel:** r10005 installed.  `catacomb` group (gid 111) with `playbook`;
+  `/etc/udev/rules.d/66-epitaph.rules` (backlight) and
+  `/etc/polkit-1/rules.d/66-epitaph.rules` (Wi-Fi/cellular).  The backlight is
+  `root:catacomb`, `-rw-rw-r--`; a write as `playbook` succeeded
+  (`BACKLIGHT_WRITE_OK`).
+* **Drawer:** 3 sliders (brightness, DPI scale, flashlight) + 4 toggles
+  (cellular, Wi-Fi, GPS, orientation).  Volume is not in the 1.4.0 drawer.
+* **Apps / Wi-Fi:** `nmcli radio wifi on` (the radio was disabled) makes
+  `wlan0` scan ~10 APs; `gorm` with its `10-gorm.rules` lists them (not
+  connected).  tzompantli (1.2.0) launches apps — a tap on Foot runs `foot`;
+  launch it into a clean workspace (trap 307).  `uinput.ko` is loaded and
+  `tools/bench/uitap.py` injects taps (trap 306).
+* **Latency:** the ~2 s slider/button delay was the clients' **softpipe**
+  rasterizer (2 s drag: epitaph 3.16 s CPU, catacomb 0.16 s; drawer draw
+  1.6–2.3 s).  Replaced `/usr/lib/xorg/modules/dri/swrast_dri.so` with Alpine
+  3.16's Mesa 21.3.9 gallium build (**llvmpipe**) + `libLLVM-13.so` + the
+  `libdrm_amdgpu`/`libdrm_nouveau` sub-libraries; the original is backed up as
+  `swrast_dri.so.amber`.  Drawer `render` is now 2.7–6 ms (~4× overall); the
+  remaining 420–550 ms is llvmpipe's deferred `swap` (and the first draw pays
+  the LLVM JIT).  The compositor still maps `pvr_dri`.  [report 253, traps
+  309–311]
+* **CPU: one core at 400 MHz.**  The kernel is built **`# CONFIG_SMP is not
+  set`** (so `maxcpus=1` is an unknown parameter and the DT's two CPUs are
+  capped), and the DTS bootargs also set `maxcpus=1`
+  (`kernel/source/omap4-winchester.dts:88`);
+  `/sys/devices/system/cpu/online` = `0`, `nproc` = 1.  The debugfs
+  `clk_summary` shows `dpll_mpu_ck = 400000000` (BogoMIPS 795.44); there is no
+  cpufreq directory and no OPP table (CONFIG_CPU_FREQ/PM_OPP are on).  Thermal:
+  `cpu_thermal` 65.0 °C, `bq27541-0` 34.5 °C.  The reference programs
+  `DPLL_MPU` and `PRM_VC_*` (report 223), so this is the biggest remaining
+  performance lever.  [traps 312/313]
+* **GL clients are software.**  `epitaph`/`tzompantli`/`gorm`/`tabula` use
+  glutin/EGL and map `swrast_dri` (llvmpipe); only the compositor maps
+  `pvr_dri`.  `wvkbd` (cairo), `foot` (pixman) and `netsurf` (CPU) are
+  responsive.  A hardware path for Wayland clients is not started.  [trap 314]
+* **Local package:** `local/work/nura/pmaports/main/epitaph/` (`pkgrel=10006`,
+  `fix-renderer-init.patch`, sha512 `b149772a…`); APK
+  `epitaph-1.4.0-r10006.apk`.  The APKBUILD sets a persistent
+  `CARGO_TARGET_DIR` for faster rebuilds.  r10006 carries the draw-phase
+  timing logs; build without them for the final image.
+* **Next:** enable the second core — build **`CONFIG_SMP=y`** (`CONFIG_NR_CPUS=2`)
+  and keep `maxcpus=1` for the first boot; the vermagic changes (`SMP`), so
+  rebuild **all** modules including `pvrsrvkm_omap4_sgx540_120.ko` and install
+  them in `/lib/modules/7.3.3` before the region-0 flash.  Then remove
+  `maxcpus=1` and boot the second core.  After that: the MPU OPP/voltage
+  (measure the reference's `DPLL_MPU`/`PRM_VC` on the oracle first), then
+  shrink/pre-warm the drawer and pursue a hardware GL path for clients.
+  Remove the r10006 draw timing and rebake the hd3 image with the fixes.
+
 ## Previous state — 2026-11-16 (session 59)
 
 This snapshot (writable, grown root; SSH back; region 0 `0x294F8E36`, kernel

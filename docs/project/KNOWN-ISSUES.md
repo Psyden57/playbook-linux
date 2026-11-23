@@ -2659,12 +2659,22 @@ report 121 §3/§11/§12.
        gets `swrast_dri.so`/`softpipe`, and `MESA_LOADER_DRIVER_OVERRIDE=pvr`
        does **not** change that.  **`libEGL_amber` is not wayland-only** — an
        earlier version of this entry said so, from a bad anchored `grep` (trap
-       344); it advertises wayland, x11, gbm, surfaceless and device.  Why
-       Mesa's wayland platform refuses `pvr_dri` is **not established**; that is
-       session 68's first measurement.  Fix options, none a toggle: a pvr Wayland
-       EGL platform, a compositor that renders clients on the GBM/pvr path
-       (pvrports ships `phoc` for Phosh), or a dmabuf bridge.  **Report 268**
-       costs them and orders the work.
+       344); it advertises wayland, x11, gbm, surfaceless and device.
+
+       **WHY, measured (session 68, report 269).**  Mesa 21.3.9's Wayland EGL
+       platform gets its DRM fd **only** through the legacy `wl_drm` protocol
+       (`dri2_initialize_wayland_drm()`: `dri2_dpy->wl_drm == NULL` → fail,
+       `platform_wayland.c:1567`), then `eglInitialize()` retries with
+       `ForceSoftware = TRUE` (`eglapi.c:640`) and `dri2_initialize_wayland_swrast()`
+       loads `swrast_dri` unconditionally.  `MESA_LOADER_DRIVER_OVERRIDE` is read
+       by `loader_get_driver_for_fd()` on the fd path, which the software retry
+       never reaches — hence it is ignored.  **catacomb (Smithay) advertises no
+       `wl_drm`** (its globals include `wl_shm` and `zwp_linux_dmabuf_v1` but not
+       `wl_drm`), which is the whole cause.  Compositors that do serve `wl_drm`
+       (wlroots/phoc, KWin, Mutter — exactly pvrports' supported set) let the
+       hardware driver load.  So the fix is **above** Mesa's driver selection: a
+       compositor that serves `wl_drm`, or a pvr Wayland EGL platform.  The
+       `swrast` result is not a missing DRI extension.  Report 269 is current.
 
 315. **CORRECTED TWICE (session 62): the SMP kernel used to die inside the
       loader's watchdog window, not at a statement — and the stop point moved
@@ -3141,6 +3151,47 @@ report 121 §3/§11/§12.
       and prefer `nm`/`readelf` on the pulled file (the unit has no binutils, so
       `nm` there returns nothing and every count reads 0, another silent trap).
       (Session 67, reports 267/268.)
+
+345. **A Wayland client gets the SGX only if the compositor serves `wl_drm`.**
+      Mesa 21.3.9's Wayland EGL platform obtains the DRM fd **only** through
+      `wl_drm` (a prereq at `platform_wayland.c:1567`); without it
+      `dri2_initialize_wayland_drm()` fails and `eglInitialize()` silently
+      retries with `ForceSoftware = TRUE`, loading `swrast_dri`.  So
+      `MESA_LOADER_DRIVER_OVERRIDE=pvr` is powerless there (it is read only by
+      `loader_get_driver_for_fd()`), and the symptom is `softpipe` + a first log
+      line `MESA-LOADER: dlopen(…/swrast_dri.so)` with no `pvr` attempt.
+      **catacomb (Smithay) serves no `wl_drm`** (its globals include `wl_shm` and
+      `zwp_linux_dmabuf_v1`); wlroots (phoc), KWin and Mutter do.  Check a
+      compositor with `WAYLAND_DEBUG=1` and look for a `wl_drm` global **before**
+      blaming the driver or patching Mesa.  (Session 68, report 269.)
+
+      **catacomb now serves a PRIME-only `wl_drm` (session 68): selection fixed,
+      PRESENTATION OPEN.**  The patch (`src/protocols/wl_drm.rs`;
+      `wl-drm-prime.patch`; package `1.5.0-r10002`) sends the render node +
+      ARGB8888/XRGB8888 + `capabilities(PRIME)` and turns `create_prime_buffer`
+      into a `Dmabuf`-backed `wl_buffer`.  Measured: `global(32, "wl_drm", 2)`;
+      clients map `pvr_dri` and report `PowerVR SGX 540`; their linear `AR24`
+      dmabufs import without error.  **But the client surfaces are black** (a
+      `grim` capture shows only the compositor chrome), while `wl_shm` clients
+      display.  Until the buffer presentation is fixed, `/etc/catacomb/initrc`
+      unsets `MESA_LOADER_DRIVER_OVERRIDE` for the clients (backup
+      `.session68-pvr`) and the compositor keeps the SGX.  [report 269
+      §4c–§4f, DECISIONS §101]
+
+346. **A `wl_drm` global makes clients SELECT the SGX, but their buffers can
+      still present black — selection is not presentation.**  With catacomb's
+      PRIME-only `wl_drm` (session 68), `epitaph`/`tabula` map `pvr_dri` and
+      report `PowerVR SGX 540`, and their linear `AR24` dmabufs (stride 4096,
+      `modifier: Invalid`) import with no error, yet a **`grim` capture is
+      black except the compositor chrome**; the same clients on `wl_shm`
+      display.  **Do not claim "the clients are on the GPU" from
+      `maps`/`GL_RENDERER` alone — capture the framebuffer and look at it.**
+      Safe state: `/etc/catacomb/initrc` unsets `MESA_LOADER_DRIVER_OVERRIDE`
+      for its children (backup `.session68-pvr`), so the compositor keeps the
+      SGX and the clients use `wl_shm`.  The pvr render-node bind-mount
+      (`renderD129` over `renderD128`) is **not** a fix: it made the clients
+      exit.  The next experiment is in HANDOFF §0f.  (Session 68, report 269
+      §4e–§4f.)
 
 ## 3. Corrections to older reports
 

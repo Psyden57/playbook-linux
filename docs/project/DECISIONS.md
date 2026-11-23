@@ -3499,8 +3499,16 @@ has the same shape.  **`libEGL_amber` is *not* wayland-only**: it advertises
 wayland, x11, gbm, surfaceless and device platforms.  (An earlier revision of
 this decision said it advertised only `wayland` and that `pvr_dri` had "no
 Wayland glue"; that came from a bad anchored `grep` and is withdrawn — trap
-344.)  **Why Mesa's wayland platform still refuses `pvr_dri` is not yet
-established**; that is the first thing session 68 must measure.
+344.)  **Why Mesa's wayland platform still refused `pvr_dri` is established in
+session 68 (report 269):** it requires the compositor to serve the legacy
+`wl_drm` protocol — that is how it gets a DRM fd and calls
+`loader_get_driver_for_fd()`.  **catacomb (Smithay) does not serve `wl_drm`**,
+so `dri2_initialize_wayland_drm()` fails and `eglInitialize()` silently retries
+with `ForceSoftware = TRUE`, loading `swrast_dri` and never reading the
+override.  wlroots/phoc, KWin and Mutter do serve it — exactly pvrports'
+supported set.  So the route is a `wl_drm`-serving compositor (b) or a pvr
+Wayland EGL platform (a); no Mesa patch is involved in the rejection.  Trap
+345.
 
 **Constraint.**  All three options are code, not configuration; (b) has a
 vendor-supported configuration to copy but changes the desktop stack.  hd3 still
@@ -3512,6 +3520,55 @@ on the GPU (`catacomb` maps `pvr_dri` + `gbm`).
 source survey, §3 the plan); session-67 note; trap 314 (mechanism appended) and
 trap 344 (the withdrawn claim); traps 341–343; `local/work/egltest.py` and
 `/tmp/gbmtest2.py`.
+
+## 101. The Wayland-client gate is `wl_drm`; catacomb now serves a PRIME-only one (session 68)
+
+**Decision.**  Treat the compositor's serving of the legacy `wl_drm` global as
+the necessary requirement for hardware-accelerated Wayland clients on this
+stack.  Rather than migrate to a desktop (Phosh is too heavy for 1 GB), **serve
+a PRIME-only `wl_drm` from catacomb itself** — a bounded Rust global that
+reuses Smithay's existing dmabuf import.  **Status: the driver selection works,
+but the client buffers do not present under catacomb (black); presentation is
+the open problem** (report 269 §4e–§4f).  Until it is solved, keep the
+compositor on the SGX and the clients on `wl_shm` (`/etc/catacomb/initrc`
+unsets the override for them).  Keep `MESA_LOADER_DRIVER_OVERRIDE=pvr` in the
+session environment (required for the compositor).  Keep the fully open
+`powervr_sgx` stack on the roadmap as the long-term route.
+
+**Why.**  Measured and source-confirmed (report 269): Mesa 21.3.9's Wayland EGL
+platform obtains its DRM fd only from `wl_drm`; without it `eglInitialize()`
+quietly retries with `ForceSoftware = TRUE` and loads `swrast_dri`, so the
+override is never consulted.  catacomb advertises `wl_shm`/`zwp_linux_dmabuf_v1`
+but not `wl_drm`; phoc (wlroots 0.19, `types/wlr_drm.c`) does, and under the
+built pvrports phoc a Wayland-EGL client reported `GL_RENDERER = PowerVR SGX
+540` and mapped `pvr_dri` (with the override), while the same probe without it
+reported `softpipe`.  Stock phoc additionally proved the wlroots DRM/GLES2 path
+reaches the SGX and needs pvrports' `GL_EXT_unpack_subimage` patch to create its
+renderer.
+
+**Constraint.**  The fix is on the live hd3 root (catacomb `1.5.0-r10002`,
+`wl-drm-prime.patch`, 432 lines); the baked image still has r10000, so a
+reflash reverts it — include it in the next rebake.  The global is PRIME-only
+(GEM names rejected); Mesa uses PRIME because the capability is advertised.  A
+heavy workload (video, WebKit) and frame latency are not yet measured.  The
+wlroots/phoc route remains proven and installed but unused; Phosh was rejected
+on memory grounds.
+
+**Bench.**  catacomb `1.5.0-r10002` running; `global(32, "wl_drm", 2)`;
+`waylandtest.py` → `PowerVR SGX 540`; clients map `pvr_dri` and import their
+linear `AR24` buffers without error — **but a `grim` capture is black except
+the compositor chrome**, so presentation is broken.  Safe state: the
+compositor on the SGX, `/etc/catacomb/initrc` (backup `.session68-pvr`) unsets
+`MESA_LOADER_DRIVER_OVERRIDE` so the clients display via `wl_shm`.  pvrports
+phoc 0.52.rc1 installed but unused; tinydm is on catacomb.
+
+**Evidence.**  Report **269** (§1 the globals, §1b the loader log, §2 the Mesa
+source, §4a the stock-phoc control, §4b the phoc client result, **§4c the
+catacomb implementation, §4d the open-stack note, §4e the bench validation**);
+`local/work/` `waylandtest.py`, `gbmtest2.py`, `egltest.py`, `httpproxy.py`;
+`local/work/nura/pmaports/main/catacomb/wl-drm-prime.patch`; the built
+`catacomb-1.5.0-r10002.apk` (sha256 `5fdf7a1c…`) and
+`phoc-0.53.0-r9992.apk`; tinydm log on the unit; trap 345.
 
 ### Repository license
 

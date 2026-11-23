@@ -5,11 +5,16 @@ Open work only; closed and parked item history is archived in
 item states the evidence that would close it.  Completed *steps* are kept inline
 only where an open item's sequence needs them (item 7a), marked "Done (session N)".
 
-Current focus: **item 7a — put the UI on the GPU (session 68, operator
-directive)**.  The SGX540 is **working** (kernel driver + pvrports userspace;
-EGL/GLES 2.0 on `PowerVR SGX 540`) and catacomb composites on it with a GLES2
-fallback, but **Wayland clients are still software-rendered**; the measured
-position and the ordered plan are in reports 267/268.  The unit runs
+Current focus: **item 7a — put the UI on the GPU.  The driver gate is solved;
+client presentation is open (session 68).**  The SGX540 works (kernel driver +
+pvrports userspace; EGL/GLES 2.0 on `PowerVR SGX 540`), and catacomb now
+serves a **PRIME-only `wl_drm`**, so Wayland clients **select** the SGX (they
+map `pvr_dri` and report `PowerVR SGX 540`) — **but their frames do not
+present** (a `grim` capture is black except the compositor chrome).  Safe
+state: the compositor on the SGX, the clients on `wl_shm` (report 269
+§4e–§4f).  Remaining under 7a: fix the client buffer presentation, bake
+catacomb `1.5.0-r10002` + the initrc change into the hd3 image, and keep the
+fully open `powervr_sgx` stack as the long-term route.  The unit runs
 **dual-core ARMv7 at 1008 MHz** with `cpufreq-dt` bound (OPPs 300/600/800/1008
 MHz; the only gap is the unattached CPU supply), on region 0 `0x3547D613`; hd3
 holds the Nura root, **writable, grown to 62.5 G**, with **SSH working**

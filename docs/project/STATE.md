@@ -1,6 +1,72 @@
 # Current state
 
-## Current state — 2026-11-23 (session 67)
+## Current state — 2026-11-23 (session 68, in progress)
+
+**The Wayland-client GPU wall is identified AND broken: it was the missing
+`wl_drm` global, and with pvrports' `phoc` a Wayland client gets the SGX.**
+Report 269.
+
+* **Why clients were software (measured + source):** Mesa 21.3.9's Wayland EGL
+  platform gets its DRM fd **only** through the legacy `wl_drm` protocol
+  (`dri2_initialize_wayland_drm()` bails at `dri2_dpy->wl_drm == NULL`,
+  `platform_wayland.c:1567`).  **catacomb (Smithay) advertises no `wl_drm`** —
+  `WAYLAND_DEBUG=1` shows `wl_shm` and `zwp_linux_dmabuf_v1` but no `wl_drm` —
+  so `eglInitialize()` silently retries with `ForceSoftware = TRUE`
+  (`eglapi.c:640`) and loads `swrast_dri`; `MESA_LOADER_DRIVER_OVERRIDE` is only
+  read by `loader_get_driver_for_fd()`, which that path never reaches.  First
+  EGL debug line is `MESA-LOADER: dlopen(…/swrast_dri.so)`, with or without the
+  override.  **Smithay has no `wl_drm` implementation at all** (source tree
+  checked), so catacomb cannot be fixed by a setting.
+* **The GBM/surfaceless path re-confirmed:** `gbmtest2.py` on `renderD129` →
+  `EGL 1.4`, 12 window configs, `PowerVR SGX 540`,
+  `EGL_MESA_image_dma_buf_export`; surfaceless the same.
+* **Stock phoc 0.59 proved the wlroots path**: its DRM backend trained on
+  `card0` (omapdrm) and its GLES2 renderer on the SGX (`GL renderer: PowerVR
+  SGX 540`), then died at `GL_EXT_unpack_subimage not supported` — the exact
+  thing pvrports patches.
+* **pvrports' phoc (0.52.rc1, `pkgrel=9992`) built and ran**: it advertises
+  `wl_drm`, modesets LVDS-1 at 1024x600, and a **Wayland-EGL client under it
+  with `MESA_LOADER_DRIVER_OVERRIDE=pvr` gets `GL_RENDERER = PowerVR SGX 540`
+  and maps `pvr_dri`** (12 ES2 configs, dmabuf export); without the override it
+  falls back to `swrast`/`softpipe`.  Proof: `local/work/waylandtest.py`.
+* **catacomb now serves a PRIME-only `wl_drm`; clients SELECT the SGX but their
+  frames do NOT present (open).**  The operator rejected a Phosh desktop (too
+  heavy for 1 GB), so the fix went into catacomb: a **PRIME-only `wl_drm`
+  global** (`src/protocols/wl_drm.rs`), shipped as catacomb **1.5.0-r10002**
+  (`wl-drm-prime.patch`, 432 lines).  The selection works: `global(32,
+  "wl_drm", 2)`; `waylandtest.py` → 12 ES2 configs, `PowerVR SGX 540`,
+  `pvr_dri`; `epitaph` logs `GL renderer "PowerVR SGX 540"`; the clients'
+  linear `AR24` dmabufs (stride 4096, `modifier: Invalid`) import without
+  error.  **But a `grim` capture shows only the compositor's chrome — the
+  client surfaces are black**, while a `wl_shm` client displays.  Cause not yet
+  separated (the client's pvr render not landing in the shared buffer, or a
+  black pvr texture sample).  Without the override a client falls back to
+  `swrast`.  [report 269 §4c–§4f, DECISIONS §101]
+* **Safe operational state:** the compositor (`catacomb`) keeps the SGX;
+  `/etc/catacomb/initrc` **unsets `MESA_LOADER_DRIVER_OVERRIDE` for its
+  children**, so the clients use `wl_shm`/softpipe and the desktop **displays**
+  (wallpaper, status bar, keyboard; verified with `grim`).  Backup
+  `/etc/catacomb/initrc.session68-pvr`; the `wl_drm` global stays advertised
+  but unused.  The pvr-node bind-mount experiment was reverted (it made the
+  clients exit) and the trace env file was removed.
+* **Bench:** catacomb `1.5.0-r10002` running on hd3 (the live root; the baked
+  image still has r10000 — **a reflash reverts the patch and the initrc**,
+  trap-343 class).  pvrports' phoc 0.52.rc1 is installed but unused (its
+  `phoc-test.desktop` was removed); tinydm points at `catacomb.desktop`.  A
+  host HTTP proxy (`local/work/httpproxy.py`, `169.254.0.2:8080`) served the
+  unit's plain-HTTP repositories without host root; WLAN credentials are in the
+  gitignored `local/work/wifi.conf`.  The clean reboot read `BOOTCTR_FCTRY =
+  0x23`, `nproc` 2, PID 1 mask `3`, battery Full ~4.1 V.
+* **Next:** establish whether the pvr dmabuf **client** render lands in the
+  shared buffer (a presenting pvr client under a wlroots compositor) or the
+  compositor's pvr texture sample is black; then try the wl_drm GEM-name path
+  or a compositor-owned copy.  After that: the hd3 rebake with catacomb r10002
+  + the initrc change, a heavy GPU workload/latency, then the owed
+  CPU/throughput/USB items.  The fully open `powervr_sgx` stack stays on the
+  roadmap as the long-term fix (with a current Mesa it needs no `wl_drm`).
+* **No region-0 change, no patch change, no kernel/flash work this session.**
+
+## Previous state — 2026-11-23 (session 67)
 
 **The second core was doing no userspace work at all — fixed; the mailbox fault
 is fixed too.**  Two findings this session, in order.  First, the mailbox fault
@@ -339,83 +405,12 @@ every register the SMP path touches read cleanly from non-secure Linux, and
 hd3 was given up to the 1917 vendor UFS to get the oracle.  Full snapshot:
 `docs/sessions/session-61.md`, report 254.
 
-## Current state — 2026-11-16 (session 60)
-
-**THE `epitaph` PANEL IS FIXED — IT STARTS, STAYS UP, AND RENDERS ITS TEXT AND
-ICONS (r10005).**  Two client bugs, both measured: the lazy renderer built the
-4096×4096 glyph atlas before any EGL context existed (GL calls are silent
-no-ops, so the texture was undefined; the first `TexSubImage2D` failed with
-`GL_INVALID_OPERATION`, invalid texture level 0, and sampling it crashed
-softpipe), and the text shader's dual-source
-(`GL_EXT_blend_func_extended`/`gl_SecondaryFragColorEXT`) draw segfaults
-softpipe even though the extension is advertised and the shader links.  The
-local `epitaph` 1.4.0 package (`pkgrel=10005`) creates the rasterizer with the
-EGL context, caps the atlas at `GL_MAX_TEXTURE_SIZE`, and uses a single-output
-premultiplied shader.  `timeout 6 epitaph` → `RC=143`; the bar shows `Thu. 1`,
-`03:20` and the signal/Wi-Fi/battery icons.  [report 251; trap 292 fixed,
-traps 303–305; DECISIONS §86]
-
-* **Region 0 = `0x294F8E36`** (unchanged; kernel `7.3.3 #77`).
-* **hd3 (media)** = the grown read-write root with the SSH kit (unchanged);
-  the flasher-restorable base is still `f7858110…` (625 999 872 B).  The baked
-  `blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`) still carries the old
-  `epitaph` and does **not** have the udev/polkit rules — rebake before
-  flashing if media should match.
-* **Region 1 = `49e318bf…`** (fallback, not booted).
-* **Bench:** `PB_LINK=usb tools/pbssh.sh`; pace bulk pushes (8 KiB/5 ms).
-  `BOOTCTR_FCTRY` read `0x27` at boot (`27000000`, above the `0x1e` threshold,
-  no write).
-* **Panel:** r10005 installed.  `catacomb` group (gid 111) with `playbook`;
-  `/etc/udev/rules.d/66-epitaph.rules` (backlight) and
-  `/etc/polkit-1/rules.d/66-epitaph.rules` (Wi-Fi/cellular).  The backlight is
-  `root:catacomb`, `-rw-rw-r--`; a write as `playbook` succeeded
-  (`BACKLIGHT_WRITE_OK`).
-* **Drawer:** 3 sliders (brightness, DPI scale, flashlight) + 4 toggles
-  (cellular, Wi-Fi, GPS, orientation).  Volume is not in the 1.4.0 drawer.
-* **Apps / Wi-Fi:** `nmcli radio wifi on` (the radio was disabled) makes
-  `wlan0` scan ~10 APs; `gorm` with its `10-gorm.rules` lists them (not
-  connected).  tzompantli (1.2.0) launches apps — a tap on Foot runs `foot`;
-  launch it into a clean workspace (trap 307).  `uinput.ko` is loaded and
-  `tools/bench/uitap.py` injects taps (trap 306).
-* **Latency:** the ~2 s slider/button delay was the clients' **softpipe**
-  rasterizer (2 s drag: epitaph 3.16 s CPU, catacomb 0.16 s; drawer draw
-  1.6–2.3 s).  Replaced `/usr/lib/xorg/modules/dri/swrast_dri.so` with Alpine
-  3.16's Mesa 21.3.9 gallium build (**llvmpipe**) + `libLLVM-13.so` + the
-  `libdrm_amdgpu`/`libdrm_nouveau` sub-libraries; the original is backed up as
-  `swrast_dri.so.amber`.  Drawer `render` is now 2.7–6 ms (~4× overall); the
-  remaining 420–550 ms is llvmpipe's deferred `swap` (and the first draw pays
-  the LLVM JIT).  The compositor still maps `pvr_dri`.  [report 253, traps
-  309–311]
-* **CPU: one core at 400 MHz.**  The kernel is built **`# CONFIG_SMP is not
-  set`** (so `maxcpus=1` is an unknown parameter and the DT's two CPUs are
-  capped), and the DTS bootargs also set `maxcpus=1`
-  (`kernel/source/omap4-winchester.dts:88`);
-  `/sys/devices/system/cpu/online` = `0`, `nproc` = 1.  The debugfs
-  `clk_summary` shows `dpll_mpu_ck = 400000000` (BogoMIPS 795.44); there is no
-  cpufreq directory and no OPP table (CONFIG_CPU_FREQ/PM_OPP are on).  Thermal:
-  `cpu_thermal` 65.0 °C, `bq27541-0` 34.5 °C.  The reference programs
-  `DPLL_MPU` and `PRM_VC_*` (report 223), so this is the biggest remaining
-  performance lever.  [traps 312/313]
-* **GL clients are software.**  `epitaph`/`tzompantli`/`gorm`/`tabula` use
-  glutin/EGL and map `swrast_dri` (llvmpipe); only the compositor maps
-  `pvr_dri`.  `wvkbd` (cairo), `foot` (pixman) and `netsurf` (CPU) are
-  responsive.  A hardware path for Wayland clients is not started.  [trap 314]
-* **Local package:** `local/work/nura/pmaports/main/epitaph/` (`pkgrel=10006`,
-  `fix-renderer-init.patch`, sha512 `b149772a…`); APK
-  `epitaph-1.4.0-r10006.apk`.  The APKBUILD sets a persistent
-  `CARGO_TARGET_DIR` for faster rebuilds.  r10006 carries the draw-phase
-  timing logs; build without them for the final image.
-* **Next:** enable the second core — build **`CONFIG_SMP=y`** (`CONFIG_NR_CPUS=2`)
-  and keep `maxcpus=1` for the first boot; the vermagic changes (`SMP`), so
-  rebuild **all** modules including `pvrsrvkm_omap4_sgx540_120.ko` and install
-  them in `/lib/modules/7.3.3` before the region-0 flash.  Then remove
-  `maxcpus=1` and boot the second core.  After that: the MPU OPP/voltage
-  (measure the reference's `DPLL_MPU`/`PRM_VC` on the oracle first), then
-  shrink/pre-warm the drawer and pursue a hardware GL path for clients.
-  Remove the r10006 draw timing and rebake the hd3 image with the fixes.
-
 ## Previous states
 
+* **session 60** (2026-11-16) — the `epitaph` panel fixed (r10005), the drawer,
+  the llvmpipe swap latency, and the one-core 400 MHz state.  The full snapshot
+  is in [`docs/history/STATE-HISTORY.md`](../history/STATE-HISTORY.md)
+  (`## Previous state — 2026-11-16 (session 60)`).
 * **session 59** (2026-11-16) — the root became writable and grew to 56.5 G,
   SSH came back (kernel `#77`, region 0 `0x294F8E36`), the touch position ghost
   was fixed (kernel `#74`), the eMMC cache-flush item was closed by measurement,

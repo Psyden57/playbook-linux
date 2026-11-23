@@ -5,14 +5,19 @@ Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolut
 `N+6` — this handoff is for **absolute 68 = Linux-era 62**, written at the
 session-67 close.  See `docs/sessions/NUMBERING.md`.
 
-> **SESSION 68 IS THE GPU SESSION.**  The operator has directed it: get GPU
-> acceleration working for the UI.  **Read report 268 first** — it surveys the
-> seven outside sources the operator supplied, says what each is worth, and lays
-> out the ordered plan.  The key measured fact is that the SGX **works on the
-> GBM/DRM EGL platform** (dmabuf export included) and only the *Wayland client*
-> path does not select it, so the plan is: diagnose the wayland rejection
-> (cheap), prove the vendor-supported GBM path with pvrports' `phoc`, then
-> decide.  Do not tune software rendering.
+> **SESSION 68: the GPU *selection* gate is solved; the client *presentation*
+> is not.**  Wayland clients were software-rendered because **catacomb
+> (Smithay) serves no `wl_drm`**, which Mesa 21.3.9's Wayland EGL platform
+> requires; without it `eglInitialize()` silently retries with
+> `ForceSoftware = TRUE` and loads `swrast_dri` (the override is never read).
+> catacomb now serves a PRIME-only `wl_drm` (`1.5.0-r10002`): clients **select**
+> the SGX (`pvr_dri`, `PowerVR SGX 540`), and their linear `AR24` dmabufs import
+> without error — **but the client surfaces are black under catacomb** (a
+> `grim` capture shows only the compositor chrome).  The desktop is kept usable
+> with the compositor on the SGX and the clients on `wl_shm`
+> (`/etc/catacomb/initrc` unsets the override; backup `.session68-pvr`).
+> **Report 269 §4e–§4f is the record; the next experiment is in §0f.**  Phosh
+> was rejected (too heavy for 1 GB); pvrports' patched phoc is proven.
 
 > **Session-67 result, in two lines.**  **The mailbox fault is fixed** (a
 > TWL6030 comparator freed by a failed probe — report 265), and **the second
@@ -43,11 +48,14 @@ audio** (headphones + both speakers, 48 kHz), and the **WL1283 WLAN**
 (associates, DHCP, traffic).  The WL1283 **BT core** works (real inquiry; `hci0`
 registers with mgmt) with the controller-open parked (§0c).
 
-**What is left, in order:** **get the UI on the GPU** (§0f — a Wayland client
-cannot reach the SGX; this is a project, not a toggle), then the CPU voltage
-(§0e), the kernel affinity fix (§0e), the rebake, and the throughput re-measure.
-The **mailbox fault is fixed** (report 265) and **both cores now take userspace
-work** (report 266).  The **USB/VUSB teardown** is intermittent and open (§0d).
+**What is left, in order:** the **GPU client path is done** (§0f, report 269 —
+catacomb now serves `wl_drm`, so Wayland clients are on the SGX).  Remaining: a
+heavy GPU workload / frame-latency measurement, the CPU voltage (§0e), the
+kernel affinity fix (§0e), the **hd3 rebake** (must include catacomb `r10002`,
+`epitaph` r10005, the llvmpipe files, the rules and the inittab line), and the
+throughput re-measure.  The **mailbox fault is fixed** (report 265) and **both
+cores now take userspace work** (report 266).  The **USB/VUSB teardown** is
+intermittent and open (§0d).
 
 ## 0a. The media, and the way back
 
@@ -219,6 +227,46 @@ but idle (`autocomp = 0`; Class3 init only) — that is the next lever (report 2
 now that CPU 1 takes userspace work.
 
 ## 0f. SGX540, the desktop, and what is owed
+
+> **SESSION-68 RESULT — selection solved, presentation OPEN (report 269
+> §4e–§4f).**  The cause was that catacomb (Smithay) serves no `wl_drm`, and
+> Mesa 21.3.9's Wayland EGL platform obtains its DRM fd only through it.
+> catacomb now serves a PRIME-only `wl_drm` (`src/protocols/wl_drm.rs`,
+> `wl-drm-prime.patch`, package `1.5.0-r10002`).  **What works:** the clients
+> select the SGX — `global(32, "wl_drm", 2)`; `waylandtest.py` →
+> `PowerVR SGX 540`, `pvr_dri`; `epitaph`/`tabula`/`catacomb` map `pvr_dri`;
+> their linear `AR24` dmabufs (stride 4096, `modifier: Invalid`) import with no
+> error.  **What does not:** a `grim` capture is black except the compositor's
+> chrome — the client surfaces do not present; `wl_shm` clients do.  Safe state:
+> the compositor on the SGX, `/etc/catacomb/initrc` unsets
+> `MESA_LOADER_DRIVER_OVERRIDE` for its children (backup `.session68-pvr`), so
+> the desktop displays.  The experiment below is historical; do not re-run it.
+> The fix is on the live root, not the baked image: the rebake must include
+> catacomb r10002 + the initrc change.
+>
+> **THE ONE EXPERIMENT (next session): is the client buffer content black, or
+> does the compositor sample it black?**
+> Add a one-shot **FBO readback** to catacomb's `DmabufHandler::dmabuf_imported`
+> (`src/catacomb.rs`): after `renderer.import_dmabuf(&buffer, None)` succeeds,
+> render the returned texture to an 8×8 FBO with a known shader and
+> `glReadPixels` one pixel; log its RGBA **once per buffer**.  Build
+> `pkgrel=10003`, install, restore the pvr clients (copy
+> `/etc/catacomb/initrc.session68-pvr` over `/etc/catacomb/initrc`), restart
+> tinydm, and read the logged pixel for the bar and wallpaper buffers.
+> * **Non-black (matches the client's colour)** → the import and pvr sampling
+>   work; the bug is in catacomb's draw/placement/lifetime of the client
+>   element.  Next: inspect `window.rs`'s texture element geometry and the
+>   layer placement; compare with a `wl_shm` client's element.
+> * **Black** → the client's GPU render is not in the shared buffer.  Next: run
+>   the same presenting client under a wlroots compositor (a small `labwc`/
+>   `cage`, or phoc with a client that speaks its protocols) to decide
+>   client-side vs compositor-side; if it is also black there, the pvr
+>   Wayland/dmabuf client path is the fault (consider the wl_drm GEM-name path
+>   or the open stack).
+> * **Import error** (unexpected) → revisit the `Dmabuf` construction
+>   (`build_dmabuf` in `src/protocols/wl_drm.rs`).
+> Control: the same readback on a `wl_shm` buffer must be non-black, validating
+> the instrument.
 
 **Working:** `pvrsrvkm_omap4_sgx540_120` binds (`pvrsrvkm 56000000.gpu: Enabling
 quirks`), `catacomb` runs, `card0-LVDS-1` is connected and the backlight is 255
