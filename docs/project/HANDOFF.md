@@ -271,9 +271,12 @@ EGL_LOG_LEVEL=debug MESA_DEBUG=1 MESA_LOADER_DRIVER_OVERRIDE=pvr \
   timeout 12 epitaph 2>&1 | tee /tmp/wayland-pvr.log
 ```
 
-and the same **without** `MESA_LOADER_DRIVER_OVERRIDE` as the control, plus, for
-contrast, the surfaceless probe that already works (`local/work/egltest.py`,
-copied to `/tmp/egltest.py`) and the GBM probe (`/tmp/gbmtest2.py`).  Capture the
+and the same **without** `MESA_LOADER_DRIVER_OVERRIDE` as the control — use
+`env -u MESA_LOADER_DRIVER_OVERRIDE`, because `/etc/profile.d/mesa.sh` exports
+`MESA_LOADER_DRIVER_OVERRIDE=pvr` into login shells (a plain SSH `sh -c` does
+not inherit it, but the compositor and any login shell do) — plus, for contrast,
+the surfaceless probe that already works (`local/work/egltest.py`, copied to
+`/tmp/egltest.py`) and the GBM probe (`/tmp/gbmtest2.py`).  Capture the
 `EGL_LOG_LEVEL`/`MESA_DEBUG` output in full.
 
 **What each result means:**
