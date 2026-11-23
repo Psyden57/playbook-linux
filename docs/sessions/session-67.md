@@ -167,6 +167,52 @@ of userspace.  Those items should be re-measured.
 not answer on the Nura root was confirmed again; the ACM (`local/work/pbcmd.py`)
 was the console throughout.
 
+## Third part — SSH was the host's VPN; the GPU path measured (report 267)
+
+The operator asked why SSH was not working, and to prioritise GPU rendering over
+re-measuring a software-rendered UI.
+
+**Confirmed:**
+
+* **The SSH failure was the host's VPN, not the unit.**  `ip rule` had
+  `32765: not from all fwmark 0xca6c lookup 51820` with table 51820 =
+  `default dev utun420`, i.e. before `lookup main`.  Every packet to
+  `169.254.0.1` went into the tunnel, which is why
+  `tcpdump -i enp8s0f3u1i2` showed **zero packets** while raw
+  `arping -I enp8s0f3u1i2 169.254.0.1` got a 0.85 ms unicast reply.  With the
+  VPN off, ping is 0.5 ms and `PB_LINK=usb tools/pbssh.sh` works.  The RNDIS
+  gadget, the device and our drivers were all fine; the driver rebind /
+  `authorized` / `usbreset` experiments were red herrings (they only reset
+  counters).  `ufw` was also `default deny (incoming)` with no rule for the
+  interface — a rule was added.  [report 267 §1]
+* **hd3 had the broken `epitaph` (`r0`).**  It segfaulted ~120 ms after
+  `Started Epitaph` — trap 292's exact symptom.  Installing the existing
+  `epitaph-1.4.0-r10005.apk` (sha256 `aee3fdc8…`) fixes it; it now runs and logs
+  its renderer.  It reports **`softpipe`** with `swrast_dri.so` (6.9 MB, amber),
+  so the session-60 **llvmpipe replacement is absent from hd3** as STATE warned.
+  [report 267 §2]
+* **A Wayland client cannot reach the SGX, and the mechanism is now measured.**
+  Surfaceless + `MESA_LOADER_DRIVER_OVERRIDE=pvr` →
+  `GL_RENDERER = PowerVR SGX 540`; a Wayland client with the *same* override →
+  `swrast_dri.so`/`softpipe`.  `libEGL_amber.so` advertises only the `wayland`
+  platform, `pvr_dri.so` exports **zero** EGL symbols (it is a Mesa gallium DRI
+  driver loaded by libEGL's DRM loader) and its only platform glue is
+  `libdrm`/`drmGetNodeTypeFromFd`; the compositor reaches it through GBM/DRM.
+  Trap 314 is correct and the override is powerless on the Wayland platform.
+  [report 267 §3]
+
+**Inferred / decided:** getting clients onto the GPU is a project, not a
+config toggle — either a pvr Wayland EGL platform (wl_drm/linux-dmabuf), a
+compositor that renders clients on the GBM/pvr path (pvrports' supported Phosh
++ `phoc`), or a dmabuf bridge.  Option 2 (Phosh/phoc) is the smallest first step
+with a vendor-supported configuration to copy.  Keeping llvmpipe for clients and
+pvr for the compositor is the status quo.  [report 267 §3]
+
+**QNX answered:** the RNDIS gadget needs no per-OS change — it is a standard
+USB Ethernet adapter, and both Linux `rndis_host` and QNX's RNDIS class driver
+speak the same control protocol (hence `PB_LINK=door` and `PB_LINK=usb` both
+reaching `169.254.0.1`).  Only the host side differs.
+
 ## Artefacts produced
 
 * Report **265** (`docs/reports/265-musb-comparator-lifetime-fix-2026-11-23.md`).
@@ -174,7 +220,14 @@ was the console throughout.
 * Device-side (hd3 root, bench): `/etc/inittab` gains
   `::sysinit:/usr/sbin/taskset -p 3 1`; backups `/etc/inittab.session67-orig`
   and `/etc/inittab.fixed`.  No region-0 or region-1 change from this half.
-* Evidence (gitignored): `local/work/{pbcmd.py,reboot_verify.py}`,
+* Report **267** (`docs/reports/267-host-vpn-ssh-and-wayland-sgx-2026-11-23.md`).
+* Device-side (hd3 root, bench): `epitaph` upgraded `1.4.0-r0` →
+  `1.4.0-r10005` (from `local/work/nura/work/packages/edge/armv7/`); the fixed
+  binary is the only durable device change from the third part.
+* Host-side (not part of the repository): `ufw allow in/out on
+  enp8s0f3u1i2`; the WireGuard VPN must be off to reach `169.254.0.1`.
+* Evidence (gitignored): `local/work/egltest.py`,
+  `local/work/{pbcmd.py,reboot_verify.py}`,
   `local/work/session67-{cpuaffinity,state}.txt`, `session67-boot3-evidence.txt`,
   `local/work/flash-session67.log`, `local/work/export67/`.
 * Patch re-export: **67 files / 9 136 lines**, sha256 `d19adff8…`;

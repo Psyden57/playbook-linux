@@ -3468,6 +3468,36 @@ the rebake includes it.  `cpufreq-dt` is bound and scales
 `local/work/session67-cpuaffinity.txt`, `local/work/session67-state.txt`;
 `local/work/pbcmd.py`; trap 340.
 
+## 100. Hardware GL for the UI is a project (pvr Wayland EGL platform or a GBM-path compositor), not a setting (session 67)
+
+**Decision.**  Do not spend further effort making software rendering faster.
+The next GPU step is one of: (a) a pvr Wayland EGL platform
+(`wl_drm`/`linux-dmabuf`) so Wayland clients get an `EGLDisplay` backed by
+`pvr_dri`; (b) bring up a compositor that renders clients itself on the
+GBM/pvr path — pvrports ships `phoc` for Phosh, which is its supported
+configuration and the smallest first step; or (c) a dmabuf bridge.  Keep
+`epitaph-1.4.0-r10005` installed in the meantime.
+
+**Why.**  Measured on the unit (report 267 §3): `libEGL_amber.so` advertises
+**only** the `wayland` platform, and `pvr_dri.so` exports **zero** EGL symbols
+(it is a Mesa gallium DRI driver that libEGL's DRM loader loads) with no
+Wayland glue — its only platform strings are `libdrm`/`drmGetNodeTypeFromFd`.
+So on the Wayland platform Mesa has only swrast to load:
+`MESA_LOADER_DRIVER_OVERRIDE=pvr` with a surfaceless display gives
+`GL_RENDERER = PowerVR SGX 540`, and the *same* override with a Wayland client
+(`epitaph` on `wayland-1`) still gives `swrast_dri.so` / `softpipe`.  The
+compositor (`catacomb`) reaches pvr because it uses GBM/DRM.  That is trap 314,
+now with its mechanism.
+
+**Constraint.**  All three options are code, not configuration; (b) has a
+vendor-supported configuration to copy but changes the desktop stack.  hd3 still
+carries the amber softpipe `swrast_dri.so` (6.9 MB), so even the session-60
+llvmpipe improvement is absent until a rebake.  The compositor itself is already
+on the GPU (`catacomb` maps `pvr_dri` + `gbm`).
+
+**Evidence.**  Report 267 §2/§3; session-67 note; trap 314 (mechanism appended),
+traps 341–343; `local/work/egltest.py`.
+
 ### Repository license
 
 **Decided (session 23): GPL-3.0-or-later.**  The project's own code and

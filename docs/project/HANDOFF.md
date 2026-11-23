@@ -33,11 +33,11 @@ audio** (headphones + both speakers, 48 kHz), and the **WL1283 WLAN**
 (associates, DHCP, traffic).  The WL1283 **BT core** works (real inquiry; `hci0`
 registers with mgmt) with the controller-open parked (§0c).
 
-**What is left, in order:** re-measure the throughput/UI numbers on two *real*
-cores (§0e — they were taken single-core), attach the CPU supply and settle the
-1.35 V clamp (§0e), replace the inittab affinity line with a kernel fix (§0e),
-then UI performance / hardware GL and the rebake (§0f).  The **mailbox fault is
-fixed** (report 265).  The **USB/VUSB teardown** is intermittent and open (§0d).
+**What is left, in order:** **get the UI on the GPU** (§0f — a Wayland client
+cannot reach the SGX; this is a project, not a toggle), then the CPU voltage
+(§0e), the kernel affinity fix (§0e), the rebake, and the throughput re-measure.
+The **mailbox fault is fixed** (report 265) and **both cores now take userspace
+work** (report 266).  The **USB/VUSB teardown** is intermittent and open (§0d).
 
 ## 0a. The media, and the way back
 
@@ -224,11 +224,21 @@ performance item (report 263 §4b): candidates are the 200 MHz L3/EMIF port, the
 conservative `tRP/tRCD = 20/17.5 ns` timings, or the measurement; a retune is a
 boot-time EMIF write, not a Linux setting.  A QNX comparison would settle it.
 
-**UI performance:** llvmpipe fixed the 2 s client draw (render 2.7–6 ms); what
-remains is its deferred `swap` (420–550 ms per full-screen drawer frame), the
-first-draw LLVM JIT, and now two cores at 1008 MHz instead of one at 400.  A
-hardware GL path for Wayland clients is still untried (trap 314).  **Kumo** needs
-a WPEWebKit/WebKit-fork build (not packaged, report 247 §4).
+**UI performance / hardware GL — the real GPU item (report 267 §3).**  hd3 now
+has `epitaph-1.4.0-r10005` (the segfault is gone) but it reports `softpipe`
+with the amber `swrast_dri.so`, so the session-60 llvmpipe replacement is
+missing from the image too.  More importantly, **a Wayland client cannot reach
+the SGX at all**: `libEGL_amber.so` advertises only the `wayland` platform and
+`pvr_dri.so` exports zero EGL symbols (a gallium DRI driver loaded by libEGL's
+DRM loader), so Mesa can only load swrast there —
+`MESA_LOADER_DRIVER_OVERRIDE=pvr` is powerless (surfaceless gives
+`PowerVR SGX 540`, a Wayland client gives `softpipe`).  The compositor reaches
+pvr through GBM/DRM.  **Getting the whole UI on the GPU is a project, not a
+toggle:** (a) a pvr Wayland EGL platform (`wl_drm`/`linux-dmabuf`), (b) a
+compositor that renders clients itself on the GBM/pvr path — pvrports ships
+`phoc` for Phosh, the vendor-supported configuration, and is the smallest first
+step, or (c) a dmabuf bridge.  **Kumo** needs a WPEWebKit/WebKit-fork build
+(not packaged, report 247 §4).
 
 ## 0g. WM8994 audio, touch, sensors — closed
 
@@ -325,7 +335,12 @@ Local helper/workspace this session: `local/work/export67/`.
 ## 3. Bench
 
 * **SSH on Nura:** `PB_LINK=usb tools/pbssh.sh 'cmd'` (root, key-only,
-  `169.254.0.1:22`).  The ACM shell is `playbook:~#`, **not** `pb> ` — so
+  `169.254.0.1:22`) — verified working (ping 0.5 ms).  **If it times out, check
+  the HOST first:** `ip rule` / `ip route show table 51820` for a WireGuard
+  `default dev utun420` before `lookup main` (trap 341 — it blackholes
+  `169.254.0.1` and makes `tcpdump` show zero packets), and
+  `ufw allow in/out on enp8s0f3u1i2` (trap 342).  The ACM shell is
+  `playbook:~#`, **not** `pb> ` — so
   `tools/pbcon.py` does **not** drive it (trap 274); use `tools/pbraw.py` or a
   prompt-aware helper.  dropbear came up without an entropy seed (crng init at
   13.1 s); if it blocks, trap 328 applies.
@@ -356,7 +371,7 @@ Local helper/workspace this session: `local/work/export67/`.
 * **Old Nura image:** the panel's `epitaph` may still show the r10005 bug;
   check before judging the desktop (§0f).
 
-## 4. Traps added last session (full list 14–340 in `KNOWN-ISSUES.md` §2)
+## 4. Traps added last session (full list 14–343 in `KNOWN-ISSUES.md` §2)
 
 * **334.** The kernel was built **`-march=armv6k`** because
   `CONFIG_ARCH_MULTI_V6=y` selects `CPU_ARM1176 → CPU_V6K → CPU_32v6`, and
@@ -397,6 +412,16 @@ Local helper/workspace this session: `local/work/export67/`.
   (verified 2 boots each way; `nproc` 2).  It is a root change, not an image
   change.  A kernel fix in `sched_init_smp()` is owed (report 266, trap 340).
   **Check `nproc`, not just `online`,** after anything CPU-related.
+* **341.** A host **WireGuard VPN** blackholes the RNDIS link: `ip rule` at
+  32765 sends unmarked traffic to `default dev utun420` before `lookup main`,
+  so `ping`/`ssh` time out, host `tx_packets` freezes and **`tcpdump` shows zero
+  packets** — while raw `arping` still replies.  Check `ip rule` first.
+* **342.** **`ufw` default-deny** blocks the RNDIS link even with a good route:
+  `ufw allow in/out on enp8s0f3u1i2`.
+* **343.** hd3's **`epitaph` is the broken `r0`** after any reflash of the
+  session-59 image (segfault ~120 ms in); install
+  `epitaph-1.4.0-r10005.apk`.  The image also lacks the session-60 llvmpipe
+  `swrast_dri.so` (it reports `softpipe`).
 * Still current: **333** (the gadget bind is the trigger; the workaround is the
   device-mode-only call), **332** (dual-CPU `printascii` garble), **331** (power
   ruled out), **330** (the IPI is serviced), **327** (`nosmp` is not
@@ -472,26 +497,32 @@ way).  cpufreq-dt IS bound and scales (300000 600000 800000 1008000, ondemand);
 no CPU supply is attached, and the twl6030_uv_to_vsel OUT OF RANGE lines are
 startup VC init clamped to VSEL 0x3A = 1.35 V, the chainloader's own value.
 
-THE ACTIVE ITEMS: (a) re-measure the memory throughput (report 263 §4b) and the
-UI latency now that CPU 1 actually takes userspace work — the old numbers are
-single-core numbers; (b) decide the CPU voltage: attach a supply binding or keep
-1.35 V for all OPPs and skip the out-of-range OPP entry (this TWL6030 revision
-cannot express >1.317 V except the hardcoded 1.35 V; 1.2 GHz crashes, report
-257); (c) replace the inittab affinity line with a kernel fix — one
-instrumented boot printing cpu_active_mask/cpu_online_mask at the top of
-sched_init_smp() and PID 1's cpus_mask after the call would settle it (the
-PBCPU/PBDBG markers are already in local/kernel-tree/init/main.c); (d) the
+THE ACTIVE ITEMS, in the operator's priority order: (a) GET THE UI ON THE GPU —
+a Wayland client cannot reach the SGX because its EGL platform is `wayland`,
+where only swrast loads (`libEGL_amber` advertises only `wayland`; `pvr_dri`
+exports no EGL symbols and is reached only through libEGL's DRM/GBM path).  The
+options are a pvr Wayland EGL platform, a GBM-path compositor (pvrports ships
+`phoc` for Phosh — smallest first step), or a dmabuf bridge; see report 267 §3.
+Do NOT "fix" the UI by tuning software rendering.  (b) decide the CPU voltage:
+attach a supply binding or keep 1.35 V for all OPPs and skip the out-of-range
+OPP entry (this TWL6030 revision cannot express >1.317 V except the hardcoded
+1.35 V; 1.2 GHz crashes, report 257); (c) replace the inittab affinity line with
+a kernel fix — one instrumented boot printing cpu_active_mask/cpu_online_mask at
+the top of sched_init_smp() and PID 1's cpus_mask after the call would settle it
+(the PBCPU/PBDBG markers are already in local/kernel-tree/init/main.c); (d) the
 intermittent USB teardown (trap 337) — capture before the drop; (e) rebake the
 hd3 base with epitaph r10005+, the llvmpipe files, the rules AND the inittab
-line.
+line; (f) re-measure the memory throughput (report 263 §4b) — the old number is
+single-core.
 
 BENCH: region 0 = 0x3547D613 (#109 SMP, stock mailbox + comparator fix,
 panic=0) at block 0x825; region 1 = the BusyBox ext4 6f5b8ca7... at 0x29000000
 (fallback, not booted); hd3 = the Nura ext4 07555bde... at 0x4915, grown to
-62.5 G, now with the inittab affinity line.  SSH: PB_LINK=usb tools/pbssh.sh
-DID NOT ANSWER on the Nura root this session (RNDIS/usb0); the ACM
-(playbook:~#, not pb>) drives it — local/work/pbcmd.py runs one command and
-waits for its own marker.  Kernel printk goes to the panel; the
+62.5 G, now with the inittab affinity line and `epitaph-1.4.0-r10005`.  SSH:
+PB_LINK=usb tools/pbssh.sh WORKS; if it times out check the host's VPN
+(trap 341) and ufw (trap 342) before the USB side.  The ACM (playbook:~#, not
+pb>) is the fallback — local/work/pbcmd.py runs one command and waits for its
+own marker.  Kernel printk goes to the panel; the
 console=ttyGS0 bootarg is inert.  Use `reboot -f` on the Nura root (plain
 reboot is very slow).  BOOTCTR_FCTRY = 0x24 at the session-67 close; read it
 with dmesg | grep pbrpmb.  Start the flasher, then reset/power on (the

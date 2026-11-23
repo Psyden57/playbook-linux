@@ -323,16 +323,24 @@ flasher can replace at every point:
     The inittab workaround (`::sysinit:/usr/sbin/taskset -p 3 1`) fixes it
     (`nproc` 2, load spread evenly, 2 boots each way); a kernel-side fix in
     `sched_init_smp()` is owed.  `cpufreq-dt` **does** exist and scale, so the
-    old "no cpufreq policy" note was stale.  **Next (session 68):** (a) attach
-    the CPU supply or confirm 1.35 V for all OPPs, and settle the
-    `twl6030_uv_to_vsel` clamp (report 266 §2/§3); (b) a kernel-side PID-1
-    affinity fix to replace the inittab line; (c) **re-measure** the memory
-    throughput and UI latency now that both cores take userspace work; (d) the
-    intermittent USB teardown (trap 337) — capture before the drop; (e)
-    shrink/pre-warm the drawer and pursue hardware GL for Wayland clients (trap
-    314); (f) rebake the restorable hd3 base with `epitaph` r10005+, the
-    llvmpipe files, the rules **and the inittab line** (the image on hd3 is the
-    session-59 state).  Kumo needs a WPEWebKit build (report 247 §4).
+    old "no cpufreq policy" note was stale.  **Session 67 also settled the GPU
+    question (report 267 §3, trap 314 + the mechanism):** a Wayland client
+    *cannot* reach the SGX — `libEGL_amber` advertises only the `wayland`
+    platform and `pvr_dri` exports no EGL symbols (it is a gallium DRI driver
+    loaded by libEGL's DRM loader), so `MESA_LOADER_DRIVER_OVERRIDE=pvr` does
+    nothing on the Wayland path (surfaceless → `PowerVR SGX 540`, Wayland client
+    → `softpipe`).  **Next (session 68), in the operator's order:** (a) **get
+    the UI on the GPU** — a pvr Wayland EGL platform (`wl_drm`/`linux-dmabuf`),
+    a GBM-path compositor (pvrports ships `phoc` for Phosh, the smallest first
+    step), or a dmabuf bridge; **not** more software-rendering tuning; (b)
+    attach the CPU supply or confirm 1.35 V for all OPPs and settle the
+    `twl6030_uv_to_vsel` clamp (report 266 §2/§3); (c) a kernel-side PID-1
+    affinity fix to replace the inittab line; (d) the intermittent USB teardown
+    (trap 337) — capture before the drop; (e) rebake the restorable hd3 base
+    with `epitaph` r10005+, the llvmpipe files, the rules **and the inittab
+    line** (the image on hd3 is the session-59 state); (f) re-measure the
+    memory throughput (report 263 §4b) — the old figure is single-core.  Kumo
+    needs a WPEWebKit build (report 247 §4).
 
 Step 3 is reversible at any time by re-flashing the same block range — which is
 the whole reason it beats an in-place mkfs.

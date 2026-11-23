@@ -2639,6 +2639,18 @@ report 121 §3/§11/§12.
        rendering via GBM+dmabuf, or an X/Wayland bridge — not started.  (Session
        60, report 253.)
 
+       **Mechanism measured (session 67, report 267 §3):** `libEGL_amber.so`
+       advertises **only** the `wayland` platform, and `pvr_dri.so` exports
+       **zero** EGL symbols — it is a Mesa gallium DRI driver loaded *by*
+       libEGL's DRM loader, with no Wayland glue (only
+       `libdrm`/`drmGetNodeTypeFromFd`).  So on the Wayland platform Mesa has
+       nothing but swrast to load, and `MESA_LOADER_DRIVER_OVERRIDE=pvr` cannot
+       help: surfaceless + the override gives `PowerVR SGX 540`, a Wayland
+       client + the same override gives `swrast_dri.so`/`softpipe`.  The
+       compositor reaches pvr through GBM/DRM.  Fix options, none a toggle: a
+       pvr Wayland EGL platform, a compositor that renders clients on the
+       GBM/pvr path (pvrports ships `phoc` for Phosh), or a dmabuf bridge.
+
 315. **CORRECTED TWICE (session 62): the SMP kernel used to die inside the
       loader's watchdog window, not at a statement — and the stop point moved
       boot to boot for that reason.**  Read with a trustworthy ring (trap 321):
@@ -3068,6 +3080,38 @@ report 121 §3/§11/§12.
       CPU 1 when the call runs (the `CPUHP_AP_ACTIVE`/`sched_cpu_activate`
       state), clamping the mask to CPU 0.  A kernel-side fix is owed.  (Session
       67, report 266 §1.)
+
+341. **A host WireGuard tunnel blackholes the RNDIS link, and it looks like a
+      broken gadget.**  `ip rule` had
+      `32765: not from all fwmark 0xca6c lookup 51820` with table 51820 =
+      `default dev utun420` — a priority *before* `lookup main` — so every
+      packet to `169.254.0.1` went into the tunnel.  Symptoms: `ping`/`ssh`
+      time out, the host's `tx_packets` freezes, and **`tcpdump -i <rndis>`
+      shows zero packets**, which reads exactly like a dead TX path; the
+      device's `rx_packets` does not move either.  **The tell:** raw
+      `arping -I <rndis> 169.254.0.1` still gets a reply (L2 bypasses routing),
+      and `ip route get` shows the right device because the *main* table is
+      fine — only `ip rule` is non-default.  Check `ip rule` / `ip route show
+      table 51820` before touching the USB side; unbinding `rndis_host`,
+      `authorized` 0/1 and `usbreset` merely reset counters and look like a
+      partial fix.  (Session 67, report 267 §1.)
+
+342. **`ufw`'s default-deny blocks the RNDIS link even with a correct route.**
+      The host runs `ufw` with `default deny (incoming)` and no rule for the
+      USB netdev, so SSH to `169.254.0.1:22` is dropped.  Add
+      `ufw allow in on <iface>` and `ufw allow out on <iface>`; do **not** add a
+      blanket inbound rule just to move a file (trap 291).  (Session 67,
+      report 267 §1.)
+
+343. **hd3's `epitaph` is the broken `r0` until the `r10005` APK is installed.**
+      A reflash of the session-59-state hd3 image brings back
+      `epitaph 1.4.0-r0`, which segfaults ~120 ms after `Started Epitaph` — the
+      trap-292 symptom, unfixed.  Install
+      `local/work/nura/work/packages/edge/armv7/epitaph-1.4.0-r10005.apk`
+      (sha256 `aee3fdc8…`) with `apk add --allow-untrusted --force-overwrite`.
+      The same image also lacks the session-60 llvmpipe `swrast_dri.so`: it
+      reports `softpipe` and the file is the 6.9 MB amber build, not the 15.8 MB
+      Alpine one.  (Session 67, report 267 §2.)
 
 ## 3. Corrections to older reports
 

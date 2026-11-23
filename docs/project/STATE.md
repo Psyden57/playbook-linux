@@ -43,9 +43,20 @@ never given userspace work.
   identical; adds `phy-twl6030-usb.c` + `phy-omap-usb2.c`, and `omap2430.c` now
   runs the stock call (mutex kept).  Tree walk (trap 211) clean outside the
   known excluded diagnostics.  `kernel/source/` mirrors refreshed.
-* **Bench:** Linux/Nura on hd3; `PB_LINK=usb tools/pbssh.sh` did **not** answer
-  this session (RNDIS/usb0), so the ACM (`playbook:~#`, `local/work/pbcmd.py`)
-  was the console.  The VUSB teardown (trap 337) is unchanged and open.
+* **Bench:** Linux/Nura on hd3; **`PB_LINK=usb tools/pbssh.sh` works** (ping
+  0.5 ms).  It appeared broken for most of the session because the **host's
+  WireGuard tunnel** blackholed `169.254.0.1` (`ip rule ... lookup 51820` with a
+  `default dev utun420` before `lookup main`); with the VPN off it is fine, and
+  `ufw allow in/out on enp8s0f3u1i2` is needed too.  [report 267 §1, traps
+  341/342]  The VUSB teardown (trap 337) is unchanged and open.
+* **hd3's `epitaph` was the broken `r0`** (segfault ~120 ms in, trap 292's
+  symptom); `epitaph-1.4.0-r10005` is now installed (trap 343), and it reports
+  `softpipe` — the session-60 llvmpipe `swrast_dri.so` is still absent from hd3.
+* **A Wayland client cannot use the SGX** (trap 314, mechanism measured in
+  report 267 §3): its EGL platform is `wayland`, where only swrast is
+  loadable; `pvr_dri` needs the DRM/GBM path the compositor uses.  Fixing it is
+  a project (a pvr Wayland EGL platform, a phoc/Phosh GBM-path compositor, or a
+  dmabuf bridge) — the next real GPU step.
 
 ## Previous state — 2026-11-19 (session 66)
 
