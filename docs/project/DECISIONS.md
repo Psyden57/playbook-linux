@@ -3644,3 +3644,72 @@ alongside the container code in `tools/bbusb.py` (see the addendum above).  Repo
 older docs still cite the pre-move `local/vendor/bbusb/...` paths — those are
 historical records and are left as written.
 
+
+---
+
+## 102. The black client surfaces are a GLES2 NPOT wrap bug; fix the texture wrap in Smithay (session 69)
+
+**Decision.**  Treat the black Wayland-client surfaces as a **texture-wrap
+defect, not a driver or `wl_drm` defect**: the EGLImage import path must set
+`GL_TEXTURE_WRAP_S/T = GL_CLAMP_TO_EDGE` on the imported texture.  Ship it as
+`rootfs/catacomb/smithay-eglimage-clamp.patch`, applied to the fetched Smithay
+checkout after the two existing Smithay patches, as catacomb `pkgrel=10003`.
+
+**Why.**  In GLES 2.0 a non-power-of-two texture with the default `REPEAT` wrap
+is *incomplete*, and sampling it returns opaque black with no GL error.
+Client buffers are NPOT (1024x20, 1024x585, 640x200, …).  Smithay's
+`GlesRenderer::import_egl_image()` binds the imported image and leaves the wrap
+at the default, while its own shm and surface import paths (`gles/mod.rs`
+≈ lines 940, 1059, 1132) set `CLAMP_TO_EDGE`.  wlroots sets it on the same
+textures, which is why the identical client presents under phoc.
+
+**Evidence (measured).**  (a) Our presenting client renders correctly into its
+drawable — its pre-swap `glReadPixels` is `(255,0,255,255)`, `nz=64/64` — yet
+is black under catacomb.  (b) A CPU-filled `wl_drm` dumb buffer is black under
+catacomb while the same pixels via `wl_shm` display; the layer geometry is
+therefore fine.  (c) A standalone program reproducing catacomb's renderer
+(`dlopen`'d EGL, GBM display on `card0`, config+context, surfaceless current)
+imports the buffer with `eglCreateImageKHR(EGL_LINUX_DMA_BUF_EXT)`, binds it
+with `glEGLImageTargetTexture2DOES`, and samples **opaque black**
+(`nz=0`), with no error at any step.  (d) Adding only the two `TexParameteri`
+calls makes the same program sample the buffer's real pixels
+(`nz=64/64`).  (e) Under phoc the same client colours are visible on the panel
+(operator observation).  Tools: `tools/bench/egl/` (`pb-egltest`,
+`pb-layerdrm`, `pb-gbmsample`, `pb-gbmimport`); report 269 §4g.
+
+**Constraint.**  Reproduce the compositor's EGL path only with `dlopen`'d
+`libEGL.so.1`; a binary that links it at load time gets `EGL_BAD_MATCH` (or a
+segfault) on a GBM-platform surfaceless `eglMakeCurrent`, which produces
+misleading results.  The fix is generic Smithay (worth upstreaming) and does
+not touch the DDK, `wl_drm` or Mesa.
+
+---
+
+## 103. Clients must bind GL attribute/uniform locations explicitly; do not assume declaration order (session 69)
+
+**Decision.**  Treat hard-coded GLES2 attribute indices and uniform locations as
+a defect in the client.  In our packages, `glBindAttribLocation` before linking
+and `glGetUniformLocation` by name (epitaph `bind-attribs.patch`,
+`pkgrel=10008`).
+
+**Why.**  GLES2 does not guarantee that the linker assigns attribute or uniform
+locations in declaration order, and the PowerVR compiler does not: measured on
+the unit against epitaph's own text program, `a_Position=2, a_UV=1, a_Flags=0,
+u_Projection=1, u_Texture=2`.  epitaph passed `0/1/2` to
+`glVertexAttribPointer` and wrote its projection with `glUniform4f(0, …)`, so
+under `pvr_dri` the geometry was fed from the wrong attribute, the projection
+was never set (every glyph collapsed to a point) and the write to location 0 hit
+the sampler and returned `GL_INVALID_OPERATION`.  The same client worked on
+softpipe purely because that linker used 0/1/2 in declaration order.
+
+**Evidence.**  (a) A one-shot `glReadPixels` histogram inside the client
+(`debug-framebuffer.patch`) reported the entire 1024x20 bar as one colour,
+`(24,24,24)`, with `glerr = 1282` — the client drew only its clear colour.
+(b) A probe linking epitaph's own shaders on the SGX printed the indices above
+and `glUniform4f(0, …)` → `0x502`.  (c) After the fix the panel's modules must
+appear; the build is the verification.  Report 269 §4h, trap 348.
+
+**Constraint.**  When a client shows only its background, check the client's
+own framebuffer before suspecting the compositor or the driver: a silent
+"nothing drawn" is usually an index/location assumption, not a GPU fault.  This
+is a general portability fix and worth upstreaming to epitaph.

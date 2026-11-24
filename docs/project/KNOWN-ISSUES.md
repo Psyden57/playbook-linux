@@ -3179,19 +3179,66 @@ report 121 §3/§11/§12.
       §4c–§4f, DECISIONS §101]
 
 346. **A `wl_drm` global makes clients SELECT the SGX, but their buffers can
-      still present black — selection is not presentation.**  With catacomb's
-      PRIME-only `wl_drm` (session 68), `epitaph`/`tabula` map `pvr_dri` and
-      report `PowerVR SGX 540`, and their linear `AR24` dmabufs (stride 4096,
-      `modifier: Invalid`) import with no error, yet a **`grim` capture is
-      black except the compositor chrome**; the same clients on `wl_shm`
-      display.  **Do not claim "the clients are on the GPU" from
-      `maps`/`GL_RENDERER` alone — capture the framebuffer and look at it.**
-      Safe state: `/etc/catacomb/initrc` unsets `MESA_LOADER_DRIVER_OVERRIDE`
-      for its children (backup `.session68-pvr`), so the compositor keeps the
-      SGX and the clients use `wl_shm`.  The pvr render-node bind-mount
-      (`renderD129` over `renderD128`) is **not** a fix: it made the clients
-      exit.  The next experiment is in HANDOFF §0f.  (Session 68, report 269
-      §4e–§4f.)
+      still present black — selection is not presentation.**  **Resolved in
+      session 69 by traps 347/348** (the NPOT texture wrap and the panel's
+      hard-coded GL locations).  The full text is in
+      [`docs/history/KNOWN-ISSUES-HISTORY.md`](../history/KNOWN-ISSUES-HISTORY.md#trap-346--selection--presentation-resolved-session-69).
+
+347. **An imported dma-buf texture samples opaque black if its wrap mode is the
+      default `REPEAT` and the buffer is non-power-of-two.**  In GLES 2.0 an
+      NPOT texture with `GL_REPEAT` is *incomplete*, so sampling returns
+      `(0,0,0,1)` — no GL error, no import error.  Client buffers are NPOT
+      (1024x20, 1024x585, 640x200, …), and **Smithay's
+      `GlesRenderer::import_egl_image()` binds the EGLImage without setting
+      `GL_TEXTURE_WRAP_S/T`**, while the shm/surface import paths in the same
+      file do set `CLAMP_TO_EDGE`.  wlroots sets it too
+      (`render/gles2/texture.c`), which is why the same client presents under
+      phoc and is black under catacomb.  Measured A/B in the pvr driver with
+      `tools/bench/egl/pb-gbmsample.c`: no clamp → `first=(0,0,0,255) nz=0`;
+      with clamp → `first=(0,255,0,255) nz=64/64`.  Fix:
+      `rootfs/catacomb/smithay-eglimage-clamp.patch` (catacomb `pkgrel=10003`).
+      **Link EGL/GLES with `dlopen` when reproducing the compositor's path** —
+      a binary that links `libEGL.so.1` directly hits `EGL_BAD_MATCH`/a segfault
+      on a GBM-platform surfaceless `eglMakeCurrent` and its readback is
+      meaningless.  (Session 69, report 269 §4g.)
+348. **GLES2 does not fix attribute or uniform indices — the PowerVR linker
+      assigns its own.**  epitaph hard-coded `0/1/2` for `glVertexAttribPointer`
+      and `glUniform4f(0, …)` for its projection, which happened to match
+      Mesa's softpipe but not `pvr_dri`: measured on the unit,
+      `a_Position=2, a_UV=1, a_Flags=0, u_Projection=1, u_Texture=2`.  The
+      result is *no geometry* (glyphs collapse to a point) plus
+      `GL_INVALID_OPERATION` from `glUniform4f(0, …)`; nothing looks like an
+      error at the API level.  A client that renders nothing but its clear
+      colour is the symptom — check with a one-shot `glReadPixels` histogram of
+      the client's own framebuffer before blaming the compositor or the driver.
+      Fix: `glBindAttribLocation` before linking and `glGetUniformLocation` by
+      name (epitaph `bind-attribs.patch`, `pkgrel=10008`).  (Session 69,
+      report 269 §4h.)
+349. **A pvr client that re-renders fails intermittently on its second
+      buffer.**  `CreateImageShared: Failed to create buffer`,
+      `PVRImageDrawableGetNativeInfo: Image get buffers call failed`,
+      `PVRDRIBufferCreate: Failed to create plane` — measured in **3 of 5**
+      runs of a simple animating client under catacomb, and **never** under
+      phoc, where the same client swaps indefinitely (`wl_buffer.release`
+      traffic confirmed on both compositors).  So it is a pvr
+      buffer-allocation defect around the second `eglSwapBuffers`, not a
+      protocol or compositor bug.  Not root-caused.  (Session 69, report 269
+      §4h.)
+350. **Cosmetic pixel glitches on shm and dmabuf clients (observed on the
+      working GPU desktop).**  The operator sees "slight pixel glitches" on the
+      keyboard (a `wl_shm` client) and, at times, on the epitaph bar (a dma-buf
+      client).  It is cosmetic and does not affect function.  **Prime suspect:
+      the early "no `GL_EXT_unpack_subimage`" optimisation**, not the session-68
+      fixes — the compositor uploads shm buffers per row and widens partial
+      damage to full rows (`smithay-gles2-fallback.patch`), and damage tracking
+      is shared with the dmabuf path.  That code dates from the renderer
+      bring-up.  Decisive experiment: force the slow, per-row-only path (or run
+      the clients on `wl_shm` with the old state) and see whether the glitches
+      persist; if they do, the remaining candidate is catacomb's damage/repaint
+      (its own `DamageBag` tracker + `CropRenderElement`), which is also
+      pre-session-68.  Do **not** attribute it to the clamp fix: that touches
+      only the dma-buf texture wrap and cannot alter pixels that are drawn.
+      (Session 69, operator observation; not root-caused.)
 
 ## 3. Corrections to older reports
 

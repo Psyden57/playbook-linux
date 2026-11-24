@@ -278,3 +278,25 @@ yields one `0x7f` (keylog).  Report 250 §2, DECISIONS §85.  Trap 300 (the eMMC
 "cache flush") was likewise closed by measurement — the card has no cache
 (`CACHE_SIZE = 0`, `CACHE_CTRL = 0`), and the stall is a plain WRITE (report
 250 §1).
+## Trap 346 — selection ≠ presentation (resolved session 69)
+
+Moved from `KNOWN-ISSUES.md` §2 when session 69 fixed it.
+
+346. **A `wl_drm` global makes clients SELECT the SGX, but their buffers can
+      still present black — selection is not presentation.**  With catacomb's
+      PRIME-only `wl_drm` (session 68), `epitaph`/`tabula` map `pvr_dri` and
+      report `PowerVR SGX 540`, and their linear `AR24` dmabufs (stride 4096,
+      `modifier: Invalid`) import with no error, yet a **`grim` capture is
+      black except the compositor chrome**; the same clients on `wl_shm`
+      display.  **Do not claim "the clients are on the GPU" from
+      `maps`/`GL_RENDERER` alone — capture the framebuffer and look at it.**
+      Safe state: `/etc/catacomb/initrc` unsets `MESA_LOADER_DRIVER_OVERRIDE`
+      for its children (backup `.session68-pvr`), so the compositor keeps the
+      SGX and the clients use `wl_shm`.  The pvr render-node bind-mount
+      (`renderD129` over `renderD128`) is **not** a fix: it made the clients
+      exit.  The next experiment is in HANDOFF §0f.  (Session 68, report 269
+      §4e–§4f.)  **RESOLVED in session 69:** two defects, both above the driver —
+      the imported texture was an incomplete GLES2 NPOT texture (trap 347) and
+      the panel client hard-coded GL attribute/uniform indices (trap 348).  With
+      catacomb r10003 + epitaph r10008 the clients render on the SGX and the UI
+      is responsive (report 269 §4g–§4i).

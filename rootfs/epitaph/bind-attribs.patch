@@ -1,0 +1,43 @@
+--- a/src/renderer.rs
++++ b/src/renderer.rs
+@@ -80,9 +80,16 @@
+         let offset_x = -1.;
+         let offset_y = 1.;
+ 
+-        // Update the text renderer's uniform.
++        // Update the text renderer's uniform.  Query the location by name:
++        // on the PowerVR driver u_Projection is 1, not 0 (2 is the sampler),
++        // so writing location 0 is GL_INVALID_OPERATION and leaves the
++        // projection at zero — every glyph collapses to a point.
+         sized.text_batcher.renderer().bind();
+-        unsafe { gl::Uniform4f(0, offset_x, offset_y, scale_x, scale_y) };
++        unsafe {
++            let id = sized.text_batcher.renderer().id;
++            let loc = gl::GetUniformLocation(id, b"u_Projection\0".as_ptr() as *const _);
++            gl::Uniform4f(loc, offset_x, offset_y, scale_x, scale_y);
++        };
+ 
+         // Resize OpenGL viewport.
+         unsafe { gl::Viewport(0, 0, size.width as i32, size.height as i32) };
+@@ -341,6 +348,12 @@
+             let id = gl::CreateProgram();
+             gl::AttachShader(id, *vertex_shader);
+             gl::AttachShader(id, *fragment_shader);
++            // GLES2 leaves attribute indices to the linker, and the PowerVR
++            // compiler picks different ones than Mesa's software rasterizer
++            // (measured: a_Position=2, a_UV=1, a_Flags=0).  Bind them.
++            gl::BindAttribLocation(id, 0, b"a_Position\0".as_ptr() as *const _);
++            gl::BindAttribLocation(id, 1, b"a_UV\0".as_ptr() as *const _);
++            gl::BindAttribLocation(id, 2, b"a_Flags\0".as_ptr() as *const _);
+             gl::LinkProgram(id);
+ 
+             let mut linked = 0;
+@@ -480,6 +493,8 @@
+             let id = gl::CreateProgram();
+             gl::AttachShader(id, *vertex_shader);
+             gl::AttachShader(id, *fragment_shader);
++            gl::BindAttribLocation(id, 0, b"aPos\0".as_ptr() as *const _);
++            gl::BindAttribLocation(id, 1, b"aColor\0".as_ptr() as *const _);
+             gl::LinkProgram(id);
+ 
+             let mut linked = 0;

@@ -1,0 +1,47 @@
+--- a/src/renderer.rs
++++ b/src/renderer.rs
+@@ -90,6 +90,44 @@
+         fun(sized);
+         let t2 = std::time::Instant::now();
+ 
++        // PB debug: summarise this client's own framebuffer once, so a driver
++        // that silently drops the module draws is visible from the client side.
++        {
++            use std::sync::atomic::{AtomicBool, Ordering};
++            static DONE: AtomicBool = AtomicBool::new(false);
++            if !DONE.swap(true, Ordering::Relaxed) {
++                let px = (size.width * size.height) as usize;
++                let mut buf = vec![0u8; px * 4];
++                unsafe {
++                    gl::ReadPixels(
++                        0,
++                        0,
++                        size.width as i32,
++                        size.height as i32,
++                        gl::RGBA,
++                        gl::UNSIGNED_BYTE,
++                        buf.as_mut_ptr() as *mut _,
++                    );
++                }
++                let mut counts: std::collections::HashMap<(u8, u8, u8), usize> =
++                    std::collections::HashMap::new();
++                for c in buf.chunks_exact(4) {
++                    *counts.entry((c[0], c[1], c[2])).or_default() += 1;
++                }
++                let mut top: Vec<_> = counts.into_iter().collect();
++                top.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
++                top.truncate(6);
++                eprintln!(
++                    "epitaph: fb {}x{} distinct={} top={:?} glerr={:?}",
++                    size.width,
++                    size.height,
++                    top.len(),
++                    top,
++                    unsafe { gl::GetError() }
++                );
++            }
++        }
++
+         unsafe { gl::Flush() };
+ 
+         sized.swap_buffers();

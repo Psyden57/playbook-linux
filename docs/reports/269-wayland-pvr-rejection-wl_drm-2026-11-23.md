@@ -1,6 +1,7 @@
 # Report 269 — why Mesa's wayland platform refuses pvr: catacomb does not advertise `wl_drm`
 
-Date: 2026-11-23 (session 68).  Bench + host; no device writes.  Answer to
+Date: 2026-11-23 (session 68); **§4g–§4i were added in session 69**, which
+continued the work on the same bench.  Bench + host; no device writes.  Answer to
 report 268 §3 step 1 (the one diagnostic that had to precede any Mesa work).
 
 ## 0. Headline
@@ -410,12 +411,161 @@ it is simply not used by the clients in this state.
 **Not yet exercised:** a heavy compositing workload and frame latency (they
 presuppose a working client buffer path).
 
+## 4g. ROOT CAUSE (session 69): the imported texture has `REPEAT` wrap, and the buffers are NPOT
+
+**One sentence.** Smithay's `GlesRenderer::import_egl_image()` binds the
+imported dma-buf to a GL texture and never sets `GL_TEXTURE_WRAP_S/T`; the
+default is `GL_REPEAT`, and in **GLES 2.0 a non-power-of-two texture with
+`REPEAT` is incomplete — sampling it returns opaque black**.  Client buffers
+are NPOT (1024x20, 1024x585, 640x200, …).  wlroots sets `CLAMP_TO_EDGE` on the
+same textures (`render/gles2/texture.c`), which is why the identical client
+presents under phoc.
+
+### The measurements that pin it
+
+All on the unit, `7.3.3 #109 SMP`, pvr amber Mesa 21.3.9, SGX540.
+
+1. **A presenting client of our own** (`pb-egltest`, `tools/bench/egl/`):
+   under catacomb it runs as `PowerVR SGX 540` (`pvr_dri`) and its
+   **pre-swap `glReadPixels` of its own drawable is non-black**
+   (`first=(255,0,255,255)`, `nz=64/64`), i.e. the client renders into exactly
+   the image Mesa hands over; the surface on screen is black.
+2. **A CPU-filled `wl_drm` buffer** (`pb-layerdrm`, an omapdrm dumb buffer
+   filled with a red/green checkerboard and attached through
+   `wl_drm.create_prime_buffer`) is black under catacomb; **the same pixels via
+   `wl_shm` display correctly** in the same layer position.  So the layer
+   geometry, crop and compositor draw are all fine; the dma-buf texture is not.
+3. **Reproduced outside the compositor** (`pb-gbmimport`/`pb-gbmsample`,
+   `tools/bench/egl/`): a program that recreates catacomb's renderer exactly —
+   `dlopen`'d `libEGL.so.1`, a **GBM display on `/dev/dri/card0`**, a config and
+   context, surfaceless `eglMakeCurrent` — imports the dumb buffer with
+   `eglCreateImageKHR(EGL_LINUX_DMA_BUF_EXT)`, binds it with
+   `glEGLImageTargetTexture2DOES` and samples it in a shader.  The import
+   returns an image and reports **no GL error**; the FBO is complete; the draw
+   reports no error; and the sampled row is
+   **`first=(0,0,0,255) nz=0` — opaque black**.
+4. **The A/B that names the parameter.**  The same program with only
+   `GL_TEXTURE_WRAP_S/T = GL_CLAMP_TO_EDGE` added samples the buffer's real
+   pixels (`first=(0,255,0,255) nz=64/64`).  External-target sampling
+   (`GL_TEXTURE_EXTERNAL_OES`) behaves the same way.  Nothing else changed.
+5. **The contrast on the panel.**  The operator saw the `pb-egltest` colours
+   flash on the panel **under phoc** (wlroots) — the same client, the same
+   buffer class, the same driver and the same forced `MESA_LOADER_DRIVER_OVERRIDE=pvr`.
+
+An earlier hypothesis — that the pvr driver cannot import a foreign dma-buf —
+is **withdrawn**: the import works; the only defect is the texture wrap mode.
+(A direct-linked-EGL test binary also segfaulted on `eglMakeCurrent` and read
+back black; that was an artefact of linking `libEGL.so.1` at load time instead
+of `dlopen`ing it as the compositors do — see the `tools/bench/egl` README.)
+
+### The fix
+
+Set `GL_TEXTURE_WRAP_S/T = GL_CLAMP_TO_EDGE` in `import_egl_image()` — the
+shm and surface import paths in the same file already do this
+(`gles/mod.rs:940/1059/1132`); only the EGLImage path omitted it.
+
+* Tracked patch: **`rootfs/catacomb/smithay-eglimage-clamp.patch`** (adds the
+  two `TexParameteri` calls with a comment explaining the GLES2 rule).
+* Packaged as catacomb **`pkgrel=10003`**: the APKBUILD applies it to the
+  fetched Smithay checkout after the two existing Smithay patches (verified in
+  that order against the pinned revision `dba255c`, hunk applies at +266 lines).
+* This is a Smithay bug, not a pvr one: any GLES2 renderer that imports NPOT
+  dma-bufs and leaves the wrap at `REPEAT` hits it.  Worth upstreaming to
+  Smithay (the same two lines).
+
+### What is still open after the fix
+
+The build is the remaining step (it needs the root-owned pmbootstrap chroot);
+once installed, the acceptance test is: `epitaph`/`tabula` render on the SGX
+**and** a heavy redraw is visible on the panel.  If the frames still do not
+appear, the next instrument is the one-shot FBO readback in
+`DmabufHandler::dmabuf_imported` described in HANDOFF §0f — but the NPOT wrap
+result explains the observed black exactly, so it should not be needed.
+
+## 4h. After the clamp fix: the panel's modules were still missing — the client hard-codes GL locations
+
+With the clamp fix installed (r10003) the **wallpaper, keyboard and the bar's
+background** all appear on the SGX.  The bar's modules (clock text, icons) did
+not.  A one-shot framebuffer summary inside the client (`debug-framebuffer.patch`,
+r10007) reported the whole 1024x20 bar as **one colour**, `(24,24,24)`, with
+`glerr = 1282` (`GL_INVALID_OPERATION`) — so the client itself drew nothing but
+its background.
+
+**Cause: epitaph assumed the linker's attribute and uniform indices.**
+`src/renderer.rs` passes `0/1/2` to `glVertexAttribPointer`/`EnableVertexAttribArray`
+and writes the projection with `glUniform4f(0, …)`.  GLES2 leaves those
+indices to the linker, and the PowerVR compiler picks different ones from Mesa's
+software rasterizer.  Measured on the unit by linking epitaph's own text shaders:
+
+| symbol | pvr (SGX540) |
+|---|---|
+| `a_Position` | **2** |
+| `a_UV` | **1** |
+| `a_Flags` | **0** |
+| `u_Projection` | **1** |
+| `u_Texture` | **2** |
+
+So under `pvr_dri` the glyph positions were fed from the wrong attribute, the
+projection uniform was never written, and `glUniform4f(0, …)` (the sampler's
+location) returned `GL_INVALID_OPERATION` — exactly the code the client logged.
+Under softpipe the linker happened to assign `0/1/2` in declaration order, which
+is why the panel worked before and why the client was never fixed upstream.
+
+**Fix (`bind-attribs.patch`, epitaph `pkgrel=10008`):** `glBindAttribLocation`
+for `a_Position`/`a_UV`/`a_Flags` (text) and `aPos`/`aColor` (rect) before
+`glLinkProgram`, and `glGetUniformLocation(…, "u_Projection")` instead of the
+literal `0`.  This is a general portability defect, not an SGX one — worth
+upstreaming.
+
+**Also measured (unchanged, and separate):** a client that keeps re-rendering
+fails **intermittently** on its second buffer with
+`CreateImageShared: Failed to create buffer` /
+`PVRDRIBufferCreate: Failed to create plane` (3 of 5 runs).  Under phoc the same
+client swaps indefinitely.  Cause not established; it is a pvr allocation
+defect in `e[gl]SwapBuffers` after the first frame, and it affects any client
+that animates.  Recorded for the next session.
+
+## 4i. VALIDATED ON THE PANEL (operator, session 69)
+
+With catacomb r10003 (clamp) and epitaph r10008 (bound locations) installed and
+the session in the pvr client state, the operator confirms on the unit:
+
+* **the wallpaper renders** (a pvr-rendered, textured 1024x585 client),
+* **the keyboard renders**,
+* **the top bar renders with its text and icons**, and
+* **the bar toggles and the UI is responsive** — "it's finally responsive, like
+  it should be".
+
+Measured at the same time (epitaph's own draw timing, `render=`):
+
+| frame | softpipe (session 60) | SGX (session 69) |
+|---|---|---|
+| 1024x20 bar, first draw | ~1.6–2.3 s for the drawer | 170–280 ms |
+| 1024x20 bar, steady state | — | **1.5–30 ms** |
+| 1024x585 drawer | 420–550 ms (llvmpipe swap) | 97 ms |
+
+So the client path is on the GPU and the interactive latency that llvmpipe
+could not fix (the deferred `swap`) is gone.  The safe `wl_shm` state is no
+longer needed: **the desktop runs with the clients on the SGX.**
+
+Open, found on the way and unrelated to the two fixes: a client that keeps
+re-animating fails on its **second** buffer in 3 of 5 runs
+(`CreateImageShared: Failed to create buffer`,
+`PVRDRIBufferCreate: Failed to create plane`), never under phoc — trap 349.
+It is worth fixing before any animated client is judged, but it does not
+affect the static desktop.
+
 ## 5. Not yet proven / caveats
 
-* **Driver selection works; presentation does not (§4e–§4f).**  The clients map
-  `pvr_dri` and the dmabuf import succeeds, but their frames are **black** under
-  catacomb.  The safe operational state keeps the compositor on the SGX and the
-  clients on `wl_shm`; the buffer presentation is the open problem.
+* **Driver selection works; presentation was black — root-caused and fixed in
+  source (§4g).**  The clients map `pvr_dri`, the dmabuf import succeeds, but
+  the imported texture sampled opaque black: it was bound without
+  `GL_TEXTURE_WRAP_S/T = CLAMP_TO_EDGE`, and the NPOT client buffers are
+  incomplete GLES2 textures with the default `REPEAT`.  The fix is
+  `rootfs/catacomb/smithay-eglimage-clamp.patch` (catacomb `pkgrel=10003`);
+  the remaining step is the root-owned build.  Until it is installed, the safe
+  operational state keeps the compositor on the SGX and the clients on
+  `wl_shm`.
 * **The override is required.**  `MESA_LOADER_DRIVER_OVERRIDE=pvr` is what makes
   `loader_get_driver_for_fd()` return `pvr`; the session
   (`/usr/share/tinydm/env-wayland.d/60-pvr.sh`) and login shells

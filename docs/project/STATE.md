@@ -1,6 +1,59 @@
 # Current state
 
-## Current state — 2026-11-23 (session 68, in progress)
+## Current state — 2026-11-24 (session 69)
+
+**The GPU client path is fixed and validated on the panel.**  Session 68 made
+Wayland clients *select* the SGX (the `wl_drm` shim); this session found and
+fixed the two defects that stopped them from *presenting*, and the desktop now
+runs with the clients on the SGX.
+
+* **Defect 1 — catacomb bound imported dma-bufs as incomplete GLES2 NPOT
+  textures.**  Smithay's `import_egl_image()` never set `GL_TEXTURE_WRAP_S/T`;
+  the default `REPEAT` makes a non-power-of-two texture incomplete, and it
+  samples opaque black with no GL error.  Client buffers are NPOT (1024x20,
+  1024x585).  wlroots sets `CLAMP_TO_EDGE`, which is why phoc worked.  Fixed in
+  `rootfs/catacomb/smithay-eglimage-clamp.patch`, catacomb **r10003**.  Measured
+  A/B in `tools/bench/egl/pb-gbmsample.c`: no clamp → `first=(0,0,0,255) nz=0`;
+  with clamp → `first=(0,255,0,255) nz=64/64`.  [report 269 §4g, trap 347,
+  DECISIONS §102]
+* **Defect 2 — epitaph hard-coded GL attribute/uniform indices.**  It passed
+  `0/1/2` to `glVertexAttribPointer` and wrote its projection with
+  `glUniform4f(0, …)`; the PowerVR linker assigns `a_Position=2, a_UV=1,
+  a_Flags=0, u_Projection=1, u_Texture=2`, so the projection was never set
+  (glyphs collapsed) and the write to location 0 hit the sampler
+  (`GL_INVALID_OPERATION`).  A one-shot framebuffer histogram inside the client
+  showed the whole bar as one colour `(24,24,24)`.  Fixed in
+  `rootfs/epitaph/bind-attribs.patch`, epitaph **r10008**.  [report 269 §4h,
+  trap 348, DECISIONS §103]
+* **Validated on the panel (operator):** wallpaper, keyboard and the bar's text
+  and icons all render on the SGX, and the UI is responsive — steady-state bar
+  draw **1.5–30 ms** (softpipe was 1.6–2.3 s), 1024x585 drawer 97 ms.
+  **The desktop now runs with the clients on the SGX**; `/etc/catacomb/initrc`
+  is the pvr variant (no `unset`) and the `wl_shm` safe state is retired.
+  [report 269 §4i]
+* **Bench verified at the close:** region 0 media trailer
+  `1f 2d c8 d7 13 d6 47 35` = CRC **`0x3547D613`** (matches
+  `boot/chainloader/kernel.img`, 10,448,868 B, sha256 `6ecd068d…`); region 1
+  sha256 **`20a5edd3…`** (read fresh, 64 MiB at `0x29000000`); hd3 ext4 magic
+  **`0xEF53`**, 15,273,984 blocks; root `/dev/loop0` rw; `BOOTCTR_FCTRY =
+  0x22`; `nproc` 2, PID 1 mask 3; SSH up.  **No region-0 change this session.**
+* **Installed on the live root:** catacomb `1.5.0-r10003`, epitaph
+  `1.4.0-r10008`, `/etc/catacomb/initrc` (pvr, 3168 B), and
+  `/usr/share/wayland-sessions/phoc-pb.desktop` (the comparison session).
+  **The hd3 baked image still has catacomb r10000, epitaph r10005 and no pvr
+  initrc** — a reflash reverts the whole result (trap-343 class); the rebake is
+  owed.
+* **Open:** trap **349** (a re-rendering pvr client fails on its second buffer
+  in 3/5 runs under catacomb, never under phoc — a pvr allocation defect), trap
+  **350** (cosmetic pixel glitches on shm/dmabuf clients, prime suspect the
+  bring-up-era upload/damage path), a heavy-redraw measurement, and the hd3
+  rebake.
+
+## Previous state — 2026-11-23 (session 68)
+
+> **Superseded by session 69** (the block above): session 68 solved the
+> *selection* gate and left the clients black; session 69 fixed the two
+> presentation defects.  The text below is that session's own snapshot.
 
 **The Wayland-client GPU wall is identified AND broken: it was the missing
 `wl_drm` global, and with pvrports' `phoc` a Wayland client gets the SGX.**

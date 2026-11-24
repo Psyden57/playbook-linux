@@ -1,23 +1,28 @@
-# Handoff — session 67 (absolute) → session 68
+# Handoff — session 69 (absolute) → session 70
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§7).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — this handoff is for **absolute 68 = Linux-era 62**, written at the
-session-67 close.  See `docs/sessions/NUMBERING.md`.
+`N+6` — this handoff is for **absolute 70 = Linux-era 64**, written at the
+session-69 close.  See `docs/sessions/NUMBERING.md`.
 
-> **SESSION 68: the GPU *selection* gate is solved; the client *presentation*
-> is not.**  Wayland clients were software-rendered because **catacomb
-> (Smithay) serves no `wl_drm`**, which Mesa 21.3.9's Wayland EGL platform
-> requires; without it `eglInitialize()` silently retries with
-> `ForceSoftware = TRUE` and loads `swrast_dri` (the override is never read).
-> catacomb now serves a PRIME-only `wl_drm` (`1.5.0-r10002`): clients **select**
-> the SGX (`pvr_dri`, `PowerVR SGX 540`), and their linear `AR24` dmabufs import
-> without error — **but the client surfaces are black under catacomb** (a
-> `grim` capture shows only the compositor chrome).  The desktop is kept usable
-> with the compositor on the SGX and the clients on `wl_shm`
-> (`/etc/catacomb/initrc` unsets the override; backup `.session68-pvr`).
-> **Report 269 §4e–§4f is the record; the next experiment is in §0f.**  Phosh
-> was rejected (too heavy for 1 GB); pvrports' patched phoc is proven.
+> **SESSION 69 RESULT (continuing session 68's GPU work): the GPU client path
+> is SOLVED and validated on the panel.**  Three things, in order.  (1) The
+> clients were software because
+> **catacomb (Smithay) served no `wl_drm`**, which Mesa 21.3.9's Wayland EGL
+> platform requires; catacomb now serves a PRIME-only one (r10002).  (2) The
+> surfaces were then **black** because Smithay binds an imported dma-buf
+> **without `GL_TEXTURE_WRAP_S/T`**: the default `REPEAT` makes the NPOT client
+> buffers incomplete GLES2 textures, which sample opaque black (r10003,
+> `smithay-eglimage-clamp.patch`, trap 347).  (3) The panel's modules were then
+> missing because **epitaph hard-codes GL attribute/uniform indices** that the
+> PowerVR linker assigns differently (`a_Position=2, a_UV=1, a_Flags=0,
+> u_Projection=1, u_Texture=2`), so its projection was never set and its glyphs
+> collapsed (`bind-attribs.patch`, r10008, trap 348).  **With both installed the
+> wallpaper, keyboard and the bar's text/icons render on the SGX and the UI is
+> responsive** — bar draw 1.5–30 ms (softpipe was 1.6–2.3 s), drawer 97 ms.
+> The clients now run on the SGX by default (the `wl_shm` safe state is
+> retired).  **Report 269 §4g–§4i is the record.**  Phosh was rejected (too
+> heavy for 1 GB); pvrports' patched phoc is proven and stays as a control.
 
 > **Session-67 result, in two lines.**  **The mailbox fault is fixed** (a
 > TWL6030 comparator freed by a failed probe — report 265), and **the second
@@ -51,8 +56,8 @@ registers with mgmt) with the controller-open parked (§0c).
 **What is left, in order:** the **GPU client path is done** (§0f, report 269 —
 catacomb now serves `wl_drm`, so Wayland clients are on the SGX).  Remaining: a
 heavy GPU workload / frame-latency measurement, the CPU voltage (§0e), the
-kernel affinity fix (§0e), the **hd3 rebake** (must include catacomb `r10002`,
-`epitaph` r10005, the llvmpipe files, the rules and the inittab line), and the
+kernel affinity fix (§0e), the **hd3 rebake** (must include catacomb `r10003`,
+`epitaph` r10008, the pvr initrc, the rules and the inittab line), and the
 throughput re-measure.  The **mailbox fault is fixed** (report 265) and **both
 cores now take userspace work** (report 266).  The **USB/VUSB teardown** is
 intermittent and open (§0d).
@@ -228,24 +233,68 @@ now that CPU 1 takes userspace work.
 
 ## 0f. SGX540, the desktop, and what is owed
 
-> **SESSION-68 RESULT — selection solved, presentation OPEN (report 269
-> §4e–§4f).**  The cause was that catacomb (Smithay) serves no `wl_drm`, and
-> Mesa 21.3.9's Wayland EGL platform obtains its DRM fd only through it.
-> catacomb now serves a PRIME-only `wl_drm` (`src/protocols/wl_drm.rs`,
-> `wl-drm-prime.patch`, package `1.5.0-r10002`).  **What works:** the clients
-> select the SGX — `global(32, "wl_drm", 2)`; `waylandtest.py` →
-> `PowerVR SGX 540`, `pvr_dri`; `epitaph`/`tabula`/`catacomb` map `pvr_dri`;
-> their linear `AR24` dmabufs (stride 4096, `modifier: Invalid`) import with no
-> error.  **What does not:** a `grim` capture is black except the compositor's
-> chrome — the client surfaces do not present; `wl_shm` clients do.  Safe state:
-> the compositor on the SGX, `/etc/catacomb/initrc` unsets
-> `MESA_LOADER_DRIVER_OVERRIDE` for its children (backup `.session68-pvr`), so
-> the desktop displays.  The experiment below is historical; do not re-run it.
-> The fix is on the live root, not the baked image: the rebake must include
-> catacomb r10002 + the initrc change.
+> **SESSION-68 RESULT — the client path works end-to-end (report 269 §4g–§4i).**
+> Three defects, each root-caused and fixed, in order: the missing `wl_drm`
+> (`wl-drm-prime.patch`, r10002); the imported texture bound with the default
+> `REPEAT` wrap, which makes the NPOT client buffers incomplete GLES2 textures
+> that sample black (`smithay-eglimage-clamp.patch`, r10003, trap 347); and
+> epitaph's literal GL attribute/uniform indices, which the PowerVR linker does
+> not honour (`bind-attribs.patch`, r10008, trap 348).  **Installed and
+> validated on the panel**: wallpaper, keyboard, bar text and icons, responsive
+> UI, bar draw 1.5–30 ms.  The pvr initrc is in place; `wl_shm` is no longer
+> used for clients.  **A rebake is owed** — the hd3 image still has catacomb
+> r10000, epitaph r10005 and no pvr initrc.
 >
-> **THE ONE EXPERIMENT (next session): is the client buffer content black, or
-> does the compositor sample it black?**
+> **THE ONE EXPERIMENT FOR SESSION 70 is trap 349** (a re-rendering pvr client
+> fails on its second buffer): see §0f.1 below.  The earlier Mesa-refusal
+> experiment and the FBO-readback plan are historical — do not re-run them.
+> **Housekeeping first:** the hd3 rebake (catacomb r10003 + epitaph r10008 + the
+> pvr initrc) — the live root has the result, the baked image does not.
+>
+> **ROOT-CAUSED AND FIXED IN SOURCE (same session) — the FBO readback is no
+> longer needed.**  The client buffers *do* carry their pixels; the compositor
+> sampled them black because **the imported texture was an incomplete GLES2
+> NPOT texture**: Smithay's `import_egl_image()` binds the EGLImage without
+> setting `GL_TEXTURE_WRAP_S/T`, and the default `REPEAT` makes any
+> non-power-of-two texture incomplete (sampling returns opaque black, no GL
+> error).  Client buffers are NPOT (1024x20, 1024x585, …); wlroots sets
+> `CLAMP_TO_EDGE`, which is why phoc presents the same client.  **Measured A/B**
+> (`tools/bench/egl/pb-gbmsample.c`, catacomb's renderer reproduced exactly):
+> no clamp → `first=(0,0,0,255) nz=0`; with clamp → `first=(0,255,0,255)
+> nz=64/64`.  **Fix:** `rootfs/catacomb/smithay-eglimage-clamp.patch`, applied
+> by catacomb **`pkgrel=10003`** after the two existing Smithay patches
+> (verified in order against the pinned revision).  **The build needs the
+> root-owned pmbootstrap chroot** — `local/work/nura/run-build-catacomb.sh` —
+> then install the APK, restore the pvr initrc, and check the panel.  Report
+> 269 §4g, trap 347, DECISIONS §102.
+>
+> **SECOND DEFECT, found once the clamp fix was installed (r10003): the panel
+> renders its background but no modules.**  A one-shot `glReadPixels` histogram
+> inside epitaph showed the whole 1024x20 bar is **one colour** `(24,24,24)`
+> with `glerr = 1282` (`GL_INVALID_OPERATION`) — the client drew only its clear
+> colour.  Cause: epitaph hard-codes GL attribute/uniform indices; the PowerVR
+> linker assigns `a_Position=2, a_UV=1, a_Flags=0, u_Projection=1,
+> u_Texture=2`, so the projection was never written and `glUniform4f(0, …)` hit
+> the sampler.  **Fix:** `bind-attribs.patch` (glBindAttribLocation +
+> glGetUniformLocation), epitaph **`pkgrel=10008`**; build with
+> `local/work/nura/run-build-epitaph.sh`.  Report 269 §4h, trap 348,
+> DECISIONS §102/§103.
+>
+> **VALIDATED END-TO-END (operator):** with r10003 + r10008 the wallpaper,
+> keyboard and the bar's text/icons all render on the SGX and the UI is
+> responsive; steady-state bar draw 1.5–30 ms (softpipe 1.6–2.3 s), drawer
+> 97 ms.  **The desktop now runs with the clients on the SGX** — the `wl_shm`
+> safe state is retired, and `/etc/catacomb/initrc` is the pvr variant (no
+> `unset`).  Report 269 §4i.
+>
+> **Open after that:** a pvr client that keeps re-rendering fails on its second
+> buffer in 3 of 5 runs (`CreateImageShared: Failed to create buffer`), never
+> under phoc — a pvr allocation defect around the second `eglSwapBuffers`
+> (trap 349).  Then: a heavy redraw measurement, and the hd3 rebake with
+> catacomb r10003 + epitaph r10008 + the initrc change.
+>
+> **The historical experiment (kept for the record): is the client buffer
+> content black, or does the compositor sample it black?**
 > Add a one-shot **FBO readback** to catacomb's `DmabufHandler::dmabuf_imported`
 > (`src/catacomb.rs`): after `renderer.import_dmabuf(&buffer, None)` succeeds,
 > render the returned texture to an 8×8 FBO with a known shader and
@@ -308,6 +357,50 @@ eliminated: the PFN/`vm_pgoff` bug class from source A — `VM_MIXEDMAP` implies
 is gone) but it reports `softpipe` with the amber `swrast_dri.so`, so the
 session-60 llvmpipe replacement is missing from the image too.  The compositor
 is on the GPU (`catacomb` maps `pvr_dri` + `gbm`); the **clients** are not.
+
+### §0f.1 THE ONE EXPERIMENT for session 70 — why does a re-rendering pvr client fail on its second buffer? (trap 349)
+
+**Known (measured, session 69).**  Under catacomb r10003 a client that swaps
+repeatedly dies on its **second** buffer in ~3 of 5 runs:
+`CreateImageShared: Failed to create buffer`,
+`PVRImageDrawableGetNativeInfo: Image get buffers call failed`,
+`PVRDRIBufferCreate: Failed to create plane`, and the underlying
+`PVRRenderBufferInitFromFdNoOffset … PVRSRV_ERROR_BAD_MAPPING`.  It survives a
+clean reboot, so it is not leaked GPU memory.  Under **phoc** the same client
+swaps indefinitely (per-frame loop lines, `wl_buffer` ids 13/14/15 recycled).
+Both compositors advertise `wl_drm` PRIME, both send `/dev/dri/renderD128`, and
+both send `wl_buffer.release` (8–9 per 5 swaps measured).  Static clients
+(wallpaper, bar) are unaffected.
+
+**Exact inputs** (push the probe first — `/tmp` is tmpfs):
+
+```sh
+# on the unit, pvr client state (catacomb, wayland-1)
+XDG_RUNTIME_DIR=/run/user/10000 WAYLAND_DISPLAY=wayland-1 \
+MESA_LOADER_DRIVER_OVERRIDE=pvr WAYLAND_DEBUG=1 \
+  /tmp/pb-egltest 700 300 6 > /tmp/wd-cat.log 2>&1
+# and the control (phoc-pb.desktop active, wayland-0)
+XDG_RUNTIME_DIR=/run/user/10000 WAYLAND_DISPLAY=wayland-0 \
+MESA_LOADER_DRIVER_OVERRIDE=pvr WAYLAND_DEBUG=1 \
+  /tmp/pb-egltest 700 300 6 > /tmp/wd-phoc.log 2>&1
+```
+
+Then, in each log, time-order `create_prime_buffer`, `wl_surface.commit` and
+`wl_buffer#N.release`, and record the index and timestamp of the first failure.
+Also capture, before and after: `cat /sys/kernel/debug/dma_buf/bufinfo` (if
+present) and `grep -c dmabuf /proc/$(pgrep -x catacomb)/fd/*`.
+
+**What each result means.**
+
+| result | meaning | next action |
+|---|---|---|
+| catacomb's `release` for buffer N arrives **after** the client allocates N+1 (phoc releases before) | catacomb holds client buffers too long | audit `Buffer`/`RenderTexture` lifetimes in `catacomb/src/windows/window.rs` (`data.texture`, `Buffer::with_implicit`) and drop the old buffer on replacement |
+| failure reproduces when only **one** buffer is outstanding (render, wait, render) | it is the pvr DDK's second allocation, independent of the compositor | treat as a driver limitation: make the panel/animated clients reuse buffers, or fix in the DDK; do not chase catacomb |
+| failure rate rises with a second concurrent pvr client | allocation pressure (catacomb's import/scanout caching) | measure the pvr memory context; try freeing cached textures on release |
+| no failure with the probe, only with the desktop's own clients | an interaction with catacomb's texture cache | instrument `DmabufHandler::dmabuf_imported` to log buffer lifetimes |
+
+**Pass criterion:** the client completes its full run under catacomb with the
+same swap count as under phoc, and the desktop stays up.
 
 ### THE ONE EXPERIMENT for session 68 — why does Mesa's wayland platform refuse pvr?
 
@@ -479,11 +572,19 @@ Local helper/workspace this session: `local/work/export67/`.
 * **WLAN checks:** `lsmod` must show **`ccm` and `ctr`**;
   `ip link set wlan0 up` → `wlcore: firmware booted (Rev 7.3.5.0.98)`.
 * **WM8994:** `i2ctransfer` args are DECIMAL (trap 166); bus 4, addr `0x1a`.
-* **`epitaph` on hd3 is now `1.4.0-r10005`** (installed this session; the `r0`
-  segfault is gone).  It still reports `softpipe`, not the GPU — §0f.  A reflash
-  of the session-59 image reverts it to the broken `r0` (trap 343).
+* **`epitaph` on hd3 is now `1.4.0-r10008`** — it renders **on the SGX**
+  (report 269 §4i) and no longer reports `softpipe`.  r10005 was the session-67
+  fix for the `r0` segfault; r10008 additionally binds the GL attribute and
+  uniform locations the PowerVR linker assigns differently (trap 348).  A
+  reflash of the session-59 image reverts all of it (trap 343).
 
-## 4. Traps added last session (full list 14–344 in `KNOWN-ISSUES.md` §2)
+## 4. Traps added last session (full list 14–350 in `KNOWN-ISSUES.md` §2)
+
+* **Session 68 added 345/346** (the `wl_drm` gate; selection ≠ presentation).
+  **Session 69 added 347–350:** **347** imported dma-buf bound as an incomplete
+  GLES2 NPOT texture (the black clients); **348** hard-coded GL
+  attribute/uniform indices in epitaph; **349** pvr second-buffer allocation
+  flakiness (open); **350** cosmetic pixel glitches (open).
 
 * **334.** The kernel was built **`-march=armv6k`** because
   `CONFIG_ARCH_MULTI_V6=y` selects `CPU_ARM1176 → CPU_V6K → CPU_32v6`, and
@@ -586,96 +687,81 @@ Local helper/workspace this session: `local/work/export67/`.
 * **Look up every external fact** (the operator's rule; the assistant's
   knowledge is frozen).
 * **Only the operator decides when to stop / wrap up.**
+* **Ask the operator what is on the panel** for a visual check; do not take
+  screenshots (grim/fb0) instead — operator preference, session 68.
 
 ## 7. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 68 (absolute; Linux-era 62)
+PlayBook (OMAP4430 "winchester") — session 70 (absolute; Linux-era 64)
 
 Workspace: this repository — a git checkout.  Map: docs/README.md.  The earlier
 work tree $HOME/rea-work is READ-ONLY.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 14-344, especially 333-344)
-and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 91-100,
-docs/reports/INDEX.md, reports 268, 267, 266, 265, 264, 263, 257, and
-sessions/session-67.md.
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 14-350, especially
+333-350) and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 91-103,
+docs/reports/INDEX.md, reports 269 (current), 268, 267, 266, 265, 264, 263,
+257, and docs/sessions/session-69.md (and session-68.md for its first half).
 
-WHERE IT STANDS: the unit runs Linux 7.3.3, dual-core at 1008 MHz, on the ARMv7
-image 0x3547D613 (#109 SMP), with the Nura root on hd3 (grown to 62.5 G, ARMv7
-modules installed); pvrsrvkm binds and catacomb runs.  THE MAILBOX FAULT IS
-FIXED (report 265, trap 339): the Oops was a freed TWL6030 phy_companion —
-twl6030_usb_probe() registered &twl->comparator before ldo_init(), a deferred
-vusb was collapsed to -ENODEV, the probe failed permanently and devres freed
-the devm twl while phy->comparator dangled; the winchester early return is gone
-and the stock omap_musb_set_mailbox() call runs (3/3 clean boots).  AND THE
-SECOND CORE WAS DOING NO USERSPACE WORK (report 266, trap 340): PID 1 was
-affinity-masked to {0}, so nproc read 1 with online=0-1; hd3's /etc/inittab now
-has ::sysinit:/usr/sbin/taskset -p 3 1 (nproc 2, load balanced, 2 boots each
-way).  cpufreq-dt IS bound and scales (300000 600000 800000 1008000, ondemand);
-no CPU supply is attached, and the twl6030_uv_to_vsel OUT OF RANGE lines are
-startup VC init clamped to VSEL 0x3A = 1.35 V, the chainloader's own value.
+WHERE IT STANDS: the unit runs Linux 7.3.3 (region 0 0x3547D613, #109 SMP,
+ARMv7, dual-core 1008 MHz) with the Nura root on hd3 (62.5 G).  **THE GPU
+CLIENT PATH IS DONE AND VALIDATED ON THE PANEL (session 69):** Wayland clients
+render on the SGX.  catacomb 1.5.0-r10003 (rootfs/catacomb/smithay-eglimage-clamp.patch)
+and epitaph 1.4.0-r10008 (rootfs/epitaph/bind-attribs.patch) are installed on
+the live root; /etc/catacomb/initrc is the pvr variant (no unset); the
+wallpaper, keyboard and the bar's text/icons all render on the SGX and the UI
+is responsive (bar draw 1.5-30 ms, was 1.6-2.3 s on softpipe).  The two defects
+were: Smithay bound imported dma-bufs without GL_TEXTURE_WRAP_S/T, so the NPOT
+client buffers were incomplete GLES2 textures sampling black (trap 347); and
+epitaph hard-coded GL attribute/uniform locations that the PowerVR linker
+assigns differently (trap 348).  Report 269 §4g-§4i is the record.
 
-THIS SESSION IS THE GPU SESSION (operator directive).  Read report 268 first: it
-surveys these sources and says what each is worth —
-https://github.com/zsavajji/pvr_sgx_rm696 (N9 SGX530 on mainline 6.18 with the
-closed userspace kept; best method + bug checklist),
-https://github.com/zsavajji/linux_mainline_rm696 (its DT kernel),
-https://gitlab.com/pvrports/pvrports (our DDK 1.17 blobs; supported UIs are
-Phosh/their phoc and Plasma-Mobile, not catacomb),
-https://github.com/The1TrueJoe/powervr_sgx (fully open stack; SGX540 wanted;
-docs/porting is the bring-up method),
-https://github.com/openpvrsgx-devgroup/linux_openpvrsgx (the kernel driver we
-vendor; kernel-only by charter),
-https://codeberg.org/Garnet/sgx540-reversing (SGX540 ISA/PDS RE tooling),
-https://e2e.ti.com/support/processors-group/processors/f/processors-forum/287992/powervr-sgx540-linux-drivers
-(historical only).  MEASURED: the SGX works through libEGL's GBM/DRM platform
-(12 window configs, PowerVR SGX 540, EGL_MESA_image_dma_buf_export present);
-only the Wayland-client path does not select it.  PLAN: (1) diagnose why Mesa's
-wayland platform rejects pvr (EGL_LOG_LEVEL=debug MESA_DEBUG=1
-MESA_LOADER_DRIVER_OVERRIDE=pvr ... epitaph) — do not patch Mesa before this;
-(2) prove the vendor-supported GBM path by bringing up pvrports' phoc; (3)
-decide with data.  The PFN/vm_pgoff bug class is already eliminated
-(VM_MIXEDMAP => PVR_MAKE_ALL_PFNS_SPECIAL => compiled out).
+THE ONE EXPERIMENT (session 70): trap 349 — why does a re-rendering pvr client
+fail on its SECOND buffer under catacomb (3 of 5 runs) and never under phoc?
+HANDOFF §0f.1 has the exact inputs (pb-egltest under catacomb and under phoc
+with WAYLAND_DEBUG=1), the capture to compare, and what each result means.
+Do not re-run the session-68 Mesa-refusal/FBO-readback experiments.
 
-OTHER ACTIVE ITEMS, after the GPU: (b) decide the CPU voltage:
-attach a supply binding or keep 1.35 V for all OPPs and skip the out-of-range
-OPP entry (this TWL6030 revision cannot express >1.317 V except the hardcoded
-1.35 V; 1.2 GHz crashes, report 257); (c) replace the inittab affinity line with
-a kernel fix — one instrumented boot printing cpu_active_mask/cpu_online_mask at
-the top of sched_init_smp() and PID 1's cpus_mask after the call would settle it
-(the PBCPU/PBDBG markers are already in local/kernel-tree/init/main.c); (d) the
-intermittent USB teardown (trap 337) — capture before the drop; (e) rebake the
-hd3 base with epitaph r10005+, the llvmpipe files, the rules AND the inittab
-line; (f) re-measure the memory throughput (report 263 §4b) — the old number is
-single-core.
+HOUSEKEEPING FIRST (after the experiment, or before it if the operator wants
+durability): the hd3 REBAKE with catacomb r10003, epitaph r10008, the pvr
+initrc, the rules and the inittab line.  The baked image is still the
+session-59 state; a reflash reverts the whole GPU result (trap-343 class).
+The build needs the root-owned pmbootstrap chroot:
+local/work/nura/run-build-catacomb.sh and run-build-epitaph.sh (the operator
+runs them).  Installing an APK on the unit is done offline:
+`apk add --no-network --allow-untrusted --upgrade /tmp/x.apk`.
 
-BENCH: region 0 = 0x3547D613 (#109 SMP, stock mailbox + comparator fix,
-panic=0) at block 0x825; region 1 = the BusyBox ext4 (sha256 20a5edd3..., was
-6f5b8ca7...) at 0x29000000
-(fallback, not booted); hd3 = the Nura ext4 07555bde... at 0x4915, grown to
-62.5 G, now with the inittab affinity line and `epitaph-1.4.0-r10005`.  SSH:
-PB_LINK=usb tools/pbssh.sh WORKS; if it times out check the host's VPN
-(trap 341) and ufw (trap 342) before the USB side.  The ACM (playbook:~#, not
-pb>) is the fallback — local/work/pbcmd.py runs one command and waits for its
-own marker.  Kernel printk goes to the panel; the
-console=ttyGS0 bootarg is inert.  Use `reboot -f` on the Nura root (plain
-reboot is very slow).  BOOTCTR_FCTRY = 0x24 at the session-67 close; read it
-with dmesg | grep pbrpmb.  Start the flasher, then reset/power on (the
-power-on bootrom holds ~20 s); the 626 MB hd3 write takes ~20 min.  /tmp is
-tmpfs; re-push ringdump.  Read dmesg UNFILTERED.  The eMMC WRITE-busy stall is
-live and has damaged the rw ext4 once — prefer clean reboots.  An agent NEVER
-writes RPMB; NVRAM read-only.  Never program WDT2 from the chainloader (trap
-322).
+ALSO OPEN: trap 350 (cosmetic pixel glitches on shm/dmabuf clients; prime
+suspect the bring-up-era "no GL_EXT_unpack_subimage" upload path and the
+damage/repaint code, not the session-69 fixes); a heavy-redraw/frame-latency
+measurement (the static desktop is measured); (b) the CPU voltage decision
+(attach a supply binding or keep 1.35 V for all OPPs; 1.2 GHz crashes, report
+257); (c) the kernel-side PID-1 affinity fix to replace the hd3 inittab line
+(one instrumented boot printing cpu_active_mask/cpu_online_mask in
+sched_init_smp(); PBCPU/PBDBG markers already in local/kernel-tree/init/main.c);
+(d) the intermittent USB teardown (trap 337) — capture before the drop; (f)
+re-measure memory throughput (report 263 §4b) — the old figure is single-core.
 
-PATCH: 67 files / 9 136 lines, sha256 d19adff8..., verified 0 rejects / 67/67
-against pristine 7.3.3 (session 67).  Re-export (and update
-kernel/patches/README.md + KERNEL-PORT.md) after any DTS or driver change.  The
-reliable method is in §2: pristine + the previous patch, overwrite the intended
-files, diff -u -N, apply to a fresh pristine scratch and cmp every file; run the
-tree walk (trap 211).  `local/work/export67/` is the working example.  No kernel
-change was needed for the affinity workaround (it is on hd3), so the patch is
-unchanged by it.
+BENCH (verified at the session-69 close): region 0 trailer = 1f 2d c8 d7 13 d6
+47 35 -> CRC 0x3547D613 (boot/chainloader/kernel.img, 10,448,868 B, sha256
+6ecd068d...); region 1 = sha256 20a5edd3... (64 MiB at 0x29000000, not booted);
+hd3 = the Nura ext4 (ext4 magic 0xEF53 at 0x49000438, 15,273,984 blocks, root
+/dev/loop0 rw).  BOOTCTR_FCTRY = 0x22; /init tops up below 0x1e.  SSH:
+PB_LINK=usb tools/pbssh.sh WORKS; if it times out check the host VPN (trap 341)
+and ufw (trap 342) first.  Kernel printk goes to the panel; console=ttyGS0 is
+inert.  Use `reboot -f` (plain reboot is very slow).  Start the flasher, then
+reset/power on (the bootrom holds ~20 s); a 626 MB hd3 write takes ~20 min.
+/tmp is tmpfs — re-push the probes (tools/bench/egl/).  Read dmesg UNFILTERED.
+**Ask the operator what is on the panel for a visual check; do not take
+screenshots.**  An agent never writes RPMB; NVRAM read-only; never program
+WDT2 from the chainloader (trap 322).
+
+PATCH: unchanged by sessions 68/69 (no kernel/DTS change) — 67 files / 9 136
+lines, sha256 d19adff8..., verified 0 rejects / 67/67 against pristine 7.3.3.
+Re-export (and update kernel/patches/README.md + KERNEL-PORT.md) after any DTS
+or driver change; the reliable method is in §2, with local/work/export67/ as
+the working example.
 
 SAFETY: read SAFETY.md first.  One variable per boot.  Flash region 0 only when
 only it changed; both regions in one bootrom session only when both changed.
@@ -683,8 +769,8 @@ The hard hazards (BOOTCTR_FCTRY 0 / >0x32 / failed write / flat pack) remain.
 
 UPDATE THE DOCS as you go and commit: STATE.md, HANDOFF.md, ROADMAP.md,
 KNOWN-ISSUES.md, DECISIONS.md and the session note.  WRAP-UP: only the operator
-decides when the session stops.  Record the bench state, write the session note,
-update the canonical docs, verify with tools/docs_audit.py and
-tools/tests/test_offline.py, then commit privately and publish the snapshot
+decides when the session stops; then record the bench state, write the session
+note, update the canonical docs, verify with tools/docs_audit.py and
+tools/tests/test_offline.py, commit privately and publish the snapshot
 (docs/project/REPO-MANAGEMENT.md).  No restore is required.
 ```

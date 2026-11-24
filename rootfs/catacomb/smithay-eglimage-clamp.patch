@@ -1,0 +1,15 @@
+--- a/src/backend/renderer/gles/mod.rs
++++ b/src/backend/renderer/gles/mod.rs
+@@ -1339,6 +1339,12 @@
+         unsafe {
+             self.gl.BindTexture(target, tex);
+             self.gl.EGLImageTargetTexture2DOES(target, image);
++            // GLES 2.0 incomplete-texture rule: a non-power-of-two texture
++            // with the default REPEAT wrap is incomplete and samples as
++            // opaque black.  Client buffers are commonly NPOT (1024x20,
++            // 1024x585, ...), so clamp, exactly as the shm/surface imports do.
++            self.gl.TexParameteri(target, ffi::TEXTURE_WRAP_S, ffi::CLAMP_TO_EDGE as i32);
++            self.gl.TexParameteri(target, ffi::TEXTURE_WRAP_T, ffi::CLAMP_TO_EDGE as i32);
+             self.gl.BindTexture(target, 0);
+         }
+ 

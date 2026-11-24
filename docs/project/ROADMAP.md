@@ -5,16 +5,27 @@ Open work only; closed and parked item history is archived in
 item states the evidence that would close it.  Completed *steps* are kept inline
 only where an open item's sequence needs them (item 7a), marked "Done (session N)".
 
-Current focus: **item 7a — put the UI on the GPU.  The driver gate is solved;
-client presentation is open (session 68).**  The SGX540 works (kernel driver +
-pvrports userspace; EGL/GLES 2.0 on `PowerVR SGX 540`), and catacomb now
-serves a **PRIME-only `wl_drm`**, so Wayland clients **select** the SGX (they
-map `pvr_dri` and report `PowerVR SGX 540`) — **but their frames do not
-present** (a `grim` capture is black except the compositor chrome).  Safe
-state: the compositor on the SGX, the clients on `wl_shm` (report 269
-§4e–§4f).  Remaining under 7a: fix the client buffer presentation, bake
-catacomb `1.5.0-r10002` + the initrc change into the hd3 image, and keep the
-fully open `powervr_sgx` stack as the long-term route.  The unit runs
+Current focus: **item 7a — put the UI on the GPU.  DONE (sessions 68–69): the
+clients run on the SGX and the desktop is responsive.**  Two defects were
+root-caused and fixed: the compositor bound imported dma-bufs as incomplete
+GLES2 NPOT textures (catacomb `smithay-eglimage-clamp.patch`, r10003), and the
+panel client hard-coded GL attribute/uniform indexes that the PowerVR linker
+assigns differently (epitaph `bind-attribs.patch`, r10008).  Validated on the
+panel: wallpaper, keyboard and the bar's text/icons render on the SGX; bar draw
+1.5–30 ms.  Remaining: the pvr second-buffer allocation flakiness (trap 349),
+a heavy-redraw measurement, and the hd3 rebake with the two packages.
+The SGX540 works (kernel driver + pvrports userspace; EGL/GLES 2.0 on
+`PowerVR SGX 540`), catacomb serves a **PRIME-only `wl_drm`**, and the clients
+select the SGX — but their surfaces were black because **Smithay binds the
+imported dma-buf as an incomplete GLES2 NPOT texture** (default `REPEAT` wrap;
+client buffers are 1024x20/1024x585).  **Fix:**
+`rootfs/catacomb/smithay-eglimage-clamp.patch` (set `CLAMP_TO_EDGE`), packaged
+as catacomb `1.5.0-r10003`; the remaining step is the root-owned build, then
+the panel check.  Measured A/B in `tools/bench/egl/pb-gbmsample.c`; report 269
+§4g, trap 347, DECISIONS §102.  Safe state meanwhile: the compositor on the
+SGX, the clients on `wl_shm`.  Remaining under 7a: install r10003, bake it +
+the initrc change into the hd3 image, and keep the fully open `powervr_sgx`
+stack as the long-term route.  The unit runs
 **dual-core ARMv7 at 1008 MHz** with `cpufreq-dt` bound (OPPs 300/600/800/1008
 MHz; the only gap is the unattached CPU supply), on region 0 `0x3547D613`; hd3
 holds the Nura root, **writable, grown to 62.5 G**, with **SSH working**
@@ -331,8 +342,15 @@ flasher can replace at every point:
     (`nproc` 2, load spread evenly, 2 boots with it and 3 without); a kernel-side
     fix in `sched_init_smp()` is owed.  `cpufreq-dt` **does** exist and scale, so
     the old "no cpufreq policy" note was stale.  **Session 67 opened the GPU
-    question and session 68 owns it (report 268 is the plan, report 267 the
-    measurement).**  Measured: a Wayland client gets `swrast_dri`/`softpipe`
+    question and sessions 68–69 own it (report 268 is the plan, report 267 the
+    measurement).  **Sessions 68–69 result:** the selection gate was the missing
+    `wl_drm` (catacomb now serves a PRIME-only one, report 269 §4c–§4e); the
+    presentation defect was **GLES2 NPOT texture completeness** — the imported
+    dma-buf texture kept the default `REPEAT` wrap, so it sampled opaque black
+    (report 269 §4g, trap 347, DECISIONS §102).  The fix
+    (`rootfs/catacomb/smithay-eglimage-clamp.patch`, catacomb `pkgrel=10003`)
+    is written and verified in build order; it needs the root-owned
+    pmbootstrap build.**  Measured: a Wayland client gets `swrast_dri`/`softpipe`
     even with `MESA_LOADER_DRIVER_OVERRIDE=pvr`, while the **GBM/DRM** platform
     *does* reach the SGX (12 window configs, `PowerVR SGX 540`,
     `EGL_MESA_image_dma_buf_export`); the compositor (`catacomb`) already uses
