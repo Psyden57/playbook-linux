@@ -1,0 +1,55 @@
+// PlayBook bench polkit rules for the desktop session (session 70).
+//
+// WHY: the desktop runs as the unprivileged user `playbook` (uid 10000) under
+// catacomb.  Without these, the bar's brightness/Wi-Fi toggles and gorm's
+// scan/connect all fail with PermissionDenied, and the only way to change
+// anything is root over SSH.
+//
+// Installed as /etc/polkit-1/rules.d/50-playbook-desktop.rules (root:polkitd
+// 0640, the directory is 0750 root:polkitd).  polkitd re-reads the directory on
+// change, so no restart is needed.
+//
+// SCOPE: every rule requires the subject to be in the `playbook` group (all the
+// desktop clients run as that user).  Nothing is granted to arbitrary users, and
+// no rule allows raw network configuration outside NetworkManager.
+
+/* NetworkManager: let the desktop user scan, enable/disable radios, and
+ * connect to a chosen AP.  This is exactly the set gorm needs and the bar's
+ * Wi-Fi toggle needs; it does NOT grant netlink-level control. */
+polkit.addRule(function(action, subject) {
+    if (!subject.isInGroup("playbook"))
+        return null;
+
+    var nm = [
+        "org.freedesktop.NetworkManager.network-control",
+        "org.freedesktop.NetworkManager.wifi.scan",
+        "org.freedesktop.NetworkManager.wifi.share.open",
+        "org.freedesktop.NetworkManager.enable-disable-wifi",
+        "org.freedesktop.NetworkManager.enable-disable-network",
+        "org.freedesktop.NetworkManager.settings.modify.system",
+        "org.freedesktop.NetworkManager.settings.modify.own",
+        "org.freedesktop.NetworkManager.sleep-wake"
+    ];
+
+    if (nm.indexOf(action.id) !== -1)
+        return polkit.Result.YES;
+
+    return null;
+});
+
+/* Backlight: the bar's brightness slider writes
+ * /sys/class/backlight/backlight/brightness, which is root-only 0644.  A udev
+ * rule grants the `video` group write access; the desktop user is in it.  This
+ * polkit rule is the belt-and-braces path for any client that goes through
+ * logind/UPower instead of writing the sysfs node directly. */
+polkit.addRule(function(action, subject) {
+    if (!subject.isInGroup("playbook"))
+        return null;
+
+    if (action.id == "org.freedesktop.login1.set-brightness" ||
+        action.id == "org.freedesktop.login1.set-brightness-quiet" ||
+        action.id.indexOf("org.freedesktop.UPower.") === 0)
+        return polkit.Result.YES;
+
+    return null;
+});

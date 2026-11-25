@@ -1,0 +1,18 @@
+# Make the backlight writable by the `video` group (session 70).
+#
+# WHY: /sys/class/backlight/backlight/brightness is created root:root 0644, so
+# the desktop user (playbook, in `video`) cannot change the brightness and the
+# bar's slider does nothing.  This is the same fix every phone distro ships.
+#
+# Install as /etc/udev/rules.d/90-playbook-backlight.rules, then
+#   udevadm control --reload-rules && udevadm trigger --subsystem-match=backlight
+#
+# MEASURED (session 70) — this device's backlight is a *class device with no
+# devnode*: `udevadm info -q all -p /sys/class/backlight/backlight` reports
+# `E: SUBSYSTEM=backlight` and nothing else, **no `KERNEL=` property at all**.
+# So a rule matching `KERNEL=="backlight"` never fires (that was the first
+# attempt and it silently did nothing).  Match on SUBSYSTEM only, and use
+# ATTR{} instead of a literal path.
+SUBSYSTEM=="backlight", ACTION=="add", \
+  RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", \
+  RUN+="/bin/chmod 0664 /sys/class/backlight/%k/brightness"
