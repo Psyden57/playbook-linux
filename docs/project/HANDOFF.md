@@ -63,7 +63,8 @@ parked (§0c).
 validated (report 269 §4g–§4i), trap 349 is closed (report 270), and the 8×
 buffer waste behind it is **fixed and deployed** (report 271).  **Remaining, and
 the first item is durability not function: the hd3 rebake** (§0f.1), then the
-**browser project** the operator wants next — **cog first, then Kumo** (§0f.2),
+**browser project** the operator wants next — **Kumo on WPE from the fork**
+(§0f.2),
 trap **350** (cosmetic glitches), a heavy-redraw measurement, packaging the pitch
 fix, the CPU voltage decision (§0e), the kernel-side affinity fix (§0e), the USB
 teardown (§0d), and the throughput re-measure.
@@ -314,78 +315,113 @@ reproduce under 8 re-rendering clients, and the pitch fix is in the image — so
 
 ### §0f.2 The browser project (operator's next goal, session 71+)
 
-**Goal:** a modern browser on this tablet.  `netsurf` (31 MiB RSS, launches fine,
-see §0b) is too old for modern sites; the operator wants **WPE WebKit**.
+**Goal:** a modern browser on this tablet.  `netsurf` (31 MiB RSS, launches fine —
+see §0b) is too old for modern sites.  The target is **Kumo**, the browser
+catacomb ships, on **WPE WebKit** — built from the maintainer's fork.
 
 **Why WPE and not WebKitGTK.**  WPE is the *embedded* WebKit port: it renders
-through **EGL/GLES2 with no GTK and no X11**, which is exactly this unit's
-SGX540 path (independently confirmed: Alpine builds WebKit 2.54.2 for armv7, so
-32-bit ARM is still supported upstream).  `webkit2gtk-4.1` (75.7 MiB installed)
-drags in GTK3 + X11 + cairo for the same engine.  **jwm/openbox are not an
-option** for this: they are X11-only, there is no Xorg on the unit, and replacing
-a 17 MiB GPU compositor with Xorg + a WM is bigger *and* loses EGL/GLES2.
+through **EGL/GLES2 with no GTK and no X11**, which is exactly this unit's SGX540
+path.  `webkit2gtk-4.1` (75.7 MiB installed, packaged) drags in GTK3 + X11 + cairo
+for the same engine.  **jwm/openbox are not an option**: X11-only, no Xorg on the
+unit, and it would replace a 17 MiB GPU compositor with a bigger *non-GPU* stack.
 
-**The gate — verified, and it blocks BOTH steps below:** there is **no
-`wpewebkit` package for armv7 in Alpine** (checked `main`, `community` and
-`testing`; only `libwpe` 1.16.3 and `libwpebackend-fdo` 1.16.1 exist), and no
-APKBUILD for it in aports.  So the engine itself must be built, whichever shell
-is used.
+### The fork is the right base — it is not general divergence (corrected)
 
-**Step 1 (cheap, do first) — prove the engine on this GPU with `cog`.**
-`cog` is Igalia's WPE reference launcher (github.com/Igalia/cog, "WPE launcher
-and webapp container").  ⚠ **`cogapp` in Alpine is `nedbat/cog`, a Python
-templating tool — unrelated.**  cog's own meson requires
-`dependency('wpe-webkit-1.0')` (or `-2.0`), so it needs the same missing engine;
-it is not a shortcut around the build, only a much smaller *client* to validate
-it with.
+An earlier draft of this section said "try upstream wpewebkit first".  **That was
+wrong and is withdrawn.**  The fork was fetched and its own commits read; it is
+**WebKitGTK 2.54.2/2.54.3 plus a small set of touch-specific patches**, and those
+patches are exactly what makes a browser usable on a touchscreen-only device:
 
-*Order of work:* build `wpewebkit` for armv7 →
-`libwpebackend-fdo` is already packaged (the Wayland/EGL backend, exactly what we
-need) → build `cog` → run it under catacomb and measure a real page's RSS and
-first-render time.
+| fork commit | what it adds |
+|---|---|
+| `41dbc7cc99` | **touch gesture for page zoom** — `WPEWebViewPlatform.cpp`, `WPEGestureController` |
+| `dd88b3eb8d` | **touch context menu support** — ~87 lines in the WPE view platform |
+| `b86110562d` | WPE context menu support |
+| `8e81edd149` | improve text search colors |
+| `5ef6e19e41` | fix segfault cancelling a finished download |
+| `e4f4ac7156` | fix segfault on preedit change |
 
-**Exact package facts (Alpine edge, armv7, read from APKINDEX this session):**
+Upstream WPE has **neither** touch zoom nor a touch context menu, so upstream
+would yield a browser that cannot really be operated here.  The rest of the
+fork's history is upstream cherry-picks and test gardening.
+
+**Note on the "777 commits ahead / 10,080 behind" figure** (also in an earlier
+draft): misleading, and read that way it invents divergence that is not there.
+That is the count against upstream **`main`**; the fork tracks the **2.54 release
+series**, which `main` has long passed.  Against its real base it is ~6 own
+commits.
+
+### Verified facts (read this session — do not re-derive)
+
+Fork: **`github.com/chrisduerr/WebKit`**, branch `main`, HEAD `e4f4ac71`,
+reachable (HTTP 200 for both repo and the pinned rev Kumo uses).
+
+Alpine edge **armv7** packages (from `APKINDEX`):
 
 | package | version | installed | note |
 |---|---|---|---|
 | `libwpe` | 1.16.3-r0 | ~0 MiB | packaged — use it |
-| `libwpebackend-fdo` | 1.16.1-r0 | ~0 MiB | packaged — the **Wayland/EGL** backend, needs `libwayland-egl`, `libepoxy` (both present) |
-| `wpewebkit` | — | — | **ABSENT for armv7** (main/community/testing) — must be built |
-| `webkit2gtk-4.1` | 2.54.2-r2 | 75.7 MiB | packaged, proof armv7 WebKit builds — but GTK/X11, not what we want |
-| `cogapp` | 3.6.0-r2 | 0.1 MiB | ⚠ **nedbat/cog, a Python templating tool — NOT Igalia's cog** |
+| `libwpebackend-fdo` | 1.16.1-r0 | ~0 MiB | packaged — the **Wayland/EGL** backend; deps `libwayland-egl`, `libepoxy` already present |
+| `wpewebkit` | — | — | **ABSENT for armv7** in main/community/testing, and no APKBUILD in aports |
+| `webkit2gtk-4.1` | 2.54.2-r2 | 75.7 MiB | packaged — **proof that WebKit 2.54 builds for armv7**, so 32-bit ARM is not the blocker |
+| `cogapp` | 3.6.0-r2 | 0.1 MiB | ⚠ **`nedbat/cog`, a Python templating tool — NOT Igalia's cog** |
 
-**Pass criterion for step 1:** cog renders a real page through
-`libwpebackend-fdo` on the SGX (`pvr_dri` mapped, `GL_RENDERER = PowerVR SGX
-540`), the panel shows content, and a measured RSS/load-time.  **If a page is
-unusably slow here, Kumo will not rescue it** — stop and reconsider before step 2.
+Kumo: **`git.sr.ht/~undeadleech/kumo`**, version 1.10.0, `rust-version 1.92.0`.
+It has **two engines**, both feature-gated:
 
-**Step 2 (only if step 1 is acceptable) — Kumo.**
-Kumo is the browser catacomb ships (catacombing.org lists it; it is *missing*
-from the Nura package set).  Repo: **`git.sr.ht/~undeadleech/kumo`**.
-Per its README, its required dependency is
-**`wpewebkit` = `libWPEWebKit-2.0` from the fork `github.com/chrisduerr/WebKit`**
-— i.e. a WebKit **fork**, not upstream.  That fork is real and actively
-maintained (pushed 2026-11-24) but is **777 commits ahead / 10,080 behind
-upstream**: its own divergent branch, not a thin patch.  Then `cargo build
---release`.
+```toml
+default = ["servo", "webkit"]
+servo  = ["dep:dpi","dep:euclid","dep:keyboard-types","dep:servo","dep:surfman"]
+webkit = ["dep:wpe-platform","dep:wpe-webkit"]
+```
 
-*Order of work:* try building **upstream** `wpewebkit` first and attempt Kumo
-against it — the fork may differ in features rather than in the
-`libWPEWebKit-2.0` API.  Only if that fails, build the fork.  Then a `kumo`
-APKBUILD.  Optional media: `gst-plugins-{base,good,bad}` + `gst-libav` (the
-README marks these optional).
+The `webkit` path pins `libWPEWebKit-2.0` from the fork above.  The `servo` path
+pins `github.com/chrisduerr/servo` @ `6235c7b9` and renders through
+`glutin 0.32` with **`features = ["wayland"]`** (no glx, no x11) — so that path is
+EGL/GLES too.
 
-**Scale, stated honestly:** WebKit is one of the largest C++ codebases in
-existence, and this host would be cross-building it for a 2-core 1 GHz Cortex-A9.
-Expect a long build and a large toolchain footprint (disk is 81 % used, 40 GB
-free).  **Do not start it blind** — step 1 exists to spend a little to learn
-whether the engine is viable on this GPU at all.
+### The plan
+
+**Step 1 — build the fork's WPE WebKit for armv7.**
+`git clone https://github.com/chrisduerr/WebKit`, checkout `e4f4ac71`, build the
+**WPE** port (not GTK) with the EGL/GLES2 target platform, against
+`libwpe` + `libwpebackend-fdo` (both packaged).  Do it in the root-owned
+pmbootstrap chroot (`local/work/nura/run-build-*.sh` is the pattern; the chroot
+is deleted after each build, so it is re-created per run).
+
+*First check, before the long build:* confirm the fork's `WPEGestureController`
+API matches what Kumo's `wpe-platform` crate expects.  The fork **adds**
+`WPEGestureController` (`41dbc7cc99`), so a version mismatch between the engine
+and the crate is the most likely first failure.  A host-side `cargo check` on
+Kumo with `--no-default-features --features webkit` answers that cheaply.
+
+**Step 2 — build Kumo** (`git.sr.ht/~undeadleech/kumo`) against it,
+`cargo build --release --no-default-features --features webkit`, then run it
+under catacomb.
+
+**Pass criterion:** Kumo renders a real page on the SGX — `pvr_dri` mapped,
+`GL_RENDERER = PowerVR SGX 540`, content on the panel, touch scrolling and the
+touch context menu working — with a measured RSS and first-render time.  Report
+all three; they decide whether this is the daily browser.
+
+**Step 3 — only if the WebKit build proves impractical** (toolchain hell, or the
+engine is unusably slow): Kumo's **Servo** backend
+(`--no-default-features --features servo`).  No engine build at all — a pinned
+Rust crate — so it is a far cheaper *attempt*, but Servo is a less complete
+engine than WebKit.  Note both backends are properly cfg-gated (53
+`cfg(feature = ...)` sites across `src/main.rs` and `src/engine/mod.rs`), so
+building one without the other is supported.
+
+### Scale, stated honestly
+
+WebKit is one of the largest C++ codebases in existence, cross-built here for a
+2-core 1 GHz Cortex-A9.  Expect a long build and a large toolchain footprint
+(disk is 81 % used, 40 GB free).  That is the reason step 3 exists as a cheap
+escape hatch, **not** a reason to skip step 1 — the fork's touch patches are the
+whole point.
 
 **Toolchain:** `. tools/env.sh` exports `MUSL_CC` (armv7 musl, see
-`local/toolchains/armv7-musl-eabihf`) — needed for anything that must *run* on
-the unit.  For packages, use the root-owned pmbootstrap chroot
-(`local/work/nura/run-build-*.sh` is the pattern; the chroot is deleted after
-each build, so it is re-created per run).
+`local/toolchains/armv7-musl-eabihf`) for anything that must *run* on the unit.
 
 ### After the rebake — the queue
 
@@ -399,7 +435,8 @@ each build, so it is re-created per run).
 4. The CPU items (§0e): the voltage decision, the kernel-side PID-1 affinity
    fix, and the memory-throughput re-measure (the old figure is single-core).
 5. The intermittent USB teardown (trap 337) — capture before the drop.
-6. **The browser project** — §0f.2 (cog first, then Kumo).
+6. **The browser project** — §0f.2 (Kumo on the fork's WPE WebKit; Servo as the
+   escape hatch).  Skip `cog`: it needs the same missing engine.
 
 ### The rest of the GPU state
 
@@ -714,16 +751,38 @@ epitaph r10008, the inittab affinity line, and the pitch fix), the inputs
 command (block 0x4915), and a table of what each possible result means.  The
 script is dry-run verified and NOT yet run (needs root for the loop mount).
 
-THE OPERATOR'S NEXT GOAL AFTER THE REBAKE: a modern browser, in two steps —
-HANDOFF §0f.2 has the verified detail.  (1) Build upstream wpewebkit for armv7
-and run COG under catacomb to measure a real page (RSS + first-render) on the
-SGX; WPE is the right engine because it is EGL/GLES2 with no GTK/X11, exactly
-our SGX540 path, and Alpine builds WebKit 2.54.2 for armv7.  (2) Only if that is
-acceptable, build KUMO (git.sr.ht/~undeadleech/kumo), whose README requires
-libWPEWebKit-2.0 from the FORK github.com/chrisduerr/WebKit (777 ahead / 10,080
-behind upstream).  There is NO wpewebkit package for armv7 in Alpine (checked
-main/community/testing), so the engine must be built either way.  Warning:
-"cogapp" in Alpine is nedbat/cog, a Python tool — unrelated to Igalia's cog.
+THE OPERATOR'S NEXT GOAL AFTER THE REBAKE: a modern browser — KUMO on WPE
+WebKit built from the maintainer's FORK.  HANDOFF §0f.2 has the verified detail.
+(1) Build github.com/chrisduerr/WebKit @ e4f4ac71 (WebKitGTK 2.54 + ~6 own
+commits), the WPE port, EGL/GLES2, against the packaged libwpe +
+libwpebackend-fdo.  (2) Build KUMO (git.sr.ht/~undeadleech/kumo) with
+--no-default-features --features webkit, run it under catacomb, and report RSS +
+first-render + whether touch zoom and the touch context menu work.
+
+USE THE FORK, NOT UPSTREAM.  Its own commits are exactly the mobile work:
+touch gesture for page zoom (41dbc7cc99), touch context menu (dd88b3eb8d,
+b86110562d), download-cancel and preedit segfaults, text-search colours.
+Upstream WPE has neither touch zoom nor a touch context menu, so an upstream
+build gives a browser you cannot really operate.  The earlier "try upstream
+first" advice in this file was WRONG and is withdrawn; so is the "777 ahead /
+10,080 behind" figure — that is against upstream main, while the fork tracks the
+2.54 release series (~6 own commits against its real base).
+
+FIRST CHECK, before the long build: the fork ADDS WPEGestureController, so a
+mismatch between the engine and Kumo's wpe-platform crate is the likeliest first
+failure — a host-side `cargo check --no-default-features --features webkit`
+answers that cheaply.
+
+THERE IS NO wpewebkit PACKAGE FOR armv7 in Alpine (main/community/testing checked;
+only libwpe 1.16.3 and libwpebackend-fdo 1.16.1).  Proof the engine does build for
+armv7: Alpine ships webkit2gtk-4.1 2.54.2 (75.7 MiB).  Warning: "cogapp" in
+Alpine is nedbat/cog, a Python templating tool — unrelated to Igalia's cog.
+
+ESCAPE HATCH if the WebKit build proves impractical: Kumo also has a SERVO
+backend (--no-default-features --features servo), a pinned Rust crate needing no
+engine build — cheaper to attempt, less complete engine.  Skip cog entirely: it
+needs the same missing engine and is only a smaller client.
+
 Do not treat jwm/openbox as an option: X11-only, no Xorg here, and it would
 replace a 17 MiB GPU compositor with a bigger non-GPU stack.
 
