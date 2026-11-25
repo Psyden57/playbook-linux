@@ -224,7 +224,7 @@ because each one cost real time.
   `docs/captures/gpu-8x-allocation-multiplier-2026-11-24.txt`,
   `docs/captures/gpu-pitch-fix-2026-11-24.txt`,
   `docs/captures/gpu-pitch-fix-desktop-2026-11-24.txt`.
-* **`tools/bench/gpu/`** — `dbmfix.c` (the fix) plus nine Python `ctypes`
+* **`tools/bench/gpu/`** — `dbmfix.c` (the fix) plus eight Python `ctypes`
   probes (`dumbchk`, `sizein`, `pitch`, `bochk`, `bochk4`, `final`, `heightspy`,
   `bpp`, `stride`) and a README.  No compiler needed on the unit.
 * **`tools/rebake-hd3.sh`** — the hd3 rebake, scoped by measurement; takes

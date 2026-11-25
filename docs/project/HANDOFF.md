@@ -59,12 +59,13 @@ charger), the **Munin touch**, the **WM8994 audio** (headphones + both speakers,
 core** works (real inquiry; `hci0` registers with mgmt) with the controller-open
 parked (§0c).
 
-**Where it stands, in order:** the **GPU client path is done and validated**
-(report 269 §4g–§4i), and **trap 349 is closed** (report 270).  **Remaining:**
-the **TILER budget work** (§0f.1 — the first real lever now), trap **350**
-(cosmetic glitches), a heavy-redraw measurement, the **hd3 rebake**, the CPU
-voltage decision (§0e), the kernel-side affinity fix (§0e), the USB teardown
-(§0d), and the throughput re-measure.
+**Where it stands, in order:** the **GPU is done** — the client path is
+validated (report 269 §4g–§4i), trap 349 is closed (report 270), and the 8×
+buffer waste behind it is **fixed and deployed** (report 271).  **Remaining, and
+the first item is durability not function: the hd3 rebake** (§0f.1), then trap
+**350** (cosmetic glitches), a heavy-redraw measurement, packaging the pitch fix,
+the CPU voltage decision (§0e), the kernel-side affinity fix (§0e), the USB
+teardown (§0d), and the throughput re-measure.
 
 ## 0a. The media, and the way back
 
@@ -173,10 +174,16 @@ SSH traffic → ~90 s; some boots survive >6 min.  So it is intermittent, not an
 idle timer (trap 337; `docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md`).
 Run `local/work/kmsgcap.py` (or a userspace `cat /dev/kmsg`) before the link dies
 and let it run through a drop; a `VBUS_DET`/`linkstat` log in that handler would
-settle it directly.  SSH **does** work on the Nura root (`PB_LINK=usb
-tools/pbssh.sh`); when it times out the cause was the **host**, not the device —
-see §3 (VPN, trap 341; `ufw`, trap 342).  The ACM (`playbook:~#`,
-`tools/pbraw.py`) remains the fallback console.
+settle it directly.  The ACM (`playbook:~#`, `tools/pbraw.py`) remains the
+fallback console.
+
+**When SSH times out, work down this list — the device is the LAST suspect**
+(trap 355): **1. the cable is plugged in** (session 70 lost time to exactly this;
+a long `uptime` on reconnect does **not** mean the link survived a drop), 2. host
+`ip rule`/route (VPN, trap 341), 3. `ufw` (trap 342), 4. only then the VUSB
+teardown.  Note this session **did not observe a teardown at all** — it ran a 4 h
+session and then an 8 h one without one — so trap 337 is currently
+**unmeasured**, not refuted.
 
 ## 0e. Owed: the CPU — the voltage decision and the kernel affinity fix
 
@@ -226,13 +233,17 @@ but idle (`autocomp = 0`; Class3 init only) — that is the next lever.
 **Then re-measure** the memory throughput (report 263 §4b) and the UI latency
 now that CPU 1 takes userspace work.
 
-## 0f. SGX540 — the client path is done; the TILER budget is the open item
+## 0f. SGX540 — the client path AND the buffer waste are both done
 
 > **The GPU client path is complete and validated on the panel (session 69).**
 > catacomb serves a PRIME-only `wl_drm`; the imported dma-buf is bound with
 > `CLAMP_TO_EDGE` (r10003, trap 347); epitaph binds its GL locations explicitly
 > (r10008, trap 348).  Wallpaper, keyboard and the bar's text/icons render on the
 > SGX; bar draw 1.5–30 ms (softpipe was 1.6–2.3 s).  Report 269 §4g–§4i.
+>
+> **The 8× buffer waste behind trap 349 is fixed and deployed (session 70).**
+> See §0f.1 and report 271.  Nothing in §0f is an open GPU question any more —
+> what is left is making it survive a reflash.
 
 ### §0f.1 SESSION 71's ONE EXPERIMENT — the hd3 rebake (the only thing standing between here and durable)
 
@@ -317,10 +328,14 @@ reproduce under 8 re-rendering clients, and the pitch fix is in the image — so
 
 **Working:** `pvrsrvkm_omap4_sgx540_120` binds (`pvrsrvkm 56000000.gpu: Enabling
 quirks`), `catacomb` runs, `card0-LVDS-1` is connected and the backlight is 255.
-**The baked image on hd3 is the session-59 state** and predates `epitaph`
-r10008, `catacomb` r10003, the llvmpipe `swrast_dri.so` replacement and the
-udev/polkit/gorm rules.  **A rebake is owed** to make the session-69 result
-durable.
+**The baked image on hd3 is the session-59 state**: it predates `epitaph`
+r10008, `catacomb` r10003, and the pitch fix; its `/etc/inittab` has no affinity
+line.  **A rebake is owed** to make the session-69/70 result durable.  Note the
+earlier claim that the image also predates "the llvmpipe `swrast_dri.so`
+replacement and the udev/polkit/gorm rules" is **withdrawn** — measured this
+session, the shipped `swrast_dri.so` contains no llvmpipe strings and no LLVM
+symbols (so there is no llvmpipe replacement in the working state at all), and
+both rule directories are **empty** on the live root.
 
 **Memory throughput (measured 2026-11-18):** the EMIF is correctly configured —
 both instances identical, 400 MHz LPDDR2-800, 32-bit, CL 6, power-down disabled,
@@ -368,8 +383,8 @@ minimal pair is `local/work/minimal/setB.signed`.
   `pb-dlopen`, `pb-layerdrm`, `pb-atlas`, `pb-attrloc`, …).  Sources tracked
   under `tools/bench/egl/`.
 * `local/work/src/catacomb-150/` and `local/work/src/smithay-check/` — the
-  sources the compositor is built from (Smithay pinned at `dba255c`); useful for
-  the `LINEAR`-buffer work.
+  sources the compositor is built from (Smithay pinned at `dba255c`), and the
+  reference for anything that needs changing in the compositor.
 * `local/work/nura/run-build-{catacomb,epitaph,phoc}.sh` — the root-owned
   pmbootstrap chroot builds (the operator runs them).
 * `local/work/soak65.py` — the reboot+soak driver (console shell `playbook:~#`).
@@ -504,12 +519,13 @@ unit must be left on TabletOS.
 
 ## 4. Traps added last session (full list 14–355 in `KNOWN-ISSUES.md` §2)
 
-* **Session 70 added 351–354, closed 349, and fixed the 8× waste:** **351**
+* **Session 70 added 351–355, closed 349, and fixed the 8× waste:** **351**
   never read "zero `wl_buffer.release`" from a run that died before its first
   swap (two distinct failure modes look alike); **352** `dma_buf/bufinfo`
   **blocks** and `dri/*/mm` is the VMA space, not TILER occupancy — sum
   `dri/omapdrm.0/gem`; **353** restarting `tinydm` to switch compositors wedges
-  the DSI link; **354** `/tmp` is not tmpfs on the hd3 root.
+  the DSI link; **354** `/tmp` is not tmpfs on the hd3 root; **355** an SSH
+  timeout is **not** evidence of trap 337 until the cable is checked.
 * **349 is closed** — the OMAP4 TILER window (128 MiB) was the buffer budget,
   and the 8× pitch-alignment waste that filled it is **fixed and deployed**
   (report 271).  **Log a syscall's arguments rather than inferring from its
@@ -532,7 +548,9 @@ unit must be left on TabletOS.
   zero packets while raw `arping` replies).  Check `ip rule` first.
 * **342.** **`ufw` default-deny** blocks the RNDIS link.
 * **343.** A reflash of the **session-59 image** reverts hd3's `epitaph` and
-  `catacomb` to the broken versions, and lacks the llvmpipe `swrast_dri.so`.
+  `catacomb` to their older versions and **loses the pitch fix and the inittab
+  affinity line** (measured in session 70: the image has `catacomb` r10000,
+  `epitaph` `1.4.0-r0` and no `taskset` line).
 * **344.** **Do not grep ELF strings with `^name$` anchors**; the unit has no
   binutils, so `nm`/`readelf` there return nothing — pull the file to the host.
 * **345.** A Wayland client gets the SGX only if the compositor serves `wl_drm`.
@@ -546,7 +564,7 @@ unit must be left on TabletOS.
 | safety before any write | `docs/project/SAFETY.md` |
 | build/flash/boot/console | `docs/project/DEVELOPMENT.md` |
 | **the pitch fix / trap 349 (current)** | **report 271** (fix), report 270 (mechanism); `ROADMAP.md` item 7a; DECISIONS §104 |
-| **the pitch-fix source and probes** | `tools/bench/gpu/` (`dbmfix.c` + nine `ctypes` probes) |
+| **the pitch-fix source and probes** | `tools/bench/gpu/` (`dbmfix.c` + eight `ctypes` probes) |
 | **the hd3 rebake** | `tools/rebake-hd3.sh` (`DBMFIX_SO=…`) |
 | **the GPU client path** | report 269 §4g–§4i; DECISIONS §102/§103 |
 | **the GPU probes** | `tools/bench/egl/`, prebuilt in `local/work/egltest-client/` |
@@ -558,7 +576,7 @@ unit must be left on TabletOS.
 | flasher (region 0/1, hd3) | `tools/bbusb.py` (+ `local/work/flash825.sh`) |
 | the hd3 root image | `local/work/nura/images/…-osk-wvkbd.img` |
 | catacomb/smithay sources | `local/work/src/catacomb-150/`, `local/work/src/smithay-check/` |
-| reports / sessions | `docs/reports/` (270 current), `docs/sessions/session-70.md` |
+| reports / sessions | `docs/reports/` (271 current), `docs/sessions/session-70.md` |
 
 ## 6. Working rules
 
