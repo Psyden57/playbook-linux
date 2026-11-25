@@ -200,5 +200,18 @@ register dumps.
 
 Report 269 §4e–§4f; traps 345/346.
 
+## GPU buffer accounting and the pitch fix (session 70)
+
+Text captures from the shell probes in `tools/bench/gpu/` (Python `ctypes`, so
+they run on the unit without a compiler).  Each records the **kernel's** view
+(`/sys/kernel/debug/dri/omapdrm.0/gem`), not a userspace guess.
+
+| file | what it shows |
+|---|---|
+| `gpu-tiler-exhaustion-2026-11-24.txt` | the trap-349 mechanism: node map, the `-12 (3)` / `dma_buf_map_attachment` chain, the 10/10 threshold (59.4 MiB clean vs 112.3 MiB fail), and the `WARN_ON(pin_cnt > 0)`; report 270 |
+| `gpu-8x-allocation-multiplier-2026-11-24.txt` | the 8× measured three ways — `libgbm` on `renderD128`, the DDK's own `PVRDRIBufferCreate`, and the faithful raw `CREATE_DUMB` baseline; report 270 §0.2 |
+| `gpu-pitch-fix-2026-11-24.txt` | the root cause and the fix: the logged `CREATE_DUMB 1x<bytes>` arguments, the pitch-alignment effect, and the 1.00× result after re-expressing as `width=<bytes>, height=1`; report 271 |
+| `gpu-pitch-fix-desktop-2026-11-24.txt` | the deployment: the wrapper/`.desktop` form, a clean boot with zero DSI errors, the idle 14.0 MiB tree, and 8/8 clean client runs; report 271 §5 |
+
 `docs/reports/data/` is indexed by the reports that produced it; the report
 INDEX (`docs/reports/INDEX.md`) says which report is current for a topic.

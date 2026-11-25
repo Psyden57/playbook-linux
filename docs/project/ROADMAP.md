@@ -5,27 +5,29 @@ Open work only; closed and parked item history is archived in
 item states the evidence that would close it.  Completed *steps* are kept inline
 only where an open item's sequence needs them (item 7a), marked "Done (session N)".
 
-Current focus: **item 7a — put the UI on the GPU.  DONE (sessions 68–69): the
-clients run on the SGX and the desktop is responsive.**  Two defects were
-root-caused and fixed: the compositor bound imported dma-bufs as incomplete
-GLES2 NPOT textures (catacomb `smithay-eglimage-clamp.patch`, r10003), and the
-panel client hard-coded GL attribute/uniform indexes that the PowerVR linker
-assigns differently (epitaph `bind-attribs.patch`, r10008).  Validated on the
-panel: wallpaper, keyboard and the bar's text/icons render on the SGX; bar draw
-1.5–30 ms.  Remaining: the pvr second-buffer allocation flakiness (trap 349),
-a heavy-redraw measurement, and the hd3 rebake with the two packages.
+Current focus: **item 7a — put the UI on the GPU.  DONE (sessions 68–70).**
+The clients run on the SGX and the desktop is responsive; the buffer waste that
+made it fragile is fixed.  Three defects were root-caused and fixed: the
+compositor bound imported dma-bufs as incomplete GLES2 NPOT textures (catacomb
+`smithay-eglimage-clamp.patch`, r10003); the panel client hard-coded GL
+attribute/uniform indexes the PowerVR linker assigns differently (epitaph
+`bind-attribs.patch`, r10008); and **the vendor allocator asked omapdrm for a
+1-pixel-wide buffer**, so omapdrm's 8-byte pitch alignment inflated every
+allocation 8× (report 271, deployed as an `LD_PRELOAD` shim — idle desktop
+59.4 → 9.5 MiB pinned, every GEM object 1.00×, trap 349 gone).
+**What remains is durability, not function:** the hd3 image must be rebaked to
+carry all three (`tools/rebake-hd3.sh`, `DBMFIX_SO=…`) — it is still the
+session-59 state, so one flash reverts them.  After that: a heavy-redraw
+measurement, trap 350 (cosmetic glitches), and packaging the shim as a
+`pvr-dbmfix` APK.
 The SGX540 works (kernel driver + pvrports userspace; EGL/GLES 2.0 on
 `PowerVR SGX 540`), catacomb serves a **PRIME-only `wl_drm`**, and the clients
-select the SGX — but their surfaces were black because **Smithay binds the
-imported dma-buf as an incomplete GLES2 NPOT texture** (default `REPEAT` wrap;
-client buffers are 1024x20/1024x585).  **Fix:**
-`rootfs/catacomb/smithay-eglimage-clamp.patch` (set `CLAMP_TO_EDGE`), packaged
-as catacomb `1.5.0-r10003`; the remaining step is the root-owned build, then
-the panel check.  Measured A/B in `tools/bench/egl/pb-gbmsample.c`; report 269
-§4g, trap 347, DECISIONS §102.  Safe state meanwhile: the compositor on the
-SGX, the clients on `wl_shm`.  Remaining under 7a: install r10003, bake it +
-the initrc change into the hd3 image, and keep the fully open `powervr_sgx`
-stack as the long-term route.  The unit runs
+run on the SGX.  The two presentation defects are fixed and installed on the
+live root: the imported dma-buf is bound with `CLAMP_TO_EDGE`
+(`rootfs/catacomb/smithay-eglimage-clamp.patch`, catacomb `1.5.0-r10003`,
+trap 347, report 269 §4g) and epitaph binds its GL locations explicitly
+(`rootfs/epitaph/bind-attribs.patch`, r10008, trap 348, report 269 §4h).
+**Long-term route:** keep the fully open `powervr_sgx` stack in view.  The unit runs
 **dual-core ARMv7 at 1008 MHz** with `cpufreq-dt` bound (OPPs 300/600/800/1008
 MHz; the only gap is the unattached CPU supply), on region 0 `0x3547D613`; hd3
 holds the Nura root, **writable, grown to 62.5 G**, with **SSH working**
@@ -364,13 +366,21 @@ flasher can replace at every point:
     and Plasma-Mobile, **not** catacomb); (3) decide with data; (4) only then
     weigh the open-stack SGX540 port (`The1TrueJoe/powervr_sgx` lists SGX540 as
     wanted; `Garnet/sgx540-reversing` has the ISA/PDS work).  **Not** more
-    software-rendering tuning.  **Next after the GPU:** (b)
+    software-rendering tuning.  **Done (session 70): the GPU work is closed** —
+    trap 349 was the OMAP4 TILER scan-out aperture filling (report 270), and the
+    8× that filled it was a **pitch-alignment bug in the vendor allocator**
+    (report 271), now fixed and deployed.  See "Current focus".  **Next:**
+    (a) **the hd3 rebake**, now the top item — it must carry catacomb r10003,
+    epitaph r10008, the inittab affinity line **and the pitch fix**
+    (`tools/rebake-hd3.sh`, `DBMFIX_SO=…`), because all of it lives only on the
+    live root and the image is still the session-59 state; (a2) a
+    heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
+    is gone) and trap 350; (b)
     attach the CPU supply or confirm 1.35 V for all OPPs and settle the
     `twl6030_uv_to_vsel` clamp (report 266 §2/§3); (c) a kernel-side PID-1
     affinity fix to replace the inittab line; (d) the intermittent USB teardown
-    (trap 337) — capture before the drop; (e) rebake the restorable hd3 base
-    with `epitaph` r10005+, the llvmpipe files, the rules **and the inittab
-    line** (the image on hd3 is the session-59 state); (f) re-measure the
+    (trap 337) — capture before the drop;
+    (f) re-measure the
     memory throughput (report 263 §4b) — the old figure is single-core.  Kumo
     needs a WPEWebKit build (report 247 §4).
 

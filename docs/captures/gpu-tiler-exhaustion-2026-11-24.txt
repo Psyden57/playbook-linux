@@ -1,0 +1,40 @@
+### t349 evidence capture, Tue Nov 24 15:32:17 UTC 2026
+### kernel: 7.3.3  region0 = 0x3547D613
+
+== A. DRM node -> driver ==
+renderD128  DRIVER=omapdrm
+renderD129  DRIVER=pvrsrvkm
+card0       DRIVER=omapdrm
+card1       DRIVER=pvrsrvkm
+
+== B. wl_drm device advertised (both compositors send renderD128) ==
+[15:20:11.830993] wl_drm#11.device("/dev/dri/renderD128")
+[14:46:26.678833] wl_drm#10.device("/dev/dri/renderD128")
+
+== C. alternating occupancy: pinned_before / outcome (10 runs) ==
+  59.4MiB -> clean ; 112.3MiB -> fail  (10/10)
+
+== D. kernel, one failure (unfiltered) ==
+[  450.930206] WARNING: drivers/gpu/drm/omapdrm/omap_gem.c:1209 at omap_gem_free_object+0x218/0x23c, CPU#1: pb-egltest/2274
+[  578.613037] omapdrm omapdrm.0: could not remap: -12 (3)
+[  578.613220] PVR_K:(Error): DmaBufImportAndAcquirePhysAddr: dma_buf_map_attachment failed: -12
+[  578.613433] PVR_K:(Error): PVRSRVMapDmaBufKM: Failed to get dma-buf phys addr
+[  578.662261] WARNING: drivers/gpu/drm/omapdrm/omap_gem.c:1209 at omap_gem_free_object+0x218/0x23c, CPU#1: pb-egltest/2427
+[  588.677764] omapdrm omapdrm.0: could not remap: -12 (3)
+[  588.677795] PVR_K:(Error): DmaBufImportAndAcquirePhysAddr: dma_buf_map_attachment failed: -12
+[  588.678131] PVR_K:(Error): PVRSRVMapDmaBufKM: Failed to get dma-buf phys addr
+[  588.724334] WARNING: drivers/gpu/drm/omapdrm/omap_gem.c:1209 at omap_gem_free_object+0x218/0x23c, CPU#0: pb-egltest/2468
+
+== E. counts this boot ==
+could_not_remap=11  warn1209=11
+
+== F. GEM occupancy, low and high ==
+-- now: objects=6 total=59.4MiB pinned_objs=6 pinned_bytes=59.4MiB tiler_cap=128.0MiB
+All Objects:
+   02000003:  0 ( 2) 00000000 0x7c428000 ( 2) 00000000    0 655360
+   02000003:  0 ( 2) 00000000 0x7c4c8000 ( 2) 00000000    0 655360
+   02000003:  0 ( 2) 00000000 0x7eb60000 ( 2) 00000000    0 19169280
+   02000003:  0 ( 3) 00000000 0x7c568000 ( 2) 00000000    0 19660800
+   02000003:  0 ( 3) 00000000 0x7d828000 ( 3) 00000000    0 19660800
+   02000003:  0 ( 1) 00000000 0x7fda8000 ( 1) 3f621d94    0 2457600
+Total 6 objects, 62259200 bytes

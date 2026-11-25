@@ -1,0 +1,39 @@
+### 8x allocation multiplier evidence, Tue Nov 24 18:50:01 UTC 2026
+### kernel 7.3.3, region0 0x3547D613
+
+== A. Mesa libgbm on the omapdrm node (python ctypes, no compiler needed) ==
+     request  stride  kernel obj    visible   ratio
+ 1024x600       4096    19660800    2457600    8.00
+1024x4800: FAILED
+ 1024x300       4096     9830400    1228800    8.00
+ 1024x75        4096     2457600     307200    8.00
+ 1024x76        4096     2490368     311296    8.00
+  512x600       2048     9830400    1228800    8.00
+ 2048x600       8192    39321600    4915200    8.00
+ 1024x1200      4096    39321600    4915200    8.00
+ [0, ]
+
+== B. The blob directly: PVRDRIBufferCreate(w,h,bpp,SCANOUT) ==
+ 1024x600  bpp=32  stride=4096   obj=19660800   obj/(stride*h)=8.00
+ 1024x600  bpp=16  stride=2048   obj=9830400    obj/(stride*h)=8.00
+ 1024x600  bpp=8   stride=1024   obj=4915200    obj/(stride*h)=8.00
+  800x480  bpp=32  stride=3200   obj=12288000   obj/(stride*h)=8.00
+  800x480  bpp=16  stride=1600   obj=6144000    obj/(stride*h)=8.00
+  800x480  bpp=8   stride=800    obj=3072000    obj/(stride*h)=8.00
+  640x480  bpp=32  stride=2560   obj=9830400    obj/(stride*h)=8.00
+ [0, ]
+
+== C. Kernel is faithful: raw DRM_IOCTL_MODE_CREATE_DUMB ==
+node /dev/dri/card0
+  1024x600  pitch=4096   size=2457600    visible=2457600   ratio= 1.00  pitch*h=2457600
+  1024x300  pitch=4096   size=1228800    visible=1228800   ratio= 1.00  pitch*h=1228800
+   256x256  pitch=1024   size=262144     visible=262144    ratio= 1.00  pitch*h=262144
+  1024x20   pitch=4096   size=81920      visible=81920     ratio= 1.00  pitch*h=81920
+
+== D. PVRDRIPixFmtGetBPP returns BITS, not bytes ==
+ fmt   BPP
+  32    32
+  37    32
+  62    16
+  76     8
+  85    16

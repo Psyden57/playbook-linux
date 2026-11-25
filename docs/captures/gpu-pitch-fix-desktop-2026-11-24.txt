@@ -1,0 +1,32 @@
+### report 271 addendum 2: the compositor runs under the shim
+### Tue Nov 24 19:28:13 UTC 2026  kernel 7.3.3  region0 0x3547D613
+
+== deployment form (what a package would install) ==
+/usr/local/lib/dbmfix.so        (LD_PRELOAD shim, musl armv7)
+/usr/local/bin/catacomb-dbmfix  (exec wrapper setting DBMFIX=1 + LD_PRELOAD)
+catacomb.desktop Exec= -> /usr/local/bin/catacomb-dbmfix
+backup: catacomb.desktop.orig
+
+== boot state ==
+[    1.741851] pbrpmb: topup: BOOTCTR_FCTRY at block 0x3a record@196 = 1f000000
+[    1.742034] pbrpmb: topup: 0x1f >= threshold 0x1e, no write
+dsi_errors=0  nproc=2  taskset=pid 1's current affinity mask: 3
+
+== idle desktop, shim active ==
+objects=11 total=20.7MiB pinned_objs=11 pinned_bytes=20.7MiB tiler_cap=128.0MiB
+All Objects:
+   02000003:  0 ( 2) 00000000 0x7efb1000 ( 1) 00000000    0 2314240
+   02000003:  0 ( 2) 00000000 0x7eb47000 ( 1) 00000000    0 2314240
+   02000003:  0 ( 2) 00000000 0x7ed7c000 ( 1) 00000000    0 2314240
+   02000003:  0 ( 2) 00000000 0x7f1e6000 ( 2) 00000000    0 2396160
+   02000003:  0 ( 2) 00000000 0x7f42f000 ( 2) 00000000    0 2396160
+   02000003:  0 ( 2) 00000000 0x7f678000 ( 2) 00000000    0 81920
+   02000003:  0 ( 2) 00000000 0x7f68c000 ( 2) 00000000    0 81920
+   02000003:  0 ( 2) 00000000 0x7fb5f000 ( 2) 00000000    0 2396160
+   02000003:  0 ( 3) 00000000 0x7f6a0000 ( 2) 00000000    0 2457600
+   02000003:  0 ( 3) 00000000 0x7f8f8000 ( 3) 00000000    0 2457600
+   02000003:  0 ( 1) 00000000 0x7fda8000 ( 1) 4ce73868    0 2457600
+Total 11 objects, 21667840 bytes
+
+== 8 re-rendering pvr clients WITH the shim: 8/8 clean, flat 20.7 MiB ==
+   (before: 3/5 failed, pinned climbed 59.4 -> 112.3 MiB)

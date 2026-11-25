@@ -3713,3 +3713,50 @@ appear; the build is the verification.  Report 269 §4h, trap 348.
 own framebuffer before suspecting the compositor or the driver: a silent
 "nothing drawn" is usually an index/location assumption, not a GPU fault.  This
 is a general portability fix and worth upstreaming to epitaph.
+
+---
+
+## 104. Fix the vendor allocator's pitch waste in userspace; treat the TILER window as the budget (session 70)
+
+**Decision.**  Treat the GPU buffer cost as **two separate facts** and act on
+both:
+
+1. **The budget is the 128 MiB TILER scan-out window**, which omapdrm pins every
+   buffer into.  Measure pinned occupancy from
+   `/sys/kernel/debug/dri/omapdrm.0/gem` (sum `size` where `pin_cnt > 0`) — never
+   from `dri/*/mm` (the VMA space, always `used 0`) or `dma_buf/bufinfo` (**it
+   blocks**, trap 352).
+2. **The waste was a vendor pitch-alignment bug, and it is fixed in userspace**
+   by an `LD_PRELOAD` shim (`tools/bench/gpu/dbmfix.c`) rather than by patching a
+   closed binary or the kernel.
+
+**Why.**  `libdbm` (proprietary, 15 KB, `sgx-ddk-um`) describes a linear buffer
+as **`width = 1, height = <total bytes>, bpp = 8`**.  omapdrm's
+`omap_gem_dumb_create()` calls `drm_mode_size_dumb(dev, args, SZ_8, 0)`, which
+aligns the **scanline pitch to 8 bytes**; a 1-byte-wide row therefore becomes an
+8-byte pitch, so a 1024x600 AR24 buffer allocates **19,660,800 B instead of
+2,457,600**.  The kernel is faithful — it recomputes `size = pitch × height` and
+ignores any size passed.  Because `libdbm` reaches the kernel through
+`drmIoctl`'s **PLT**, the request can be corrected without modifying any closed
+binary: re-express the same bytes as `width=<bytes>, height=1`.
+
+**Evidence (measured).**  The multiplier is exactly **8.00** at bpp 8/16/32 and
+at five resolutions (a geometry effect would vary with size).  A raw
+`DRM_IOCTL_MODE_CREATE_DUMB` gives 1.00× for the same geometry.  A logging
+`LD_PRELOAD` shim captured the actual arguments (`CREATE_DUMB 1x2457600 bpp=8 →
+pitch=8 size=19660800`).  With the fix: idle desktop pinned TILER
+**59.4 → 14.0 MiB** (and **9.5 MiB** on a fresh boot), **every** GEM object
+**1.00×**, **8/8** re-rendering pvr clients clean at a flat 20.7 MiB (before:
+3/5 failed while climbing to 112.3 MiB), and the **panel is operator-confirmed
+correct twice**.  Trap 349 no longer reproduces.  Report 271.
+
+**Constraint.**  The shim is a **bridge, not the destination**: package it
+(`pvr-dbmfix`) and, longer term, fix it upstream (in `libdbm`/the DDK, or in
+omapdrm accepting a 1-wide buffer without pitch waste).  Two measurement traps
+guard the reading: a run that dies at `eglCreateWindowSurface` never creates a
+buffer, so its "zero releases" is meaningless (trap 351); and when fixed and
+unfixed runs are mixed, **the unfixed ones leave 18,513,920 B objects behind and
+look like a leak** — check object *sizes*, not the total.  Apply it by
+`reboot -f`, not by restarting `tinydm` (trap 353).  **This supersedes the same
+section's first version**, which read the failure as 32-bit tiling and
+recommended `LINEAR` buffers that were already linear.

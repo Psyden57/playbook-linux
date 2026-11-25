@@ -1,0 +1,30 @@
+### report 271 addendum: the pitch-alignment root cause and a working fix
+### Tue Nov 24 19:06:54 UTC 2026  kernel 7.3.3
+
+== 1. what libdbm ACTUALLY asks for (LD_PRELOAD logging shim) ==
+dbmlog: CREATE_DUMB 1x2457600 bpp=8 flags=0x0 height 2457600->2457600  kernel size=19660800 pitch=8 rc=0
+dbmlog: CREATE_DUMB 1x1228800 bpp=8 flags=0x0 height 1228800->1228800  kernel size=9830400 pitch=8 rc=0
+dbmlog: CREATE_DUMB 1x614400 bpp=8 flags=0x0 height 614400->614400  kernel size=4915200 pitch=8 rc=0
+dbmlog: CREATE_DUMB 1x1536000 bpp=8 flags=0x0 height 1536000->1536000  kernel size=12288000 pitch=8 rc=0
+
+== 2. the kernel pitch-aligns a 1-byte-wide row to SZ_8 ==
+what libdbm does today: width=1, height=N, bpp=8
+   1024x600 AR24 -> width=1 height=2457600: pitch=8 size=19660800 ratio=8.00
+
+the same bytes expressed as width=N, height=1:
+   width=2457600 height=1            : pitch=2457600 size=2457600 ratio=1.00
+   width=4096 height=600 (pitch=w): pitch=4096 size=2457600 ratio=1.00
+
+== 3. the fix: re-express bytes as width=N,height=1 ==
+dbmfix: CREATE_DUMB 1x2457600 -> 2457600x1 bpp=8  size=2457600 pitch=2457600 rc=0  [pitch-fixed]
+new kernel objects: [2457600]
+  size=2457600: rows_if_stride=600  (asked height=600, ratio=1.0)
+
+== 4. live pvr client: renders, and 4/4 back-to-back runs clean ==
+   (without: pinned climbs 59.4 -> 112.3 MiB and the run fails)
+   with   : pinned stays 66.0 MiB, fail=0 x4
+   02000003:  0 ( 2) 00000000 0x7eb60000 ( 2) 00000000    0 19169280
+   02000003:  0 ( 3) 00000000 0x7c568000 ( 2) 00000000    0 19660800
+   02000003:  0 ( 3) 00000000 0x7d828000 ( 3) 00000000    0 19660800
+   02000003:  0 ( 1) 00000000 0x7fda8000 ( 1) 3f621d94    0 2457600
+Total 9 objects, 69201920 bytes

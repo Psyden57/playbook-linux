@@ -3214,16 +3214,58 @@ report 121 §3/§11/§12.
       Fix: `glBindAttribLocation` before linking and `glGetUniformLocation` by
       name (epitaph `bind-attribs.patch`, `pkgrel=10008`).  (Session 69,
       report 269 §4h.)
-349. **A pvr client that re-renders fails intermittently on its second
-      buffer.**  `CreateImageShared: Failed to create buffer`,
-      `PVRImageDrawableGetNativeInfo: Image get buffers call failed`,
-      `PVRDRIBufferCreate: Failed to create plane` — measured in **3 of 5**
-      runs of a simple animating client under catacomb, and **never** under
-      phoc, where the same client swaps indefinitely (`wl_buffer.release`
-      traffic confirmed on both compositors).  So it is a pvr
-      buffer-allocation defect around the second `eglSwapBuffers`, not a
-      protocol or compositor bug.  Not root-caused.  (Session 69, report 269
-      §4h.)
+349. **A pvr client fails on its second buffer because the OMAP4 TILER
+      translation window is too full — an omapdrm scan-out capacity fault, not
+      a pvr or compositor bug.**  **ROOT-CAUSED IN SESSION 70 (report 270).**
+      The failure chain is `omap_gem_pin_tiler()` → `tiler_reserve_1d()` →
+      `-ENOMEM`, logged `omapdrm omapdrm.0: could not remap: -12 (3)`, then
+      `dma_buf_map_attachment failed: -12` → `PVRSRVMapDmaBufKM: Failed to get
+      dma-buf phys addr` → the client's `CreateImageShared: Failed to create
+      buffer`.  **`(3)` is `TILFMT_PAGE`** — the enum is `8BIT=0, 16BIT=1,
+      32BIT=2, PAGE=3` — so these are the **linear** path
+      (`tiler_reserve_1d(obj->size)`, charged **1:1**), and the GEM
+      `OMAP_BO_TILED_MASK` bits are zero.  **Do not read it as tiling.**
+      The TILER maps a fixed 128 MiB aperture (`0x60000000`,
+      `2^14 × 2^13 = 2^27` B) that the display controller scans out from;
+      OMAP4 shares **one** container between the 8/16/32-bit and paged views
+      (`omap_dmm_tiler.c:933-935`).  Measured 10/10 on one boot: **59.4 MiB
+      pinned → clean; 112.3 MiB → fail.**  Waiting does not free it (60 s with
+      no client alive stays high); the freed object also trips
+      `WARN_ON(pin_cnt > 0)` at `omap_gem.c:1209` from `dma_buf_release` on
+      process exit.
+      **The real multiplier is 8×, it is a PITCH-ALIGNMENT bug, and it is FIXED
+      in a shim (report 271).**  `libdbm` describes a linear buffer as
+      **`width = 1, height = <total bytes>, bpp = 8`**; omapdrm's
+      `omap_gem_dumb_create()` calls `drm_mode_size_dumb(dev, args, SZ_8, 0)`,
+      which aligns the **scanline pitch to 8 bytes**, so a 1-byte-wide row
+      becomes an 8-byte pitch and every allocation is 8× too big
+      (`width=1,height=2457600` → `pitch=8, size=19,660,800` for a
+      2,457,600-byte frame).  **Fix:** re-express the same byte count as
+      `width=<bytes>, height=1` — `tools/bench/gpu/dbmfix.c`, an `LD_PRELOAD`
+      wrapper on `ioctl` (`libdbm` reaches the kernel via `drmIoctl`'s PLT, so no
+      closed binary is modified).  **Measured working, compositor included:**
+      deployed for the whole session (`/usr/local/lib/dbmfix.so` plus a
+      `catacomb-dbmfix` exec wrapper, applied by `reboot -f` — zero DSI errors),
+      the panel is **operator-confirmed correct** (wallpaper, keyboard, bar) and
+      **8/8 re-rendering pvr clients are clean** with pinned TILER **flat at
+      20.7 MiB**.  The idle desktop falls **59.4 → 14.0 MiB** and every GEM
+      object in the tree is now **1.00×** (largest 2,457,600 B = one full frame,
+      versus 19,660,800 before).  **Trap 349 no longer reproduces.**
+      Still to do: package it as `pvr-dbmfix` and bake it into the hd3 rebake;
+      the permanent fix belongs upstream (in `libdbm`/the DDK, or in omapdrm
+      accepting a 1-wide buffer without pitch-alignment waste).
+      **Measurement trap:** when fixed and unfixed runs are mixed, the *unfixed*
+      ones leave 18,513,920 B objects behind and look like a leak — check object
+      sizes, not just the total.  Toolchain:
+      `https://musl.cc/arm-linux-musleabihf-cross.tgz` (the pmbootstrap build
+      chroot is deleted after each build).
+      (Reports 270, 271; probes in `tools/bench/gpu/`.)
+      **catacomb 3/5, phoc 5/5 is a headroom difference, not a code-path one** —
+      phoc idles at 39.8 MiB, catacomb at 59.4 MiB, and both release client
+      buffers (15–17 per run).  **Retracted:** the "prefer LINEAR/non-tiled
+      buffers" fix from the first draft of report 270 addresses nothing, because
+      these buffers are already linear.  (Session 69 discovered it; session 70
+      root-caused it — report 270 §0.1/§0.2.)
 350. **Cosmetic pixel glitches on shm and dmabuf clients (observed on the
       working GPU desktop).**  The operator sees "slight pixel glitches" on the
       keyboard (a `wl_shm` client) and, at times, on the epitaph bar (a dma-buf
@@ -3239,6 +3281,60 @@ report 121 §3/§11/§12.
       pre-session-68.  Do **not** attribute it to the clamp fix: that touches
       only the dma-buf texture wrap and cannot alter pixels that are drawn.
       (Session 69, operator observation; not root-caused.)
+351. **Never read "zero `wl_buffer.release`" from a run that died before its
+      first swap.**  A client can fail in **two** places and both print
+      `CreateImageShared: Failed to create buffer`: (a) at
+      `eglCreateWindowSurface` (`context/surface failed 0x3009`,
+      `EGL_BAD_ALLOC`) — **no buffer is ever created**, so of course no release
+      arrives; and (b) after the first successful `eglSwapBuffers`, on the
+      **second** buffer — which is the real second-buffer symptom.  Session 70
+      first sampled mode (a) and concluded "catacomb sends zero releases,
+      unlike phoc's 16–17", which pointed at a compositor buffer-lifetime bug.
+      Re-measured on runs that reached the swap, catacomb sends **15–16**
+      releases per run — the same order as phoc.  Always classify a run by
+      whether it reached `swap=1` before drawing conclusions from its event
+      trace.  (Session 70, report 270 §5.)
+352. **`/sys/kernel/debug/dma_buf/bufinfo` blocks on this kernel, and
+      `dri/*/mm` is not TILER occupancy.**  Reading `bufinfo` hangs the SSH
+      session (it waits on a lock); do not put it in a command batch that other
+      reads depend on.  `dri/omapdrm.0/mm` prints the **VMA** address space
+      (`vm_addr_space_mm`), so it always shows `used 0 free <all>` and says
+      nothing about the DMM container.  TILER occupancy must be summed from
+      `dri/omapdrm.0/gem`: fields are `flags: name (refcount) offset dma_addr
+      (pin_cnt) vaddr roll size`, so pin is field 6 and size is field 10 —
+      parse by regex, not by positional `awk`, and the sum of `size` where
+      `pin_cnt > 0` is the number that matters (report 270 §5).
+353. **Restarting `tinydm` to switch compositors wedges the DSI link — it
+      costs a reboot.**  Trap 289 said compositor restarts over a live link do
+      not recover; session 70 confirmed it the hard way by switching
+      catacomb↔phoc four times for a control: `DSI error: Failed to set
+      dsi_if_enable to 0` plus `NO PACKET_SENT` on VC0 **and** VC1, then a
+      black panel with the backlight lit while DISPC kept scanning
+      (`LINE_STATUS` advancing) and catacomb's IPC still answered `dpms on`.
+      The panel only came back on a clean `reboot -f` (no DSI error at all on
+      that boot).  **Plan a compositor comparison as one switch per boot**, or
+      accept a reboot per switch.  (Session 70, report 270 §6; trap 289.)
+354. **`/tmp` is NOT tmpfs on the Nura/hd3 root — pushed probes survive a
+      reboot.**  `mount` shows only `/dev/loop0 on / type ext4
+      (rw,relatime,nobarrier)`; `/tmp` has no separate mount, so it is a
+      directory on the 62.5 G ext4 (`df` reports the same 56.5 G for both).
+      The handoff and session-69's note said "/tmp is tmpfs, re-push the
+      probes"; that is true of the **region-1 BusyBox** root, not of hd3.
+      Measured: `/tmp/pb-egltest` and `/tmp/pins.py` were still present
+      across a `reboot -f` in session 70.  Do not assume either state —
+      check `mount | grep ' /tmp '` on the root in front of you.  (Session 70.)
+
+355. **An SSH timeout is not evidence of trap 337 until the cable is checked.**
+      Mid session 70 the link timed out and I was about to record it as the
+      intermittent VUSB teardown; the cause was that **the cable had been
+      unplugged** (operator).  The host checks were clean (`ip rule` with no
+      WireGuard rule, `enp8s0f3u1i2` holding `169.254.0.2`), and the link came
+      back on replug.  A long `uptime` at the next connect does **not** prove the
+      link survived a drop — it may just mean the session paused.  Check in this
+      order: cable, then `ip rule`/route (trap 341), then `ufw` (trap 342), then
+      trap 337.  (Session 70; the
+      `docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md` question stays
+      open.)
 
 ## 3. Corrections to older reports
 
