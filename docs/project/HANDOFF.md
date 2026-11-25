@@ -275,8 +275,8 @@ directories are empty).
 ```sh
 # the shim: rebuild with the musl toolchain (the pmbootstrap build chroot is
 # deleted after each build; the host armv7-eabihf is glibc and unusable)
-M=local/work/arm-linux-musleabihf-cross/bin/arm-linux-musleabihf-gcc
-$M -shared -fPIC -O2 -o local/work/dbmfix.so tools/bench/gpu/dbmfix.c -ldl
+. tools/env.sh   # exports MUSL_CC (armv7 musl; see local/toolchains/)
+$MUSL_CC -shared -fPIC -O2 -o local/work/dbmfix.so tools/bench/gpu/dbmfix.c -ldl
 
 # the bake (root needed: loop mount + apk --root)
 DBMFIX_SO=$PWD/local/work/dbmfix.so tools/rebake-hd3.sh --dry-run   # inspect

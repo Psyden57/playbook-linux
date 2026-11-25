@@ -148,8 +148,8 @@ just the total, before concluding "leak".
 ## 7. Reproducing it
 
 ```sh
-M=local/work/arm-linux-musleabihf-cross/bin/arm-linux-musleabihf-gcc   # musl.cc
-$M -shared -fPIC -O2 -o dbmfix.so tools/bench/gpu/dbmfix.c -ldl
+. tools/env.sh          # exports MUSL_CC (armv7 musl from musl.cc)
+$MUSL_CC -shared -fPIC -O2 -o dbmfix.so tools/bench/gpu/dbmfix.c -ldl
 tools/pbssh.sh 'cat > /usr/local/lib/dbmfix.so' < dbmfix.so
 # observe:  LD_PRELOAD=/tmp/dbmlog.so python3 /tmp/final.py   (logs the args)
 # apply:    DBMFIX=1 LD_PRELOAD=/usr/local/lib/dbmfix.so <client|compositor>

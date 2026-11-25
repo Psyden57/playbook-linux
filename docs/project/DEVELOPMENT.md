@@ -32,7 +32,11 @@ path.
 * Every boot: `pkexec chmod 666 /dev/ttyACM0` (trap 24).
 * **`tools/pb_bootlog.sh`** captures the console's full `kmsg` to
   `local/logs/boot-YYYYmmdd-HHMMSS.log` (host-side only).  Run it **on
-  request** — it is not part of the routine boot loop.
+  request** — it is not part of the routine boot loop.  The directory is
+  **ephemeral by design**: the 2026-10/early-11 captures were deleted at the
+  session-70 close, so a `local/logs/boot-*.log` citation in an older session or
+  report refers to a file that is no longer retained.  Re-capture on the current
+  image rather than trusting an old log (`LOCAL-PAYLOAD-INVENTORY.md` §5).
 * Read `SAFETY.md` before the first write of a session.  **Do not assume there is
   a spare** — the unit inventory and its state are in `STATE.md` §"The unit".  An
   agent still never writes RPMB; the unit behaves as read-only except the

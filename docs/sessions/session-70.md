@@ -234,7 +234,7 @@ because each one cost real time.
   `/usr/share/wayland-sessions/catacomb.desktop` (repointed) and
   `catacomb.desktop.orig` (backup).  **A reflash of the session-59 image loses
   all four.**
-* **Host-side toolchain**: `local/work/arm-linux-musleabihf-cross/` (from
+* **Host-side toolchain**: `local/toolchains/armv7-musl-eabihf/` (from
   `https://musl.cc/arm-linux-musleabihf-cross.tgz`, 98 MB, sha256 `11e155a0…`)
   — needed because the pmbootstrap build chroot is deleted after each build and
   `local/toolchains/armv7-eabihf` is glibc.

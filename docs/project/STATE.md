@@ -606,9 +606,22 @@ The per-session snapshots are in
 
 ## Current images
 
-The unit table below is authoritative for what is on media.  Keep the current
-image, one known-good fallback, and anything an open contradiction still needs;
-the durable record is the CRC and what it demonstrated, not the file.
+The unit table below is authoritative for what is on media.  The durable record
+is the CRC and what it demonstrated, **not** the file.  **Retention rule
+(operator, session 70):** keep the **latest dual-core image**, the **last working
+single-core image**, the **read-back instrument**, and the **freshest hd3
+filesystem** — everything else is rebuildable from the recorded CRC and is
+deleted rather than accumulated.  All QNX assets (`*.ifs`, `*.rcfs`, `*.ufs`) are
+kept regardless: they are the way back.  `LOCAL-PAYLOAD-INVENTORY.md` records
+what was deleted and what remains.
+
+**Only five kernel images are retained** (session-70 cleanup): the current
+dual-core `0x3547D613` (in `boot/`, tracked by name), the single-core
+`0x8B83421F`, the read-back instrument `0x5BBCD22E`, and the two fallbacks
+`0xC9FEE2D1` / `0xC675E206`.  **The table
+below is a historical record of what each image demonstrated — most of those
+files are no longer on disk.**  A CRC is the durable artefact; the file was
+rebuildable and was deleted (`LOCAL-PAYLOAD-INVENTORY.md` §7).
 
 | image | base | role |
 |---|---|---|

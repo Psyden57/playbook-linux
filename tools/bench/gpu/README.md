@@ -23,8 +23,8 @@ own record (`/sys/kernel/debug/dri/omapdrm.0/gem`), not guessed.
 it.  Gated on `DBMFIX=1`, logs every rewrite, touches nothing else.
 
 ```sh
-M=local/work/arm-linux-musleabihf-cross/bin/arm-linux-musleabihf-gcc
-$M -shared -fPIC -O2 -o dbmfix.so tools/bench/gpu/dbmfix.c -ldl
+. tools/env.sh                     # exports MUSL_CC (an armv7 **musl** compiler)
+$MUSL_CC -shared -fPIC -O2 -o dbmfix.so tools/bench/gpu/dbmfix.c -ldl
 tools/pbssh.sh 'cat > /tmp/dbmfix.so' < dbmfix.so
 DBMFIX=1 LD_PRELOAD=/tmp/dbmfix.so <pvr client>
 ```
@@ -32,9 +32,13 @@ DBMFIX=1 LD_PRELOAD=/tmp/dbmfix.so <pvr client>
 Measured: 19,660,800 B → 2,457,600 B; a live pvr client renders correctly and
 **4/4** back-to-back runs are clean with pinned TILER flat at 66.0 MiB.
 
-**Toolchain:** `https://musl.cc/arm-linux-musleabihf-cross.tgz` (98 MB, sha256
-`11e155a0…`).  The pmbootstrap build chroot is deleted after each build, and the
-host's `local/toolchains/armv7-eabihf` is **glibc** (won't load on the musl
-unit), so this download is the way to rebuild.
+**Toolchain:** `MUSL_CC`, exported by `. tools/env.sh` when
+`local/toolchains/armv7-musl-eabihf` is present.  It comes from
+`https://musl.cc/arm-linux-musleabihf-cross.tgz` (98 MB, sha256 `11e155a0…`),
+unpacked so the compiler lands at
+`local/toolchains/armv7-musl-eabihf/bin/arm-linux-musleabihf-gcc`.  It is needed
+because the pmbootstrap build chroot is deleted after each build and
+`local/toolchains/armv7-eabihf` is **glibc** (its output will not load on the
+musl unit).
 
 Result and interpretation: **report 271**.
