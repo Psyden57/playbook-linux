@@ -37,13 +37,17 @@ has grown to 84 objects / 166 MiB total / **25.6 MiB pinned** (the fresh boot wa
 single **transient DSI error at t=1911 s** on that boot (it recovered — null
 packets sent after 1 poll — and is **not** the `NO PACKET_SENT` wedge).
 
+**Touch after a cold boot:** the Munin controller can be down until
+**GPIO1_14/GPIO4_8 are pulsed** (the driver does not drive them; STATE, touch
+row).  A warm `reboot -f` keeps it up.  Before judging the touch tests, check
+`grep -E '^ *118:' /proc/interrupts` (it should be counting) and, if it is down,
+pulse the pads.
+
 **Then launch Kumo the way the session will.**  The compositor and its clients
 run as `playbook`; a launched client must get the session environment, not a
 bare `su`:
 
 ```sh
-PID=$(pgrep -x catacomb | head -1)
-# copy the session env the README-permissions recommends
 su playbook -c '
   export XDG_RUNTIME_DIR=/run/user/10000
   export WAYLAND_DISPLAY=wayland-1
@@ -54,6 +58,11 @@ su playbook -c '
   nohup kumo https://example.com >/tmp/kumo.log 2>&1 </dev/null &
 '
 ```
+
+If the engine's media session complains about the session bus, add
+`DBUS_SESSION_BUS_ADDRESS` copied from catacomb's
+`/proc/$(pgrep -x catacomb)/environ` (the rest of the `XDG_SESSION_*` env can
+come from there too, as `rootfs/README-permissions.md` describes).
 
 Then read, in this order:
 
@@ -82,6 +91,12 @@ Then read, in this order:
 **Pass criterion:** Kumo renders a real page on the SGX — `pvr_dri` mapped,
 `GL_RENDERER = PowerVR SGX 540` in the WebKit process — with a measured RSS and
 first-render time, and touch scrolling, zoom and the context menu working.
+
+**Escape hatch:** Kumo also has a **Servo** backend
+(`--no-default-features --features servo`, upstream Kumo; our package drops the
+servo dependency) — a pinned Rust crate, no engine build, but a less complete
+engine.  Skip **cog** entirely (it needs the same missing engine and is only a
+smaller client).  [report 273 §4]
 
 ## 0b. The owed rebake — now includes the browser packages
 
@@ -123,18 +138,23 @@ GPU-only rebake is `…-preperm.img` (`9b656d36…`).
 ## 0d. The queue behind the Kumo experiment
 
 1. **The GEM growth** — 84 objects / 166 MiB total / 25.6 MiB pinned after 5 h;
-   six unpinned 9,707,520 B objects (`1024×2370×4`).  Source unknown; walk the
-   objects with the clients stopped and compare a fresh boot.  Reboot before the
-   Kumo test.
+   six 9,707,520 B objects (the pinned sum is 25.6 MiB, so at least four are
+   unpinned; `1024×2370×4` is arithmetic on the size, not a measured geometry).
+   Source unknown; walk the objects with the clients stopped and compare a fresh
+   boot.  Reboot before the Kumo test.
 2. **The power-button DPMS binding** — the initrc binds the release to a DPMS
    toggle, and a DPMS off wedges the DSI (the first post-flash boot's black
    panel; trap-353 class).  Decide whether to neutralize it in the next image.
 3. **trap 350** (cosmetic glitches) and a **heavy-redraw/frame-latency**
    measurement — both now unblocked (the TILER pressure is gone).
 4. **Package the pitch fix** as `pvr-dbmfix` (today `/usr/local` files).
-5. The **CPU** items (§0e of the old handoff, still current): the voltage
-   decision, the kernel-side PID-1 affinity fix, the memory-throughput re-measure.
-6. The **USB teardown** (trap 337) — capture before the drop.
+5. The **CPU** items (STATE "What is next", DECISIONS §99, report 266): the
+   1.35 V-for-all-OPPs vs a real supply binding decision, the kernel-side PID-1
+   affinity fix, and the memory-throughput re-measure (the old figure is
+   single-core).
+6. The **USB teardown** (trap 337) — capture before the drop with
+   `local/work/kmsgcap.py` (or `cat /dev/kmsg`); the ACM shell `playbook:~#`
+   (`tools/pbraw.py`) is the fallback.  [report 263 §4]
 
 ## 0e. What is proven about the build (do not re-derive)
 
@@ -186,6 +206,13 @@ GPU-only rebake is `…-preperm.img` (`9b656d36…`).
   visual check; do not screenshot.
 * **Do not restart `tinydm` to switch compositors** — it wedges the DSI (trap
   353).  A DPMS off can also wedge it (see the power-button binding above).
+* The eMMC can log `Card stuck being busy` during write bursts, and a power cut
+  can damage the rw ext4 (trap 336): prefer a clean `reboot`, and **do not call
+  `sync`** (the eMMC FLUSH hangs the card, trap 300).  `/tmp` is on the ext4,
+  not tmpfs (trap 354).
+* **Revert experiments and prove the revert.**  Use the reference before the
+  bench (DECISIONS §61).  Look up every external fact.  Time-box subagents
+  (trap 109).
 * Write the durable fact into the repository in the same turn.  Never present a
   guess as a fact.
 
@@ -200,6 +227,16 @@ GPU-only rebake is `…-preperm.img` (`9b656d36…`).
 * `tools/rebake_hd3.py`, `tools/rebake-hd3.sh` — the rebake.
 * `local/work/src/kumo/` — Kumo 1.10.0 checkout (the source of the API
   symbols); `local/work/src/wpe-src/` — the WPE tarball and patches.
+* `local/kernel-tree/` — the 7.3.3 build tree (gitignored; it carries the
+  session-62/63/64 diagnostics); `local/pristine/linux-7.3.3` for a clean
+  diff/export.  The exact kernel build/flash recipe is
+  `docs/project/DEVELOPMENT.md` §2 (this handoff keeps only the flash loop).
+* `tools/bench/egl/` + `local/work/egltest-client/` — the prebuilt armv7 GPU
+  probes (`pb-egltest`, `pb-gbmsample`, …).
+* `local/work/kmsgcap.py` — the ACM capture for the USB teardown;
+  `tools/pbssh.sh` and `tools/pbraw.py` — the console paths.
+* WLAN manual bring-up (if NetworkManager does not auto-connect): report 236 /
+  DECISIONS §70; the BT controller is parked in STATE "What is next" 1a.
 * Reports **274** (current for the build), 273 (API gate/APKBUILD), **272**
   (rebake), 271 (pitch fix), 270 (trap 349).
 
@@ -214,7 +251,8 @@ operator whether a page is on the panel; measure RSS and first render; check
 * Kumo has never drawn a page; its RSS, first render and touch behaviour are
   unmeasured.  The engine's data path on the SGX (the DRM node Kumo passes vs
   the pvr render node) is the likely first failure.
-* The GEM growth and its six 9.7 MB unpinned objects are unexplained.
+* The GEM growth and its six 9.7 MB objects are unexplained (at least four are
+  unpinned, since the pinned sum is 25.6 MiB).
 * The single transient DSI event at t=1911 s was not seen by the operator and
   did not cost the panel; it is not a full wedge.
 * The `wpewebkit`/`kumo` packages are not in the flashed image.
@@ -257,6 +295,8 @@ nohup kumo https://example.com; read /tmp/kumo.log, the WebKit helper processes
 VmRSS, the omapdrm gem tree and unfiltered dmesg; ASK THE OPERATOR what is on the
 panel.  Pass: a real page on the SGX (pvr_dri mapped, GL_RENDERER=PowerVR SGX
 540), measured RSS and first render, and touch scrolling/zoom/context menu.
+Touch after a cold boot may need the GPIO1_14/GPIO4_8 pulse; check irq 118
+before judging it.
 
 IF IT FAILS: the likely first failure is the DRM node Kumo passes to WebKit
 (the compositor's dmabuf feedback main device is omapdrm renderD128, while the
@@ -277,7 +317,10 @@ boot; WLAN wlan0 connected 192.168.0.231; battery Full.  SSH:
 PB_LINK=usb tools/pbssh.sh works; if it times out check the cable, the host VPN
 (trap 341) and ufw (trap 342) first.  Kernel printk goes to the panel; use
 reboot -f; ask the operator for visual checks; do not screenshot; do not restart
-tinydm (trap 353).  An agent never writes RPMB; NVRAM read-only.
+tinydm (trap 353).  An agent never writes RPMB; NVRAM read-only.  Revert
+experiments and prove the revert; use the reference before the bench; look up
+every external fact; the eMMC can log Card stuck being busy and do not call sync
+(traps 336/300); /tmp is on the ext4 (trap 354).
 
 SAFETY: read SAFETY.md first.  One variable per boot.  Flash region 0 only when
 only it changed; both regions in one bootrom session only when both changed.

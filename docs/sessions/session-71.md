@@ -97,8 +97,9 @@ the panel, RSS, touch) is deliberately left to the next session.
   the session-70 `NO PACKET_SENT` wedge); desktop processes from the boot.
 * GEM tree: **84 objects, 174,493,696 B total, 26,861,568 B pinned (25.6 MiB)**,
   largest 9,707,520 B — up from the fresh-boot 8 objects/14.7 MB.  The pinned sum
-  is below the 128 MiB TILER but higher than the 9.5 MiB fresh baseline; the
-  9.7 MB objects are unpinned.  **Reboot before the Kumo test.**
+  is below the 128 MiB TILER but higher than the 9.5 MiB fresh baseline.  The
+  six 9.7 MB objects are mostly unpinned (at least four, since 25.6 MiB is the
+  whole pinned sum); their source is unknown.  **Reboot before the Kumo test.**
 * Wi-Fi `wlan0 connected` 192.168.0.231; battery Full 100 %; SSH over USB works.
 
 ## Inferred
@@ -115,8 +116,10 @@ the panel, RSS, touch) is deliberately left to the next session.
   (`ENABLE_WPE_PLATFORM ON`, `WPE_PLATFORM_* OFF`, `USE_GBM/LIBDRM ON`) matches.
 * **The GEM growth over 5 h is a slow buffer accumulation**, not the 8× pitch
   bug: every measured object is at 1.00× sizes, and the pinned sum is 25.6 MiB.
-  The 9.7 MB objects (`1024×2370×4`) are unpinned and need a per-object source;
-  the engine/Kumo installs are not GPU clients.
+  The six 9.7 MB objects are mostly unpinned (at least four, since the pinned sum
+  is 25.6 MiB); `1024×2370×4` is arithmetic on the size, not a measured
+  geometry.  Their source needs a per-object walk; the engine/Kumo installs are
+  not GPU clients.
 
 ## Dead ends and wrong assumptions (valuable — do not skip)
 
@@ -165,9 +168,10 @@ the panel, RSS, touch) is deliberately left to the next session.
 * **Kumo on the panel**: does it render on the SGX under catacomb; RSS; first
   render; touch zoom and the touch context menu?  The engine/Kumo are installed,
   so this is the next session's one experiment (reboot first to clear the GEM).
-* **The GEM accumulation**: what are the six 9,707,520 B unpinned objects, and
-  why does the idle desktop reach 25.6 MiB pinned/166 MiB total after 5 h?  A
-  per-object walk with the clients stopped, and a reboot-to-reboot comparison.
+* **The GEM accumulation**: what are the six 9,707,520 B objects (mostly
+  unpinned), and why does the idle desktop reach 25.6 MiB pinned/166 MiB total
+  after 5 h?  A per-object walk with the clients stopped, and a
+  reboot-to-reboot comparison.
 * **The single DSI event at t=1911 s**: a transient (null packets after 1 poll)
   or the start of a wedge?  It did not cost the panel this time; capture the
   next one with the operator's visual check.

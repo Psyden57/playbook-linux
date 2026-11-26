@@ -78,8 +78,9 @@ bootrom; no physical power cycle is needed.
   magic `53 ef`), 56.5 G, the flashed image `5d3eac8f…`; `BOOTCTR_FCTRY`
   **`0x2f`**; `nproc` 2, PID 1 mask 3.  The 5 h boot had **1 transient DSI
   error** (t=1911 s, null packets sent after 1 poll — not the `NO PACKET_SENT`
-  wedge).  GEM: **84 objects, 166 MiB total, 25.6 MiB pinned**, largest 9.7 MB
-  (mostly unpinned; reboot before the Kumo test).
+  wedge).  GEM: **84 objects, 166 MiB total, 25.6 MiB pinned**, largest 9.7 MB;
+  the six 9.7 MB objects are mostly unpinned (at least four).  Reboot before the
+  Kumo test.
 
 ## Previous state — 2026-11-24 (session 70)
 
