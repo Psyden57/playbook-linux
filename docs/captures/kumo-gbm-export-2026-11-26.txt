@@ -1,8 +1,9 @@
 # Kumo / WPE WebKit GBM-export probes — 2026-11-26 (session 72)
 
-Live text from the unit, re-run at the session-72 wrap-up.  Read-only: the probes
-open a DRM node, create one 64x64 AR24 buffer and destroy it; nothing on media is
-written.  **This is the evidence behind report 275.**
+Live text from the unit: the GBM/PRIME probes re-run at the session-72 wrap-up,
+and the Kumo logs from this session's runs.  Read-only: the probes open a DRM
+node, create one 64x64 AR24 buffer and destroy it; nothing on media is written.
+**This is the evidence behind report 275.**
 
 Unit at the capture: Linux `7.3.3 #109 SMP` on hd3 (the session-71 rebaked image),
 `pvrsrvkm 56000000.gpu` bound, catacomb running, Kumo **not** running.
