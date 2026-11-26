@@ -30,7 +30,8 @@ Evidence in this session's captures:
 powervr_sgx 56000000.gpu: [drm] SGX540 has one memory context: clients are not isolated from the firmware or from each other (allow_unisolated=1)
 powervr_sgx 56000000.gpu: [drm] SGX core id 0x01140000 revision 0x00010200: TI OMAP4430 (SGX540 1.2.0)
 powervr_sgx 56000000.gpu: [drm] powervr_sgx/sgx540_ukernel.bin: open microkernel invfix, interface 1.0, features 0x8
-powervr_sgx 56000000.gpu: [drm] EDM init: event status 0xa0000000, BIF int 0x8000, timer 0x01003e29
+powervr_sgx 56000000.gpu: [drm] EDM init: event status 0xa0000000, BIF int 0x8000, timer 0x0102994b
+                                    (the timer word is a free-running counter, so it differs per boot)
 powervr_sgx 56000000.gpu: [drm] microkernel started
 [drm] Initialized powervr_sgx 1.0.0 for 56000000.gpu on minor 1
 ```
@@ -103,7 +104,8 @@ the full per-revision errata table, and the microkernel as **C source**.
   `sKernelPDDevPAddr` at +0x5c**, independently corroborating our driver's
   `static_assert`s and the image's `0x16` word read.  The layouts part company
   *after* `0x5c` (the vendor block ends at `0xf8`; the image claims `0x60`-`0xff`
-  as its own scratch), which is a real divergence to check field by field.
+  as its own scratch), which is a real divergence to check field by field.  The
+  derived offset table is `docs/reference/sgx540-ddk18-facts.md` §7.
 * **`FIX_HW_BRN_31620` is a host MMU burn our tree lacks** — every page directory
   must carry a valid read-only PTE at PDE 0 / PTE 1, which is exactly
   `sgx540_heaps.general`'s base.  Tested and **rejected** (§6).

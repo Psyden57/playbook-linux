@@ -93,24 +93,18 @@ show `consumed 2..4` — the microkernel now takes commands off the CCB.  Exactl
 **one** job then completes per GPU reset, consistent with the EDM being entered
 once (the image's own event-entry counter reads 1).
 
-## 4. The DDK's control-block layout is a primary source for `ta3dctl`
-
-`eurasia/services4/srvinit/devices/sgx/sgx_mkif.h` defines `SGXMK_TA3D_CTL` and
-`SGXMK_STATE` field by field with `/*!< ... */` comments, and the code
-`static_assert`s several offsets.  That is the authority for the
-control-block offsets the open image carries as guesses, and it is worth
-diffing the two field by field before trusting any of the unmeasured tables.
-
-## 5. What this drop does *not* answer
+## 4. What this drop does *not* answer
 
 * The microkernel's own register tables (0x618, 0x62c, 0x694, TA 0x200,
   3D 0x428) are still not in any header — this drop's kernel side is the same
   host-touched subset, and the microkernel itself is a binary.
-* The `ta3dctl` offsets still need the diff in §4.
+* The `ta3dctl` offsets are *derived* in §7 from the header's structs and
+  corroborate ours, but the fields above `0x5c` still need the field-by-field
+  diff §7 describes.
 * Nothing was verified on silicon in this note except the `0x0138` mask and the
   `SW_EVENT` bit; both were measured as a change in behaviour, not yet as a fix.
 
-## 6. Two `USE_CODE_BASE` facts, from the DDK's own derivation
+## 5. Two `USE_CODE_BASE` facts, from the DDK's own derivation
 
 The open driver's `use_code_base_addr_shift` was written as a guess for the 540
 (the fact sheet's Gap 7).  The DDK 1.8 derives it instead of guessing:
@@ -144,7 +138,7 @@ settled as a K fact** and the entry's guess was right; what remains open about
 `USE_CODE_BASE` is only whether the registers *exist* on rev-120 silicon, which
 is a write/read-back, not a header question.
 
-## 7. `FIX_HW_BRN_31620`: a dummy page our MMU driver does not create
+## 6. `FIX_HW_BRN_31620`: a dummy page our MMU driver does not create
 
 `sgxerrata.h`'s SGX540 rev-120 block defines `FIX_HW_BRN_31620` — "workaround in
 services", i.e. **host-side**, and our `pvrsgx_mmu.c` has no trace of it
@@ -203,10 +197,12 @@ Two supporting facts from the same header pair:
   allocation happens to land there; the DDK makes it unconditionally
   present in every directory, whatever the client allocated.
 
-## 9. The `ta3dctl` layout, derived from the DDK's structs (corroborates ours)
+## 7. The `ta3dctl` layout, derived from the DDK's structs (corroborates ours)
 
 `sgx_mkif.h` gives `PVRSRV_SGX_EDMPROG_SECATTR` and `SGXMK_STATE` field by
-field.  Combined with `SGXMK_TA3D_CTL`, and for our configuration
+field with `/*!< … */` comments, and `static_assert`s several offsets — it is
+the authority for the control-block offsets the open image carries as guesses.
+Combined with `SGXMK_TA3D_CTL`, and for our configuration
 (`FIX_HW_BRN_28889` set; **no** `SGX_FEATURE_2D_HARDWARE`, no `SGX_FEATURE_MP`,
 no `SGX_FEATURE_MK_SUPERVISOR`, `FIX_HW_BRN_31939` not in the rev-120 list,
 `SGX_DISABLE_UKERNEL_SECONDARY_STATE` clear; and
@@ -242,7 +238,7 @@ scratch in `0x5c`–`0xff`.  So an offset the image writes above `0x5c` names a
 trusting any of the carried-over tables, and a reason the image's private-region
 choice (`0x60`–`0xff` claimed as its own) is a real, not cosmetic, divergence.
 
-## 10. The vendor's SGX540 microkernel entry table (from source, not a blob)
+## 8. The vendor's SGX540 microkernel entry table (from source, not a blob)
 
 `eurasia/eurasiacon/binary2_540_omap4430_android_release/target/intermediates/ukernel/`
 holds the microkernel as **C source** — `ukernel.h` is

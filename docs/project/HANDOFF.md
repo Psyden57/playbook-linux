@@ -105,8 +105,9 @@ invocation): read the counter after job 1 and after job 2.
   Next: the image's `UK_WAITLOG` (`+0x35` wait-site) on that failure.
 * **The counter advances for job 1 only** → the EDM stops being dispatched after
   its first post-init task.  Next: `EVENT_PDS_ENABLE`/`EVENT_STATUS` read from
-  *inside* the driver at job 2, plus `SC_TAFLIGHT`/`SC_INFLIGHT` (`0x10ce`/`0x14`)
-  to see whether it is stuck in a defer branch rather than never entered.
+  *inside* the driver at job 2, plus `SC_TAFLIGHT`/`SC_INFLIGHT` (control-block
+  words `0x36`/`0x14`) to see whether it is stuck in a defer branch rather than
+  never entered.
 * **The counter never advances, yet job 1 passes** → the pass does not come from
   the microkernel's completion path at all.  Then the driver's own accounting is
   the thing to trust, and the question becomes "what does the test's fence
@@ -218,9 +219,10 @@ invocation): read the counter after job 1 and after job 2.
 ## 5. What could shorten the port
 
 * The DDK 1.8 drop's `eurasia/services4/srvinit/devices/sgx/sgx_mkif.h` is a
-  primary source for every `ta3dctl` field (report 277 §4 has the derived
-  table); the image's own offsets above `0x5c` diverge from it and should be
-  checked field by field.
+  primary source for every `ta3dctl` field; the **derived offset table** is
+  `docs/reference/sgx540-ddk18-facts.md` §7, and report 277 §4 has the summary.
+  The image's own offsets above `0x5c` diverge from the vendor block and should
+  be checked field by field.
 * The same drop ships the vendor microkernel as **C source**
   (`pbuKernelProgram[]` + `ukernel_labels.h`): a per-command entry table, not a
   single internal dispatcher.  Reading it is legitimate (source, GPL-2) and may
@@ -237,7 +239,7 @@ Workspace: this repository — a git checkout.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
 file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 368-387) and §3,
-DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 108-111, docs/reports/INDEX.md,
+DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 108-112, docs/reports/INDEX.md,
 reports 277 (this session), 276 (graphics route + addendum), 275 (Kumo),
 docs/reference/sgx540-factsheet.md AND docs/reference/sgx540-ddk18-facts.md,
 docs/captures/sgx540-ukernel-{list0,start,first-job}-2026-11-26.txt,

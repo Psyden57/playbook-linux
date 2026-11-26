@@ -251,7 +251,7 @@ just the module, installed it and booted:
 **Conclusion: not the stall.**  Reverted — `git checkout` on
 `pvrsgx_device.c` and a module rebuild reproduce **`2e138afc0e832a4e7b41d97f74452508`**,
 byte-identical to the module on hd3, which is what is installed again.  The
-DDK's own workaround stays recorded in `docs/reference/sgx540-ddk18-facts.md` §7
+DDK's own workaround stays recorded in `docs/reference/sgx540-ddk18-facts.md` §6
 for whoever picks this up.
 
 The honest reading of the pass pattern (1–2 passes immediately after a reset,

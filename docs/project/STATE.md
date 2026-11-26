@@ -8,7 +8,8 @@ published upstream (DECISIONS §110).
 
 **Measured on the unit.**  `powervr_sgx` binds `56000000.gpu` and reports
 `open microkernel invfix, interface 1.0, features 0x8`, `EDM init: event status
-0xa0000000, BIF int 0x8000, timer 0x01003e29`, **`microkernel started`**; its
+0xa0000000, BIF int 0x8000` (the trailing `timer` word is a free-running counter
+and differs per boot), **`microkernel started`**; its
 debugfs agrees — `firmware running: 1`, `hostctl init 0x1`, `uk-lockups 0`,
 `BIF_INT_STAT 0x00008000` (`FLUSH_COMPLETE`, **no fault**), `BIF_FAULT 0`.
 `card1`/`renderD129` = `powervr_sgx`; `card0`/`renderD128` stay `omapdrm`.
