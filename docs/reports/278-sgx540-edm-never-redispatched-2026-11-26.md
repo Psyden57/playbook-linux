@@ -157,12 +157,26 @@ what is unproven is whether the **doorbell** reaches the core.
 
 * **Why the doorbell does not open is not measured.**  `ccb_write()` writes
   `EUR_CR_EVENT_KICK` (0xac8, `NOW` b0) and then polls the ring; whether that
-  write reaches the core, and whether `EVENT_KICKER`'s **28-bit** address field
-  is programmed correctly for this core, is now the question.  It needs a
-  register read **from inside the driver** (trap 384) — a debugfs line of
+  write reaches the core is now the question.  It needs a register read **from
+  inside the driver** (trap 384) — a debugfs line of
   `EVENT_KICK`/`EVENT_KICKER`/`EVENT_PDS_ENABLE` read back around the doorbell
-  is the cheapest form, and the driver already has both registers in its `regs`
+  is the cheapest form, and the driver already has all three in its `regs`
   table.
+* **Two cheaper explanations were checked statically and both are clean** (the
+  session's last work, after this report's measurements):
+  * The init kick going to `EVENT_KICK2` (0x0ac0) while jobs use `EVENT_KICK`
+    (0x0ac8) is the DDK kernel driver's own `SGX_FEATURE_MULTI_EVENT_KICK`
+    behaviour, and `pvrsgx_regs.h`'s `EVENT_KICK2 = 0x0ae8` is an unused
+    SGX545-family constant.  **An earlier draft of this report called it a
+    sufficient cause; that is withdrawn.**  [trap 392;
+    `docs/contradictions/sgx540-event-kick2-offset.md`, resolved]
+  * `event_pds_addr()` has the vendor's shape (`addr − pds_pixel.base` when
+    `EDM_VERTEX_PDSADDR_FULL_RANGE` is clear — which `srvinit` also gates on),
+    evaluates to `0x800000` (8 MiB) well inside `EUR_CR_EVENT_OTHER_PDS_EXEC`'s
+    18-bit field, and the driver's `check_event_pds()` read-back passes.  That
+    gate cannot detect "the PDS program is in the wrong heap", because both
+    sides of the comparison come from our own layout (trap 393) — but the
+    derivation itself agrees with the vendor's.  [fact sheet, "Events and kicks"]
 * **`EVENT_PDS_ENABLE`'s value is not read back.**  The driver programs
   `0x2204f00f`; the DDK's own derivation says the same; nothing has read the
   register.  One read answers whether the write stuck.

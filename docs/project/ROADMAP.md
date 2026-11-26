@@ -464,6 +464,10 @@ flasher can replace at every point:
     report 278]  **The next session's unit is the doorbell
     (`EUR_CR_EVENT_KICK` 0xac8 / `EVENT_KICKER` 0xac4, 28-bit) and
     `EVENT_PDS_ENABLE` (`0x2204f00f`), read from inside the driver** (trap 384).
+    Two cheaper explanations were cleared statically at the session's end and
+    must not be re-run: the differing init/job kick offsets are the vendor's own
+    `MULTI_EVENT_KICK` behaviour (trap 392), and the event program's address
+    matches `srvinit`'s derivation (trap 393).
     Then one interaction to make the EDM dispatch at all, and the aim after that
     is a frame.
     (a2) a

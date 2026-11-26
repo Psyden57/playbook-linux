@@ -3875,6 +3875,35 @@ report 121 §3/§11/§12.
           NEED -O" note is about the QNX door; this root has no `scp` at all.
           (Session 75.)
 
+392. **The SGX540 has FOUR kick registers, and which one is the doorbell is a
+          feature flag — "the init kick and the job kick use different offsets"
+          is the vendor's own shape, not a bug.**  `sgx540defs.h` defines
+          `EVENT_KICK1` 0x0ab0, `EVENT_KICK2` 0x0ac0, `EVENT_KICK` 0x0ac8 and
+          `EVENT_KICK3` 0x0ad8.  The DDK's kernel driver writes the init kick to
+          `EVENT_KICK2` when `SGX_FEATURE_MULTI_EVENT_KICK` is set (else
+          `EVENT_KICK`), and the per-command kick to `EVENT_KICK` (or to
+          `EVENT_KICK2` under `FIX_HW_BRN_26620 && SYSTEM_CACHE`); the multi-event
+          path does **not** increment the kernel CCB's event-kicker word.  So
+          `pvrsgx_fw_start()` → 0x0ac0 and `ccb_write()` → 0x0ac8 is correct for
+          this core, and `pvrsgx_regs.h`'s `EVENT_KICK2 = 0x0ae8` is only ever
+          used by cores that set `event_kick2` on the *SGX545*'s routing.
+          **Recorded because session 75 first read this as a defect and had to
+          retract it** — check a differing constant against the vendor's call
+          sites before calling it one.  (Session 75; contradiction file
+          `sgx540-event-kick2-offset.md`, now resolved.)
+
+393. **A read-back that passes proves less than it looks, when both sides are
+          computed from the same assumption.**  `check_event_pds()` compares
+          `EUR_CR_EVENT_OTHER_PDS_EXEC` (0x0a68) against
+          `event_pds_addr()` = `fw.addr[PDS0] & ~0xf`, minus `pds_pixel.base`
+          when `EDM_VERTEX_PDSADDR_FULL_RANGE` is clear.  That is real evidence
+          the write landed on an implemented register, but the *value* is ours on
+          both sides: the *expected* address is derived from our heap layout and
+          compared with what the same write put back.  It cannot detect "the PDS
+          program is in the wrong heap".  Compare the derivation against the
+          vendor's own (`srvinit`, which subtracts `sDevVAddrPDSExecBase` for
+          exactly this core) rather than against itself.  (Session 75.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

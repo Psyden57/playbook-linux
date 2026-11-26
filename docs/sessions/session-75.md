@@ -52,14 +52,15 @@ against the four outcomes that document lists.  The instruction was explicit —
   candidates, both cheap: the `EVENT_KICK` write (`0xac8`, `NOW` b0) may not
   land, or the entry may be reached but rejected before its first work (the
   session-74 entry-top store faulted, which is that shape).
-* **The init kick and the job kick may be aimed at different registers.**  Read
-  from the source this session: `sgx540_regs` sets `.event_kick2 = 0x0ac0`,
-  `pvrsgx_fw_start()` prefers `event_kick2` over `EVENT_KICK`, and `ccb_write()`
-  writes `EVENT_KICK` (0xac8) — so the addresses differ.  `pvrsgx_regs.h` has
-  `EVENT_KICK2 = 0x0ae8`, the fact sheet says 0x0ac0.  Recorded as an open
-  contradiction (`sgx540-event-kick2-offset.md`); **not measured**, and it is the
-  first thing the next session should read back because it would explain the
-  symptom exactly.
+* **The doorbell is the remaining candidate, not the kick offsets.**  Late in
+  the session the differing init/job kick offsets (`EVENT_KICK2` 0x0ac0 in
+  `pvrsgx_fw_start()`, `EVENT_KICK` 0x0ac8 in `ccb_write()`) looked like a
+  sufficient cause and were written down as one.  **They are not: the DDK's own
+  kernel driver does exactly the same** when `SGX_FEATURE_MULTI_EVENT_KICK` is
+  set, and `pvrsgx_regs.h`'s `EVENT_KICK2 = 0x0ae8` is an unused SGX545-family
+  constant.  Retracted at the session's end from the vendor's source, with no
+  boot spent; the contradiction file is closed and trap 392 carries the lesson.
+  What survives of the idea is narrower — see the two cleared checks below.
 
 ## Dead ends and wrong assumptions (valuable — do not skip)
 
@@ -83,8 +84,12 @@ against the four outcomes that document lists.  The instruction was explicit —
 
 * **Why the doorbell does not open.**  §0b of the new handoff is the experiment:
   read `EVENT_PDS_ENABLE` (0x0a58), `EVENT_KICKER` (0xac4), `EVENT_KICK` (0xac8)
-  and `EVENT_STATUS` (0x12c) back **from inside the driver** around one NULL job,
-  and read `0x0ab0`/`0x0ac0`/`0x0ac8`/`0x0ae8` for the kick2 question.
+  and `EVENT_STATUS` (0x12c) back **from inside the driver** around one NULL job.
+  Two cheaper checks were done at the session's end and both came back clean, so
+  do not repeat them: the kick offsets match the vendor's `MULTI_EVENT_KICK`
+  behaviour (trap 392), and `event_pds_addr()` has `srvinit`'s shape, lands 8 MiB
+  inside `OTHER_PDS_EXEC`'s 18-bit field, and its read-back gate passes — though
+  that gate compares our derivation with our own write (trap 393).
 * **Does the event entry execute at all past init?**  `k_getmiscinfo` needs no
   client PD, so a `GETMISCINFO` submit would prove the entry runs (the driver
   sends one at init, which is why `SC_VERSION` reads 1).
@@ -108,8 +113,9 @@ against the four outcomes that document lists.  The instruction was explicit —
   session's report.
 * `docs/captures/sgx540-ukernel-kick-counter-2026-11-26.txt` — the instrument,
   its negative control, the measurement and the timing mechanism.
-* `docs/contradictions/sgx540-event-kick2-offset.md` (new, open) — the two
-  addresses for the SGX540's second kick register.
+* `docs/contradictions/sgx540-event-kick2-offset.md` (new) — raised **and
+  resolved/retracted in this session**; kept as the record of a wrong reading
+  that would otherwise be re-derived.
 * `rootfs/powervr-sgx/0003-sgx540-kick-counter.patch` — the instrument plus the
   session-74 CCB-trace word relocation that had never been in 0002; applying
   0001→0003 to a pristine `95f78ca` reproduces both `ukernel.py` and the

@@ -1,34 +1,23 @@
-# The SGX540's second kick register is at 0x0ac0 or 0x0ae8 — the docs disagree
+# The SGX540's second kick register is at 0x0ac0 or 0x0ae8 — the docs disagreed
 
-**Status: OPEN.**  Raised in session 75 while turning the doorbell into the next
-experiment.  Read back the three addresses; that settles it in one boot.
+**Status: RESOLVED (session 75), and the suspicion that raised it is RETRACTED.**
+Settled from the GPL-2 DDK's own kernel driver, without a boot.  Kept as a
+record because the wrong reading was written down first and would otherwise be
+re-derived.
 
-## The claims
+## The apparent conflict
 
-**(a) 0x0ac0 — `docs/reference/sgx540-factsheet.md`, "Events and kicks".**  The
-fact sheet's register table gives the SGX540:
-
-```
-EVENT_KICK1 / EVENT_KICK2   0x0ab0 / 0x0ac0     (SGX545: 0x0ae4 / 0x0ae8)
-EVENT_KICK                  0x0ac8              (SGX545: 0x0ac8)
-EVENT_KICKER                0x0ac4  (ADDRESS b4-27, a 24-bit field at shift 4)
-PDS_EXEC_BASE               0x0ab8
-EVENT_TIMER                 0x0acc
-```
-
-read from the GPL-2 DDK 1.17/1.8 headers, and it states explicitly that
-"`SGX_FEATURE_MULTI_EVENT_KICK` **is set** — the microkernel start can use
-`EVENT_KICK2` (the SGX530 cannot)".
+**(a) 0x0ac0 — `docs/reference/sgx540-factsheet.md` and our `sgx540_regs`.**
+The fact sheet's register table gives the SGX540 `EVENT_KICK1`/`EVENT_KICK2` at
+**0x0ab0 / 0x0ac0**, and `pvrsgx_core.c`'s SGX540 entry sets
+`.event_kick2 = 0x0ac0`.
 
 **(b) 0x0ae8 — `drm/powervr_sgx/pvrsgx_regs.h`.**  The driver's own header has
-`SGX_CR_EVENT_KICK2 0x0ae8` (with `SGX_CR_EVENT_KICK 0x0ac8`), i.e. it keeps the
-SGX545's offset for the second register.
+`SGX_CR_EVENT_KICK2 0x0ae8`, i.e. an SGX545-family offset.
 
-**(c) 0x0ac0 — `drm/powervr_sgx/pvrsgx_core.c`, `sgx540_regs`.**  Our SGX540
-entry sets `.event_kick2 = 0x0ac0` and `.event_kick2_now = BIT(0)` — agreeing
-with (a), and disagreeing with (b), in the same tree.
+Both are in the tree, so the two cannot both be describing the same register.
 
-## Why it matters now
+## Why it looked like the bug
 
 `pvrsgx_fw_start()` takes
 
@@ -39,41 +28,57 @@ else
         sgx_wr(sdev, SGX_CR_EVENT_KICK, SGX_CR_EVENT_KICK_NOW);
 ```
 
-so on a core whose `event_kick2` is non-zero **the init kick goes to
-`event_kick2` and the per-job kick in `ccb_write()` goes to `EVENT_KICK`**.  On
-this port that means the init kick was written to **0x0ac0** and every job kick
-to **0x0ac8**.  If in fact the core has one doorbell (which is what the DDK's own
-`BRN_22934` comment in `pvrsgx_fw.c` implies — "a core with one kick register
-takes it there") and the correct address is 0x0ac8, then the init kick went to an
-unnamed register and the job kicks went to the right one; if the correct address
-is 0x0ac0, it is the reverse.  Either way the two kicks are aimed at *different*
-registers, which is a sufficient cause for the measured symptom: **the init runs
-once and no job is ever dispatched** (report 278).
+while `ccb_write()` unconditionally writes `SGX_CR_EVENT_KICK` (0x0ac8).  With
+`.event_kick2 = 0x0ac0`, the **init** kick and every **job** kick are aimed at
+different registers — which would explain "the init runs once and nothing
+after" (report 278) exactly.  It was recorded as the first thing to check.
 
-Note this is not the same as "the video PDS exec address pair is a guess"
-(`event_pds_guessed`); that is a separate, already-recorded unknown
-(`docs/reference/sgx540-ddk18-facts.md` §9).
+## Resolved: the vendor does the same thing
 
-## What is uncertain
+`sgx540defs.h` defines **four** kick registers — `KICK1` 0x0ab0, `KICK2`
+0x0ac0, `KICK` 0x0ac8, `KICK3` 0x0ad8 — and the DDK's own kernel driver picks
+between them by feature:
 
-Whether 0x0ac0 and 0x0ac8 are two registers, one register, or one register plus
-an alias.  The DDK's `BRN_22934` suggests some cores have only one, and the
-driver's own comment says so — but our entry supplies both, and
-`pvrsgx_core_family_usable()` only requires `kick2 == !!cr->event_kick2`, so it
-accepts an entry that sets both fields on a core that may not have both.
+| call site | `SGX_FEATURE_MULTI_EVENT_KICK` | without |
+|---|---|---|
+| init (`eurasia_km/…/sgx/sgxinit.c:469-483`) | `EUR_CR_EVENT_KICK2` **0x0ac0** | `EUR_CR_EVENT_KICK` 0x0ac8 |
+| per command (`eurasia_km/…/sgx/sgxutils.c:512-546`) | `EUR_CR_EVENT_KICK` 0x0ac8, or `EUR_CR_EVENT_KICK2` under `FIX_HW_BRN_26620 && SGX_FEATURE_SYSTEM_CACHE` | `EUR_CR_EVENT_KICK` 0x0ac8 |
 
-## What would settle it
+`SGX_FEATURE_MULTI_EVENT_KICK` **is** defined for the SGX540, and
+`FIX_HW_BRN_26620`'s `SYSTEM_CACHE` combination does not apply here (the 540
+has no system cache — see the fact sheet's errata note), so the vendor's
+sequence on this core is **init → KICK2 (0x0ac0), per command → KICK (0x0ac8)**.
+That is precisely what our driver does.
 
-One boot, from **inside the driver** (trap 384 — `/dev/mem` is closed in this
-configuration): after `pvrsgx_fw_start()`, read back **0x0ab0, 0x0ac0, 0x0ac8
-and 0x0ae8**, then submit a NULL job and read them again.  A register that does
-not exist on a gated core returns 0 and stays 0; the one the doorbell uses
-changes.  Cheapest form: three extra lines in the `ctlblk` debugfs dump
-(`pvrsgx_debugfs.c` already prints named registers through `pvrsgx_dump_status`).
+Also, in the non-multi branch only, the vendor increments the kernel CCB's
+**event-kicker** word (the memory word `EVENT_KICKER` 0x0ac4 points at):
+
+```c
+*psDevInfo->pui32KernelCCBEventKicker = (*psDevInfo->pui32KernelCCBEventKicker + 1) & 0xFF;
+```
+
+The multi-event path does not.  Our `ccb_write()` increments it
+unconditionally, which is at most cosmetic on this core.
+
+## Where (b) came from
+
+`pvrsgx_regs.h`'s `SGX_CR_EVENT_KICK2 0x0ae8` is the **SGX545-family** value
+(the SGX545 header has `KICK1`/`KICK2` at 0x0ae4/0x0ae8).  It is a shared
+header constant, and the SGX540's `regs` entry overrides the field with its own
+0x0ac0 — so nothing on this core ever reads 0x0ae8.  Not a defect, just two
+cores' constants in one header.
+
+## Consequence
+
+**The differing offsets are not the cause of the stall.**  Report 278 §6 and the
+session-75 note listed them as the first thing to read back; that item is
+withdrawn.  The doorbell question stays open in its own right — whether the
+writes *land*, and whether the event program's delivery address is right — and
+those are now the next boot's reads, not because of this.
 
 ## Recorded
 
-Session 75 (turning the doorbell into the next experiment); report 278 §6 and
-`docs/project/HANDOFF.md` §0b name it as the first thing to check.  The fact
-sheet is not edited here: it is K evidence from a header, and the question is
-what the *silicon* does, so this stays open until the read-back.
+Raised and retracted in session 75; trap **392** in `docs/project/KNOWN-ISSUES.md`
+carries the lesson ("check a differing constant against the vendor's call sites
+before calling it a defect").  Evidence: the DDK 1.8 drop at
+`/home/psyden/Pdrive/GFX_Linux_DDK-master`, files and line numbers above.

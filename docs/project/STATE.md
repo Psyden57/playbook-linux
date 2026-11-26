@@ -40,11 +40,17 @@ load, so `dmesg | grep 'open microkernel'` is the only truth about what ran
 **The next unit of work: the doorbell.**  `ccb_write()` writes
 `EUR_CR_EVENT_KICK` (0xac8, `NOW` b0) and `EVENT_KICKER` (0xac4, a **28-bit**
 address field at shift 4), and the driver programs `EVENT_PDS_ENABLE = 0x2204f00f`
-— none of it read back.  Read those three **from inside the driver** (trap 384;
-a debugfs line is cheapest) around one doorbell, plus `EVENT_STATUS` to see
-whether anything is latched or acked.  The microkernel is alive and idle without
-them: 12 s after a restart it reads `firmware running: 1`, `uk-lockups 0`, and
-`EVENT_STATUS 0xa0000000` — the same value `EDM init` printed.
+— none of it read back.  **Two cheaper explanations were checked statically at
+the session's end and both are clean**, so do not re-run them: the init kick
+using `EVENT_KICK2` while jobs use `EVENT_KICK` is the vendor's own
+`MULTI_EVENT_KICK` shape (trap 392, and the earlier "sufficient cause" reading is
+withdrawn), and the event program's address matches `srvinit`'s derivation and
+sits 8 MiB inside `OTHER_PDS_EXEC`'s 18-bit field (trap 393).  Read those three
+**from inside the driver** (trap 384; a debugfs line is cheapest) around one
+doorbell, plus `EVENT_STATUS` to see whether anything is latched or acked.  The
+microkernel is alive and idle without them: 12 s after a restart it reads
+`firmware running: 1`, `uk-lockups 0`, and `EVENT_STATUS 0xa0000000` — the same
+value `EDM init` printed.
 
 **Measured on the unit (sessions 74-75).**  `powervr_sgx` binds `56000000.gpu`
 and reports

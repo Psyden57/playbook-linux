@@ -112,17 +112,25 @@ register, which the `regs` table may still be copying.  The dispatch mask is
 `EVENT_PDS_ENABLE` (0x0a58), programmed `0x2204f00f` by the DDK's own
 derivation and never read back.
 
-**One concrete suspicion to check first.**  `sgx540_regs` sets
-`.event_kick2 = 0x0ac0`, and `pvrsgx_fw_start()` prefers `event_kick2` over
-`EVENT_KICK` whenever it is non-zero — so on this core the **init** kick goes to
-`0x0ac0`, not to the 0xac8 `ccb_write()` uses.  The fact sheet's table
-(`docs/reference/sgx540-factsheet.md`, "Events and kicks") puts the 540's
-`EVENT_KICK1`/`EVENT_KICK2` at **0x0ab0 / 0x0ac0** with `EVENT_KICK` at 0x0ac8,
-and the driver's `pvrsgx_regs.h` puts `EVENT_KICK2` at **0x0ae8**.  Both cannot
-be right; if the two registers are meant to be *the same* one, the init kick
-landed on a different address from the per-job kick, which would explain
-"init runs once, nothing after".  Read `0x0ab0`, `0x0ac0` and `0x0ac8` back
-before anything else — it is one boot and it is free.
+**Already checked and CLEARED statically (session 75) — do not spend a boot on
+these two.**
+
+* *Which kick register.*  The init kick goes to `EVENT_KICK2` (0x0ac0) and every
+  job kick to `EVENT_KICK` (0x0ac8) — and that is exactly what the DDK's own
+  kernel driver does when `SGX_FEATURE_MULTI_EVENT_KICK` is set, which it is for
+  the SGX540.  The differing offsets are **not** a defect; `pvrsgx_regs.h`'s
+  `EVENT_KICK2 = 0x0ae8` is the SGX545-family constant and is overridden by our
+  entry.  Full derivation: `docs/contradictions/sgx540-event-kick2-offset.md`
+  (resolved), trap 392.
+* *Whether the event program's address is right.*  `event_pds_addr()` uses the
+  same shape as the vendor's (`addr − pds_pixel.base` when
+  `EDM_VERTEX_PDSADDR_FULL_RANGE` is clear), the result (`0x800000`, 8 MiB) is
+  far inside `OTHER_PDS_EXEC`'s 18-bit field, and the `check_event_pds()`
+  read-back passes.  That read-back cannot detect "the PDS program is in the
+  wrong heap" (trap 393), but the derivation itself agrees with `srvinit`.
+
+So neither of the two cheap explanations survives.  What remains is **whether
+the writes land at all** — see the method below.
 
 **Method — one boot, three reads, no new instrument.**  Add a temporary debugfs
 line (or a `pr_info` in `ccb_write()`, rate-limited) that prints all three
@@ -187,9 +195,11 @@ invocation): read the counter after job 1 and after job 2.
   fired and the microkernel ignored it.  Next: does the event entry execute at
   all past init?  `k_getmiscinfo` is the one command that needs no client PD.
 * **`EVENT_KICK` reads back 0 and `EVENT_STATUS` is unchanged** → the write does
-  not land.  Next: `EVENT_KICKER`'s field width and the two `event_kick2`
-  offsets — see the suspicion above, and
-  `docs/contradictions/sgx540-event-kick2-offset.md`.
+  not land.  The offsets and the PDS address are already cleared (above), so the
+  candidates left are the **shared IRQ** (`request_threaded_irq(...,
+  IRQF_SHARED)`, so a level that the display also latches could be missed) and
+  the **PDS program itself** — whether the image that address points at is the
+  one this core executes.  `vdc_ack()` in the ISR is the display-latch half.
 * **`EVENT_PDS_ENABLE` does not read back `0x2204f00f`** → the write did not
   stick (a gated unit, or the wrong offset).  Settle that first.
 * **All three read back correctly and nothing changes** → the doorbell path is
@@ -331,13 +341,14 @@ PlayBook (OMAP4430 "winchester") — session 76 (absolute; Linux-era 70)
 Workspace: this repository — a git checkout.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 368-391) and §3,
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 368-393) and §3,
 DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 108-113, docs/reports/INDEX.md,
 report 278 (this session's predecessor), 277 (the run it corrects), 276
 (graphics route + addendum), 275 (Kumo),
 docs/reference/sgx540-factsheet.md AND docs/reference/sgx540-ddk18-facts.md,
 docs/captures/sgx540-ukernel-kick-counter-2026-11-26.txt,
-docs/contradictions/sgx540-event-kick2-offset.md,
+docs/contradictions/sgx540-event-kick2-offset.md (resolved; read so you do NOT
+re-run it),
 docs/sessions/session-75.md and session-74.md.
 
 WHERE IT STANDS: Linux 7.3.3 #5 SMP ARMv7, dual-core 1008 MHz; region 0
@@ -367,11 +378,12 @@ default).  NOTHING IS PUBLISHED UPSTREAM (DECISIONS 110).
 WHAT REMAINS: HANDOFF §0b is the one experiment, and it is now about the
 DOORBELL: read EUR_CR_EVENT_KICK (0xac8), EVENT_KICKER (0xac4) and
 EVENT_PDS_ENABLE (0x0a58) back from INSIDE the driver (trap 384 closes /dev/mem)
-around one NULL job, and read 0x0ab0/0x0ac0/0x0ac8/0x0ae8 for the kick2 offset
-question (docs/contradictions/sgx540-event-kick2-offset.md -- sgx540_regs uses
-0x0ac0 for the init kick while ccb_write uses 0x0ac8 for every job kick, which
-is a sufficient cause for the symptom).  Do not instrument the microkernel again
-until that is read.
+around one NULL job.  Two cheap explanations were CLEARED statically at the end
+of session 75 and must not be re-run: the init kick going to EVENT_KICK2
+(0x0ac0) while jobs use EVENT_KICK (0x0ac8) is the vendor's own shape for a
+MULTI_EVENT_KICK core (trap 392), and event_pds_addr() agrees with srvinit and
+lands 8 MiB inside the 18-bit field (trap 393).  Do not instrument the
+microkernel again until the doorbell is read.
 
 TRAPS THAT COST TIME: a uAPI "1/1 passed" is the driver's timeout here, not a
 completion (trap 388); "consumed" after a reset equals "issued" and proves

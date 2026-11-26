@@ -143,12 +143,41 @@ This is the SGX545's fine-grained split, not the SGX530's coarse one — the
   modern SGX545 layout, not the SGX530's.  The bit positions follow the SGX545
   for the shared events (K); the per-bit list is to be transcribed before use.
 * **Multi-event kick:** `EVENT_KICK1` 0x0ab0 (`NOW` b0-7), `EVENT_KICK2` 0x0ac0
-  (`NOW` b0), `EVENT_KICK` 0x0ac8 (`NOW` b0), `EVENT_KICKER` 0x0ac4 (address
-  b4-27), `EVENT_TIMER` 0x0acc (`ENABLE` b24, `VALUE` b0-23).
-  `SGX_FEATURE_MULTI_EVENT_KICK` **is set** — the microkernel start can use
-  `EVENT_KICK2` (the SGX530 cannot).
+  (`NOW` b0), `EVENT_KICK` 0x0ac8 (`NOW` b0), `EVENT_KICK3` 0x0ad8 (`NOW` b0),
+  `EVENT_KICKER` 0x0ac4 (address b4-27), `EVENT_TIMER` 0x0acc (`ENABLE` b24,
+  `VALUE` b0-23).  `SGX_FEATURE_MULTI_EVENT_KICK` **is set** — the microkernel
+  start can use `EVENT_KICK2` (the SGX530 cannot).
+* **Which kick register is the doorbell is a feature flag, not a core constant
+  (K, verified session 75).**  The DDK's own kernel driver writes them from one
+  site, chosen by `#if`:
+
+  | | `SGX_FEATURE_MULTI_EVENT_KICK` | without |
+  |---|---|---|
+  | init kick (`sgxinit.c`) | **`EVENT_KICK2` 0x0ac0** | `EVENT_KICK` 0x0ac8 |
+  | per-command kick (`sgxutils.c`) | `EVENT_KICK` 0x0ac8, **or `EVENT_KICK2` when `FIX_HW_BRN_26620 && SGX_FEATURE_SYSTEM_CACHE`** | `EVENT_KICK` 0x0ac8 |
+
+  In both cases the *other* kick register is untouched, and only the non-multi
+  path increments the kernel CCB's **event kicker** word (the memory word
+  `EVENT_KICKER` 0x0ac4 points at) — the multi-event path does not.  So an
+  image/driver that uses `EVENT_KICK2` for the init kick and `EVENT_KICK` per
+  job is behaving exactly as the vendor's does; the two different offsets are
+  **not** a defect.  (An earlier session-75 note suspected they were; retracted.)
 * `EVENT_KICKER`'s address is **28-bit** (b4-27), matching the device address
   space (§BIF).
+* **The event PDS register pair.**  Two exist per requestor on this core, and
+  the microkernel's is the `OTHER` one:
+  `EUR_CR_EVENT_PIXEL_PDS_EXEC/DATA/INFO` at **0x0a5c/0x0a60/0x0a64** and
+  `EUR_CR_EVENT_OTHER_PDS_EXEC/DATA/INFO` at **0x0a68/0x0a6c/0x0a70** (K).
+  `*_PDS_EXEC` is an **18-bit** address field (b4-21, `MASK 0x03FFFFF0`, so a
+  4 MiB range in 16-byte units) taken as an offset from `PDS_EXEC_BASE` 0x0ab8
+  when `EDM_VERTEX_PDSADDR_FULL_RANGE` is clear — which it is for the SGX540.
+  `*_PDS_INFO` is typed, not opaque: `USESECEXEC` b25, `OBUFFER_REQD` b22-24,
+  `ATTRIBUTE_SIZE` b13-20, `DM` b11-12 (`EVENT` = 0x1800, `PIXEL` 0x0800,
+  `VERTEX` 0), `PNS` b10, `USE_PIPELINE` b8, `ODS` b1-7, `SD` b0.  The open
+  driver writes `3`/`0x00013d01` there in its `edm_init` single-context branch;
+  decoded against those fields that is `DM = EVENT`, `PNS` set,
+  `USE_PIPELINE = 0`, `SD` set, `ATTRIBUTE_SIZE = 9` — i.e. a **plausible**, not
+  obviously wrong, value (session 75).
 
 ## The BIF and the MMU
 

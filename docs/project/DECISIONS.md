@@ -4199,3 +4199,24 @@ from inside the driver (trap 384).
 (the run, its negative control, the timing figures); traps 388-391
 (`1/1 passed` semantics, `consumed` after a reset, the build id in `dmesg`, and
 hd3's missing `scp`).
+
+**Added at the session's close, from the same day's evidence.**  Two further
+rules, both earned by mistakes in this session:
+
+1. **A differing constant is not a defect until it is compared with the
+   vendor's *call sites*.**  Session 75 read `sgx540_regs.event_kick2 = 0x0ac0`
+   against `pvrsgx_regs.h`'s `EVENT_KICK2 = 0x0ae8`, plus the init/job kicks
+   going to different registers, and wrote it down as a sufficient cause of the
+   stall.  The DDK's own kernel driver does exactly the same under
+   `SGX_FEATURE_MULTI_EVENT_KICK`, and the header constant is another core's —
+   retracted the same session with no boot spent (trap 392).  Reading a header
+   is not the same as reading how it is used.
+2. **A passing read-back is only as good as what it compares.**  The driver's
+   `check_event_pds()` gate compares `EUR_CR_EVENT_OTHER_PDS_EXEC` with a value
+   derived from our own heap layout — real evidence the write landed, none at all
+   that the address means the right thing (trap 393).  Where both sides of a
+   check come from the same assumption, say so, and compare the *derivation*
+   against the vendor's instead.
+
+Both are the same class as the report-271 lesson (log a syscall's arguments, not
+its result): prefer the primary source's *use* over a plausible-looking number.
