@@ -399,6 +399,41 @@ flasher can replace at every point:
     — the SGX540 port needs the 28-bit / single-context / no-`USE_CODE_BASE`
     work plus OMAP4 glue, not just a table entry; start with the fact sheet and
     a "New SGX core" issue;
+    (a1) **the SGX540 identity is measured (session 73) and the open tree already
+    carries the 28-bit core class** — `CORE_ID` id **0x0114**, `CORE_REVISION`
+    **0x00010200** (Rev 120), module `rev` **0x40000000**,
+    `tools/bench/gpu/sgxcoreid.py` + `docs/captures/sgx540-identity-2026-11-26.txt`,
+    **C** facts in `docs/reference/sgx540-factsheet.md`, DECISIONS §109, the
+    session-73 addendum to report 276.  Three corrections to report 276's scoping:
+    the upstream core check accepts **28 bits** and **one dir list** (not ≥32/≥2);
+    the SGX530 is a **complete** 28-bit family entry with `allow_unisolated`; and
+    the 540's `USE_CODE_BASE` is **24-bit/DM-at-24** (not the 545's 25-bit/25).
+    The closed stack stays in service throughout;
+    (a1b) **the entry is now written and unit-tested, and nothing is published**
+    (session 73; DECISIONS §110 — no issue, no PR until the core runs on the
+    unit).  `rootfs/powervr-sgx/0001-sgx540-core-entry.patch` carries
+    `sgx540_regs`, a 28-bit `sgx540_heaps` taken from the DDK's own
+    `sgxconfig.h` 28-bit block, `sgx540_init_regs`, `pvrsgx_cmd_core_sgx540`, the
+    `cores[]` entry and the `of_device_id` row; it compiles 23/23 objects on the
+    real 7.3.3 tree with zero warnings, the driver's `powervr_sgx_core` KUnit
+    suite passes **8/8** (with a verified negative control) and the heaps pass
+    `tools/bench/gpu/sgx540-heaps-check.py`.  Two header differences are
+    load-bearing: the 540 gates **IDXFIFO and TA** too (`GENMASK(19,0)`) and its
+    `BIF_INT_STAT` has no fault-type field.
+    (a1c) **the driver BINDS and IDENTIFIES the core on hardware (session 73)** —
+    it logs `SGX core id 0x01140000 revision 0x00010200: TI OMAP4430 (SGX540
+    1.2.0)`, so the entry is validated on silicon, and the `allow_unisolated` guard
+    behaves as designed.  Route: a **copy** of `local/kernel-tree`
+    (`local/kernel-tree-sgx`, `mrproper` first) with the closed DDK off
+    (DECISIONS §111); the GPU firmware goes in the **initramfs** (trap 380); the
+    closed DDK is blocked with a modprobe.d `install … /bin/false` (trap 381), and
+    never by a live unbind (it oopses).
+    (a1d) **the SGX540 microkernel builds but is a `srvinit` image** — `3-byte`
+    delta from the SGX545 image, all 7 offline tests pass, SGX545 golden hash
+    intact; the driver rejects it because a one-context core needs a **`pdtable`
+    patch and a list-0 load**, and the image routes TA/3D to **list 1** (trap 382).
+    **Open: the list-0 / PD-table work**, then a kick, then the register tables
+    (hypothesis), `sgx540_init_regs`, `USE_CODE_BASE` (Gap 7), and Mesa;
     (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b)

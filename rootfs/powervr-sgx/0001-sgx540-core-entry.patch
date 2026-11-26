@@ -1,0 +1,384 @@
+diff --git a/docs/uapi/cmd/pvrsgx_cmd_defs.c b/docs/uapi/cmd/pvrsgx_cmd_defs.c
+index fafbfbc..a6875e6 100644
+--- a/docs/uapi/cmd/pvrsgx_cmd_defs.c
++++ b/docs/uapi/cmd/pvrsgx_cmd_defs.c
+@@ -355,3 +355,31 @@ const struct pvrsgx_cmd_core pvrsgx_cmd_core_sgx530 = {
+ 		[PVRSGX_CMD_TRANSFER] = &sgx530_transfer,
+ 	},
+ };
++
++/* sgx540: like the sgx530 until a run on the core settles the checked fields. */
++static const struct pvrsgx_cmd_def sgx540_render = {
++	.name = "render",
++	.type = PVRSGX_CMD_RENDER,
++};
++
++static const struct pvrsgx_cmd_def sgx540_ta_kick = {
++	.name = "ta_kick",
++	.type = PVRSGX_CMD_TA_KICK,
++};
++
++static const struct pvrsgx_cmd_def sgx540_transfer = {
++	.name = "transfer",
++	.type = PVRSGX_CMD_TRANSFER,
++};
++
++const struct pvrsgx_cmd_core pvrsgx_cmd_core_sgx540 = {
++	.name = "sgx540",
++	.va_bits = 28,
++	.pds_row_bytes = 0,
++	.max_samples = 1,
++	.cmds = {
++		[PVRSGX_CMD_RENDER] = &sgx540_render,
++		[PVRSGX_CMD_TA_KICK] = &sgx540_ta_kick,
++		[PVRSGX_CMD_TRANSFER] = &sgx540_transfer,
++	},
++};
+diff --git a/docs/uapi/cmd/pvrsgx_cmd_defs.h b/docs/uapi/cmd/pvrsgx_cmd_defs.h
+index 611e46e..2abb0b8 100644
+--- a/docs/uapi/cmd/pvrsgx_cmd_defs.h
++++ b/docs/uapi/cmd/pvrsgx_cmd_defs.h
+@@ -39,5 +39,6 @@ extern const u8 pvrsgx_cmd_ext_owner[64];
+ 
+ extern const struct pvrsgx_cmd_core pvrsgx_cmd_core_sgx545;
+ extern const struct pvrsgx_cmd_core pvrsgx_cmd_core_sgx530;
++extern const struct pvrsgx_cmd_core pvrsgx_cmd_core_sgx540;
+ 
+ #endif /* PVRSGX_CMD_DEFS_H */
+diff --git a/drm/powervr_sgx/Kconfig b/drm/powervr_sgx/Kconfig
+index 4eae6cf..255fdbe 100644
+--- a/drm/powervr_sgx/Kconfig
++++ b/drm/powervr_sgx/Kconfig
+@@ -45,14 +45,15 @@ config DRM_POWERVR_SGX_GMA500
+ 	  Say Y if this kernel runs on a Cedarview machine.
+ 
+ config DRM_POWERVR_SGX_OF
+-	bool "SGX on device tree SoCs (TI OMAP3630 SGX530)"
++	bool "SGX on device tree SoCs (TI OMAP3630 SGX530, OMAP4 SGX540)"
+ 	depends on DRM_POWERVR_SGX && OF
+ 	help
+ 	  Bind to an SGX described by the img,powervr-sgx device tree
+ 	  binding. Only parts whose GPU node sits in a ti-sysc module, which
+-	  clocks and powers it, are handled: the OMAP3630's SGX530. Its
+-	  clients aren't isolated from the firmware or from each other, so
+-	  the driver runs it only with powervr_sgx.allow_unisolated=1, for
++	  clocks and powers it, are handled: the OMAP3630's SGX530 and the
++	  OMAP4430/4460/4470's SGX540. Both have one memory context, so their
++	  clients aren't isolated from the firmware or from each other, and the
++	  driver runs them only with powervr_sgx.allow_unisolated=1, for
+ 	  bring-up. Dma-buf import isn't supported on ARM yet.
+ 
+ 	  Say N unless this kernel is for such an SoC.
+diff --git a/drm/powervr_sgx/pvrsgx_core.c b/drm/powervr_sgx/pvrsgx_core.c
+index e0f2639..543eff4 100644
+--- a/drm/powervr_sgx/pvrsgx_core.c
++++ b/drm/powervr_sgx/pvrsgx_core.c
+@@ -148,6 +148,116 @@ static const struct pvrsgx_heap_layout sgx530_heaps = {
+ 	.pb_max_pages = 0x2000,
+ };
+ 
++/*
++ * SGX540 (TI OMAP4430/4460/4470), from the GPL sgx540defs.h of DDK 1.17.4948957
++ * and its devices/sgx/sgxconfig.h 28-bit heap block.
++ *
++ * It is the SGX545's register layout for the clock gates, reset, events and the
++ * MMU's page-size machinery, but CORE_ID/CORE_REVISION sit 4 bytes higher, the
++ * kicks sit lower, the address space is 28 bits, one memory context, and the
++ * USE_CODE_BASE fields are one bit narrower (24-bit address, DM at bit 24).
++ * There are no BIF bank registers and no per-requestor request bases.
++ */
++static const struct pvrsgx_core_regs sgx540_regs = {
++	.core_id = 0x0020,
++	.core_revision = 0x0024,
++	/*
++	 * Every 2-bit gating field, ISP b0-1 through TA b18-19: unlike the
++	 * SGX545 (whose units stop at PDS b14-15), the SGX540 also gates IDXFIFO
++	 * (b16-17) and TA (b18-19). AUTO_MAN_REG (b24) and SYSTEM_CLKG (b28) are
++	 * single bits, not 2-bit fields, so they stay out of the SGX_CLKG_ALL
++	 * mask; the system clock is handled where it is enabled.
++	 */
++	.clkgatectl_units = GENMASK(19, 0),
++	.clkgatectl_dpm = GENMASK(11, 10),
++	.clkgatectl2 = 0x0004,
++	/* PBE b0-1, CACHEL2 b2-3, UCACHEL2 b4-5, USE0 b6-7, ITR0 b8-9,
++	 * TEX0 b10-11, MADD0 b12-13, USE1 b14-15, ITR1 b16-17, TEX1 b18-19,
++	 * MADD1 b20-21.
++	 */
++	.clkgatectl2_units = GENMASK(21, 0),
++	.clkgatestatus = 0x0008,
++	/* One status bit per unit; DPM is b5. */
++	.clkgatestatus_dpm = BIT(5),
++	.soft_reset_bif = BIT(0),
++	/* VDM b1, DPM b2, TE b3, MTE b4, ISP b5, ISP2 b6, TSP b7, PDS b8,
++	 * PBE b9, CACHEL2 b10, UCACHEL2 b11, MADD b12, ITR b13, TEX b14,
++	 * USE b15, IDXFIFO b16, TA b17.
++	 */
++	.soft_reset_cores = GENMASK(17, 1),
++	.event_kick2 = 0x0ac0,
++	.event_kick2_now = BIT(0),
++	.use_code_base0 = 0x0a0c,
++	.pds_exec_base = 0x0ab8,
++	/*
++	 * BIF_INT_STAT differs from the SGX545's: fault requests are b0-13 and
++	 * b14 is PF_N_RW (read or write). There is no separate fault-type field,
++	 * so bif_int_stat_fault_type is that read/write bit.
++	 */
++	.bif_int_stat_fault_req = GENMASK(13, 0),
++	.bif_int_stat_fault_type = BIT(14),
++	/* BIF_FAULT address b12-27. */
++	.bif_fault_addr = GENMASK(27, 12),
++	/* No BIF bank registers on a single-context core. */
++	.bif_bank_set = 0,
++	.bif_bank0 = 0,
++	/* 24-bit address field, data master at bit 24 (SGX535/545 use bit 25). */
++	.use_code_base_dm_shift = 24,
++	/*
++	 * 256-byte units, as the SGX530's: the same 24-bit field layout and the
++	 * same 28-bit address space, and a byte unit could not reach the code
++	 * heaps at 0x0e400000 through 24 bits. The granule is a guess until a
++	 * USSE task runs (fact sheet Gap 7); the SGX545 fetches at 128 bytes.
++	 */
++	.use_code_base_addr_shift = 8,
++	.cr_b30 = 0x0b30,
++	/* The event PDS registers are not in the GPL header; the SGX545's offsets
++	 * are a guess here, checked by reading back before the first kick.
++	 */
++	.event_pds_enable = SGX545_CR_EVENT_PDS_ENABLE,
++	.event_pds_enable_all = SGX545_CR_EVENT_PDS_ENABLE_ALL,
++	.event_pds_base = SGX545_CR_EVENT_PDS_BASE,
++	.event_pds_data0 = SGX545_CR_EVENT_PDS_DATA0,
++	.event_pds_data1 = SGX545_CR_EVENT_PDS_DATA1,
++};
++
++/* Init script part 2 for the SGX540: the host's interrupt, as the SGX530's. */
++static const struct pvrsgx_core_init_reg sgx540_init_regs[] = {
++	{ SGX_CR_EVENT_HOST_ENABLE, SGX_CR_EVENT_STATUS_SW_EVENT },
++	{ SGX_CR_EVENT_HOST_ENABLE2, 0 },
++	{ 0xa74, 0x208200 },
++};
++
++/*
++ * 256 MiB, the GPL sgxconfig.h 28-bit layout (no general mapping heap, no large
++ * general heap: the build's defaults). Every base is that header's; a heap runs
++ * to the next one's base.
++ *
++ * That header has no texture heap on a 28-bit core - textures come out of the
++ * general heap - so, as sgx530_heaps does, the top half of the general region
++ * ([0x00001000, 0x08800000) in the header) is given to the texture heap: the
++ * client heaps must not overlap, and the split point is ours, not the DDK's.
++ *
++ * kernel code and PDS vertex lie within 64 MiB above PDS_EXEC_BASE (0x0dc00000):
++ * 0x0e400000 and 0x0e800000 are, so pds_reach() passes without
++ * EDM_VERTEX_PDSADDR_FULL_RANGE.
++ */
++static const struct pvrsgx_heap_layout sgx540_heaps = {
++	.general = { 0x00001000, 0x04400000 },
++	.texture = { 0x04400000, 0x08800000 },
++	.params_3d = { 0x08800000, 0x0c800000 },
++	.ta_data = { 0x0c800000, 0x0d800000 },
++	.sync = { 0x0d800000, 0x0dc00000 },
++	.pds_pixel = { 0x0dc00000, 0x0e400000 },
++	.kernel_code = { 0x0e400000, 0x0e800000 },
++	.pds_vertex = { 0x0e800000, 0x0f000000 },
++	.kernel_data = { 0x0f000000, 0x0f400000 },
++	.usse_pixel = { 0x0f400000, 0x0f900000 },
++	.usse_vertex = { 0x0fc00000, 0x0fe00000 },
++	/* Half the 64 MiB PB heap, as the SGX530's: the free list and VM objects hold the rest. */
++	.pb_max_pages = 0x2000,
++};
++
+ static const struct pvrsgx_core_family families[] = {
+ 	{
+ 		.name = "SGX545",
+@@ -185,6 +295,26 @@ static const struct pvrsgx_core_family families[] = {
+ 		.init_regs = sgx530_init_regs,
+ 		.num_init_regs = ARRAY_SIZE(sgx530_init_regs),
+ 	},
++	{
++		/*
++		 * TI OMAP4430/4460/4470: one memory context, 28-bit addresses,
++		 * 4 USE pipes and multi-event kick; no BRN_28889 in its errata.
++		 */
++		.name = "SGX540",
++		.core = 540,
++		/* Read on our OMAP4430 board (PlayBook): id 0x0114, rev 1.2.0. */
++		.core_id = 0x01140000,
++		.regs = &sgx540_regs,
++		.features = PVRSGX_FEATURE_MULTI_EVENT_KICK,
++		.isa = PVRSGX_ISA_SGX545,
++		.num_dir_lists = 1,
++		.va_bits = 28,
++		.heaps = &sgx540_heaps,
++		.event_pds_guessed = true,
++		.cmds = &pvrsgx_cmd_core_sgx540,
++		.init_regs = sgx540_init_regs,
++		.num_init_regs = ARRAY_SIZE(sgx540_init_regs),
++	},
+ };
+ 
+ static const struct pvrsgx_core_info cores[] = {
+@@ -229,10 +359,23 @@ static const struct pvrsgx_core_info cores[] = {
+ 		.clock_hz = 200000000,
+ 		.fw_name = "powervr_sgx/sgx530_ukernel.bin",
+ 	},
++	{
++		/*
++		 * Read on our OMAP4430 board (PlayBook). The clock is the DT's
++		 * assigned dpll_per_m7x2_ck rate (omap443x.dtsi); the microkernel's
++		 * timer only needs the order of magnitude.
++		 */
++		.family = &families[2],
++		.name = "TI OMAP4430 (SGX540 1.2.0)",
++		.core_rev = 0x00010200,
++		.clock_hz = 307200000,
++		.fw_name = "powervr_sgx/sgx540_ukernel.bin",
++	},
+ };
+ 
+ MODULE_FIRMWARE("powervr_sgx/sgx545_ukernel.bin");
+ MODULE_FIRMWARE("powervr_sgx/sgx530_ukernel.bin");
++MODULE_FIRMWARE("powervr_sgx/sgx540_ukernel.bin");
+ 
+ /*
+  * Without EDM_VERTEX_PDSADDR_FULL_RANGE, a heap the EDM runs PDS code from
+diff --git a/drm/powervr_sgx/pvrsgx_of.c b/drm/powervr_sgx/pvrsgx_of.c
+index f287604..cc857c8 100644
+--- a/drm/powervr_sgx/pvrsgx_of.c
++++ b/drm/powervr_sgx/pvrsgx_of.c
+@@ -86,6 +86,7 @@ static void pvrsgx_of_shutdown(struct platform_device *pdev)
+ 
+ static const struct of_device_id pvrsgx_of_ids[] = {
+ 	{ .compatible = "img,powervr-sgx530", .data = (void *)530 },
++	{ .compatible = "img,powervr-sgx540", .data = (void *)540 },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(of, pvrsgx_of_ids);
+diff --git a/drm/powervr_sgx/tests/pvrsgx_core_test.c b/drm/powervr_sgx/tests/pvrsgx_core_test.c
+index bfef651..0e79363 100644
+--- a/drm/powervr_sgx/tests/pvrsgx_core_test.c
++++ b/drm/powervr_sgx/tests/pvrsgx_core_test.c
+@@ -134,6 +134,41 @@ static void core_test_cpu_latency(struct kunit *test)
+ 	}
+ }
+ 
++/*
++ * The SGX540: one directory list, 28 bits, multi-event kick, 4 USE pipes; its
++ * CORE_ID/REVISION and kick offsets are the sgx540defs.h ones, not the SGX545's.
++ */
++static void core_test_sgx540(struct kunit *test)
++{
++	const struct pvrsgx_core_family *f = pvrsgx_core_family_get(540);
++
++	KUNIT_ASSERT_NOT_NULL(test, f);
++	KUNIT_EXPECT_TRUE(test, pvrsgx_core_family_usable(f));
++	KUNIT_EXPECT_TRUE(test, pvrsgx_core_single_context(f));
++	KUNIT_EXPECT_EQ(test, f->num_dir_lists, 1);
++	KUNIT_EXPECT_EQ(test, f->va_bits, 28);
++	KUNIT_EXPECT_EQ(test, f->core_id, 0x01140000);
++	/* No BRN_28889 in the SGX540's rev-120 errata (26620/28011/34028). */
++	KUNIT_EXPECT_EQ(test, f->quirks, 0);
++	/* Multi-event kick, so the second kick register must be named. */
++	KUNIT_EXPECT_TRUE(test, !!(f->features & PVRSGX_FEATURE_MULTI_EVENT_KICK));
++	KUNIT_EXPECT_EQ(test, f->regs->event_kick2, 0x0ac0);
++	/* No BIF bank registers on a single-context core. */
++	KUNIT_EXPECT_EQ(test, f->regs->bif_bank_set, 0);
++	KUNIT_EXPECT_EQ(test, f->regs->bif_bank0, 0);
++	/* The SGX540's USE_CODE_BASE is 24-bit / DM at bit 24, not the 545's 25/25. */
++	KUNIT_EXPECT_EQ(test, f->regs->use_code_base_dm_shift, 24);
++	KUNIT_EXPECT_EQ(test, pvrsgx_core_family_get(545)->regs->use_code_base_dm_shift, 25);
++	/* CORE_ID/REVISION moved 4 bytes up from the SGX545's. */
++	KUNIT_EXPECT_EQ(test, f->regs->core_id, 0x0020);
++	KUNIT_EXPECT_EQ(test, f->regs->core_revision, 0x0024);
++	KUNIT_EXPECT_STREQ(test, pvrsgx_core_lookup(f, 0x01140000, 0x00010200)->name,
++			   "TI OMAP4430 (SGX540 1.2.0)");
++	/* The SGX545's id/revision are not this core's. */
++	KUNIT_EXPECT_NULL(test, pvrsgx_core_lookup(f, 0x01150000, 0x00010200));
++	KUNIT_EXPECT_NULL(test, pvrsgx_core_lookup(f, 0x01140000, 0x0001000e));
++}
++
+ static struct kunit_case pvrsgx_core_test_cases[] = {
+ 	KUNIT_CASE(core_test_lookup),
+ 	KUNIT_CASE(core_test_empty_window),
+@@ -141,6 +176,7 @@ static struct kunit_case pvrsgx_core_test_cases[] = {
+ 	KUNIT_CASE(core_test_table),
+ 	KUNIT_CASE(core_test_sgx545_values),
+ 	KUNIT_CASE(core_test_sgx530),
++	KUNIT_CASE(core_test_sgx540),
+ 	KUNIT_CASE(core_test_cpu_latency),
+ 	{}
+ };
+diff --git a/mesa/src/sgx/isa/sgx.xml b/mesa/src/sgx/isa/sgx.xml
+index 57e82c5..fbd2ae2 100644
+--- a/mesa/src/sgx/isa/sgx.xml
++++ b/mesa/src/sgx/isa/sgx.xml
+@@ -875,7 +875,7 @@ NUM | BANK << 7 | EXT << 8.
+ 		h27-31 (bits 59-63) is the hardware class; each class splits
+ 		further on its own sub-op bits.
+ 	</doc>
+-	<gen min="54500" max="54599"/>
++	<gen min="54000" max="54599"/>
+ 	<encode type="struct sgx_isa_instr *" case-prefix="SGX_ISA_OPC_">
+ 		<map name="PRED">src->pred</map>
+ 		<map name="SKIPINV">src->skipinv</map>
+diff --git a/mesa/src/sgx/isa/sgx_isa.h b/mesa/src/sgx/isa/sgx_isa.h
+index dbe0897..8dcc779 100644
+--- a/mesa/src/sgx/isa/sgx_isa.h
++++ b/mesa/src/sgx/isa/sgx_isa.h
+@@ -163,6 +163,9 @@ struct sgx_isa_instr {
+ /* Cores sgx.xml describes; the value is the core's number. */
+ enum sgx_isa_core {
+    SGX_ISA_CORE_SGX545 = 545,
++   /* Same USSE (first-generation) instruction set, 4 USE pipes: the SGX540 of
++    * TI OMAP4 encodes identically.  Only the core number differs. */
++   SGX_ISA_CORE_SGX540 = 540,
+ };
+ 
+ /*
+diff --git a/mesa/src/sgx/isa/sgx_isa_encode.c b/mesa/src/sgx/isa/sgx_isa_encode.c
+index 08abeb5..605ebb4 100644
+--- a/mesa/src/sgx/isa/sgx_isa_encode.c
++++ b/mesa/src/sgx/isa/sgx_isa_encode.c
+@@ -194,7 +194,8 @@ sgx_isa_encode(const struct sgx_isa_instr *instr, const struct sgx_isa_fc *fc)
+ bool
+ sgx_isa_core_supported(unsigned core)
+ {
+-   return core == 0 || core == SGX_ISA_CORE_SGX545;
++   return core == 0 || core == SGX_ISA_CORE_SGX545 ||
++          core == SGX_ISA_CORE_SGX540;
+ }
+ 
+ uint32_t
+diff --git a/ukernel/test_emu.py b/ukernel/test_emu.py
+index b41a557..24154c3 100644
+--- a/ukernel/test_emu.py
++++ b/ukernel/test_emu.py
+@@ -37,10 +37,13 @@ def patch_limm(code, off, v):
+     struct.pack_into("<II", code, off, lo, hi)
+ 
+ 
+-def load():
+-    binp = os.path.join(HERE, "sgx545_ukernel.bin")
+-    manp = os.path.join(HERE, "sgx545_ukernel.json")
+-    subprocess.run([sys.executable, os.path.join(HERE, "build.py"), binp, manp], check=True)
++def load(core="sgx545"):
++    binp = os.path.join(HERE, core + "_ukernel.bin")
++    manp = os.path.join(HERE, core + "_ukernel.json")
++    # build.py takes the core as an optional leading token; the handler logic is
++    # core-independent, so every core's image gets the same assertions.
++    subprocess.run([sys.executable, os.path.join(HERE, "build.py"), core, binp, manp],
++                   check=True)
+     man = json.load(open(manp))
+     # patch the control-block-base limm as srvinit -o does on the box
+     code = bytearray(open(binp, "rb").read())
+@@ -212,8 +215,9 @@ def test_xfer_counter_32bit(code, man):
+ 
+ 
+ def main():
+-    code, man = load()
+-    print("microkernel offline tests:")
++    core = sys.argv[1] if len(sys.argv) > 1 else "sgx545"
++    code, man = load(core)
++    print(f"microkernel offline tests ({core}):")
+     test_init(code, man)
+     test_recovery_init(code, man)
+     test_raise_irq(code, man)

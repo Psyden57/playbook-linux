@@ -1,0 +1,72 @@
+# SGX540 identity read — live, session 73 (2026-11-26)
+
+The first hardware read of the SGX540's own registers (fact sheet Gaps 1 and 2,
+report 276 step 1/2).  Zero-risk: read-only, 4-byte loads through `/dev/mem`
+(`CONFIG_STRICT_DEVMEM` is off), while `pvrsrvkm` clocks the GPU.
+
+Unit: Linux `7.3.3 #109 SMP` on hd3, region 0 `0x3547D613`, `pvrsrvkm_omap4_sgx540_120`
+bound (`56000000.gpu`, `renderD129`, `card1`), booted 31 min, `BOOTCTR_FCTRY 0x28`.
+
+Tool: `tools/bench/gpu/sgxcoreid.py` (pushed to `/tmp/sgxcoreid.py`, run as root).
+Offsets are the SGX540 ones from the vendored GPL DDK (`sgx540defs.h`).
+
+## Raw output
+
+```
+GPU register window 0x56000000 (read-only, /dev/mem)
+  0x56000020  SGX540 CORE_ID          [0x0020] = 0x01140000  -> config=0x0000 id=0x0114
+  0x56000024  SGX540 CORE_REVISION    [0x0024] = 0x00010200  -> maintenance=0 minor=2 major=1 designer=0x00
+  0x56000028  SGX540 DESIGNER_REV_F1  [0x0028] = 0x00000000
+  0x5600002c  SGX540 DESIGNER_REV_F2  [0x002c] = 0x00000000
+  0x5600001c  SGX545 CORE_ID?         [0x001c] = 0x00000000  -> config=0x0000 id=0x0000
+  0x56000020  SGX545 CORE_REVISION?   [0x0020] = 0x01140000  -> maintenance=0 minor=0 major=20 designer=0x01
+  0x56000000  CLKGATECTL              [0x0000] = 0x00000000
+  0x56000004  CLKGATECTL2             [0x0004] = 0x00000000
+  0x56000008  CLKGATESTATUS           [0x0008] = 0x00000000
+  0x5600000c  CLKGATECTLOVR           [0x000c] = 0x00000000
+  0x56000080  SOFT_RESET              [0x0080] = 0x00000000
+  0x56000118  EVENT_STATUS2           [0x0118] = 0x00000000
+  0x5600012c  EVENT_STATUS            [0x012c] = 0x00000000
+  0x56000130  EVENT_HOST_ENABLE       [0x0130] = 0x00000000
+  0x56000c00  BIF_CTRL                [0x0c00] = 0x00000000
+  0x56000c04  BIF_INT_STAT            [0x0c04] = 0x00008000
+
+EXPECTED CORE_REVISION 0x00010200 (1.2.0, 'Rev 120'): MATCH
+CORE_ID id field (SGX545 is 0x0115): 0x0114
+
+ti-sysc module id @ 0x5600fe00
+  0x5600fe00  ti-sysc rev             [+0x00] = 0x40000000
+  0x5600fe10  ti-sysc sysc            [+0x10] = 0x0000003c
+```
+
+The read set is exactly the registers the upstream kernel guide calls safe to read
+before the reset sequence has run (`docs/porting/kernel.md` §2), plus the identity
+group; the write-only `*_CLEAR` registers were not read.  `BIF_INT_STAT` bit 15 is
+`FLUSH_COMPLETE` (`sgx540defs.h:495`) — the DDK's BIF in a completed-flush state,
+which is what an idle bound GPU should show.  Every other `BIF_CTRL`/event/gating
+register reading 0 is the quiescent state, not a claim about bit meaning.
+
+## What it confirms (now tag C)
+
+| Fact | Value | Tag |
+|---|---|---|
+| `CORE_ID` at 0x0020, `CORE_REVISION` at 0x0024 | as the DDK header says, **not** the SGX545's 0x001c/0x0020 | **C** |
+| `CORE_ID` id field | **0x0114** (the SGX545's is 0x0115; the SGX530's is 0x0110) | **C** |
+| `CORE_REVISION` | **0x00010200** = major 1, minor 2, maintenance 0 → **"Rev 120"** | **C** |
+| `DESIGNER_REV_FIELD1/2` | 0x0028/0x002c, both read 0 on this unit | **C** |
+| `CLKGATECTL`/`2`, `CLKGATESTATUS`, `CLKGATECTLOVR`, `SOFT_RESET` offsets | the header's offsets return sane, quiescent values (all 0 at idle) | **C** (offsets) |
+| ti-sysc module registers | `rev` @ 0x5600fe00 = `0x40000000` (major 1, minor 0 → 1.0); `sysc` @ 0x5600fe10 = `0x0000003c` | **C** |
+
+The `CORE_ID` id field **0x0114** is the load-bearing new fact: it is one below
+the SGX545's 0x0115 and well above the SGX530's 0x0110, so the open driver can
+distinguish the three cores from the ID alone.  The expected `0x00010200`
+`CORE_REVISION` **matches**, so the DDK's rev-120 assumption and the DT binding's
+"Rev 120" agree with the silicon.
+
+## What is still open (unchanged)
+
+* `USE_CODE_BASE` presence (fact sheet Gap 7) — needs a write/read-back test on
+  0x0a0c+n, not a read; only a USSE task settles whether the registers stick.
+* The 28-bit/single-context BIF behaviour (Gap 6) and the DPM/TA/ISP/TSP/PBE/PDS
+  state (Gap 10) — neither is in the GPL headers.
+* No write of any kind was made; the GPU stayed bound and the desktop unaffected.

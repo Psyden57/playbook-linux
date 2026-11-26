@@ -4000,3 +4000,129 @@ facts and the upstream guide); the vendored DDK
 `kernel/vendor/pvrsgx-1.17.4948957-101c687a.tar.xz`; upstream
 `docs/porting/{README,kernel}.md` and `cores/{sgx530,clovertrail}.md` and
 `CONTRIBUTING.md`; report 275; DECISIONS §107.
+
+## 109. The SGX540 identity is measured, and the open tree already carries the 28-bit core class (session 73)
+
+**Decision.**  Treat the SGX540 port's first stage as **done** and its remaining
+work as **data plus a captured init script**, not new driver architecture.  The
+zero-risk reads are complete and match the sources, so:
+
+1. Record the measured identity in `docs/reference/sgx540-factsheet.md` as **C**
+   facts: `CORE_ID` id **0x0114**, `CORE_REVISION` **0x00010200** (Rev 120),
+   `DESIGNER_REV_FIELD1/2` **0**, module `rev` **0x40000000**, module `sysc`
+   **0x0000003c**, `BIF_INT_STAT` at idle **0x00008000** (`FLUSH_COMPLETE`).
+2. Stop treating report 276's "≥32 bits, multiple contexts, ≥2 dir lists" core
+   check as a blocker: the upstream check accepts **28 bits** and **one directory
+   list** for a core without `MULTIPLE_MEM_CONTEXTS`, and the SGX530 is already a
+   complete 28-bit family entry.  An SGX540 entry is `sgx540_regs` + a 28-bit heap
+   layout + `sgx540_init_regs` + `pvrsgx_cmd_core_sgx540` + the `of_device_id`
+   row, run with `powervr_sgx.allow_unisolated=1`.
+3. Carry the `USE_CODE_BASE` finding into the port: the 540 header's layout is
+   **24-bit address / DM at bit 24**, unlike the 535/545's 25-bit / bit 25 — so a
+   540 entry must not copy the 545 shifts, and whether the registers exist on rev
+   120 remains a measured gap (contradictions file open).
+
+**Why.**  The upstream tree moved between report 276 and now: `pvrsgx_core.c` has
+the SGX530 as a full family (`sgx530_heaps`, `va_bits = 28`,
+`PVRSGX_QUIRK_BRN_28889`), `pvrsgx_of.c` already supports a `ti-sysc` parent
+platform device, and `allow_unisolated` gates the single-context case on exactly
+the flag the SGX540 lacks.  Our own silicon reads the expected identity, so the
+"is this really a rev-120 SGX540?" question is closed and an upstream issue can
+carry measured evidence.  The remaining unknowns (DPM/TA/ISP/TSP/PBE/PDS state,
+the heap layout, `USE_CODE_BASE` presence, the microkernel tables) are the same
+ones report 276 §5 lists — the port is **smaller**, not solved.
+
+**Constraint.**  Still multi-session and still hardware-costed (`BOOTCTR_FCTRY`
+per boot; boot test kernels from RAM).  The cleanroom is unchanged: the
+Imagination GPL headers are already in the upstream tree, so quoting them is the
+project's own K evidence; closed userspace and QNX material stay black-box only.
+Keep the closed pvr stack for the desktop until the open one draws a frame.
+
+**Evidence.**  `docs/captures/sgx540-identity-2026-11-26.txt` and
+`tools/bench/gpu/sgxcoreid.py` (the reads); `docs/reference/sgx540-factsheet.md`
+(now with C facts); upstream `drm/powervr_sgx/pvrsgx_core.c`
+(`pvrsgx_core_family_usable`, the `sgx530_*` family and heaps),
+`pvrsgx_of.c`, `pvrsgx_cmd_defs.c`; `kernel/src/services4/srvkm/hwdefs/
+{sgx540defs,sgxfeaturedefs,sgxerrata}.h`; report 276 (and its session-73
+addendum); `docs/contradictions/sgx540-use-code-base.md`.  **No media write, no
+RPMB write, no kernel/DTS change.**
+
+## 110. Nothing goes upstream until it runs on the hardware (operator, session 73)
+
+**Decision.**  Do **not** open the upstream `powervr_sgx` "New SGX core" issue
+(or any upstream issue/PR) until the SGX540 actually runs on the unit.  The port
+is developed and reviewed in our own `local/work/powervr_sgx` clone first; the
+public artefact (issue, then PR against `dev`) is written **only** once there is
+a hardware result to attach.
+
+**Why.**  The project's own rule is that hardware facts come with evidence and a
+core is "accepted in the kernel before it draws anything, **as long as what it
+claims is tested**" (`docs/porting/README.md`, `CONTRIBUTING.md`).  An issue
+filed on inferred facts would be exactly the kind of claim the guide warns
+against, and would burn the maintainers' attention on something we have not yet
+shown works.  The operator's standing preference is to publish proven work, not
+plans.
+
+**What replaces it as the next step.**  Build the port locally and prove what can
+be proven without publishing:
+
+1. The entry compiles against the real 7.3.3 tree (done: all 23 objects, no
+   warnings) and its table passes the driver's own KUnit suite on x86_64
+   (`powervr_sgx_core`; the SGX540 case is `core_test_sgx540`).
+2. The heap layout satisfies `heaps_fit()`/`pds_reach()`
+   (`tools/bench/gpu/sgx540-heaps-check.py`).
+3. Only then does the hardware read-back test on the unit begin (the driver
+   binding and logging the core ID, from RAM), and the issue follows a frame.
+
+**Constraint.**  This gates *publication*, not work: reading the upstream tree,
+building against it, and running its tests locally are all fine and are how the
+entry is validated.  Keep the clone at `local/work/powervr_sgx` (gitignored) and
+record results here and in the fact sheet; do not push, do not open an issue.
+
+**Evidence.** `CONTRIBUTING.md` ("Before you start": open an issue first, for a
+core use the template; "Test on hardware and say what you ran");
+`docs/porting/README.md` ("Adding a core"; "as long as what it claims is
+tested"); operator instruction, session 73.
+
+## 111. Test the open SGX540 driver in a COPY of the tree with the closed DDK off (session 73)
+
+**Decision.**  Build the open-driver kernel from **`local/kernel-tree-sgx`**, a
+copy of `local/kernel-tree` with `CONFIG_SGX` (the vendored closed DDK) **off** and
+`CONFIG_DRM_POWERVR_SGX=y` + `_OF=y` **on**.  Keep `local/kernel-tree` untouched
+as the known-good tree that builds the current working image.  Do not try to run
+the two drivers side by side.
+
+**Why.**  The operator suggested the copy instead of a module-beside-the-DDK
+attempt, and it is the better experiment:
+
+1. **It is one variable.**  The closed DDK binds `56000000.gpu` at boot, so an
+   `insmod` of `powervr_sgx` next to it can only get `-EBUSY`; making it bind would
+   mean `rmmod pvrsrvkm`, which tears down the desktop's GPU path first.  A copy
+   with the DDK off has nothing else claiming the device.
+2. **It cannot regress the working image.**  `local/kernel-tree` stays the tree
+   that produces `0x3547D613`; the experiment lives in a copy that can be deleted.
+3. **It fixes the `O=` problem honestly.**  `local/kernel-tree` is dirty so `O=`
+   refuses it, and `local/pristine/linux-7.3.3` has no PlayBook support at all
+   (trap 378, the failed flash).  A copy of the *patched* tree builds in-tree and
+   keeps every board file.
+4. **`mrproper` first**, or the copy carries the old closed-DDK objects and
+   `drivers/gpu/drm/Makefile` still says `obj-$(CONFIG_SGX) += pvrsgx/`.
+
+**Verification of the plan, not the result.**  `local/kernel-tree-sgx` (after
+`cp -a` + `make mrproper`) configures as `CONFIG_DRM_POWERVR_SGX=y`,
+`CONFIG_DRM_POWERVR_SGX_OF=y`, **no `CONFIG_SGX`**, with
+`omap4-winchester.dts` and `drivers/misc/pbmon.c` present.  Whether the kernel
+boots and the driver binds is the next measurement — it costs one region-0 flash
+and one `BOOTCTR_FCTRY` boot, and the way back is re-flashing the `0x3547D613`
+image.
+
+**Constraint.**  With the closed DDK off, the SGX540 has **no working driver** on
+that boot: the desktop will not come up on the GPU.  Expect a degraded boot and
+read the panel; the point of this boot is the driver's `dmesg` line
+(`SGX core id 0x01140000 revision 0x00010200: TI OMAP4430 (SGX540 1.2.0)`), not a
+usable desktop.  Revert by re-flashing region 0.
+
+**Evidence.**  `local/kernel-tree/drivers/gpu/drm/{Kconfig:367,Makefile:241}`
+(the vendored DDK); `powervr_sgx/Kconfig` ("Not compatible with the out-of-tree
+PowerVR services driver … bind one or the other"); `KNOWN-ISSUES.md` traps
+375/378; operator suggestion, session 73.

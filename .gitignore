@@ -94,6 +94,12 @@ initramfs/root/pbrpmb
 initramfs/root/dropbear
 initramfs/root/dropbear_*_host_key
 initramfs/root/authorized_keys
+# the open microkernel: a built artifact, like the binaries above.  It must sit
+# in the initramfs because the GPU probe runs at ~0.9 s, before hd3 is mounted,
+# so request_firmware() cannot see /lib/firmware on the real root.  Source and
+# the built copy live in local/work/powervr_sgx/ukernel/ and are archived under
+# rootfs/powervr-sgx/.
+initramfs/root/lib/firmware/
 
 # --- third-party QNX documentation kept for reference, not redistributable ---
 

@@ -3488,6 +3488,240 @@ report 121 §3/§11/§12.
        and is cleared by a **second** `reboot -f` (trap-353 class).  (Session 72,
        report 275 §4.)
 
+368. **`/dev/mem` `mmap()` requires a page-aligned offset — non-aligned reads fail
+        with `EINVAL`, and the failure looks like a bad register.**  Reading the
+        SGX identity with Python, `mmap.mmap(fd, size, offset=0x5600fe00)` raised
+        `OSError: [Errno 22] Invalid argument`; the same offset at 0x56000000 (page
+        aligned) worked.  The identity read itself was fine from the first attempt
+        — only the **module** window at 0x5600fe00 failed, which a hasty reader
+        could misreport as "the GPU window reads but the module does not".  Always
+        round the offset **down** to 0x1000 and index the in-page bias;
+        `tools/bench/gpu/sgxcoreid.py`'s `region()` does this.  `dd if=/dev/mem`
+        and mmap both work here because `CONFIG_STRICT_DEVMEM` is **off**
+        (`kernel/winchester-7.3.3.config`), which is what makes an agent-side
+        register read possible at all.  (Session 73.)
+
+369. **Read only the GPU registers the guide names — the SGX can hang the
+        interconnect on an unnamed read.**  The SGX540 identity read used exactly
+        the registers `docs/porting/kernel.md` §2 calls safe before the reset
+        sequence (`CLKGATECTL`, `CLKGATESTATUS`, `SOFT_RESET`, `EVENT_STATUS`,
+        `EVENT_HOST_ENABLE`, `BIF_CTRL`, `CORE_ID`, `CORE_REVISION`) plus
+        `DESIGNER_REV_*` and the **read-only** `BIF_INT_STAT`; the write-only
+        `*_CLEAR` registers were not read, and nothing past 0x0c08 was touched
+        (fact sheet Gap 12).  All of them returned sane values and the DDK stayed
+        bound with 0 DSI errors.  Do **not** turn this into a sweep: a read of an
+        unnamed register on a gated unit can hang the bus, and the guide's SGX530
+        section records a display-register sweep that hung a whole board.  (Session
+        73; report 276 step 1.)
+
+370. **The SGX540's errata and `USE_CODE_BASE` are not the SGX545's, and report
+        276's summary of both was wrong.**  `sgxerrata.h` gives the SGX540
+        **exactly three** BRNs at rev 120 (`26620`, `28011`, `34028`); the
+        29954–31780 list report 276 §2 quoted is the **SGX543's** block.  And
+        `sgx540defs.h`'s `USE_CODE_BASE` uses a **24-bit** address (`MASK
+        0x00FFFFFF`) with the data-master at **bit 24** (`MASK 0x03000000`), while
+        `sgx535defs.h`/`sgx545defs.h` use **25 bits** with DM at **bit 25** — so a
+        540 entry must not copy the 545's `use_code_base_*_shift` values.  Whether
+        the registers exist on rev 120 is still unmeasured.  (Session 73; report
+        276 addendum, `docs/contradictions/sgx540-use-code-base.md`.)
+
+371. **The open driver's core check is not "≥32 bits and ≥2 directory lists".**
+        `pvrsgx_core_family_usable()` (`drm/powervr_sgx/pvrsgx_core.c`) accepts
+        `va_bits` **28 or 32**, and `num_dir_lists` **exactly 1** for a core
+        without `MULTIPLE_MEM_CONTEXTS`; it refuses a multi-context core with
+        fewer than 2.  The SGX530 is already a **complete** 28-bit family entry
+        (`sgx530_regs`, `sgx530_heaps`, `pvrsgx_cmd_core_sgx530`,
+        `PVRSGX_QUIRK_BRN_28889`) and the single-context case is gated by
+        `powervr_sgx.allow_unisolated=1`.  Report 276 §1/§2 called this "driver
+        code, not a table row"; most of it has since landed upstream, so an
+        SGX540 entry is **data plus a captured init script**.  Re-read the tree
+        before quoting report 276's scoping.  (Session 73, upstream `95f78ca`.)
+
+372. **The SGX540's `CLKGATECTL` and `BIF_INT_STAT` are *not* the SGX545's — a
+        copied mask silently mis-gates the core.**  `EUR_CR_CLKGATECTL` on the
+        SGX540 gates **IDXFIFO b16-17 and TA b18-19** as well as the ISP…PDS
+        pairs, so the driver's `SGX_CLKG_ALL` mask must be `GENMASK(19, 0)`; the
+        SGX545's `GENMASK(15, 0)` leaves the **TA unclock-gated**, and its
+        `AUTO_MAN_REG` (b24) and `SYSTEM_CLKG` (b28) are single bits, not 2-bit
+        fields, so they must stay out of the mask.  `EUR_CR_BIF_INT_STAT` has
+        **no fault-type field** on the 540: fault requests are b0-13 and b14 is
+        `PF_N_RW`; the SGX545's b0-15 / b16-18 do not apply.  Compare every field
+        against `sgx540defs.h` before copying an SGX545 or SGX530 value.
+        (Session 73; caught by the header comparison, before any hardware.)
+
+373. **A heap layout that "passes" `heaps_fit()` can still overlap every other
+        heap.**  `heaps_fit()` only checks each range is non-empty and inside
+        `va_bits`, and `pds_reach()` checks two specific heaps; **neither checks
+        overlap**.  The first `sgx540_heaps` gave `texture` `[0x08800000,
+        0x10000000)`, which contains `params_3d`, `ta_data`, … right up to
+        `usse_vertex`, and both driver checks still passed.  Two heaps covering
+        one address lets two allocations collide, so check pairs explicitly —
+        `tools/bench/gpu/sgx540-heaps-check.py` now does.  (Session 73.)
+
+374. **The vendor DDK's `sgxconfig.h` is the sourced heap layout for a 28-bit
+        core — do not derive the heaps from the SGX530's.**  Our DDK 1.17's
+        `services4/srvkm/devices/sgx/sgxconfig.h` has an explicit
+        `#if SGX_FEATURE_ADDRESS_SPACE_SIZE == 28` block giving every heap base
+        (general `0x00001000`, PDS pixel `0x0dc00000`, kernel code `0x0e400000`,
+        PDS vertex `0x0e800000`, kernel data `0x0f000000`, USSE pixel
+        `0x0f400000`, USSE vertex `0x0fc00000`).  It has **no texture heap** on a
+        28-bit core (textures come from general), which is why `sgx530_heaps`
+        carves one from the top of general; the split point is ours, not the
+        DDK's.  The header is in the vendored tarball, so extract it rather than
+        guessing.  (Session 73.)
+
+375. **KUnit-building this driver needs the DRM helpers the bench kernel never
+        enabled, and `obj-.../` in `drivers/gpu/drm/Makefile`.**  Our
+        `local/kernel-tree` config lacks `DRM_GPUVM`/`DRM_SCHED`/
+        `DRM_GEM_SHMEM_HELPER`, so an out-of-tree `make M=... modules` compiles
+        every object and then fails at **modpost** with `symbol
+        'drm_gpuvm_exec_lock' undefined` and friends — that is a config gap, not
+        a code error.  For the KUnit run, `drivers/gpu/drm/Kconfig` **and**
+        `Makefile` must both mention `powervr_sgx` (the Makefile line is easy to
+        miss: without it the build says "ready" and produces no objects), the
+        driver's `pvrsgx_cmd_defs.c`/`.h` are **symlinks into `docs/uapi/cmd/`**
+        so a `cp` that dereferences them or an `rm` in the wrong tree deletes the
+        real file, and a stale in-tree `.o` set makes `ar` fail on absolute
+        paths.  Clean `O=` plus the in-tree sync is the reliable sequence.
+        (Session 73; `drm/ci/omap3630-kernel.sh` is the upstream's own script for
+        this.)
+
+376. **`USE_CODE_BASE` is named in `sgx540defs.h` but is NOT on the guide's
+        safe-to-read list — do not probe it from userspace.**  Trap 369 said
+        "read only the registers the guide names", then this session read
+        `USE_CODE_BASE[0..15]` (`0x0a0c + 4n`) anyway, because the header names
+        them (`EUR_CR_USE_CODE_BASE`).  **Named-in-a-header is not the same test
+        as safe-to-read.**  The upstream guide's list for a core in any state is
+        short and specific — `CLKGATECTL`, `CLKGATESTATUS`, `SOFT_RESET`,
+        `EVENT_STATUS`, `EVENT_HOST_ENABLE`, `BIF_CTRL`, `CORE_ID`,
+        `CORE_REVISION` — and it says "some others hang the bus until the reset
+        sequence has run".  The identity probe earlier in the same session, which
+        stayed inside that list, ran 20 reads with no effect.
+
+        **What is *not* established: that this read caused the wedge.**  The read
+        timed out and the RNDIS link, ACM console and UI all died, which is why it
+        is now off-limits — but a wedge also happens **spontaneously on some
+        boots** (trap 377): the very next boot wedged at t=28.8 s with nothing
+        read at all, and session 72 saw the same right after a reboot.  Record
+        this as **unproven-but-unnecessary risk**, not as the proven cause.
+        Settle Gap 7 from inside the open driver's reset sequence (write, read
+        back, restore) in a boot from RAM.
+        (Session 73; operator correction.)
+
+377. **The hardware buttons are not wired up at all, and the black panel is a
+        boot-time DSI wedge that happens spontaneously — not a button effect.**
+        Two separate corrections, both from the operator in session 73.
+
+        **(a) No button works.**  The OS does not register the power,
+        volume-up/down or pause/resume buttons; no work has ever been done to
+        bring them up, and a power-button *hold* reset is the hardware's own.  So
+        the initrc's `keyboard` bindings (lines 18–24) can never fire, and the
+        "power-button release toggles DPMS" explanation that sessions 59, 70, 71
+        and 72 all reached for **cannot be true**.  Treat it as retired folklore.
+
+        **(b) The wedge is spontaneous, at boot, and reproducible.**  On the
+        session-73 boots the log shows the failure at a *fixed* point in early
+        boot: `Failed to set dsi_if_enable to 0` (t≈28.8 s), then
+        `pb hs-clock: null packet on VC0/HS … polls=2000 (NO_PACKET_SENT)` and
+        `VC1/LP … polls=2000`, then `DSI VC(1) error, vc irqstatus 8` (t≈30–31 s),
+        and a TCON re-send that does not recover it.  Compare the healthy boot:
+        the same null packets return **`polls=1`** with `irqstatus=0x104`.  So the
+        discriminator is **`polls=2000` (exhausted) vs `polls=1` (immediate)**,
+        and the operator reports it happening right after a reboot in session 72
+        too.  It is **not** caused by anything read or written that boot.
+
+        **What this means for diagnosis and recovery:** read `dmesg` for
+        `NO_PACKET_SENT`/`dsi_if_enable` — never infer the panel state from a
+        screenshot.  **`grim` captures the compositor's buffers, not the panel**,
+        so a screenshot of a healthy desktop coexists with a black panel (this
+        session did exactly that).  Recovery is a `reboot -f` (trap 289: do not
+        iterate compositor restarts over a wedged link); it usually comes back
+        clean, and if it does not, reboot again.  The open question — why the
+        first modeset after a boot fails on some boots — belongs to the display
+        work, not to the GPU port.  (Session 73; operator correction.)
+
+378. **A kernel must be built from `local/kernel-tree`, never from
+        `local/pristine/linux-7.3.3` — the pristine tree has no PlayBook support
+        and the unit will not boot.**  Session 73 wanted an out-of-tree `O=`
+        build, and the built `local/kernel-tree` is dirty so `O=` refuses it;
+        `local/pristine/linux-7.3.3` accepted it, the driver compiled cleanly and
+        the image wrapped, flashed and **failed to boot — the unit fell back to
+        bootrom**.  The reason: the board support exists **only in
+        `local/kernel-tree`** (the applied patch).  Missing from pristine:
+        `drivers/misc/pbmon.c`, `drivers/input/touchscreen/playbook-munin.c`,
+        `sound/soc/ti/playbook-wm8994.c`, `arch/arm/boot/dts/ti/omap/
+        omap4-winchester.dts` (so no DTB for this board, no display bring-up, no
+        DSI-init TCON hook).  **Check before wrapping any image:**
+
+        ```sh
+        for f in drivers/misc/pbmon.c arch/arm/boot/dts/ti/omap/omap4-winchester.dts; do
+            test -e $TREE/$f || echo "NOT A PLAYBOOK TREE: $TREE"; done
+        ```
+
+        A clean `O=` build is only possible from a **patched** copy of pristine
+        (apply `kernel/patches/0001-playbook-winchester-7.3.3.patch` first, plus
+        the vendored SGX driver).  Region 0 was restored by re-wrapping the
+        `0x3547D613` image and re-flashing; the unit came back with 0 DSI errors.
+        (Session 73.)
+
+379. **`CONFIG_SGX=n` does not stop the closed DDK — hd3's `/etc/modules` loads
+        `pvrsrvkm` as a module and it wins the GPU probe race.**  Building the
+        open-driver kernel with the closed DDK off (`CONFIG_SGX` unset) removes only
+        the *built-in* copy.  The unit's root has `pvrsrvkm_omap4_sgx540_120` in
+        `/etc/modules`, it probes `56000000.gpu` at boot too, and on both
+        session-73 boots it won:
+
+        ```
+        /sys/bus/platform/devices/56000000.gpu/driver -> .../drivers/pvrsrvkm
+        /sys/class/drm/card1/device/uevent            -> DRIVER=pvrsrvkm
+        /sys/bus/platform/drivers/powervr_sgx/        -> (no device)
+        ```
+
+        `powervr_sgx` still probed, read the core ID and logged
+        `TI OMAP4430 (SGX540 1.2.0)`, then failed on its missing firmware — but it
+        never owned the device.  **To actually give the open driver the GPU**, stop
+        the closed one from loading: `modprobe.blacklist=pvrsrvkm_omap4_sgx540_120`
+        on the kernel command line (or remove it from `/etc/modules` on hd3).  Two
+        drivers that both match the same DT node are a race, not a preference —
+        check `/sys/bus/platform/devices/56000000.gpu/driver` before concluding
+        anything about which one is bound.  (Session 73;
+        `docs/captures/sgx540-bind-2026-11-26.txt`.)
+
+380. **The GPU firmware must live in the INITRAMFS: the probe runs before hd3 is
+        mounted.**  `powervr_sgx` probes `56000000.gpu` at t≈0.88 s, while the root
+        is still the initramfs; hd3 (with its `/lib/firmware`) is mounted later.
+        A microkernel placed only on the real root gives
+        `Direct firmware load ... failed with error -2`.  Put it in
+        `initramfs/root/lib/firmware/powervr_sgx/` and rebuild the image; the error
+        then changes (in session 73, to "not a microkernel file", which is progress).
+        `initramfs/root/lib/firmware/` is gitignored as a built artifact.
+        (Session 73.)
+
+381. **`modprobe.blacklist=` does not stop OpenRC loading a module by name.**  The
+        kernel parameter only suppresses *alias-based* autoloading;
+        `/etc/init.d/modules` reads `/etc/modules` and runs
+        `modprobe <exact-name>`, which bypasses it — `pvrsrvkm` still loaded and
+        took the GPU.  To actually block it, use a modprobe.d entry with
+        `install <mod> /bin/false` (a plain `blacklist` line is not enough for an
+        exact-name load either), or drop it from `/etc/modules`.  Verify with
+        `modprobe -n -v <mod>`: it must print the `/bin/false` line, not an
+        `insmod`.  (Session 73.)
+
+382. **The open microkernel image is built for `srvinit`, not `powervr_sgx`, and a
+        single-context core needs a PD-table patch it does not have.**  `mkukfw.py`
+        (the wrapper `powervr_sgx` requires) rejects an image that is not
+        `SGX5`/`UKRN`-headered, and for a one-context core it requires
+        `SINGLE_CONTEXT` set, `SECURE` clear **and** a `pdtable` patch: the driver
+        allocates a PD table at `kernel_code.base + 0xf000` and the microkernel
+        must load directory list 0 from it.  `ukernel/ukernel.py` cannot — it
+        routes TA/3D to **list 1** through `BIF_BANK0` and assumes list 0 is
+        `srvinit`'s shared kernel PD ("under `powervr_sgx` list 0 is an empty idle
+        PD and the transfer BIF-faults on a client address").  Treat "build an
+        SGX540 microkernel" as: add the `pdtable` patch site and load list 0 from
+        it, set the single-context feature bits, and re-audit the ~39 references
+        to `list 1`/`BANK0`/`0xc78` — not as a `cores/sgx540.py` data file.
+        (Session 73.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

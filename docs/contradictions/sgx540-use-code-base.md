@@ -50,6 +50,28 @@ fact.  Neither source overrides the other.
   code-base windows are not implemented for 535/540" (its phrasing is the
   former, but the surrounding text is about driver work).
 
+## New evidence (session 73, host only): the 540's field layout is the 24-bit class
+
+Read from the same DDK drop, side by side:
+
+| core | header | address field | data-master field |
+|---|---|---|---|
+| **SGX540** | `sgx540defs.h:538` | b0-23, `MASK 0x00FFFFFF`, `SHIFT 0` | b24-25, `MASK 0x03000000`, `SHIFT 24` |
+| SGX535 | `sgx535defs.h:641` | b0-24, `MASK 0x01FFFFFF` | b25-26, `MASK 0x06000000`, `SHIFT 25` |
+| SGX545 | `sgx545defs.h:634` | b0-24, `MASK 0x01FFFFFF` | b25-26, `MASK 0x06000000`, `SHIFT 25` |
+
+So the SGX540's `USE_CODE_BASE` is **not** the SGX545's layout: it is one bit
+narrower in the address, and the data-master field sits one bit lower.  That is
+the same shape the open driver's SGX530 `regs` record uses
+(`use_code_base_dm_shift = 24`, `use_code_base_addr_shift = 8` for the 530's
+256-byte units; the 540's unit is unknown).  This does not settle whether the
+**registers exist on rev 120**, but it does mean:
+
+* A driver must not copy the SGX545's `use_code_base_*_shift` values for a 540.
+* The header is not a plain SGX545 copy left in the tree — it was written for a
+  different field layout, which is evidence that the register set is real for
+  this core family even if our revision's behaviour is still unmeasured.
+
 ## What would settle it
 
 One read-only-then-write test on our unit with the vendor DDK clocking the GPU

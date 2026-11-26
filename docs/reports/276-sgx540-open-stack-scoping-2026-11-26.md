@@ -4,6 +4,31 @@ Date: 2026-11-26 (session 72).  Host only; no device writes.  Follows report 275
 (Kumo cannot render because the closed pvr GBM cannot export dmabufs) and the
 operator's question: is the open/RE graphics route better than our blobs?
 
+> **Addendum (session 73).**  Three of this report's claims are corrected by
+> reading the upstream tree as it stands (commit `95f78ca`, 2026-11-25) and by the
+> first hardware read of our SGX540:
+>
+> 1. **§1's core check is stricter than the code.**  `pvrsgx_core_family_usable()`
+>    accepts `va_bits` **28 or 32** and **`num_dir_lists == 1`** for a core without
+>    `MULTIPLE_MEM_CONTEXTS`; it does not demand ≥32 bits or ≥2 directory lists.
+>    The SGX530 is now a **complete family entry** (28-bit heaps, its own
+>    `pvrsgx_cmd_core`, BRN-28889, `allow_unisolated`) — the work §2 called "not
+>    per-core yet" has largely landed.
+> 2. **The errata list in §2 is wrong.**  `sgxerrata.h` gives the SGX540 **three**
+>    at rev 120 (`FIX_HW_BRN_26620`, `_28011`, `_34028`); the 29954–31780 group is
+>    the SGX543's.
+> 3. **`USE_CODE_BASE` is not a clean "no".**  `sgx540defs.h` defines it with a
+>    **24-bit** address and DM at bit 24, unlike the 535/545 (25-bit, DM at 25), so
+>    the header is written for a different layout rather than copied.  Whether the
+>    registers exist on rev 120 is still unmeasured.
+>
+> And the first hardware read is done: **`CORE_ID` id `0x0114`,
+> `CORE_REVISION` `0x00010200` (Rev 120), module `rev` `0x40000000`** — the
+> expected identity, and a `CORE_ID` that distinguishes the 540 from the 545
+> (0x0115) and 530 (0x0112).  See `docs/reference/sgx540-factsheet.md` §"Identity"
+> and `docs/captures/sgx540-identity-2026-11-26.txt`.  The recommendation below
+> stands; the sequencing changes (see "What this changes", §8).
+
 ## 0. Headline
 
 **The open stack is the durable fix, and our SGX540 is a harder port than a
@@ -145,6 +170,8 @@ same blobs; `zsavajji` is SGX530.
 * The vendored DDK headers (gitignored payload):
   `kernel/vendor/pvrsgx-1.17.4948957-101c687a.tar.xz` →
   `sgx540defs.h`, `sgxfeaturedefs.h`, `sgxerrata.h`, `sgxmmu.h`, `sgxdefs.h`.
+  The same headers are in the upstream tree's
+  `kernel/src/services4/srvkm/hwdefs/` (SGX535/540/543/544/545 all present).
 * Upstream: `docs/porting/{README,kernel,microkernel,isa,state,mesa}.md` and
   `docs/porting/cores/{sgx530,clovertrail}.md` in
   `github.com/The1TrueJoe/powervr_sgx`; `CONTRIBUTING.md` (the cleanroom and
@@ -153,3 +180,43 @@ same blobs; `zsavajji` is SGX530.
   `docs/project/ROADMAP.md` 7a.
 * The drafted fact sheet: `docs/reference/sgx540-factsheet.md` (upstream format,
   tagged, with the gaps table).
+* The identity read (session 73): `tools/bench/gpu/sgxcoreid.py` and
+  `docs/captures/sgx540-identity-2026-11-26.txt`.
+
+## 8. What this changes (session 73 addendum)
+
+The port is **smaller than §2–§4 assume, and its first milestone is met**.
+
+* **What is already done in the open tree** (read at commit `95f78ca`):
+  the 28-bit core class exists end to end — `sgx530_regs`, a 28-bit
+  `sgx530_heaps`, `pvrsgx_cmd_core_sgx530` (`.va_bits = 28`),
+  `PVRSGX_QUIRK_BRN_28889`, and `powervr_sgx.allow_unisolated=1` for the
+  single-memory-context case, which the driver gates on exactly
+  `!MULTIPLE_MEM_CONTEXTS`.  The platform glue exists too: `pvrsgx_of.c` already
+  handles a TI `ti-sysc` parent (no own clocks/power domain) with an
+  `of_device_id` table, and the SGX530 entry is there.
+* **What an SGX540 entry still needs** (all data plus a captured init script):
+  `sgx540_regs` (CORE_ID/REVISION 0x20/0x24, the 28-bit request bases, the
+  `USE_CODE_BASE` shifts from the 540 header — **not** the 545's), a 28-bit heap
+  layout that satisfies `pds_reach()` without
+  `EDM_VERTEX_PDSADDR_FULL_RANGE`, `sgx540_init_regs` captured from a working
+  boot, a `pvrsgx_cmd_core_sgx540`, and `of_device_id` `img,powervr-sgx540` →
+  core 540.  The `allow_unisolated` gate then applies unchanged.
+* **What is still genuinely unknown** (the §5 "U" facts, unchanged): the
+  DPM/TA/ISP/TSP/PBE/PDS state map, whether `USE_CODE_BASE` exists on rev 120,
+  the 28-bit heap's exact layout, and the microkernel's 540 tables.
+* **The first zero-risk milestone is met:** the identity read returned the
+  expected `CORE_ID`/`CORE_REVISION` and the module `rev` the quirk matches, so
+  a "New SGX core" issue can now carry measured identity for an OMAP4430 rev-120
+  SGX540 rather than an inferred one.
+* **Revised order:** (1) the fact sheet is written with **C** facts
+  (`docs/reference/sgx540-factsheet.md`); (2) open the upstream issue with the
+  identity read; (3) add `sgx540_regs` + the `of_device_id` entry and let the
+  driver log the core ID (the guide's stage 1–3), booting from RAM as our
+  chainloader already does; (4) the heap layout and init script; (5) the
+  microkernel; (6) Mesa.  The closed stack keeps the desktop throughout.
+
+**Cleanroom note.**  The upstream tree already ships the Imagination GPL headers
+(including `sgx540defs.h`), so quoting them in our fact sheet is the same class
+of K evidence the project itself uses; nothing closed is copied.  The vendor
+*userspace* and the QNX material stay black-box evidence only.

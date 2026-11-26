@@ -219,8 +219,11 @@ they run on the unit without a compiler).  Each records the **kernel's** view
 |---|---|
 | `rebake-2026-11-25-boot1-evidence.txt` | the first boot after flashing the rebaked hd3 image: the DSI wedge at boot+37 s (`dsi_if_enable to 0`, `NO PACKET_SENT`), the compositor alive and `dpms on` (so it is not a dead process), the healthy touch IRQ (118: 20,126 events), the GEM tree, and the clean second boot (0 DSI errors) |
 
-Report 272 §4.  The wedge is the trap-353 class, likely triggered by the
-power-button release → DPMS binding; `reboot -f` cleared it.
+Report 272 §4; `reboot -f` cleared it.  **Session 73 retired the "power-button
+release → DPMS binding" explanation**: the OS registers **no** hardware buttons at
+all, so those initrc bindings are dead code.  The wedge is the boot-time DSI fault
+of trap 377 (`NO_PACKET_SENT` with `polls=2000`, where a healthy boot returns
+`polls=1`).
 
 ## Kumo / WPE WebKit GBM export (session 72)
 
@@ -232,6 +235,22 @@ This is the evidence behind report 275: WebKit's `AcceleratedSurface` needs a GB
 dmabuf and the closed pvr DDK cannot export the buffer it allocates.  The probes
 are tracked at `tools/bench/gpu/`.  The probe output is reproducible; the `dmesg`
 chain was measured live during the runs and is gone after the reboots (§E).
+
+
+## SGX540 open-stack port (session 73)
+
+Three captures from the first hardware work on the open `powervr_sgx` port:
+
+| file | what it shows |
+|---|---|
+| `sgx540-identity-2026-11-26.txt` | read-only `/dev/mem` identity probe with `pvrsrvkm` bound: `CORE_ID` id **0x0114**, `CORE_REVISION` **0x00010200** (Rev 120), `DESIGNER_REV_FIELD1/2` 0, ti-sysc `rev` `0x40000000` / `sysc` `0x0000003c`, `BIF_INT_STAT` `0x00008000` (`FLUSH_COMPLETE`).  The read set is the guide's safe list only |
+| `sgx540-bind-2026-11-26.txt` | the open driver on hardware: `SGX core id 0x01140000 revision 0x00010200: TI OMAP4430 (SGX540 1.2.0)`, `allow_unisolated` refusing then accepting the core, and the measured `pvrsrvkm` race (`56000000.gpu` owned by the closed DDK even with `CONFIG_SGX=n`) |
+| `sgx540-ukernel-2026-11-26.txt` | the microkernel work: the 3-byte delta from the SGX545 image, the offline tests, the initramfs firmware requirement (probe at t≈0.9 s), the `modprobe.blacklist` failure, and the structural blocker — `not a microkernel file`, then the list-0 / `pdtable` requirement |
+
+The probes are tracked at `tools/bench/gpu/sgxcoreid.py` (safe) and
+`sgxusecodebase.py` (**DO NOT RUN** — trap 376).  The fact sheet
+`docs/reference/sgx540-factsheet.md` carries the **C** facts; DECISIONS §109-§111
+and traps 368-382 are the operational record.
 
 `docs/reports/data/` is indexed by the reports that produced it; the report
 INDEX (`docs/reports/INDEX.md`) says which report is current for a topic.

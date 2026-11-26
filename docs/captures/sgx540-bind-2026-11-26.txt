@@ -1,0 +1,91 @@
+# SGX540 identity and bind — the open driver, on hardware (session 73)
+
+The first hardware result of the open-stack SGX540 port.  Two boots, both with an
+image built from `local/kernel-tree-sgx` (a copy of `local/kernel-tree` with
+`CONFIG_SGX` off and `CONFIG_DRM_POWERVR_SGX=y` + `_OF=y`; DECISIONS §111).
+
+Unit: PlayBook `0x50175127`, OMAP4430 ES2.2, kernel `7.3.3 #1 SMP` (built
+2026-11-26 03:23), root on hd3.
+
+## The result
+
+```
+[    0.000000] Kernel command line: earlyprintk keep_bootcon ignore_loglevel
+               console=ttyGS0,115200 clk_ignore_unused panic=0
+               fw_devlink=permissive powervr_sgx.allow_unisolated=1
+[    0.798217] powervr_sgx 56000000.gpu: [drm] SGX540 has one memory context:
+               clients are not isolated from the firmware or from each other
+               (allow_unisolated=1)
+[    0.798522] powervr_sgx 56000000.gpu: [drm] SGX core id 0x01140000
+               revision 0x00010200: TI OMAP4430 (SGX540 1.2.0)
+[    0.798919] powervr_sgx 56000000.gpu: Direct firmware load for
+               powervr_sgx/sgx540_ukernel.bin failed with error -2
+[    0.799163] powervr_sgx 56000000.gpu: [drm] *ERROR* no microkernel:
+               powervr_sgx/sgx540_ukernel.bin (-2)
+[    0.799438] powervr_sgx 56000000.gpu: probe with driver powervr_sgx
+               failed with error -2
+```
+
+**What this proves.**  The open driver bound to the GPU, read `CORE_ID` and
+`CORE_REVISION` from the hardware, matched them against the core table, and
+printed the part name — **`0x01140000` / `0x00010200` → TI OMAP4430 (SGX540
+1.2.0)**.  That is the exact string the entry was written to produce from the
+identity measured earlier in the session (`docs/captures/sgx540-identity-2026-11-26.txt`),
+so the `regs` offsets, the `core_id` match and the `cores[]` lookup are all
+correct on silicon.
+
+It also exercised the design's own guard: with `allow_unisolated` unset the
+driver refused the core ("every client could reach the firmware…"), and with
+`powervr_sgx.allow_unisolated=1` on the kernel command line it proceeded.  Both
+behaviours are as intended.
+
+**What stopped it.**  There is no microkernel for this core yet:
+`powervr_sgx/sgx540_ukernel.bin` is absent (`-2`), so the probe fails at
+`request_firmware()`.  Building it is the next step (a core-specific `CORE_NAME =
+sgx540` microkernel; `ukernel/README.md`).
+
+## Correction: `pvrsrvkm` still owns the device
+
+`CONFIG_SGX` off removes only the **built-in** copy of the closed DDK.  The unit's
+hd3 root loads `pvrsrvkm_omap4_sgx540_120` from `/etc/modules`, and that module
+probes `56000000.gpu` at boot too.  Measured on the second boot:
+
+```
+/sys/bus/platform/devices/56000000.gpu/driver -> /sys/bus/platform/drivers/pvrsrvkm
+/sys/class/drm/card1/device/uevent: DRIVER=pvrsrvkm
+/sys/bus/platform/drivers/powervr_sgx/:   (no device)
+/sys/bus/platform/drivers/pvrsrvkm/:      56000000.gpu
+```
+
+So `pvrsrvkm` won the probe race and holds the device; `powervr_sgx` probed,
+identified the core, and failed on firmware **without** owning it.  Two
+consequences:
+
+* **The identification is still valid** — it read the real device's registers.
+* **A future boot that expects `powervr_sgx` to run the GPU must stop
+  `pvrsrvkm` from loading**: `modprobe.blacklist=pvrsrvkm_omap4_sgx540_120` on the
+  kernel command line, or remove it from hd3's `/etc/modules`.  Otherwise the
+  closed DDK keeps the device and the open one can never bind it.
+
+The desktop still came up (`catacomb` running, panel `connected`, **0 DSI
+errors**) — the compositor fell back, since `pvrsrvkm` was the driver present.
+
+## How it was reached
+
+1. Read the identity read-only through `/dev/mem` (`tools/bench/gpu/sgxcoreid.py`)
+   — `CORE_ID` id 0x0114, `CORE_REVISION` 0x00010200.
+2. Wrote the core entry (`rootfs/powervr-sgx/0001-sgx540-core-entry.patch`) and
+   validated it on the host (compiles 23/23; KUnit 8/8 with a negative control).
+3. Copy of `local/kernel-tree` → `local/kernel-tree-sgx`, `make mrproper`,
+   closed DDK off, `DRM_POWERVR_SGX=y`/`_OF=y`, DRM helpers on.
+4. Flashed region 0 (block `0x825`), booted, read `dmesg`.
+
+The first attempt at this **failed before any of that**: an image built from
+`local/pristine/linux-7.3.3` (no PlayBook support) fell back to bootrom and had to
+be restored (trap 378).
+
+## Bench
+
+Region 0 on media after the second flash: `0x325193F7` (the unisolated-DTB image
+`local/work/kernel-sgx540-unisolated.img`).  The known-good image to return to is
+`0x3547D613` (`boot/chainloader/kernel.img` rebuilt from `local/kernel-tree`).
