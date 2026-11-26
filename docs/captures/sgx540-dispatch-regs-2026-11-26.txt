@@ -1,0 +1,93 @@
+# SGX540: the timer IS running; the dispatch is still dead; and a trap of mine was wrong
+
+Session 75, boot 3.  One module rebuild (one line added to the `status` dump),
+one reboot, read-only afterwards.  **This corrects trap 395 and the "1000×"
+claims that came with it — my own error, retracted below.**
+
+## The instrument
+
+`pvrsgx_dump.c`'s register table gained seven read-only entries — all registers
+the driver already writes or already reads back, so none is the unnamed-read
+hazard of trap 369:
+
+```
+EVENT_TIMER        0x0acc    EVENT_PDS_ENABLE  0x0a58
+EVENT_KICKER       0x0ac4    EVENT_PDS_EXEC    0x0a68
+EVENT_KICK         0x0ac8    EVENT_PDS_DATA    0x0a6c
+                             EVENT_PDS_INFO    0x0a70
+```
+
+Built from `local/kernel-tree-sgx` (trap 378), and the tree was **proved to be
+the installed module plus this one change**: with the edit reverted the build
+reproduces `2e138afc0e832a4e7b41d97f74452508` byte-for-byte, with it applied
+`9a0ebbe378a12e18b3c871367ce2f961` (4,102,776 B).
+
+## What the registers read (idle, firmware `invfix`, `resets 0`)
+
+```
+EVENT_STATUS         0x012c 0xa0000000     b31 MASTER_INTERRUPT, b29 TIMER latched
+EVENT_STATUS2        0x0118 0x00000000
+EVENT_HOST_ENABLE    0x0130 0x20004000     TIMER | SW_EVENT
+EVENT_HOST_ENABLE2   0x0110 0x00000000
+EVENT_TIMER          0x0acc 0x010228fe     ENABLE b24 set, VALUE 0x0228fe
+EVENT_KICKER         0x0ac4 0x0f002010     the driver's kicker word, as written
+EVENT_KICK           0x0ac8 0x00000000     self-clearing; a read proves nothing
+EVENT_PDS_ENABLE     0x0a58 0x2204b00f     *** we write 0x2204f00f ***
+EVENT_PDS_EXEC       0x0a68 0x00804090
+EVENT_PDS_DATA       0x0a6c 0x00000003
+EVENT_PDS_INFO       0x0a70 0x00013d01
+```
+
+**`EVENT_TIMER` is alive.**  Sampled five times, 2 s apart:
+
+```
+0x0100fd20  0x01045555  0x01039dc8  0x0103511f  0x01048a4a
+```
+
+Every sample is within `0x000000..0x04B000`, i.e. the counter is running and
+reloading inside the programmed period.  The timer is **not** dead.
+
+## Retraction: the period is NOT 1000× too long
+
+The previous capture reasoned "the driver stores 307 200 where the DDK stores
+307, so it is 1000× too slow".  **That was wrong.**  `ui32uKernelTimerClock` is
+a **count of core-clock cycles**, so
+
+```
+307 200 counts / 307 200 000 Hz = 1.000 ms  = 1 kHz  -- exactly what was asked for
+```
+
+and the DDK's own expression is the same quotient the driver computes
+(`ui32CoreClockSpeed / ui32uKernelFreq` = 307200000 / 1000 = **307 200**).  I had
+compared a *count* against a *rate*.  Trap 395 is withdrawn; the register's real
+period is 1 ms.
+
+## What this leaves
+
+The timer fires.  `EVENT_STATUS` b29 (TIMER) is **latched and never cleared** —
+nothing acknowledges it — and `EVENT_PDS_ENABLE` carries TIMER (0x20000000) and
+SW_EVENT… except that **bit 14 does not read back**: we write `0x2204f00f` and
+read `0x2204b00f`, a difference of exactly `0x4000`.
+
+That is the sharpest new fact in this capture, because `SW_EVENT` was the
+*session-74 fix* — the one bit that changed a universal timeout into `1/1
+passed`.  Either the bit is not implemented in this register on this core, or it
+is self-clearing.  Both are testable: write `0x2204f00f` again and read it back
+immediately, then again after a delay.
+
+State of the dispatch picture after three boots:
+
+| fact | how |
+|---|---|
+| the timer fires at ~1 kHz | `EVENT_TIMER` VALUE cycling within its period |
+| the timer event is latched | `EVENT_STATUS` b29 set, permanently |
+| nothing acknowledges it | `EVENT_STATUS` never changes; IRQ 147 count 0 |
+| the event program is not entered | dynamic tick counter 0 over 12 s; `kick` counters 0 |
+| the init task *did* run | `SC_VERSION` 0x18 = 0x00010000; `EVENT_HOST_ENABLE` b29 |
+| the PDS enable word loses a bit | written 0x2204f00f, reads 0x2204b00f |
+
+## Bench at the close of this reading
+
+Region 0 **`0x02C1DDC2`** (no flash), firmware `invfix` (`12f12abb…`, unchanged),
+module `9a0ebbe3…` (+ the dump), `resets 0`, IRQ 147 count 0,
+`BOOTCTR_FCTRY` 0x32, battery 4.150 V / 100 %.

@@ -6,16 +6,18 @@ Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolut
 session-75 close.  See `docs/sessions/NUMBERING.md`.
 
 > **SESSION 75 RESULT: the SGX540 microkernel's event program is entered ONCE
-> and never again; the EDM timer never fires at all; and the NULL job that
-> "passed" in session 74 was the driver's own 2 s timeout.**  A dynamic tick
-> counter read **0 after 12 s idle** with the GPU IRQ never asserted; an
-> entry-counting instrument read **0 over a whole job window**; the kernel ring
-> held the command while the microkernel's own read was `0/0`; six back-to-back
-> jobs cost **six** GPU resets, and the two `1/1 passed` runs took **2016806**
-> and **2020499** µs against `job_timeout_ms = 2000`.  The init task *does* run
-> (`SC_VERSION`, `EVENT_HOST_ENABLE` b29).  Report **278** (§8 is the timer);
-> traps **388–396**; DECISIONS **§113**; captures
-> `docs/captures/sgx540-{ukernel-kick-counter,tick-counter}-2026-11-26.txt`.
+> and never again; the timer fires but nothing consumes it; one dispatch bit
+> does not stick; and the NULL job that "passed" in session 74 was the driver's
+> own 2 s timeout.**  Three boots.  A dynamic tick counter read **0 over 12 s**
+> while `EUR_CR_EVENT_TIMER` cycles inside its period; `EVENT_STATUS` b29 stays
+> **latched and unacknowledged**; IRQ 147 has **never** fired; `kick` is never
+> entered and six jobs cost six resets; and the two `1/1 passed` runs took
+> **2016806** / **2020499** µs against `job_timeout_ms = 2000`.  Of the whole
+> dispatch configuration exactly one field is not what the driver wrote:
+> **`EVENT_PDS_ENABLE` reads `0x2204b00f` where it writes `0x2204f00f`** (bit 14
+> `SW_EVENT`).  The init task *does* run (`SC_VERSION`, `EVENT_HOST_ENABLE` b29).
+> Report **278** (§8 timer, §9 registers); traps **388–397**; DECISIONS **§113**;
+> captures `docs/captures/sgx540-{ukernel-kick-counter,tick-counter,dispatch-regs}-2026-11-26.txt`.
 
 ## 0. The job, and where it stands
 
@@ -53,20 +55,20 @@ the browser (report 275).  This session is that port.
   (trap 389).  And that boot ran build **`ccb2`**, not `invfix` — the file on
   hd3 was swapped after its module load, and the firmware is read only at module
   load (trap 390); `dmesg | grep 'open microkernel'` is the only truth.
-* **The EDM timer never fires, measured directly.**  `UK_TICKLOG` increments a
-  **32-bit dynamic** counter in the microkernel's own memory (free control-block
-  words 0x2c/0x2d) once per pass through the timer branch; the host compares two
-  reads.  After **12 s idle**: **0**, with `resets 0` and IRQ 147 never having
-  asserted.  The session-75 `ctlblk` word could never have shown a 1 kHz event —
-  it is static memory — so this needed a different shape of instrument (trap
-  394).  The emulator control confirms it moves: `init`, three timer events, one
-  bare doorbell → `0x2c` = 0 → 3 → 3.
-* **The driver's timer period is 1000× the DDK's count** (trap 395):
-  `pvrsgx_fw_start()` stores `pvrsgx_clock_hz() / UKERNEL_TIMER_HZ` = **307 200**
-  and `init_set` programs it verbatim into `EUR_CR_EVENT_TIMER`, whose `VALUE`
-  field is b0-23; the DDK's own `ui32CoreClockSpeed / ui32uKernelFreq` is 307 for
-  its 1 kHz tick.  **Whether that is why the timer never fires is NOT
-  established** — reading 0x0acc back is the next cheap step.
+* **The event program is not entered — but the TIMER is not why.**  `UK_TICKLOG`
+  increments a **32-bit dynamic** counter in the microkernel's own memory (free
+  control-block words 0x2c/0x2d) once per pass through the timer branch; after
+  **12 s idle** it read **0**.  Then the register itself was read: `EUR_CR_EVENT_TIMER`
+  is **alive** — `ENABLE` b24 set, five samples all inside `0..0x04B000`, i.e.
+  cycling at ~1 kHz.  So the timer fires, and the event is raised but never
+  consumed: `EVENT_STATUS` b29 stays **latched**, nothing acknowledges it, and
+  IRQ 147 has never asserted.  A static `ctlblk` word could never have shown a
+  1 kHz event (trap 394) — that is why the counter had to be dynamic.
+* **`EVENT_PDS_ENABLE` loses bit 14.**  The driver writes `0x2204f00f` and the
+  register reads `0x2204b00f`; the bit is `SW_EVENT`, it is stable across reads,
+  and it was session 74's "decisive fix" — the microkernel→host signal.  Every
+  other dispatch register reads back as written (`EVENT_KICKER`,
+  `EVENT_PDS_EXEC/DATA/INFO`).  Trap 397.
 * **The init task really does run**, on three independent proofs, none of them
   the `microkernel started` log line: `SC_VERSION` (0x18) = `0x00010000` (a
   microkernel-only store), `EVENT_HOST_ENABLE` b29 set (`0x20004000`, ORed in by
@@ -121,19 +123,24 @@ the browser (report 275).  This session is that port.
 
 ## 0b. The one experiment for session 76
 
-**Question, in this order: (1) what does `EUR_CR_EVENT_TIMER` read back, and
-(2) does anything reach the event program when a job is submitted?**
+**Question: is `EVENT_PDS_ENABLE`'s bit 14 (`SW_EVENT`) implemented on this
+core, and does a job's `EVENT_KICK` reach the event program?**
 
-Why (1) is first: session 75 measured that the timer branch never runs — a
-dynamic counter read 0 after 12 s idle (`UK_TICKLOG`) — and separately that the
-driver hands the microkernel a period 1000× the DDK's count (trap 395).  If
-`EUR_CR_EVENT_TIMER` (0x0acc) reads 0, the 23-bit `VALUE` field is blanking
-`0x004B0000` and the timer can never fire, which is a one-line driver fix.  That
-register is **not** in the driver's `status` dump, so it needs one added line.
+Why (1) is first: with the dump registers in place, **every** field of the
+dispatch configuration now reads back as the driver wrote it — `EVENT_TIMER`
+cycling inside its period, `EVENT_KICKER` the driver's own word,
+`EVENT_PDS_EXEC/DATA/INFO` unchanged — **except `EVENT_PDS_ENABLE`**, which
+reads `0x2204b00f` where the driver writes `0x2204f00f`.  One bit, `SW_EVENT`,
+stable across reads, not self-clearing.  `SW_EVENT` is the microkernel→host
+signal *and* a dispatch source, so if it cannot be set the host is never
+interrupted — which is what IRQ 147's zero count and the permanently latched
+`EVENT_STATUS` b29 both say.  The test is a per-bit write/read-back of
+**0x0a58** from inside the driver: set each bit of `0x2204f00f` alone, read back,
+restore.  That separates "not implemented" from "store masked" in one run.
 
-Why (2) still matters and does not depend on (1): a *job* is submitted through
-`EVENT_KICK`, not the timer.  The `kick` counters stayed 0 through a whole job
-window, so nothing re-enters the event program after init by that route either.
+Why (2) does not depend on (1): a *job* is submitted through `EVENT_KICK`, and
+the `kick` counters stayed 0 through a whole job window.  Read the doorbell in
+the same boot.
 
 The write side is `ccb_write()`: it writes **`EUR_CR_EVENT_KICK` (0xac8,
 `NOW` b0)** after storing the command, and the address form is
@@ -274,12 +281,12 @@ the counters are read through `ctlblk`, which is free.
 | region 0 | CRC **`0x02C1DDC2`** — media trailer `1f2dc8d7 c2ddc102`.  File `boot/chainloader/kernel.img`, 10,450,520 B, sha256 `70474c01…` (**no flash this session**) |
 | region 1 | sha256 **`20a5edd3a791a37ef5e6ab9a50d1c83f8967d8257ed76c9fe23a318d4b887422`** |
 | hd3 | the session-71 rebaked image **`5d3eac8f…`** at `0x4915`, grown to 62.5 G; `/dev/loop0` ext4 rw, 56.5 G |
-| `BOOTCTR_FCTRY` | **`0x1e`** (`dmesg \| grep pbrpmb`: `0x1e000000`, `>= threshold 0x1e, no write`; `/init` tops up below `0x1e`) |
+| `BOOTCTR_FCTRY` | **`0x32`** (the last boot's `/init` topped `0x1d → 0x32`, `PASS`; it tops up below `0x1e`) |
 | CPU | `nproc` 2; PID 1 affinity **`0,1`** |
 | battery | Full, 100 % (`VOLTAGE_NOW` 4 151 000 µV) |
-| GPU | `card1`/`renderD129` = **`powervr_sgx`** (open driver), microkernel running, **`resets 9`**; `card0`/`renderD128` = `omapdrm` |
+| GPU | `card1`/`renderD129` = **`powervr_sgx`** (open driver), microkernel running, **`resets 0`** (the last two boots submitted nothing); `card0`/`renderD128` = `omapdrm`; GPU IRQ **147, count 0 — never fired** |
 | microkernel | `/lib/firmware/powervr_sgx/sgx540_ukernel.bin` = **`invfix`** (md5 `12f12abb…`, 16,640 B, **reverted and `md5sum`-proven**); the session-75 instrument is beside it as `.kick1` (`229b838c…`, inert), the pre-session copy as `.before-kick1`, the session-73 raw as `.session73-raw`.  **The boot that produced report 278 ran `ccb2`, not `invfix`** (trap 390) |
-| module | `/lib/modules/7.3.3/kernel/drivers/gpu/drm/powervr_sgx.ko` = `2e138afc…`; `.bak` (session 73) and `.brn31620` (the reverted experiment) beside it |
+| module | `/lib/modules/7.3.3/kernel/drivers/gpu/drm/powervr_sgx.ko` = **`9a0ebbe3…`**, the session-75 build of the module **plus the seven dispatch registers added to `pvrsgx_dump.c`** (session 273's `2e138afc…` kept as `.live-prev`; revert by copying it back and rebooting).  Built from `local/kernel-tree-sgx`; with the dump edit reverted the same tree reproduces `2e138afc…` byte-for-byte.  `.bak` (session 73) and `.brn31620` (the reverted experiment) also beside it |
 | desktop | `swrast` (the closed DDK is blocked by the operator's standing direction; the open driver is the work) |
 | panel | 0 DSI errors, `bl_power` 0 |
 | WLAN | **up**, but the DHCP lease moved during the session: **`10.195.132.240/13`**, default via `10.192.0.1`, not the `192.168.0.231` of the session-74 close.  `usb0` is `169.254.0.1/16` either way, so **the SSH path is unaffected** — this only matters if a session wants to reach the unit over the LAN.  Read `ip -br addr` before quoting an address |
@@ -310,6 +317,11 @@ the counters are read through `ctlblk`, which is free.
   with the closed-material boundary and two retractions.
 * `docs/captures/sgx540-ukernel-kick-counter-2026-11-26.txt` — **this session**:
   the instrument, its negative control, the measurement and the fence mechanism.
+* `docs/captures/sgx540-tick-counter-2026-11-26.txt` — the dynamic counter, the
+  12 s zero, and the "1000×" note that is now retracted.
+* `docs/captures/sgx540-dispatch-regs-2026-11-26.txt` — **the register read**:
+  the whole dispatch configuration, `EVENT_TIMER` cycling, and the one field
+  (`EVENT_PDS_ENABLE` bit 14) that does not read back as written.
 * `docs/captures/sgx540-ukernel-{list0,start,first-job}-2026-11-26.txt` — the
   session-74 stages (read with trap 388 in hand: the `1/1 passed` there is the
   timeout).
@@ -335,6 +347,12 @@ the counters are read through `ctlblk`, which is free.
   the timeout (traps 388/389).
 * **Why the doorbell does not open.**  The next experiment (§0b).  Nothing
   between "the driver wrote `EVENT_KICK`" and "the entry ran" is measured.
+* **Whether `EVENT_PDS_ENABLE`'s bit 14 (`SW_EVENT`) is implemented here.**  It
+  is the one dispatch field that does not read back as written, it is stable, and
+  it is the microkernel→host signal.  Trap 397; §0b is the per-bit test.
+* **Why the latched TIMER event is never acknowledged.**  `EVENT_STATUS` b29 is
+  set at every reading and never clears, which is what an event program that is
+  never entered would leave behind — but it is not proof of the ordering.
 * **Whether the event entry executes at all past init.**  A `GETMISCINFO` submit
   would settle it cheaply — it is the one command needing no client PD.
 * **Any microkernel register table.**  No kick has ever been *exercised*: the
@@ -372,12 +390,14 @@ PlayBook (OMAP4430 "winchester") — session 76 (absolute; Linux-era 70)
 Workspace: this repository — a git checkout.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 368-396) and §3,
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 368-397) and §3,
 DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 108-113, docs/reports/INDEX.md,
 report 278 (this session's predecessor), 277 (the run it corrects), 276
 (graphics route + addendum), 275 (Kumo),
 docs/reference/sgx540-factsheet.md AND docs/reference/sgx540-ddk18-facts.md,
 docs/captures/sgx540-ukernel-kick-counter-2026-11-26.txt,
+docs/captures/sgx540-tick-counter-2026-11-26.txt,
+docs/captures/sgx540-dispatch-regs-2026-11-26.txt,
 docs/contradictions/sgx540-event-kick2-offset.md (resolved; read so you do NOT
 re-run it),
 docs/sessions/session-75.md and session-74.md.
@@ -408,19 +428,25 @@ default).  NOTHING IS PUBLISHED UPSTREAM (DECISIONS 110).
 
 WHAT REMAINS: the microkernel's init task DOES run (SC_VERSION, EVENT_HOST_ENABLE
 b29 -- not the "microkernel started" line, which the host writes itself under
-edm_init=1, trap 396), but nothing re-enters the event program: the EDM timer
-never fires (a dynamic counter read 0 after 12 s idle), the GPU IRQ 147 has never
-asserted, kick is never entered, and the ring keeps the command.  HANDOFF §0b is
-one boot with two reads: EUR_CR_EVENT_TIMER (0x0acc -- the driver hands the
-microkernel a period 1000x the DDK's count, trap 395), then the doorbell,
-EUR_CR_EVENT_KICK (0xac8), EVENT_KICKER (0xac4) and EVENT_PDS_ENABLE (0x0a58),
-all read from INSIDE the driver (trap 384 closes /dev/mem) around one NULL job.
-Two cheap explanations were CLEARED statically at the end
-of session 75 and must not be re-run: the init kick going to EVENT_KICK2
-(0x0ac0) while jobs use EVENT_KICK (0x0ac8) is the vendor's own shape for a
-MULTI_EVENT_KICK core (trap 392), and event_pds_addr() agrees with srvinit and
-lands 8 MiB inside the 18-bit field (trap 393).  Do not instrument the
-microkernel again until the doorbell is read.
+edm_init=1, trap 396), and the EDM timer DOES fire (EUR_CR_EVENT_TIMER cycles
+inside its 1 ms period; my earlier "1000x too long" claim is retracted, trap
+395).  But nothing consumes it: EVENT_STATUS b29 stays latched and
+unacknowledged, GPU IRQ 147 has never asserted, a dynamic tick counter read 0
+over 12 s, kick is never entered, and the ring keeps the command.  Of the whole
+dispatch configuration exactly ONE field is not what the driver wrote:
+EVENT_PDS_ENABLE reads 0x2204b00f where it writes 0x2204f00f -- bit 14 SW_EVENT.
+
+HANDOFF §0b is one boot: a per-bit write/read-back of EVENT_PDS_ENABLE (0x0a58)
+from INSIDE the driver (trap 384 closes /dev/mem) to learn whether SW_EVENT is
+implemented or merely masked, plus the doorbell (EUR_CR_EVENT_KICK 0xac8,
+EVENT_KICKER 0xac4) around one NULL job.  The dump registers are already in place
+in pvrsgx_dump.c, so no new instrumentation should be needed.
+
+Three cheap explanations were CLEARED and must not be re-run: the init kick
+going to EVENT_KICK2 (0x0ac0) while jobs use EVENT_KICK (0x0ac8) is the vendor's
+own shape for a MULTI_EVENT_KICK core (trap 392), event_pds_addr() agrees with
+srvinit and lands 8 MiB inside the 18-bit field (trap 393), and the timer's
+period is right (trap 395, retracted).
 
 TRAPS THAT COST TIME: a uAPI "1/1 passed" is the driver's timeout here, not a
 completion (trap 388); "consumed" after a reset equals "issued" and proves

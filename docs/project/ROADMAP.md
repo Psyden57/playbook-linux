@@ -467,15 +467,19 @@ flasher can replace at every point:
     Two cheaper explanations were cleared statically and must not be re-run: the
     differing init/job kick offsets are the vendor's own `MULTI_EVENT_KICK`
     behaviour (trap 392), and the event program's address matches `srvinit`'s
-    derivation (trap 393).  **Then measured directly: the EDM timer never fires**
-    — a dynamic counter (`UK_TICKLOG`, free control-block words 0x2c/0x2d; a
-    static `ctlblk` word can never show a 1 kHz event, trap 394) read 0 after
-    12 s idle with IRQ 147 never asserting, while the driver hands the
-    microkernel a period **1000×** the DDK's count (trap 395).  The init task
-    *does* run (`SC_VERSION`, `EVENT_HOST_ENABLE` b29 — not the "microkernel
-    started" line, which the host writes itself under `edm_init=1`, trap 396).
-    So the next boot reads `EUR_CR_EVENT_TIMER` (0x0acc) first, then the
-    doorbell.
+    derivation (trap 393).  **Then measured, three boots: the timer fires,
+    nothing consumes it, and one PDS bit does not stick.**  A dynamic counter
+    (`UK_TICKLOG`; a static `ctlblk` word can never show a 1 kHz event, trap 394)
+    read 0 over 12 s, yet `EUR_CR_EVENT_TIMER` is alive — `0x010228fe`, `ENABLE`
+    set, cycling inside its period — so the driver's period is right and my
+    "1000×" claim is retracted (trap 395).  `EVENT_STATUS` b29 stays latched and
+    IRQ 147 never fires.  Of the whole dispatch configuration exactly one field is
+    not what the driver wrote: **`EVENT_PDS_ENABLE` reads `0x2204b00f` where it
+    writes `0x2204f00f`** — bit 14 `SW_EVENT`, session 74's "decisive fix",
+    stable across reads (trap 397).  The init task *does* run (`SC_VERSION`,
+    `EVENT_HOST_ENABLE` b29 — not the "microkernel started" line, which the host
+    writes under `edm_init=1`, trap 396).  Next: a per-bit write/read-back of
+    0x0a58 from inside the driver, then the doorbell.
     Then one interaction to make the EDM dispatch at all, and the aim after that
     is a frame.
     (a2) a

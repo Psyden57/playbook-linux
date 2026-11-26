@@ -1,4 +1,4 @@
-# Session 75 (absolute) — the EDM never re-dispatches, its timer never fires, and the "passing" job was the timeout
+# Session 75 (absolute) — the EDM never re-dispatches, one dispatch bit does not stick, and the "passing" job was the timeout
 
 > Numbering: absolute `75` (the project's chronological scheme — see
 > `NUMBERING.md`); the reports call this **Linux-era session 69**
@@ -56,20 +56,15 @@ measurement" below.
 
 Same session, one more boot.  Reading only; the firmware is reverted.
 
-* **The EDM timer never fires.**  `UK_TICKLOG` increments a 32-bit **dynamic**
-  counter — free control-block words `0x2c` (low 16) and `0x2d` (high 16), with a
-  carry — once per pass through the timer branch, and the host compares two
-  reads.  After **12 s idle**: **0**, `resets 0`, IRQ 147 never asserted.  At the
-  1 kHz the driver asks for, `0x2c` would be ≈12 000 even under the divisor
-  below, so this is not a period question: the dispatch does not happen.
-* **The driver's timer period is 1000× the DDK's count.**  `pvrsgx_fw_start()`
-  stores `pvrsgx_clock_hz() / UKERNEL_TIMER_HZ` = 307 200 000 / 1000 = **307 200**,
-  and `init_set` programs that word verbatim into `EUR_CR_EVENT_TIMER`, whose
-  `VALUE` is b0-23.  The DDK computes the same quotient
-  (`sgxpower.c:125`, `ui32CoreClockSpeed / ui32uKernelFreq`) with
-  `ui32uKernelFreq` = 1000, i.e. **307** for its 1 kHz tick — the driver applies
-  the 1 kHz and then divides by it again.  **Not established** that this is why
-  the timer never fires; reading `0x0acc` back is the next step.
+* **The event program is not entered.**  `UK_TICKLOG` increments a 32-bit
+  **dynamic** counter — free control-block words `0x2c` (low 16) and `0x2d`
+  (high 16), with a carry — once per pass through the timer branch, and the host
+  compares two reads.  After **12 s idle**: **0**, `resets 0`, IRQ 147 never
+  asserted.
+* **~~The driver's timer period is 1000× the DDK's count.~~**  Written here, then
+  **retracted in the third measurement below**: it compared a *count* of clock
+  cycles against a *rate*.  307 200 / 307.2 MHz = 1.000 ms, exactly the 1 kHz
+  the driver asks for.  The register read confirms it cycles correctly.
 * **The init task does run** — three independent proofs, none of them the
   `microkernel started` line: `SC_VERSION` (0x18) = `0x00010000`, a
   microkernel-only store; `EVENT_HOST_ENABLE` b29 set (`0x20004000`), ORed in by
@@ -78,6 +73,27 @@ Same session, one more boot.  Reading only; the firmware is reverted.
   driver `msleep(20)`s, checks `BIF_INT_STAT`, then writes `INIT_COMPLETE`
   itself, and `init_set` writes it too.  The log line is not a microkernel report
   (trap 396).
+
+## Third measurement — the dispatch registers
+
+One reboot, one module change: `pvrsgx_dump.c`'s table gained seven read-only
+entries (`EVENT_TIMER` 0x0acc, `EVENT_KICKER` 0xac4, `EVENT_KICK` 0xac8,
+`EVENT_PDS_ENABLE` 0x0a58, `EVENT_PDS_EXEC/DATA/INFO` 0x0a68/0x0a6c/0x0a70), all
+registers the driver already writes or reads back.  The tree was proved to be the
+installed module plus exactly that change (reverted, it rebuilds `2e138afc…`).
+
+* **The timer runs.**  `EVENT_TIMER` = `0x010228fe`, `ENABLE` b24 set, and five
+  samples 2 s apart all inside `0..0x04B000`: the counter cycles in its period.
+  **Retraction:** the previous section's "the period is 1000× too long" compared
+  a **count** against a **rate**; 307 200 counts / 307.2 MHz = 1.000 ms = 1 kHz,
+  which is exactly what was asked for, and the DDK's expression is the same
+  quotient (trap 395).
+* **Nothing consumes it.**  `EVENT_STATUS` b29 (TIMER) is latched at every
+  reading and never cleared, and IRQ 147's count is still 0.
+* **`EVENT_PDS_ENABLE` loses bit 14.**  The driver writes `0x2204f00f`; the
+  register reads **`0x2204b00f`**, stable across reads.  That bit is `SW_EVENT`,
+  session 74's "decisive fix" and the microkernel→host signal (trap 397).  Every
+  other dispatch register reads back as written.
 
 ## Inferred (reasoning from evidence, not directly measured)
 
@@ -108,6 +124,10 @@ Same session, one more boot.  Reading only; the firmware is reverted.
   ring-reset artefact.  The ring itself (`wo`/`ro`) says the opposite.
 * **"`1/1 passed` means one job completed."**  Killed by the 2016806 µs times and
   by the reset count rising while nothing moved.
+* **"The timer period is 1000× too long."**  Killed by reading the register: the
+  counter cycles inside its period.  The comparison put a **count of clock
+  cycles** (307 200) against a **rate** (307 kHz) and called the ratio a factor.
+  Units first, factor second (trap 395).
 * **A near miss worth recording:** the first attempt to rebuild the instrumented
   image also clobbered `ukernel/sgx540_ukernel.bin` (a default-output build wrote
   the JSON there), which made the emulator read garbage.  Both default artifacts
@@ -150,10 +170,13 @@ Same session, one more boot.  Reading only; the firmware is reverted.
 * `docs/contradictions/sgx540-event-kick2-offset.md` (new) — raised **and
   resolved/retracted in this session**; kept as the record of a wrong reading
   that would otherwise be re-derived.
-* `docs/captures/sgx540-timer-clock-2026-11-26.txt` — the reading that suggested
-  the timer (the 1000× period, the control block, the `edm_init` bit).
+* `docs/captures/sgx540-timer-clock-2026-11-26.txt` — the reading that started
+  this line of work (the control block, the `edm_init` bit, and a "1000× period"
+  note that is **wrong** and is annotated as such in the next two captures).
 * `docs/captures/sgx540-tick-counter-2026-11-26.txt` — the measurement: the
   dynamic counter, its emulator control, and the zeros on the unit.
+* `docs/captures/sgx540-dispatch-regs-2026-11-26.txt` — the register read, the
+  retraction of the "1000×" claim, and the one dispatch bit that does not stick.
 * `rootfs/powervr-sgx/0004-sgx540-tick-counter.patch` — the dynamic instrument.
 * `rootfs/powervr-sgx/0003-sgx540-kick-counter.patch` — the instrument plus the
   session-74 CCB-trace word relocation that had never been in 0002; applying

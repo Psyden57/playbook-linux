@@ -3919,18 +3919,21 @@ report 121 §3/§11/§12.
          static word, because it is a count of entries, not of time.
          (Session 75.)
 
-395. **`HOSTCTL_UK_TIMER_CLOCK` is 1000× the DDK's count — the driver divides by
-         1000 after already applying the 1 kHz.**  `pvrsgx_fw_start()` stores
-         `pvrsgx_clock_hz() / UKERNEL_TIMER_HZ` = 307 200 000 / 1000 =
-         **307 200**, and the microkernel's `init_set` programs that word
-         verbatim into `EUR_CR_EVENT_TIMER`.  The DDK computes the same quotient
-         (`sgxpower.c:125`, `ui32CoreClockSpeed / ui32uKernelFreq`) with
-         `ui32uKernelFreq` = **1000**, so its word is a **count for a 1 kHz
-         tick**.  Measured on the unit, the register's `VALUE` field is b0-23, so
-         `0x004B0000` may simply be blanked — which is why the timer never fires
-         is *not* yet established, only that it does not.  Read
-         `EUR_CR_EVENT_TIMER` (0x0acc) back; it is not in the driver's `status`
-         dump.  (Session 75.)
+395. **RETRACTED — `HOSTCTL_UK_TIMER_CLOCK` = 307 200 is CORRECT, and the EDM
+          timer does fire.**  I first wrote that the driver's period was 1000× the
+          DDK's because it stores 307 200 where I believed the DDK stores 307.
+          **That compared a count against a rate and was wrong.**
+          `ui32uKernelTimerClock` is a count of *core-clock cycles*, so
+          307 200 / 307 200 000 Hz = **1.000 ms = 1 kHz**, exactly the request;
+          and the DDK's own expression is the same quotient the driver computes
+          (`ui32CoreClockSpeed / ui32uKernelFreq` = 307200000/1000 = 307 200).
+          Measured afterwards: `EUR_CR_EVENT_TIMER` (0x0acc) reads
+          **`0x010228fe`** with `ENABLE` b24 set, and five samples two seconds
+          apart all sit inside `0..0x04B000` — the counter is running and
+          reloading.  **Lesson:** a "N× wrong" comparison needs both sides in the
+          same units; check whether the field is a count or a rate before calling
+          it a factor.  (Session 75; capture
+          `sgx540-dispatch-regs-2026-11-26.txt`.)
 
 396. **With `edm_init=1` the HOST writes `ui32InitStatus` itself, so "microkernel
          started" in `dmesg` is not the microkernel's report.**  The branch does
@@ -3941,6 +3944,21 @@ report 121 §3/§11/§12.
          `0x00010000`, a microkernel-only store) and `EVENT_HOST_ENABLE` b29
          (`0x0130` = `0x20004000`, ORed in by `init_set` after the timer write)
          both prove the init task ran to its end.  (Session 75.)
+
+397. **`EVENT_PDS_ENABLE` (0x0a58) reads back `0x2204b00f` although the driver
+         writes `0x2204f00f` — bit 14 (`SW_EVENT`) does not stick, and the
+         SGX540's header defines it.**  `sgx540defs.h:2043` has
+         `EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK 0x00004000`, and session 74
+         changed the entry to `SGX540_CR_EVENT_PDS_ENABLE_ALL 0x2204f00f`
+         precisely to add it — the bit that turned a universal timeout into
+         `1/1 passed`.  Read back on the unit the register holds
+         **`0x2204b00f`**, i.e. the SGX545 value, and it is *stable* across
+         reads (not self-clearing).  So either the bit is not implemented in
+         this register on this core, or the store is masked.  `SW_EVENT` is the
+         microkernel→host signal, so if it is not a dispatch source here the
+         host can never be interrupted — which is consistent with IRQ 147 having
+         never fired.  **Unresolved; the next test is a write/read-back of
+         0x0a58 with each bit, from inside the driver.**  (Session 75.)
 
 ## 3. Corrections to older reports
 

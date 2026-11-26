@@ -1,0 +1,44 @@
+# 0005 - the dispatch registers in the status dump (session 75, boot 3)
+#
+# Seven read-only entries in pvrsgx_dump.c's register table: the timer's
+# period+ENABLE (0x0acc), the kick register and the kicker address the event
+# program is entered through (0x0ac8/0x0ac4), and the event-PDS
+# enable/exec/data/info the driver programs (0x0a58/0x0a68/0x0a6c/0x0a70).
+# Every one is a register the driver already writes, or already reads back in
+# check_event_pds(), so none is the unnamed-read hazard of trap 369.
+#
+# This is instrumentation, not a fix: it was added to answer "which dispatch
+# field is wrong", and it found exactly one (EVENT_PDS_ENABLE reads 0x2204b00f
+# where the driver writes 0x2204f00f).  Keep or drop it as the port prefers.
+#
+# Built module md5 9a0ebbe378a12e18b3c871367ce2f961 (4,102,776 B); with this
+# patch reverted the same tree reproduces the session-273 module
+# 2e138afc0e832a4e7b41d97f74452508 byte-for-byte, so it is the only delta.
+#
+# Applies after 0004 to drm/powervr_sgx/pvrsgx_dump.c.
+diff --git a/drm/powervr_sgx/pvrsgx_dump.c b/drm/powervr_sgx/pvrsgx_dump.c
+index 465e1ac..bdd7413 100644
+--- a/drm/powervr_sgx/pvrsgx_dump.c
++++ b/drm/powervr_sgx/pvrsgx_dump.c
+@@ -44,6 +44,21 @@ static void dump_regs(struct seq_buf *sb, struct pvrsgx_device *sdev)
+ 		{ "EVENT_STATUS2", SGX_CR_EVENT_STATUS2 },
+ 		{ "EVENT_HOST_ENABLE", SGX_CR_EVENT_HOST_ENABLE },
+ 		{ "EVENT_HOST_ENABLE2", SGX_CR_EVENT_HOST_ENABLE2 },
++		/*
++		 * The dispatch side, added for the session-75/76 doorbell work: the
++		 * timer's period+ENABLE, the kick register and the kicker address the
++		 * event program is entered through, and the event-PDS exec/data/info
++		 * the driver programs.  All are registers this driver already writes
++		 * (or, for the PDS pair, already reads back), so none is an unnamed
++		 * read in the trap-369 sense.
++		 */
++		{ "EVENT_TIMER", SGX_CR_EVENT_TIMER },
++		{ "EVENT_KICKER", SGX_CR_EVENT_KICKER },
++		{ "EVENT_KICK", SGX_CR_EVENT_KICK },
++		{ "EVENT_PDS_ENABLE", cr->event_pds_enable },
++		{ "EVENT_PDS_EXEC", cr->event_pds_base },
++		{ "EVENT_PDS_DATA", cr->event_pds_data0 },
++		{ "EVENT_PDS_INFO", cr->event_pds_data1 },
+ 		{ "BIF_CTRL", SGX_CR_BIF_CTRL },
+ 		{ "BIF_INT_STAT", SGX_CR_BIF_INT_STAT },
+ 		{ "BIF_FAULT", SGX_CR_BIF_FAULT },

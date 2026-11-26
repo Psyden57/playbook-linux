@@ -211,12 +211,13 @@ it, `docs/captures/sgx540-timer-clock-2026-11-26.txt`.
   with `resets 0` and IRQ 147 never having asserted.  So nothing re-enters the
   event program after the init task — the same statement §2 reached from the
   `kick` counters, now measured from the dispatch side too.
-* **The driver's timer period is 1000× the DDK's count** (trap 395):
-  `pvrsgx_fw_start()` stores `pvrsgx_clock_hz() / UKERNEL_TIMER_HZ` = 307 200,
-  and `init_set` programs it verbatim into `EUR_CR_EVENT_TIMER`, whose `VALUE`
-  field is b0-23.  The DDK's own `ui32CoreClockSpeed / ui32uKernelFreq` is 307
-  for its 1 kHz tick.  Whether the oversized value is *why* the timer never fires
-  is **not** established — reading 0x0acc back is the next cheap step.
+* **RETRACTED, one boot later: the timer period is correct, and the timer runs.**
+  This section first reported the driver's `HOSTCTL_UK_TIMER_CLOCK` = 307 200 as
+  "1000× the DDK's 307".  That compared a **count** against a **rate**:
+  307 200 counts / 307.2 MHz = **1.000 ms**, exactly the 1 kHz requested, and the
+  DDK's expression is the same quotient.  `pvrsgx_dump.c` then gained the seven
+  dispatch registers, and `EUR_CR_EVENT_TIMER` reads **`0x010228fe`** with
+  `ENABLE` set, cycling inside its period on every sample.  See §9.
 * **The init task does run**, on three independent proofs — `SC_VERSION` (0x18 =
   `0x00010000`, a microkernel-only store), `EVENT_HOST_ENABLE` b29 set
   (`0x20004000`, ORed in by `init_set` after the timer write), `BIF_FAULT 0`.
@@ -224,3 +225,39 @@ it, `docs/captures/sgx540-timer-clock-2026-11-26.txt`.
   `ui32InitStatus` itself, so the `microkernel started` log line is not the
   microkernel's report (trap 396); §1's claim that it "is live" rested on that
   line and on `firmware running: 1`, which is the same bit.
+
+## 9. Third boot: the timer is alive, and one PDS bit does not stick
+
+`pvrsgx_dump.c`'s register table gained seven read-only entries —
+`EVENT_TIMER` (0x0acc), `EVENT_KICKER` (0xac4), `EVENT_KICK` (0xac8),
+`EVENT_PDS_ENABLE/DATA/INFO` (0x0a58/0x0a6c/0x0a70) and `EVENT_PDS_EXEC`
+(0x0a68) — every one a register the driver already writes or already reads back,
+so no unnamed-read hazard (trap 369).  Verified the tree is the installed module
+plus exactly this change: reverted, the build reproduces `2e138afc…`.
+
+Read on the unit, idle:
+
+```
+EVENT_STATUS      0x012c 0xa0000000     b29 TIMER latched, and it stays latched
+EVENT_HOST_ENABLE 0x0130 0x20004000     TIMER | SW_EVENT
+EVENT_TIMER       0x0acc 0x010228fe     ENABLE b24, VALUE cycling 0..0x04B000
+EVENT_KICKER      0x0ac4 0x0f002010     the driver's own kicker word
+EVENT_KICK        0x0ac8 0x00000000     self-clearing; reading it proves nothing
+EVENT_PDS_ENABLE  0x0a58 0x2204b00f     *** the driver writes 0x2204f00f ***
+EVENT_PDS_EXEC    0x0a68 0x00804090     as written
+EVENT_PDS_DATA    0x0a6c 0x00000003     as written
+EVENT_PDS_INFO    0x0a70 0x00013d01     as written
+```
+
+So of the whole dispatch configuration, **exactly one field is not what the
+driver wrote**: `EVENT_PDS_ENABLE`'s bit 14, `SW_EVENT` — a difference of
+`0x4000`, stable across reads and not self-clearing.  That is the bit session 74
+added as "the decisive fix", and it is the microkernel→host signal; if this core
+will not accept it as a dispatch source, no host interrupt can be raised, which
+is consistent with IRQ 147 never firing and with the latched TIMER event never
+being acknowledged.
+
+The next test is narrow and one boot: a per-bit write/read-back of **0x0a58**
+from inside the driver, to separate "not implemented" from "store masked".  Note
+that "the event program is not entered" and "the bit does not stick" are not yet
+proven to be the same fact — they are two measurements that happen to agree.

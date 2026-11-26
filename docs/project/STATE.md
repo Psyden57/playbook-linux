@@ -37,17 +37,24 @@ swapped after that boot's module load, and the firmware is read only at module
 load, so `dmesg | grep 'open microkernel'` is the only truth about what ran
 (trap 390).
 
-**And then, measured directly: the EDM timer never fires.**  A **dynamic** tick
-counter (`UK_TICKLOG`, a 32-bit value split across free control-block words
-0x2c/0x2d) read **0 after twelve seconds idle**, with the boot's `resets` still 0
-and IRQ 147 never having asserted.  The static `ctlblk` word the session-75
-instrument used could never have shown a 1 kHz event (trap 394).  The driver also
-hands the microkernel a `HOSTCTL_UK_TIMER_CLOCK` that is **1000×** the DDK's
-count (307 200 vs the vendor's `ui32CoreClockSpeed / ui32uKernelFreq` = 307 for
-its 1 kHz tick — trap 395).  What is *proved* is that the timer does not
-dispatch; whether the 1000× value is why is the next read
-(`EUR_CR_EVENT_TIMER` 0x0acc is not in the driver's `status` dump).
-[report 278 §8; `docs/captures/sgx540-tick-counter-2026-11-26.txt`]
+**The EDM timer fires, and nothing consumes it.**  A **dynamic** tick counter
+(`UK_TICKLOG`, a 32-bit value split across free control-block words 0x2c/0x2d)
+read **0 after twelve seconds idle** (trap 394 explains why the static `ctlblk`
+word could never have shown this).  But the register itself is alive:
+`EUR_CR_EVENT_TIMER` (0x0acc) reads **`0x010228fe`** with `ENABLE` b24 set, and
+five samples 2 s apart all sit inside `0..0x04B000` — the counter runs and
+reloads at ~1 kHz.  `EVENT_STATUS` b29 (TIMER) is **latched and never
+acknowledged**, and IRQ 147 has never asserted.  So the event is being raised and
+the event program is not being entered.  (The earlier "the period is 1000× too
+long" reading was **wrong** — it compared a count against a rate; trap 395 is
+retracted.)  [report 278 §8; captures
+`sgx540-tick-counter-2026-11-26.txt`, `sgx540-dispatch-regs-2026-11-26.txt`]
+
+**The sharpest new lead: `EVENT_PDS_ENABLE` loses a bit.**  The driver writes
+**`0x2204f00f`** and the register reads **`0x2204b00f`** — bit 14 `SW_EVENT`,
+stable across reads, not self-clearing.  That bit was session 74's "decisive
+fix", and it is the microkernel→host signal.  If it is not a dispatch source on
+this core, the host can never be interrupted.  [trap 397]
 
 **Also settled: the init task really does run.**  Three independent proofs, none
 of them the driver's own log line (with `edm_init=1` the *host* writes
@@ -55,24 +62,25 @@ of them the driver's own log line (with `edm_init=1` the *host* writes
 microkernel-only store; `EVENT_HOST_ENABLE` b29 set (`0x20004000`), ORed in by
 `init_set` after the timer write; and `BIF_FAULT 0` throughout.
 
-**The next unit of work: two reads, one boot.**  First
-`EUR_CR_EVENT_TIMER` (0x0acc) — if it reads 0 the 1000× period is being blanked
-and the timer can never fire, which settles the paragraph above.  Then the
-doorbell: `ccb_write()` writes `EUR_CR_EVENT_KICK` (0xac8, `NOW` b0) and
-`EVENT_KICKER` (0xac4, a **28-bit** address field at shift 4), and the driver
-programs `EVENT_PDS_ENABLE = 0x2204f00f` — none of it read back.  The doorbell
-does **not** depend on the timer, so it is worth reading in the same boot (a
-`GETMISCINFO` submit needs no client PD and no timer).  **Two cheaper
-explanations were checked statically and both are clean**, so do not re-run
-them: the init kick using `EVENT_KICK2` while jobs use `EVENT_KICK` is the
-vendor's own `MULTI_EVENT_KICK` shape (trap 392; the earlier "sufficient cause"
-reading is withdrawn), and the event program's address matches `srvinit`'s and
-sits 8 MiB inside `OTHER_PDS_EXEC`'s 18-bit field (trap 393).  Read those three
-**from inside the driver** (trap 384; a debugfs line is cheapest) around one
-doorbell, plus `EVENT_STATUS` to see whether anything is latched or acked.  The
-microkernel is alive and idle without them: 12 s after a restart it reads
-`firmware running: 1`, `uk-lockups 0`, and `EVENT_STATUS 0xa0000000` — the same
-value `EDM init` printed.
+**The next unit of work: the `SW_EVENT` bit.**  Everything else on the dispatch
+side now reads correctly — the timer cycles, the kicker address is the driver's
+own word, the PDS exec/data/info are the values written.  The exception is
+`EVENT_PDS_ENABLE`'s bit 14 (trap 397), so the next step is a per-bit
+write/read-back of **0x0a58** from inside the driver, to learn whether the bit is
+implemented at all.  Then the doorbell: `ccb_write()` writes
+`EUR_CR_EVENT_KICK` (0xac8, `NOW` b0) and
+`EVENT_KICKER` (0xac4, a **28-bit** address field at shift 4).  Both now read
+back as written; `EVENT_KICK` (0xac8) is self-clearing, so a read of it proves
+nothing.  The doorbell does **not** depend on the timer, so it is worth reading
+in the same boot (a `GETMISCINFO` submit needs no client PD and no timer).
+**Two cheaper explanations were checked statically and both are clean**, so do
+not re-run them: the init kick using `EVENT_KICK2` while jobs use `EVENT_KICK`
+is the vendor's own `MULTI_EVENT_KICK` shape (trap 392; the earlier "sufficient
+cause" reading is withdrawn), and the event program's address matches
+`srvinit`'s and sits 8 MiB inside `OTHER_PDS_EXEC`'s 18-bit field (trap 393).
+All of it is read **from inside the driver** (trap 384), and the timer,
+`EVENT_KICKER`, `EVENT_PDS_EXEC/DATA/INFO` already read back correctly — so it is
+`EVENT_PDS_ENABLE`'s missing bit and the doorbell that remain.
 
 **Measured on the unit (sessions 74-75).**  `powervr_sgx` binds `56000000.gpu`
 and reports
