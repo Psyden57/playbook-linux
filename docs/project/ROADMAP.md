@@ -483,7 +483,7 @@ flasher can replace at every point:
     **C** fact to contradict a **K** one (trap 397).  The other three stand.  The
     init task *does* run (`SC_VERSION`, `EVENT_HOST_ENABLE` b29 — not the
     "microkernel started" line, which the host writes under `edm_init=1`, trap
-    396).  Next: whether `EVENT_PDS_EXEC` (`0x00804090`, 18-bit field) points at
+    396).  Next: whether `EVENT_PDS_EXEC` (`0x00804090`, 22-bit/64 MiB field) points at
     code this core executes, then the doorbell.
     Then one interaction to make the EDM dispatch at all, and the aim after that
     is a frame.

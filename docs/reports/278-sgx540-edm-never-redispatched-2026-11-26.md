@@ -172,8 +172,9 @@ what is unproven is whether the **doorbell** reaches the core.
     `docs/contradictions/sgx540-event-kick2-offset.md`, resolved]
   * `event_pds_addr()` has the vendor's shape (`addr − pds_pixel.base` when
     `EDM_VERTEX_PDSADDR_FULL_RANGE` is clear — which `srvinit` also gates on),
-    evaluates to `0x800000` (8 MiB) well inside `EUR_CR_EVENT_OTHER_PDS_EXEC`'s
-    18-bit field, and the driver's `check_event_pds()` read-back passes.  That
+    evaluates to `0x804090` (8.02 MiB) inside `EUR_CR_EVENT_OTHER_PDS_EXEC`'s
+    **22-bit / 64 MiB** field (b4-25, `MASK 0x03FFFFF0`), and the driver's
+    `check_event_pds()` read-back passes.  That
     gate cannot detect "the PDS program is in the wrong heap", because both
     sides of the comparison come from our own layout (trap 393) — but the
     derivation itself agrees with the vendor's.  [fact sheet, "Events and kicks"]

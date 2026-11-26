@@ -105,7 +105,7 @@ IFS rebuild, but each changes how a result should be read:
     entered once and never again (report 278), and the two cheap register-level
     explanations are now cleared: the kick offsets are the vendor's shape, and
     `event_pds_addr()` agrees with `srvinit` and lands well inside
-    `OTHER_PDS_EXEC`'s 18-bit field (trap 393).  Open: whether `EVENT_KICK`
+    `OTHER_PDS_EXEC`'s 22-bit/64 MiB field (trap 393).  Open: whether `EVENT_KICK`
     (0x0ac8) / `EVENT_KICK2` (0x0ac0) *land*, and whether the shared level IRQ
     (`IRQF_SHARED`, also latched by the display) is being missed.  *Would settle
     it:* the §0b read-back from inside the driver around one NULL job.

@@ -76,7 +76,7 @@ microkernel-only store; `EVENT_HOST_ENABLE` b29 set (`0x20004000`), ORed in by
 **The next unit of work: the PDS exec address.**  Every register on the dispatch
 side now reads back as written, and the one that did not stick is explained
 (bit 14 is absent; trap 397).  What has never been examined is whether
-`EVENT_PDS_EXEC` (`0x00804090`) — 18-bit field, `(addr − PDS_EXEC_BASE) >> 4` —
+`EVENT_PDS_EXEC` (`0x00804090`) — 22-bit field (b4-25, 64 MiB), `(addr − PDS_EXEC_BASE) >> 4` —
 points at code this core will execute: `check_event_pds()` only compares it with
 our own derivation.  Then the doorbell: `ccb_write()` writes
 `EUR_CR_EVENT_KICK` (0xac8, `NOW` b0) and
@@ -88,7 +88,7 @@ in the same boot (a `GETMISCINFO` submit needs no client PD and no timer).
 not re-run them: the init kick using `EVENT_KICK2` while jobs use `EVENT_KICK`
 is the vendor's own `MULTI_EVENT_KICK` shape (trap 392; the earlier "sufficient
 cause" reading is withdrawn), and the event program's address matches
-`srvinit`'s and sits 8 MiB inside `OTHER_PDS_EXEC`'s 18-bit field (trap 393).
+`srvinit`'s and sits 8 MiB inside `OTHER_PDS_EXEC`'s 22-bit field (trap 393).
 All of it is read **from inside the driver** (trap 384), and the timer,
 `EVENT_KICKER`, `EVENT_PDS_EXEC/DATA/INFO` already read back correctly — so it is
 `EVENT_PDS_ENABLE`'s missing bit and the doorbell that remain.

@@ -180,9 +180,12 @@ This is the SGX545's fine-grained split, not the SGX530's coarse one — the
   the microkernel's is the `OTHER` one:
   `EUR_CR_EVENT_PIXEL_PDS_EXEC/DATA/INFO` at **0x0a5c/0x0a60/0x0a64** and
   `EUR_CR_EVENT_OTHER_PDS_EXEC/DATA/INFO` at **0x0a68/0x0a6c/0x0a70** (K).
-  `*_PDS_EXEC` is an **18-bit** address field (b4-21, `MASK 0x03FFFFF0`, so a
-  4 MiB range in 16-byte units) taken as an offset from `PDS_EXEC_BASE` 0x0ab8
-  when `EDM_VERTEX_PDSADDR_FULL_RANGE` is clear — which it is for the SGX540.
+  `*_PDS_EXEC` is a **22-bit** address field (b4-25, `MASK 0x03FFFFF0`, so a
+  **64 MiB** range in 16-byte units) taken as an offset from `PDS_EXEC_BASE`
+  0x0ab8 when `EDM_VERTEX_PDSADDR_FULL_RANGE` is clear — which it is for the
+  SGX540.  (An earlier revision of this sheet said 18-bit/4 MiB; that was
+  arithmetic on the mask, not a reading of it.  Measured `EVENT_PDS_EXEC` =
+  `0x00804090`, whose offset field is `0x804090` = 8.02 MiB.)
   `*_PDS_INFO` is typed, not opaque: `USESECEXEC` b25, `OBUFFER_REQD` b22-24,
   `ATTRIBUTE_SIZE` b13-20, `DM` b11-12 (`EVENT` = 0x1800, `PIXEL` 0x0800,
   `VERTEX` 0), `PNS` b10, `USE_PIPELINE` b8, `ODS` b1-7, `SD` b0.  The open
