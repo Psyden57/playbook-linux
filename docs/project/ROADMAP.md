@@ -487,10 +487,32 @@ flasher can replace at every point:
     code this core executes, then the doorbell.
     Then one interaction to make the EDM dispatch at all, and the aim after that
     is a frame.
+    (a3) **The vendor's SGX540 microkernel is in the DDK 1.8 drop as source AND
+    as a prebuilt binary — decide: adapter for it, or keep retargeting our
+    reassembly (session 76).**  `services4/srvinit/devices/sgx/
+    eventhandler.pds.asm` is the program `EVENT_PDS_EXEC` points at, and it is a
+    **PDS dispatcher**: `movs douta, ir0, INPUT_IR0_PA_DEST`, branch on the bits,
+    `movs doutu` into the USSE EventHandler.  Its event bit map is **not**
+    `EUR_CR_EVENT_STATUS`: `EURASIA_PDS_IR0_EDM_EVENT_TIMER` is **bit 1**
+    (`hwdefs/sgxdefs.h:3270`) against this port's bit-29 poll.  The constants are
+    patched by the host at load (`sgxinit.c:2507-2510`); the generated
+    `eventhandler_pds.h` names the words (IR0 `[17]`, IR1 `[20]`, timestamp
+    `[16]`, DOUTU1 `[1]/[5]/[9]/[13]`, DOUTU2 `[29]`, generic DOUTU0 `[12]`,
+    3D `[0]`, TA `[4]`, SPM `[8]`; segment 144 B) — and **our loader patches
+    only `ctlblk` and `pdtable`**, so no PDS-input routing exists.  The drop also
+    carries a **finished vendor image**,
+    `binary2_540_omap4430_android_{debug,release}/…/ukernel/ukernel.bin`
+    (22 192 B `cfc577aa…` / 19 984 B `ff69e400…`), with `ukernel_labels.h`'s
+    per-command entry table (`EVENTHANDLER 0x50`, `TIMER 0x2AD0`,
+    `GETMISCINFO 0xEE0`) and 2D/3D/SPM/TA splits; it disassembles as SGX540 code
+    with `local/work/sgxasm/sgx-disasm -c sgx540`.  It predates this port's
+    `ukfw_header`, so it needs an adapter — but the adapter is bounded (entry
+    table, PDS programs, patch sites all known) and **it is the binary that
+    actually dispatched on this silicon**.  Extract:
+    `docs/captures/sgx540-vendor-ukernel-source-2026-11-26.txt`; trap 399.
     (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
-    is gone) and trap 350; (b)
-    attach the CPU supply or confirm 1.35 V for all OPPs and settle the
+    is gone) and trap 350; (b) attach the CPU supply or confirm 1.35 V for all OPPs and settle the
     `twl6030_uv_to_vsel` clamp (report 266 §2/§3); (c) a kernel-side PID-1
     affinity fix to replace the inittab line; (d) the intermittent USB teardown
     (trap 337) — capture before the drop;

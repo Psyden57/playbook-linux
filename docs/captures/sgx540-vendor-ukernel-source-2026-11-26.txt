@@ -1,0 +1,261 @@
+SGX540 vendor microkernel SOURCE found — the event dispatcher, in full
+========================================================================
+Session 76.  Evidence class: K (vendor GPL-2 source, read, not executed).
+Source tree: /home/psyden/Pdrive/GFX_Linux_DDK-master (outside the repo).
+
+WHY THIS MATTERS
+-----------------
+HANDOFF §5 predicted: "The same drop ships the vendor microkernel as C source
+(pbuKernelProgram[] + ukernel_labels.h): a per-command entry table... Reading it
+is legitimate (source, GPL-2) and may answer §0b directly."
+
+It does more than that.  §0b asked **what EVENT_PDS_EXEC (0x00804090) points
+at**.  The answer is in
+`eurasia/services4/srvinit/devices/sgx/eventhandler.pds.asm`: it points at a
+**PDS program whose only job is to read the EDM's interrupt registers and DOUTU
+into the USSE event handler**.  That program, and the host code that must patch
+its constants before it will run, are both in this drop.
+
+THE ARTIFACTS (all GPL-2 source in the drop)
+--------------------------------------------
+services4/srvinit/devices/sgx/eventhandler.pds.asm   14 252 B  the PDS dispatcher
+services4/srvinit/devices/sgx/eventhandler.use.asm    43 456 B  the USSE handler
+services4/srvinit/devices/sgx/sgx_init.use.asm        38 584 B  init (USSE)
+services4/srvinit/devices/sgx/sgx_timer.use.asm       78 752 B  the timer task
+services4/srvinit/devices/sgx/sgx_utils.asm          164 554 B  the utils
+services4/srvinit/devices/sgx/sgxinit.c              204 869 B  the HOST loader
+services4/srvinit/devices/sgx/usedefs.h                         PA()/SA()/CCB() macros
+services4/srvinit/devices/sgx/sgx_mkif.h              30 483 B  the shared structs
+
+Prebuilt intermediates also exist for exactly this part, which is how the entry
+offsets below were confirmed:
+eurasiacon/binary2_540_omap4430_android_debug/target/intermediates/ukernel/
+  ukernel.bin 22 192 B (md5 cfc577aa...)  ukernel.h (pbuKernelProgram[])
+  ukernel_labels.h  — the real vendor entry table
+  ukernel2D/3D/SPM/TA .bin + _labels.h  — the other programs, same shape
+  eventhandler.use.asm.preproc 120 KB — the assembler's resolved output for
+  this build (constants substituted); its `#line` markers map back to the source.
+
+THE VENDOR ENTRY TABLE (ukernel_labels.h) — measured from the drop
+-----------------------------------------------------------------
+UKERNEL_EVENTHANDLER_OFFSET            0x00000050   <- the event program entry
+UKERNEL_HOSTKICKFLUSHPDCACHE_OFFSET    0x000007B8
+UKERNEL_HOSTKICKPOWER_OFFSET           0x000007D0
+UKERNEL_HOSTKICKCONTEXTSUSPEND_OFFSET  0x000008B8
+UKERNEL_HOSTKICKTRANSFER_OFFSET        0x000009F8
+UKERNEL_HOSTKICKTA_OFFSET              0x00000AD8
+UKERNEL_HOSTKICKCLEANUP_OFFSET         0x00000C00
+UKERNEL_HOSTKICKPROCESS_QUEUES_OFFSET  0x00000D48
+UKERNEL_HOSTKICKSETHWPERFSTATUS_OFFSET 0x00000D60
+UKERNEL_HOSTKICKGETMISCINFO_OFFSET     0x00000EE0
+UKERNEL_INITUKERNELPRIMARY1_OFFSET     0x000010C0
+UKERNEL_INITUKERNELSECONDARY_OFFSET    0x00001140
+UKERNEL_INITUKERNELPRIMARY2_OFFSET     0x00001150
+UKERNEL_STARTTIMER_OFFSET              0x000012F8
+UKERNEL_TIMER_OFFSET                   0x00002AD0
+UKERNEL_CHECKHOSTCLEANUPREQUEST_OFFSET 0x00002E58
+UKERNEL_CHECKHOSTPOWERREQUEST_OFFSET   0x00002EC8
+UKERNEL_IDLECORE_OFFSET                0x00003750
+UKERNEL_RESUME_OFFSET                  0x000036D8
+UKERNEL_SETUPDIRLISTBASE_OFFSET        0x000047E8
+UKERNEL_WAITFORRESET_OFFSET            0x000042E8
+UKERNEL_COMMONPROGRAMEND_OFFSET        0x00005290
+UKERNEL_WRITEHWPERFENTRY_OFFSET        0x00005310
+
+**This is a per-command entry table**, exactly as HANDOFF §5 said — not one
+internal dispatcher.  Every host kick command has its own entry offset.
+
+THE ANSWER TO §0b: WHAT THE PDS EVENT PROGRAM DOES
+--------------------------------------------------
+`eventhandler.pds.asm` is short and its structure is unambiguous:
+
+  data dword INPUT_IR0_PA_DEST;      /* constants the HOST patches */
+  data dword INPUT_IR1_PA_DEST;
+  data dword INPUT_TIMESTAMP_PA_DEST;
+  data dword INPUT_DOUTU1;
+  data dword INPUT_DOUTU2;
+  data dword INPUT_GENERIC_DOUTU0;
+  data dword INPUT_3D_DOUTU0;  INPUT_TA_DOUTU0;  INPUT_2D_DOUTU0;  INPUT_SPM_DOUTU0;
+
+  /* Emit ir0 and ir1 */
+  movs  douta, ir0, INPUT_IR0_PA_DEST;      <- line 85
+  movs  douta, ir1, INPUT_IR1_PA_DEST;      <- line 86
+
+  ... then it tests those bits and branches to a handler ...
+  and   eventreg1, ir1, EURASIA_PDS_IR1_EDM_EVENT_KICKPTR_CLRMSK;   (line 127)
+  and   tmp0, eventreg1, EURASIA_PDS_IR1_EDM_EVENT_SWEVENT;         (line 130)
+  p0    bra NotHostKick;                                            (line 133)
+
+  UseGenericEventHandler:                                           (line 247)
+  movs  doutu, INPUT_GENERIC_DOUTU0, INPUT_DOUTU1, INPUT_DOUTU2;
+  halt;
+
+So the PDS program is a **pure dispatcher**: it copies the EDM interrupt
+registers into a host structure, picks a branch from the bits, and DOUTUs into
+the USSE program that does the work.  It performs no GPU command processing.
+
+*** The bit layout is NOT EUR_CR_EVENT_STATUS. ***
+The PDS reads `ir0`/`ir1`.  hwdefs/sgxdefs.h:
+
+  #define EURASIA_PDS_IR0_EDM_EVENT_TIMER_BIT   1
+  #define EURASIA_PDS_IR0_EDM_EVENT_TIMER       (1UL << 1)      <- bit 1
+  #define EURASIA_PDS_IR0_EDM_EVENT_SW_EVENT1_BIT 21
+  #define EURASIA_PDS_IR0_EDM_EVENT_SW_EVENT2_BIT 22
+
+while the same event is **bit 29** in EUR_CR_EVENT_STATUS (0x12C) — the layout
+this port has been reading all along.  Two different registers, two different
+bit maps.  The resolved preproc agrees: the timer test compiles to
+`and r0, pa[DOUT(PVRSRV_SGX_EDMPROG_PRIMATTR.ui32PDSIn0)], #(1UL << 1)`.
+
+THE HOST SIDE: THE CONSTANTS ARE PATCHED AT LOAD, AND WE NEVER DO
+-----------------------------------------------------------------
+`sgxinit.c:2507-2510` (LoaduKernelPrograms), after copying the PDS program:
+
+  PDSUKERNEL_EVENTSSetINPUT_IR0_PA_DEST(
+      (IMG_PUINT32)psEventPDSMemInfo->pvLinAddr,
+      ((offsetof(PVRSRV_SGX_EDMPROG_PRIMATTR, ui32PDSIn0) / sizeof(IMG_UINT32))
+       << EURASIA_PDS_DOUTA1_AO_SHIFT));
+  PDSUKERNEL_EVENTSSetINPUT_IR1_PA_DEST(... ui32PDSIn1 ...);
+  PDSUKERNEL_EVENTSSetINPUT_TIMESTAMP_PA_DEST(... ui32TimeStamp ...);
+  PDSUKERNEL_EVENTSSetINPUT_DOUTU1(... aui32USETaskCtrl[1]);
+  PDSUKERNEL_EVENTSSetINPUT_DOUTU2(... aui32USETaskCtrl[2]);
+  PDSUKERNEL_EVENTSSetINPUT_GENERIC_DOUTU0(... aui32USETaskCtrl[0]
+                                              | ui32USETaskCtrlAddrGeneric);
+
+i.e. the PDS program ships with **placeholder constants**, and the host must
+write, into the program's own instruction stream, where each `movs douta` should
+deposit its value.  `sgx_mkif.h` defines the destinations:
+
+  typedef struct _PVRSRV_SGX_EDMPROG_PRIMATTR_ {
+      IMG_UINT32 ui32PDSIn0;     /* PDS input register 0 */
+      IMG_UINT32 ui32PDSIn1;     /* PDS input register 1 */
+      IMG_UINT32 ui32TimeStamp;
+  } PVRSRV_SGX_EDMPROG_PRIMATTR;
+
+**Our loader patches exactly two limm placeholders in total** —
+`a.patch(17, "ctlblk")` and `a.patch(14, "pdtable")` (ukernel.py:457/466);
+`fw_build_open()` fills only those (`pvrsgx_fw.c:223-233`, the `UKFW_*` value
+table).  There is no PDS-input routing at all.
+
+OUR DESIGN DIVERGES DELIBERATELY, AND THAT IS THE OPEN QUESTION
+---------------------------------------------------------------
+Ours is not a PDS dispatcher.  `ukernel.py` build()'s `event` entry is a USSE
+program that reads `EUR_CR_EVENT_STATUS` itself and dispatches on it:
+
+  ldr r2, #CR_EVENT_STATUS // 4
+  limm r3, #{0x2000 | 0x40000 | 0x800000 | EVENT_TIMER}
+  and  r3, r2, r3
+  str  #CR_EVENT_HOST_CLEAR // 4, r3
+  limm r4, #0x20000000
+  test.and.ne p0, r2, r4            /* timer event (bit 29)? */
+
+and our PDS0 entry is a 4-word stub (data, data, data, MOVS, HALT) whose only
+job is to DOUTU into that USSE entry.  So this port has no `ir0`/`ir1` view of
+the events at all: it polls the host-visible status register instead.
+
+**Not yet established: whether that is sufficient on this silicon.**  Two facts
+bound it.  (a) The vendor's *own* USSE EventHandler does read `ui32PDSIn0/1`
+(lines 112-141, 324, 369) — it never polls EUR_CR_EVENT_STATUS for the timer.
+(b) Our event program is entered at all only because something raises an EDM
+event; if the PDS entry cannot see `ir0`, it cannot be *that* which DOUTUs for a
+timer tick.  That is the shape of the stall: tick counter = 1, no re-entry.
+
+THE GENERATED HEADER: EXACT WORD INDICES, AND A CORRECTION TO OUR VALUE
+----------------------------------------------------------------------
+`eurasiacon/binary2_540_omap4430_android_debug/target/intermediates/
+eventhandler_pds/eventhandler_pds.h` is auto-generated and gives both the
+compiled program and the exact word each constant must be patched at:
+
+  #define PDS_UKERNEL_EVENTS_DATA_SEGMENT_SIZE  (144UL)
+  static const IMG_UINT32 g_pui32PDSUKERNEL_EVENTS[220] = { ... };
+
+  PDSUKERNEL_EVENTSSetINPUT_IR0_PA_DEST        -> pui32Program[17]   (68)
+  PDSUKERNEL_EVENTSSetINPUT_IR1_PA_DEST        -> pui32Program[20]   (80)
+  PDSUKERNEL_EVENTSSetINPUT_TIMESTAMP_PA_DEST  -> pui32Program[16]   (64)
+  PDSUKERNEL_EVENTSSetINPUT_DOUTU1             -> [1],[5],[9],[13]   (4,20,36,52)
+  PDSUKERNEL_EVENTSSetINPUT_DOUTU2             -> pui32Program[29]   (116)
+  PDSUKERNEL_EVENTSSetINPUT_GENERIC_DOUTU0     -> pui32Program[12]   (48)
+  PDSUKERNEL_EVENTSSetINPUT_3D_DOUTU0          -> pui32Program[0]    (0)
+  PDSUKERNEL_EVENTSSetINPUT_TA_DOUTU0          -> pui32Program[4]    (16)
+  PDSUKERNEL_EVENTSSetINPUT_SPM_DOUTU0         -> pui32Program[8]    (32)
+
+**The vendor value is 9.  Our 1 is NOT a simple typo — read on before changing it.**
+`sgxinit.c:2821` is the vendor's own derivation:
+
+  (PDS_UKERNEL_EVENTS_DATA_SEGMENT_SIZE >> EUR_CR_EVENT_OTHER_PDS_DATA_SIZE_ALIGNSHIFT)
+      << EUR_CR_EVENT_OTHER_PDS_DATA_SIZE_SHIFT
+
+with `DATA_SEGMENT_SIZE = 144`, `ALIGNSHIFT = 4` (hwdefs/sgxdefs.h:8386) and
+`SHIFT = 0` (hwdefs/sgx540defs.h:2143), i.e. **144 / 16 = 9**.
+
+BUT the 144-byte segment belongs to the vendor's 220-word EVENT dispatcher
+program (`g_pui32PDSUKERNEL_EVENTS[220]`), whose data segment is the 9-word
+PVRSRV_SGX_EDMPROG_PRIMATTR block that its `movs douta` fill.  **Our PDS0 is a
+different program**: `pvrsgx_pds_entry()` (pvrsgx_pds.c:99-105) assembles a
+4-word launch stub — three data words plus one MOVS->DOUTU and a HALT — whose
+data segment really is 16 bytes, so `1` is right *for that program*.  Setting 9
+would tell the PDS to copy 144 bytes out of a 16-byte stub, which is the same
+class of error as the old `3` in the other direction.
+
+So this is not a one-word fix, and this session did NOT make one.  What it does
+establish is the real shape of the gap:
+
+  * the vendor's event path is a 220-word PDS **dispatcher** that reads ir0/ir1,
+    fills a 9-word attribute block and DOUTUs into the USSE EventHandler;
+  * ours is a 4-word stub that DOUTUs into a USSE entry which polls
+    EUR_CR_EVENT_STATUS itself.
+
+They are different designs, and `event_pds_data0` must match whichever program
+is actually loaded.  The question for the next session is therefore **not** "is
+1 the right number" but "should this port adopt the vendor's PDS dispatcher" —
+which the drop makes possible for the first time, because both the source
+(`eventhandler.pds.asm`) and the compiled program (`eventhandler_pds.h`,
+220 words, constants at [16],[17],[20],[29],[12],[0],[4],[8]) are in hand.
+
+Do not change `event_pds_data0` on the strength of the vendor's 9 alone.  It is
+evidence about a program we do not run.
+
+A COMPLETE PREBUILT VENDOR MICROKERNEL FOR THIS EXACT CHIP
+----------------------------------------------------------
+The drop carries finished binaries for `binary2_540_omap4430`, debug and
+release, not just source:
+
+  .../binary2_540_omap4430_android_debug/.../ukernel/ukernel.bin    22 192 B  cfc577aa...
+  .../binary2_540_omap4430_android_release/.../ukernel/ukernel.bin  19 984 B  ff69e400...
+
+plus the per-program splits (2D / 3D / SPM / TA) and every `.asm.preproc`.
+Their entry tables are `ukernel_labels.h` above.
+
+**This is the "reuse the target's proven code path" option, and it is new.**
+Every microkernel this port has run is its own reassembly of a 1.17-era SGX545
+image retargeted to the SGX540 (`local/work/powervr_sgx/ukernel/`, cores/
+{sgx540,sgx545}.py).  This is the vendor's own SGX540 build, the one that ran
+under the reference OS on this silicon.
+
+It is not a drop-in: our `ukfw_parse`/`fw_build_open` expect this port's file
+header (magic, entry-pair table, patch table — `struct ukfw_header`,
+pvrsgx_fw.c:272+), and the vendor `.bin` predates it.  Adopting it means writing
+an adapter: the vendor's entry offsets are known (ukernel_labels.h), its PDS
+programs and their constants are known (eventhandler_pds.h), and the host patch
+sites are known (sgxinit.c).  That is a real but bounded piece of work, and it
+replaces speculative reassembly with vendor code on the exact part.
+
+**Open question for the operator / next session:** continue retargeting our
+reassembly, or build the adapter and run the vendor image?  The second is much
+more likely to dispatch, because it is the binary that did.
+
+TWO MORE THINGS THE DROP SETTLES
+---------------------------------
+1. **`ui32EventOtherPDSInfo` is derived, not guessed** (sgxinit.c:3640):
+   `DM_EVENT | PNS_MASK | USE_PIPELINE_0 | SD_MASK` (when not multithreaded)
+   `| ALIGN(ui32USENumAttrs * 4, ATTRIBUTE_SIZE_ALIGN) << ATTRIBUTE_SIZE_SHIFT`.
+   Our driver writes `0x00013d01` to `event_pds_data1` from a derivation; the
+   `0x13d` field is plausible as `ATTRIBUTE_SIZE`, but the four flag bits above
+   are not in the vendor's shape and have not been checked.
+2. **`EUR_CR_EVENT_PDS_ENABLE`** (sgxinit.c:3672): the vendor ORs
+   `BREAKPOINT | DPM_OUT_OF_MEMORY_ZLS | SW_EVENT(if defined) | TIMER`, and the
+   comment says **"PDS_ENABLE_SW_EVENT is ignored by the PDS - host kick events
+   always enabled"** — which is consistent with session 75's per-bit sweep
+   finding bit 14 absent, and gives the reason: the PDS ignores it because host
+   kicks are always enabled.
+

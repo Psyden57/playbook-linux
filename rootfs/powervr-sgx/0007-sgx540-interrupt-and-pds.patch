@@ -1,0 +1,532 @@
+# 0007 - the SGX's interrupt reaches the CPU, and the PDS launch program fixed
+#
+# Session 76.  Five defects, each measured on the reference unit.
+#
+# 1. The interrupt was never wired to the CPU.  On OMAP4 the SGX core's request
+#    enters the ti,sysc target module's IRQSTATUS_2 (window offset 0xfe38) and
+#    reaches the GIC only while IRQENABLE_SET_2 (0xfe44) bit 0 is set.  The
+#    vendor's OMAP4 platform code enables exactly that pair and maps the whole
+#    64 KiB window (SYS_OMAP4430_SGX_REGS_SIZE 0xFFFF); on Linux it also defines
+#    SGX_OCP_NO_INT_BYPASS, so THALIA_INT_BYPASS is NOT used there.  This driver
+#    mapped only 0x4000 and never touched the wrapper, so EVENT_STATUS bit 31
+#    could stay set with irq 147 at count 0.  With the gate opened, irq 147 ran
+#    0 -> 100000.  Userspace cannot do it: a /dev/mem write there is an external
+#    abort (L4 firewall).
+#
+# 2. FIX_HW_BRN_30852 ("turns off PDS auto clock gating").  In the SGX540's
+#    rev-120 errata block.  srvinit writes CLKGATECTL_PDS_CLKG_ON where every
+#    other unit gets _AUTO.  This driver set every unit to AUTO: CLKGATECTL read
+#    0x000aa6aa and CLKGATESTATUS bit 7 (PDS) read set -- the PDS was parked.
+#    Now a per-core quirk; CLKGATECTL reads 0x000a66aa.
+#
+# 3. EUR_CR_PDS (0x0abc) was never written, leaving DOUT_TIMEOUT_DISABLE (b6)
+#    clear, i.e. the PDS data-store timeout armed.  srvinit writes it; so did our
+#    own SGX545 init list (0x0e).  The SGX540 value is 0x40 (chunk start 0 on a
+#    UNIFIED_TEMPS_AND_PAS core, timeout disabled).
+#
+# 4. The single-context edm_init launch program did not fit PVRSGX_FW_PDS0's
+#    0x18-byte slot: data = 12 put its code at word 12 (needing words 0..13),
+#    while PDS1 at +0x20 is built after it and occupies words 8..21, so it
+#    overwrote this program's DS1[0] and its DOUTU/HALT.  Init still ran only
+#    because PDS1's DOUTU encodes the same code base and offset.  Now data = 4:
+#    words 0-2 data, 4 MOVS, 5 HALT, inside the slot.
+#
+# 5. EVENT_PDS_DATA (0x0a6c) is the data segment's size in 16-byte units
+#    (EUR_CR_EVENT_OTHER_PDS_DATA_SIZE_ALIGNSHIFT = 4).  It said 3 (= 48 bytes)
+#    for that 24-byte slot.  Now 1 (= 16 bytes), consistent with (4).
+#
+# The microkernel side is in the same commit: ukernel.py's init_set no longer ORs
+# EVENT_TIMER into EVENT_HOST_ENABLE.  That bit says "interrupt the host", and
+# srvinit writes SW_EVENT only; the dispatch mask is EVENT_PDS_ENABLE, which
+# already carries TIMER.  With the OR in place every 1 kHz tick raised a host
+# interrupt the ISR had to reject and the line was disabled at 100000.
+#
+# Two read-only debugfs nodes are added for the next session: "pds" prints the
+# event-PDS register beside the buffer it resolves to (the comparison trap 393
+# says the old check_event_pds() could not make), and "timer_edge" clears the
+# latched TIMER bit and re-reads the microkernel's tick counter.
+#
+# Still open: the EDM dispatches once and never again.  Every host-side input is
+# now measured correct and the tick counter still reads 1, so the fault is in the
+# microkernel task's admission, not in this configuration.
+#
+# Applies after 0001-0006 to a pristine 95f78ca.  Verified: 0001..0007 reproduce
+# the built tree byte-for-byte (pvrsgx_device.c, pvrsgx_pds.c, ukernel.py
+# compared).  Module md5 with this patch: 37a329a6b40d8e1f10ee61110a15523c.
+diff --git a/drm/powervr_sgx/pvrsgx_hw.h b/drm/powervr_sgx/pvrsgx_hw.h
+--- a/drm/powervr_sgx/pvrsgx_hw.h
++++ b/drm/powervr_sgx/pvrsgx_hw.h
+@@ -20,6 +20,26 @@
+  * what the microkernel and the init script do with them. Code reaches them
+  * through the core table.
+  */
++/*
++ * The OCP wrapper around the SGX core (the ti,sysc target module). The SGX's
++ * own interrupt line is not wired to the GIC: the core's request enters the
++ * wrapper at IRQSTATUS_2 and reaches the CPU only once IRQENABLE_SET_2 has
++ * bit 0 set. The vendor's OMAP4 kernel driver maps the whole 64 KiB SGX window
++ * and enables exactly this pair (sgxinit-adjacent, eurasia_km/services4/system/
++ * omap4/sysconfig.c SysEnableSGXInterrupts(); on Linux it also defines
++ * SGX_OCP_NO_INT_BYPASS, so the THALIA_INT_BYPASS bit in OCP_DEBUG_CONFIG is
++ * NOT used there). These offsets are the GPL out-of-tree OCP header's
++ * (hwdefs/ocpdefs.h).
++ */
++#define PVRSGX_OCP_WINDOW_SIZE			0x10000
++/* IRQSTATUS_2, IRQENABLE_SET_2 and IRQENABLE_CLR_2 all live in this one page. */
++#define PVRSGX_OCP_PAGE_OFF			0xf000
++#define PVRSGX_OCP_PAGE_SIZE			0x1000
++#define PVRSGX_OCP_IRQSTATUS_2			0xfe38
++#define PVRSGX_OCP_IRQENABLE_SET_2		0xfe44
++#define PVRSGX_OCP_IRQENABLE_CLR_2		0xfe50
++#define PVRSGX_OCP_IRQ_SGXCORE			BIT(0)
++
+ #define SGX545_CR_EVENT_PDS_ENABLE		0x0a58	/* host events start the event program */
+ #define   SGX545_CR_EVENT_PDS_ENABLE_ALL	0x2204b00f
+ /*
+diff --git a/drm/powervr_sgx/pvrsgx_device.h b/drm/powervr_sgx/pvrsgx_device.h
+--- a/drm/powervr_sgx/pvrsgx_device.h
++++ b/drm/powervr_sgx/pvrsgx_device.h
+@@ -139,6 +139,12 @@
+ 
+ 	/** @regs: The core registers (BAR 0). */
+ 	void __iomem *regs;
++	/**
++	 * @ocp: The OCP wrapper's interrupt registers when the core's request
++	 * reaches the CPU through them (OMAP4's ti,sysc target module), else NULL.
++	 * They sit past the core window the driver maps for @regs.
++	 */
++	void __iomem *ocp;
+ 	/** @vdc: The display engine's registers when it carries the SGX's interrupt, or NULL. */
+ 	void __iomem *vdc;
+ 	/** @irq: Its interrupt. */
+@@ -400,6 +406,37 @@
+ }
+ 
+ /*
++ * The OCP wrapper's gate on the SGX core's interrupt. On OMAP4 the core's
++ * request is not wired straight to the GIC: it enters the wrapper's
++ * IRQSTATUS_2 and the wrapper forwards it only while IRQENABLE_SET_2 bit 0 is
++ * set. The vendor's driver enables that pair on every clock-enable. Without
++ * it the core may raise EVENT_STATUS's MASTER_INTERRUPT forever with the CPU
++ * line never asserting -- exactly the state measured here.
++ *
++ * Only the wrapper's own page is mapped (@ocp points at window offset
++ * PVRSGX_OCP_PAGE_OFF), so the window offsets are rebased onto it. Reading
++ * past the mapped page -- or using the window's absolute offsets -- is an
++ * external abort, which is how the first attempt at this crashed.
++ */
++#define PVRSGX_OCP_REG(off)	((off) - PVRSGX_OCP_PAGE_OFF)
++
++static inline void pvrsgx_ocp_irq(struct pvrsgx_device *sdev, bool on)
++{
++	if (!sdev->ocp)
++		return;
++	if (on) {
++		/* The pending bit first, then the enable: the vendor's order. */
++		iowrite32(PVRSGX_OCP_IRQ_SGXCORE,
++			  sdev->ocp + PVRSGX_OCP_REG(PVRSGX_OCP_IRQSTATUS_2));
++		iowrite32(PVRSGX_OCP_IRQ_SGXCORE,
++			  sdev->ocp + PVRSGX_OCP_REG(PVRSGX_OCP_IRQENABLE_SET_2));
++	} else {
++		iowrite32(PVRSGX_OCP_IRQ_SGXCORE,
++			  sdev->ocp + PVRSGX_OCP_REG(PVRSGX_OCP_IRQENABLE_CLR_2));
++	}
++}
++
++/*
+  * The microkernel translates through the last directory list; TA, 3D and
+  * host requests through list 0, which the microkernel points at the job's
+  * page directory.
+diff --git a/drm/powervr_sgx/pvrsgx_device.c b/drm/powervr_sgx/pvrsgx_device.c
+--- a/drm/powervr_sgx/pvrsgx_device.c
++++ b/drm/powervr_sgx/pvrsgx_device.c
+@@ -425,6 +425,8 @@
+ 	/* Only with the handler in place. */
+ 	if (!err && sdev->vdc)
+ 		vdc_irq_enable(sdev, true);
++	if (!err)
++		pvrsgx_ocp_irq(sdev, true);
+ 	return err;
+ }
+ 
+@@ -439,6 +441,7 @@
+ #endif
+ 	if (sdev->vdc)
+ 		vdc_irq_enable(sdev, false);
++	pvrsgx_ocp_irq(sdev, false);
+ 	free_irq(sdev->irq, sdev);
+ }
+ 
+diff --git a/drm/powervr_sgx/pvrsgx_of.c b/drm/powervr_sgx/pvrsgx_of.c
+--- a/drm/powervr_sgx/pvrsgx_of.c
++++ b/drm/powervr_sgx/pvrsgx_of.c
+@@ -64,6 +64,23 @@
+ 	sdev->regs = devm_ioremap_resource(dev, &win);
+ 	if (IS_ERR(sdev->regs))
+ 		return PTR_ERR(sdev->regs);
++	/*
++	 * The OCP wrapper's interrupt gate. On OMAP4 the SGX core's request is
++	 * not wired straight to the GIC: it enters the ti,sysc wrapper's
++	 * IRQSTATUS_2 at 0xfe38 in this same window, and the wrapper forwards it
++	 * only while IRQENABLE_SET_2 bit 0 is set. The vendor's driver maps the
++	 * whole 64 KiB and enables that pair; we map just the wrapper's page.
++	 * The offsets are OMAP4's, so only the SGX540 family gets it.
++	 */
++	if (sdev->family->core == 540 && resource_size(res) >= PVRSGX_OCP_WINDOW_SIZE) {
++		struct resource ocp = DEFINE_RES_MEM_NAMED(res->start + PVRSGX_OCP_PAGE_OFF,
++							  PVRSGX_OCP_PAGE_SIZE,
++							  PVRSGX_DRIVER_NAME "-ocp");
++
++		sdev->ocp = devm_ioremap_resource(dev, &ocp);
++		if (IS_ERR(sdev->ocp))
++			return PTR_ERR(sdev->ocp);
++	}
+ 
+ 	/* The module is clocked only while its parent is awake. */
+ 	err = pm_runtime_resume_and_get(dev->parent);
+diff --git a/drm/powervr_sgx/pvrsgx_core.h b/drm/powervr_sgx/pvrsgx_core.h
+--- a/drm/powervr_sgx/pvrsgx_core.h
++++ b/drm/powervr_sgx/pvrsgx_core.h
+@@ -29,6 +29,16 @@
+ /* Errata the kernel works around (the GPL headers' FIX_HW_BRN_*). */
+ /* A BIF directory or table invalidate and a data invalidate never in one command. */
+ #define PVRSGX_QUIRK_BRN_28889			BIT(0)
++/*
++ * FIX_HW_BRN_30852 ("turns off PDS auto clock gating"): the PDS's automatic
++ * clock gate must stay OPEN, not automatic. With it in AUTO the PDS block parks
++ * itself and the event program is never fetched -- the event stays latched in
++ * EVENT_STATUS and the microkernel is entered once (by the init kick) and never
++ * again. The DDK's own srvinit forces EUR_CR_CLKGATECTL_PDS_CLKG_ON under this
++ * burn instead of PDS_CLKG_AUTO. Present in the SGX540 rev-120 errata block
++ * (sgxerrata.h) and NOT for the SGX545, so it is a per-core quirk.
++ */
++#define PVRSGX_QUIRK_BRN_30852			BIT(1)
+ 
+ /* The USSE instruction set, for the shader validator's tables. */
+ enum pvrsgx_isa {
+@@ -115,6 +125,7 @@
+ 	u32 core_revision;
+ 	u32 clkgatectl_units;		/* every gating field of CLKGATECTL */
+ 	u32 clkgatectl_dpm;		/* CLKGATECTL's DPM field */
++	u32 clkgatectl_pds;		/* CLKGATECTL's PDS field (FIX_HW_BRN_30852) */
+ 	u32 clkgatectl2;
+ 	u32 clkgatectl2_units;
+ 	u32 clkgatestatus;
+diff --git a/drm/powervr_sgx/pvrsgx_core.c b/drm/powervr_sgx/pvrsgx_core.c
+--- a/drm/powervr_sgx/pvrsgx_core.c
++++ b/drm/powervr_sgx/pvrsgx_core.c
+@@ -170,6 +170,8 @@
+ 	 */
+ 	.clkgatectl_units = GENMASK(19, 0),
+ 	.clkgatectl_dpm = GENMASK(11, 10),
++	/* PDS_CLKG b14-15: forced ON, not AUTO, under FIX_HW_BRN_30852. */
++	.clkgatectl_pds = GENMASK(15, 14),
+ 	.clkgatectl2 = 0x0004,
+ 	/* PBE b0-1, CACHEL2 b2-3, UCACHEL2 b4-5, USE0 b6-7, ITR0 b8-9,
+ 	 * TEX0 b10-11, MADD0 b12-13, USE1 b14-15, ITR1 b16-17, TEX1 b18-19,
+@@ -225,11 +227,24 @@
+ 	.event_pds_data1 = SGX545_CR_EVENT_PDS_DATA1,
+ };
+ 
+-/* Init script part 2 for the SGX540: the host's interrupt, as the SGX530's. */
++/*
++ * Init script part 2 for the SGX540: the host's interrupt, as the SGX530's,
++ * plus EUR_CR_PDS.
++ *
++ * 0x0abc is EUR_CR_PDS on this core (sgx540defs.h): attribute-chunk-start in
++ * b0-5 and DOUT_TIMEOUT_DISABLE in b6. Both the DDK 1.8's srvinit and our own
++ * SGX545 list write it (0x0e there), and the register reads 0 here, i.e. the
++ * PDS data-store timeout is still armed. A PDS program that stalls on a DOUT
++ * then aborts instead of completing, which is what a silent "the event program
++ * is never entered" looks like from the host side. The SGX540's own value is
++ * srvinit's: (attrib_reg_start << 0) | DOUT_TIMEOUT_DISABLE, and attrib_reg_start
++ * is 0 on a UNIFIED_TEMPS_AND_PAS core, which this is (sgxfeaturedefs.h).
++ */
+ static const struct pvrsgx_core_init_reg sgx540_init_regs[] = {
+ 	{ SGX_CR_EVENT_HOST_ENABLE, SGX_CR_EVENT_STATUS_SW_EVENT },
+ 	{ SGX_CR_EVENT_HOST_ENABLE2, 0 },
+ 	{ 0xa74, 0x208200 },
++	{ 0xabc, 0x40 },
+ };
+ 
+ /*
+@@ -315,6 +330,7 @@
+ 		.va_bits = 28,
+ 		.heaps = &sgx540_heaps,
+ 		.event_pds_guessed = true,
++		.quirks = PVRSGX_QUIRK_BRN_30852,
+ 		.cmds = &pvrsgx_cmd_core_sgx540,
+ 		.init_regs = sgx540_init_regs,
+ 		.num_init_regs = ARRAY_SIZE(sgx540_init_regs),
+diff --git a/drm/powervr_sgx/pvrsgx_fw.c b/drm/powervr_sgx/pvrsgx_fw.c
+--- a/drm/powervr_sgx/pvrsgx_fw.c
++++ b/drm/powervr_sgx/pvrsgx_fw.c
+@@ -576,8 +576,19 @@
+ 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
+ 	sgx_wr(sdev, cr->event_pds_base, event_pds_addr(sdev));
+ 	if (pvrsgx_edm_init && pvrsgx_core_single_context(sdev->family)) {
+-		/* §9 event-control words for the EDM launch (edm-path.md §2). */
+-		sgx_wr(sdev, cr->event_pds_data0, 3);
++		/*
++		 * §9 event-control words for the EDM launch (edm-path.md §2).
++		 *
++		 * _PDS_DATA holds the data segment's SIZE in 16-byte units
++		 * (EUR_CR_EVENT_OTHER_PDS_DATA_SIZE_ALIGNSHIFT = 4). The launch
++		 * program pvrsgx_pds_entry() assembles for this path has a 4-word
++		 * (16-byte) data segment, because PDS0's slot in `layout[]` is 0x18
++		 * bytes and its code starts at word 4. It previously said 3 = 48
++		 * bytes, describing a 12-word segment that could not fit the slot --
++		 * the PDS was told to read 48 bytes of attributes where only 24
++		 * existed, which is consistent with a task that never completes.
++		 */
++		sgx_wr(sdev, cr->event_pds_data0, 1);
+ 		sgx_wr(sdev, cr->event_pds_data1, 0x00013d01);
+ 	} else {
+ 		sgx_wr(sdev, cr->event_pds_data0, 1);
+@@ -614,6 +625,7 @@
+ {
+ 	const struct pvrsgx_core_regs *cr = sdev->cr;
+ 	u32 *hc = fw_words(sdev, PVRSGX_FW_HOSTCTL);
++	u32 gate;
+ 	bool first = !sdev->fw_started, was_powered = READ_ONCE(sdev->powered);
+ 	int err;
+ 
+@@ -667,9 +679,19 @@
+ 	sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PD;
+ 	mutex_unlock(&sdev->ccb_lock);
+ 
+-	/* Every unit's clock gated automatically, but the DPM's: it stays on. */
++	/*
++	 * Every unit's clock gated automatically, but the DPM's: it stays on.
++	 * On a core with FIX_HW_BRN_30852 the PDS's gate must stay OPEN too --
++	 * automatic gating parks the PDS and the event program is never fetched
++	 * (sgxerrata.h, "turns off PDS auto clock gating"; srvinit forces
++	 * EUR_CR_CLKGATECTL_PDS_CLKG_ON under the same burn).
++	 */
++	gate = SGX_CLKG_ALL(cr->clkgatectl_units, SGX_CLKG_AUTO);
++	if (sdev->family->quirks & PVRSGX_QUIRK_BRN_30852)
++		gate = (gate & ~cr->clkgatectl_pds) |
++		       field_prep(cr->clkgatectl_pds, SGX_CLKG_ON);
+ 	sgx_wr(sdev, SGX_CR_CLKGATECTL,
+-	       (SGX_CLKG_ALL(cr->clkgatectl_units, SGX_CLKG_AUTO) & ~cr->clkgatectl_dpm) |
++	       (gate & ~cr->clkgatectl_dpm) |
+ 	       field_prep(cr->clkgatectl_dpm, SGX_CLKG_ON));
+ 	sgx_wr_opt(sdev, cr->clkgatectl2, SGX_CLKG_ALL(cr->clkgatectl2_units, SGX_CLKG_AUTO));
+ 	sgx_wr(sdev, cr->event_pds_enable, 0);
+diff --git a/drm/powervr_sgx/pvrsgx_pds.c b/drm/powervr_sgx/pvrsgx_pds.c
+--- a/drm/powervr_sgx/pvrsgx_pds.c
++++ b/drm/powervr_sgx/pvrsgx_pds.c
+@@ -80,16 +80,26 @@
+ 	    pvrsgx_core_single_context(sdev->family)) {
+ 		/*
+ 		 * EDM launch (edm-path.md §2): the §9 bare-DOUTU event program — the
+-		 * three fixed DOUTU words in an 8-word data interleave (code base 15 |
+-		 * bit 21, so the task runs with data-master 3 as the EDM requestor;
+-		 * offset 0), one MOVS->DOUTU, HALT. This is the launch that makes the
+-		 * microkernel's stores commit under EDMPROTECT; it starts the
+-		 * init/event entry at offset 0.
++		 * three fixed DOUTU words, one MOVS->DOUTU, HALT. This is the launch
++		 * that makes the microkernel's stores commit under EDMPROTECT; it
++		 * starts the init/event entry at offset 0.
++		 *
++		 * The data segment is 4 words, not 12: PDS0's slot in `layout[]` is
++		 * 0x18 bytes (6 words), and its code therefore has to start at word 4.
++		 * With data = 12 the program needs words 0..13, which runs into PDS1
++		 * at +0x20 — PDS1 is built after PDS0 and overwrote this program's
++		 * DS1 word and its DOUTU/HALT. It happened to still start the right
++		 * entry (PDS1's DOUTU is the same code base and offset), which is why
++		 * init ran; but the task's inputs were PDS1's, not this program's.
++		 *
++		 * In a 4-word data segment pvrsgx_pds_ds() puts D1(0) at word 2, so
++		 * the four MOVS sources are DS0[0], DS0[1], DS1[0] (=1),
++		 * DS0[0] — the same values as before, now inside the slot.
+ 		 */
+-		p = pvrsgx_pds_prog(sdev, b, 12);
++		p = pvrsgx_pds_prog(sdev, b, 4);
+ 		p.w[0] = 0x0020000f;	/* DS0[0]: code base 15, bit 21, no temps */
+ 		p.w[1] = 0x04000000;	/* DS0[1] */
+-		p.w[8] = 0x00000001;	/* DS1[0]: DOUTU word 2 */
++		p.w[2] = 0x00000001;	/* DS1[0]: DOUTU word 2 */
+ 		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D0(1), PDS_D1(0), PDS_D0(0));
+ 		pvrsgx_pds_halt(&p);
+ 		return;
+diff --git a/drm/powervr_sgx/pvrsgx_debugfs.c b/drm/powervr_sgx/pvrsgx_debugfs.c
+--- a/drm/powervr_sgx/pvrsgx_debugfs.c
++++ b/drm/powervr_sgx/pvrsgx_debugfs.c
+@@ -7,6 +7,7 @@
+ #include <drm/drm_print.h>
+ 
+ #include <linux/debugfs.h>
++#include <linux/delay.h>
+ #include <linux/ktime.h>
+ #include <linux/pm_runtime.h>
+ #include <linux/seq_buf.h>
+@@ -157,11 +158,110 @@
+ 	return 0;
+ }
+ 
++/*
++ * The PDS programs the EDM starts USSE tasks from, as they sit in the code
++ * arena, plus the address the event-PDS register actually resolves to.  This is
++ * the one view that can tell "the event program is at the right place" from
++ * "EVENT_PDS_EXEC points somewhere else": the register is compared with the
++ * buffer, not with our own derivation again (trap 393).
++ *
++ * Read-only: it reads the driver's own firmware buffers and the one register
++ * the driver already writes.
++ */
++static int pds_show(struct seq_file *m, void *unused)
++{
++	struct drm_debugfs_entry *entry = m->private;
++	struct pvrsgx_device *sdev = to_pvrsgx_device(entry->dev);
++	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
++	struct pvrsgx_fw *f = &sdev->fw;
++	u32 exec = sgx_rd(sdev, sdev->cr->event_pds_base);
++	u32 want = f->addr[PVRSGX_FW_PDS0] & ~0xfu;
++	u32 resolved;
++
++	seq_printf(m, "event_pds_base reg 0x%04x = 0x%08x\n", sdev->cr->event_pds_base, exec);
++	seq_printf(m, "  as an offset from pds_pixel.base 0x%08x -> 0x%08x\n",
++		   (u32)h->pds_pixel.base, (u32)h->pds_pixel.base + exec);
++	seq_printf(m, "  PDS0 buffer dev addr (aligned)   = 0x%08x\n", want);
++	seq_printf(m, "  offsets match: %s\n",
++		   (want - (u32)h->pds_pixel.base) == exec ? "yes" : "NO");
++	resolved = (u32)h->pds_pixel.base + exec;
++	seq_printf(m, "  resolved target 0x%08x is %s the PDS0 stub\n", resolved,
++		   resolved == want ? "exactly" :
++		   (resolved > want && resolved < want + 0x200) ? "inside" : "OUTSIDE");
++	/* The stub's own words, and the first words of the image's event entry. */
++	seq_printf(m, "PDS0 stub (%u words):\n", 0x18 / 4);
++	for (int i = 0; i < 0x18 / 4; i++)
++		seq_printf(m, "  [%2d] 0x%08x\n", i, ((u32 *)f->cpu[PVRSGX_FW_PDS0])[i]);
++	seq_printf(m, "image entry 0 (event) first 8 words, at 0x%08x:\n",
++		   f->addr[PVRSGX_FW_UKERNEL]);
++	for (int i = 0; i < 8; i++)
++		seq_printf(m, "  [%2d] 0x%08x\n", i, ((u32 *)f->cpu[PVRSGX_FW_UKERNEL])[i]);
++	return 0;
++}
++
++/*
++ * Is the EDM edge-triggered on a latched event bit?  EVENT_STATUS's TIMER bit
++ * (b29) is set at every reading and never cleared: the event is raised, the
++ * dispatch mask has it (EVENT_PDS_ENABLE b29), the exec address resolves to
++ * PDS0 -- and the event program is not entered (the tick counter stands still).
++ * One explanation is that a permanently-latched bit never produces a new edge,
++ * so the PDS never fires again.  This node tests exactly that: it reads the
++ * microkernel's tick counter, clears EVENT_STATUS's TIMER bit through
++ * EVENT_HOST_CLEAR, waits, and reads the counter again.  If the counter moves,
++ * the dispatch was waiting for the ack.
++ *
++ * Clearing a status bit this way is what the microkernel's own dispatcher does
++ * (and/str to HOST_CLEAR) and what the driver's reset path does for the whole
++ * word, so it is a supported operation, not an invented one.
++ */
++static int timer_edge_show(struct seq_file *m, void *unused)
++{
++	struct drm_debugfs_entry *entry = m->private;
++	struct pvrsgx_device *sdev = to_pvrsgx_device(entry->dev);
++	u32 *ctl = sdev->fw.cpu[PVRSGX_FW_TA3DCTL];
++	u32 before, mid, after, status;
++
++	before = READ_ONCE(ctl[0x2c]);
++	status = sgx_rd(sdev, SGX_CR_EVENT_STATUS);
++	seq_printf(m, "EVENT_STATUS  0x%08x (TIMER b29 = %u)\n", status,
++		   !!(status & SGX_CR_EVENT_STATUS_TIMER));
++	seq_printf(m, "tick counter before      0x%08x\n", before);
++
++	/* Clear just the TIMER bit, as the dispatcher would. */
++	sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR, SGX_CR_EVENT_STATUS_TIMER);
++	mid = sgx_rd(sdev, SGX_CR_EVENT_STATUS);
++	seq_printf(m, "EVENT_STATUS after clear 0x%08x (TIMER b29 = %u)\n", mid,
++		   !!(mid & SGX_CR_EVENT_STATUS_TIMER));
++
++	msleep(30);
++	after = READ_ONCE(ctl[0x2c]);
++	seq_printf(m, "tick counter after       0x%08x   %s\n", after,
++		   after != before ? "*** ADVANCED: the EDM was waiting on the ack ***"
++				   : "(unchanged)");
++	seq_printf(m, "EVENT_STATUS re-read     0x%08x\n",
++		   sgx_rd(sdev, SGX_CR_EVENT_STATUS));
++
++	/*
++	 * Read the register the EDM fetches PDS code through, and the PDS's own
++	 * status pair. If the send/execute never completes, one of these says so
++	 * rather than the tick counter merely standing still.
++	 */
++	seq_printf(m, "\nEUR_CR_PDS          0x%08x  (DOUT_TIMEOUT_DISABLE b6 = %u)\n",
++		   sgx_rd(sdev, 0xabc), !!(sgx_rd(sdev, 0xabc) & 0x40));
++	seq_printf(m, "PDS_CACHE_STATUS    0x%08x\n", sgx_rd(sdev, 0x138));
++	seq_printf(m, "PDS_CACHE_ENABLE    0x%08x\n", sgx_rd(sdev, 0xa54));
++	seq_printf(m, "PDS_CACHE_HOST_EN   0x%08x\n", sgx_rd(sdev, 0x13c));
++	seq_printf(m, "EVENT_TIMER         0x%08x\n", sgx_rd(sdev, SGX_CR_EVENT_TIMER));
++	return 0;
++}
++
+ static const struct drm_debugfs_info pvrsgx_debugfs_list[] = {
+ 	{ "status", status_show, 0 },
+ 	{ "ctlblk", ctlblk_show, 0 },
+ 	{ "render", render_show, 0 },
+ 	{ "disp_enable", dispen_show, 0 },
++	{ "pds", pds_show, 0 },
++	{ "timer_edge", timer_edge_show, 0 },
+ };
+ 
+ void pvrsgx_debugfs_init(struct drm_minor *minor)
+diff --git a/drm/powervr_sgx/pvrsgx_dump.c b/drm/powervr_sgx/pvrsgx_dump.c
+--- a/drm/powervr_sgx/pvrsgx_dump.c
++++ b/drm/powervr_sgx/pvrsgx_dump.c
+@@ -96,6 +96,15 @@
+ 	if (sdev->vdc)
+ 		seq_buf_printf(sb, "irqs found behind the display's latch: %d\n",
+ 			       atomic_read(&sdev->irq_late));
++	/*
++	 * The OCP wrapper's gate on the core's interrupt, where the platform has
++	 * one. Both registers are in the wrapper page mapped as @ocp, so they use
++	 * the same rebase as the enable.
++	 */
++	if (sdev->ocp)
++		seq_buf_printf(sb, "ocp irq: status_2 0x%08x enable_set_2 0x%08x\n",
++			       ioread32(sdev->ocp + PVRSGX_OCP_REG(PVRSGX_OCP_IRQSTATUS_2)),
++			       ioread32(sdev->ocp + PVRSGX_OCP_REG(PVRSGX_OCP_IRQENABLE_SET_2)));
+ 	seq_buf_printf(sb, "kernel PD 0x%08x idle PD 0x%08x\n",
+ 		       pvrsgx_mmu_pd_addr(sdev->kernel_mmu),
+ 		       pvrsgx_mmu_pd_addr(pvrsgx_idle_mmu(sdev)));
+diff --git a/ukernel/ukernel.py b/ukernel/ukernel.py
+--- a/ukernel/ukernel.py
++++ b/ukernel/ukernel.py
+@@ -676,19 +676,22 @@
+     a.i("or r0, r0, r1")
+     a.i(f"str #{CR_EVENT_TIMER // 4}, r0")        # EUR_CR_EVENT_TIMER = period | ENABLE
+     # The counter alone does not dispatch the EDM: an event source must also be
+-    # enabled, and the driver leaves EVENT_HOST_ENABLE = SW_EVENT only (that is the
+-    # microkernel->host signal, not an incoming one).  On this core the timer's own
+-    # enable mask exists (EUR_CR_EVENT_HOST_ENABLE_TIMER_MASK, b29 -- same bit as
+-    # EVENT_STATUS TIMER), so OR it in and the periodic pass keeps the EDM running
+-    # (and services a coincident host kick at tmr_tick_check).  Without it the EDM is
+-    # entered once by the driver's init kick and never again: measured as the
+-    # event-program counter (control block +0x3b) standing still at 1.
+-    if SINGLE_CONTEXT:
+-        a.i(f"ldr r2, #{CR_EVENT_HOST_ENABLE // 4}")
+-        a.i("wdf")
+-        a.i(f"limm r3, #{EVENT_TIMER}")
+-        a.i("or r2, r2, r3")
+-        a.i(f"str #{CR_EVENT_HOST_ENABLE // 4}, r2")
++    # enabled.  The two enable registers have DIFFERENT jobs and must not be
++    # confused:
++    #
++    #   EUR_CR_EVENT_PDS_ENABLE (0x0a58)  -- which sources DISPATCH the event
++    #       program.  The driver writes this (0x2204b00f, TIMER included), so
++    #       the periodic tick reaches the EDM without any help from us.
++    #   EUR_CR_EVENT_HOST_ENABLE (0x0130) -- which sources INTERRUPT THE HOST.
++    #       The vendor's srvinit writes SW_EVENT only, and its ISR acks only
++    #       SW_EVENT (sgxinit.c), so the TIMER bit must never appear here.
++    #
++    # An earlier revision ORed EVENT_TIMER (b29) into HOST_ENABLE "to keep the
++    # EDM running".  That made every 1 kHz tick raise a host interrupt the
++    # driver could not acknowledge: irq 147 went 0 -> 100000 (the kernel's
++    # unhandled-interrupt limit) and the line was then disabled, so the real
++    # SW_EVENT interrupts -- the microkernel's completion signals -- were lost.
++    # Nothing is ORed in here now; PDS_ENABLE already carries TIMER.
+     if TMR_LOG:
+         # H1: hostctl[6] (period) -> 0x35, 0xacc read-back -> 0x37. H2: a timer-tick
+         # counter (0x38, ++ per timer-only event) and 0xb14^0xb20 (the watchdog's own

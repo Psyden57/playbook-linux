@@ -4247,3 +4247,53 @@ rules, both earned by mistakes in this session:
 Both are the same class as the report-271 lesson (log a syscall's arguments, not
 its result): prefer the primary source's *use* over a plausible-looking number,
 and prefer a counter you can read twice over a word you can only snapshot.
+
+## 114. The panel gesture guard is TEMPORARY; the real fix is one line in catacomb, and llvmpipe is not a workaround for it (session 76)
+
+The operator asked the right question: "you're going to simply disable the bottom
+handle by setting it to 0 height, instead of fixing it so it can turn the
+backlight on and off without wedging DSI?"  The answer is yes, for now, and the
+record must say so plainly.
+
+**What is applied:** `catacomb msg gesture-handle --height 0` at the end of
+`/etc/catacomb/initrc` (md5 `56888215…`, previous kept as
+`initrc.pre-gesture0`).  It stops the panel wedging during a bench session by
+removing the double-tap sleep notch entirely.  **It costs a real feature** — the
+gesture handle's window-cycle gestures — and it is a guard, not a repair.
+
+**Where the defect actually is.**  Not in the kernel and not in rendering:
+
+* `src/windows/mod.rs` `on_double_tap()` sends `set_display_status(false)` for a
+  double-tap in the centre 20 % of the handle — by design, documented as
+  "20% DPMS off";
+* `src/input.rs:505` calls `set_display_status(true)` on **every** double-tap,
+  with no check of the current state.
+
+So a double-tap in the notch always does ON then OFF, and the measured pair was
+34 ms apart.  The intended fix is one guarded line:
+
+```rust
+Some(TouchAction::DoubleTap) if !self.display_on => self.set_display_status(true),
+```
+
+Wake only when actually off.  Then the notch can only ever sleep, the ON→OFF
+pair cannot happen, and every gesture keeps working.  It needs a catacomb
+rebuild (r10009, same flow as r10003/r10008).
+
+**What is NOT established, and must not be hand-waved.**  Tight ON→OFF pairs
+over the IPC path (`catacomb msg dpms on; catacomb msg dpms off`, 20 iterations)
+did **not** wedge the link — `NO_PACKET_SENT` stayed 0 throughout.  So "OFF too
+soon after ON" is not by itself sufficient, and the in-gesture path differs from
+the IPC path in a way not yet identified.  That difference is the real question,
+and it is the same class as the reference OS's DSI resume path this port never
+took.  **Do not record the guard as having fixed the wedge.**  (Because the
+operator redirected the session to the GPU, this is parked by instruction, not
+because it is solved.)
+
+**llvmpipe is a separate, real improvement, not a workaround for this.**
+Restoring it (session 76 addendum) took the desktop from softpipe to
+`llvmpipe (LLVM 13.0.1, 128 bits)` — 4.3 ms vs 48.0 ms for a 1024×585
+clear+finish — and the operator confirmed the desktop is snappier.  It did
+**not** stop the blanking, which is what ruled out a rendering race and pointed
+at the input path.  The hd3 flasher image still carries neither llvmpipe nor
+`libLLVM-13`; the rebake must add both.

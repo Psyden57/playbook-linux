@@ -117,6 +117,19 @@ meaning of any bit.
 This is the SGX545's fine-grained split, not the SGX530's coarse one — the
 `tools/state/busysplit.py` groups should map with little change (D).
 
+**`FIX_HW_BRN_30852` — the PDS must NOT auto-gate its clock (K, and the reason
+the PDS is a special case).**  The SGX540's rev-120 errata block defines
+`FIX_HW_BRN_30852`, commented *"turns off PDS auto clock gating"*
+(`sgxerrata.h`, in the `SGX_CORE_REV == 120` branch).  `srvinit` therefore writes
+**`EUR_CR_CLKGATECTL_PDS_CLKG_ON`** where every other unit gets `_AUTO`
+(`sgxinit.c`, `#if defined(FIX_HW_BRN_30852)` around the PDS field), and the
+clock-gating poll mask excludes `CLKGATESTATUS_PDS_CLKS`.  A driver that sets
+every unit to `AUTO` writes `CLKGATECTL` PDS = 2 (**0x000aa6aa**), and
+`CLKGATESTATUS` bit 7 (PDS) then reads **set** — the PDS block is parked.
+Measured on our unit both ways: AUTO → `CLKGATECTL 0x000aa6aa`;
+forced ON → **`0x000a66aa`** (PDS field 1).  This is an SGX540-only quirk (it is
+not in the SGX545's errata), so it belongs in the per-core table.
+
 ## Reset
 
 `SOFT_RESET` at 0x0080 (K), the modern unit set:
@@ -138,10 +151,77 @@ This is the SGX545's fine-grained split, not the SGX530's coarse one — the
 
 ## Events and kicks
 
+* **The interrupt does not reach the CPU without the OCP wrapper's gate — C,
+  measured (session 76).**  The SGX core's request is not wired to the GIC
+  directly: it enters the `ti,sysc` target module's `IRQSTATUS_2` (window offset
+  **0xfe38**) and the wrapper forwards it only while `IRQENABLE_SET_2`
+  (**0xfe44**) has bit 0 set.  The DDK's OMAP4 platform code enables exactly that
+  pair (`eurasia_km/services4/system/omap4/sysconfig.c`,
+  `SysEnableSGXInterrupts()`: `IRQSTATUS_2 <- 1`, then `IRQENABLE_SET_2 <- 1`),
+  and it maps the **whole 64 KiB** SGX window (`SYS_OMAP4430_SGX_REGS_SIZE`
+  0xFFFF) so the wrapper is reachable; `gpvOCPRegsLinAddr = gsSGXRegsCPUVAddr`.
+  On Linux that drop also defines **`SGX_OCP_NO_INT_BYPASS`**
+  (`syslocal.h:86`), so the `THALIA_INT_BYPASS` bit of `OCP_DEBUG_CONFIG`
+  (0xff08) is **not** used there.  Our open driver mapped only 0x4000
+  (`PVRSGX_REGS_MIN`) and never touched the wrapper: with the core raising
+  `EVENT_STATUS` MASTER_INTERRUPT (b31) the CPU line stayed at count 0.  With the
+  gate opened, irq 147 ran **0 → 100000** (the kernel's unhandled-interrupt
+  limit), which is the proof the line is now delivering.  **Writes to the
+  wrapper from userspace are an external abort** (L4 firewall), so this can only
+  be done in kernel code.
 * `EVENT_STATUS` (0x012c), `EVENT_HOST_ENABLE`/`CLEAR` (0x0130/0x0134),
   `EVENT_STATUS2`/`HOST_ENABLE2`/`HOST_CLEAR2` (0x0118/0x0110/0x0114) — the
   modern SGX545 layout, not the SGX530's.  The bit positions follow the SGX545
   for the shared events (K); the per-bit list is to be transcribed before use.
+* **The event program is a PDS dispatcher, and it reads `ir0`/`ir1`, NOT
+  `EUR_CR_EVENT_STATUS` — K, read from the vendor source (session 76).**  The
+  DDK 1.8 drop ships the microkernel as source:
+  `services4/srvinit/devices/sgx/eventhandler.pds.asm` is the program
+  `EVENT_PDS_EXEC` points at.  It declares six `data dword INPUT_*` constants,
+  starts with `movs douta, ir0, INPUT_IR0_PA_DEST` / `movs douta, ir1,
+  INPUT_IR1_PA_DEST`, branches on those bits, and ends
+  `movs doutu, INPUT_GENERIC_DOUTU0, INPUT_DOUTU1, INPUT_DOUTU2` + `halt`.  It
+  processes no commands itself — it is a pure dispatcher into the USSE
+  `EventHandler` (`eventhandler.use.asm`), which likewise tests
+  `PA(ui32PDSIn0)`/`PA(ui32PDSIn1)` and never polls `EUR_CR_EVENT_STATUS` for
+  the timer.  **The bit maps differ:** `EURASIA_PDS_IR0_EDM_EVENT_TIMER` is
+  **bit 1** (`hwdefs/sgxdefs.h:3270`), while the same event is **bit 29** in
+  `EUR_CR_EVENT_STATUS`.  This port's event entry polls STATUS instead — a
+  deliberate divergence whose sufficiency on this silicon is unproven.
+* **The PDS constants are patched by the host at load, and the indices are
+  known — K (session 76).**  `sgxinit.c:2507-2510` fills them with
+  `PDSUKERNEL_EVENTSSetINPUT_*`, routing `ui32PDSIn0`/`ui32PDSIn1`/timestamp and
+  the DOUTU task-control words into the program.  The auto-generated
+  `…/intermediates/eventhandler_pds/eventhandler_pds.h` gives the compiled
+  220-word program and the exact patch words: IR0 `[17]`, IR1 `[20]`, timestamp
+  `[16]`, DOUTU1 `[1],[5],[9],[13]`, DOUTU2 `[29]`, generic DOUTU0 `[12]`,
+  3D `[0]`, TA `[4]`, SPM `[8]`; `DATA_SEGMENT_SIZE = 144`.  Our loader patches
+  only `ctlblk` and `pdtable` and does no PDS-input routing.
+* **A complete prebuilt vendor SGX540 microkernel is in the drop — K
+  (session 76).**  `eurasiacon/binary2_540_omap4430_android_{debug,release}/…
+  /ukernel/ukernel.bin` (22 192 B `cfc577aa…` / 19 984 B `ff69e400…`), with
+  `ukernel_labels.h` (`EVENTHANDLER 0x50`, `TIMER 0x2AD0`, `GETMISCINFO 0xEE0`,
+  …) and the 2D/3D/SPM/TA programs split out.  It decodes as SGX540 code with
+  this repo's disassembler.  It predates this port's `ukfw_header`, so it needs
+  an adapter — see `docs/captures/sgx540-vendor-ukernel-source-2026-11-26.txt`.
+* **`EUR_CR_EVENT_PDS_ENABLE`'s `SW_EVENT` bit is ignored by the PDS — K
+  (session 76).**  The vendor comment at `sgxinit.c:3672` says
+  *"PDS_ENABLE_SW_EVENT is ignored by the PDS - host kick events always
+  enabled"*, which explains session 75's per-bit sweep finding that bit 14 never
+  sticks (trap 397): it is not a dispatch source, and host kicks are always on.
+
+* **`EVENT_PDS_ENABLE` and `EVENT_HOST_ENABLE` are different gates and must not
+  be confused — C, measured (session 76).**  `EVENT_PDS_ENABLE` (0x0a58) says
+  which sources **dispatch the event program**; the driver writes it
+  (`0x2204b00f`, TIMER included).  `EVENT_HOST_ENABLE` (0x0130) says which
+  sources **interrupt the host**; `srvinit` writes **SW_EVENT only**
+  (`0x4000`), and the DDK's ISR acks only SW_EVENT.  An open-microkernel
+  revision ORed TIMER (b29) into `EVENT_HOST_ENABLE` "to keep the EDM running":
+  every 1 kHz tick then raised a host interrupt the ISR had to reject, irq 147
+  climbed to the kernel's **100000** unhandled limit and the line was disabled,
+  which lost the real completion interrupts.  With the bit removed,
+  `EVENT_HOST_ENABLE` reads `0x00004000` and `EVENT_STATUS` no longer latches a
+  stuck MASTER_INTERRUPT.
 * **Multi-event kick:** `EVENT_KICK1` 0x0ab0 (`NOW` b0-7), `EVENT_KICK2` 0x0ac0
   (`NOW` b0), `EVENT_KICK` 0x0ac8 (`NOW` b0), `EVENT_KICK3` 0x0ad8 (`NOW` b0),
   `EVENT_KICKER` 0x0ac4 (address b4-27), `EVENT_TIMER` 0x0acc (`ENABLE` b24,
@@ -186,6 +266,28 @@ This is the SGX545's fine-grained split, not the SGX530's coarse one — the
   SGX540.  (An earlier revision of this sheet said 18-bit/4 MiB; that was
   arithmetic on the mask, not a reading of it.  Measured `EVENT_PDS_EXEC` =
   `0x00804090`, whose offset field is `0x804090` = 8.02 MiB.)
+* **`*_PDS_DATA` is the data segment's SIZE in 16-byte units — C, and a defect
+  found with it (session 76).**  `EUR_CR_EVENT_OTHER_PDS_DATA_SIZE_ALIGNSHIFT`
+  is **4**, so the field holds `segment_bytes >> 4`.  The open driver wrote
+  **3** (48 bytes = a 12-word data segment) while the launch program it
+  assembled lived in a **0x18-byte (6-word) buffer** and actually needed only a
+  4-word (16-byte) segment — so the register described attributes the slot could
+  not hold.  Corrected to **1**.  Measured live: `EVENT_PDS_DATA 0x00000001`.
+* **The launch program's slot was too small for the shape it was built in — C,
+  measured (session 76).**  `layout[]` gives `PVRSGX_FW_PDS0` **0x18** bytes at
+  `pds_base`, `PVRSGX_FW_PDS1` at **+0x20**, and so on.  The single-context
+  `edm_init` branch of `pvrsgx_pds_entry()` assembled its program with
+  `data = 12`, i.e. code at word 12, needing words 0..13 (56 bytes) — past the
+  slot.  PDS1 is built *after* PDS0 and its own program occupies words 8..21, so
+  it **overwrote** the launch program's `DS1[0]` (word 8) and its
+  `MOVS->DOUTU`/`HALT` (words 12/13).  Init still ran because PDS1's `DOUTU`
+  happens to encode the same code base and offset, but the task's inputs were
+  PDS1's.  Fixed by giving the launch a **4-word data segment** (`data = 4`), so
+  it fits: words 0-2 data, 4 `MOVS`, 5 `HALT`.  Verified in the `pds` debugfs
+  node: `[0]=0x0020000f [1]=0x04000000 [2]=0x00000001 [4]=0x07000305
+  [5]=0xaf000000`, and `EVENT_PDS_EXEC` resolves **exactly** to that buffer.
+  (The `pds` node compares the register against the buffer rather than against
+  the derivation again, which is what trap 393 says a read-back can't do.)
   `*_PDS_INFO` is typed, not opaque: `USESECEXEC` b25, `OBUFFER_REQD` b22-24,
   `ATTRIBUTE_SIZE` b13-20, `DM` b11-12 (`EVENT` = 0x1800, `PIXEL` 0x0800,
   `VERTEX` 0), `PNS` b10, `USE_PIPELINE` b8, `ODS` b1-7, `SD` b0.  The open
@@ -492,10 +594,11 @@ Each needs a read or test on our SGX540.  Read only named registers.
 |---|---|---|
 | 1 | `CORE_ID` and `CORE_REVISION` | **DONE (C):** `CORE_ID` id `0x0114`, `CORE_REVISION` `0x00010200`. |
 | 2 | The module `rev` and the SGX quirk | **Partly done (C):** `rev` = `0x40000000`, `sysc` = `0x0000003c` at idle.  Still to check: `OCP_DEBUG_CONFIG` bit 31 after enable. |
-| 3 | The interrupt reaches the CPU | Enable the timer event and count `GIC_SPI 21` in `/proc/interrupts`. |
-| 4 | Clock-gating/status layout | `CLKGATESTATUS` idle vs during a TA pass. |
+| 3 | The interrupt reaches the CPU | **DONE (C, session 76):** it does not, until the OCP wrapper's `IRQENABLE_SET_2` (0xfe44) bit 0 is set — see "Events and kicks".  With the gate open irq 147 delivers. |
+| 4 | Clock-gating/status layout | `CLKGATESTATUS` idle vs during a TA pass.  **Partly (C):** the PDS bit (b7) reads *set* while `CLKGATECTL`'s PDS field is `AUTO` — `FIX_HW_BRN_30852` requires it forced ON. |
 | 5 | Soft-reset bits | Reset one unit at a time; watch status/events. |
 | 6 | BIF: 28-bit space, variable pages, single context | Map one page (valid bit only), read it from the microkernel, fault an unmapped address, read `BIF_FAULT`; switch `DIR_LIST_BASE0` with `INVALDC`. |
+| 6a | **Why the EDM stops after ONE dispatch (session 76, OPEN)** | With every host-side input measured correct — `EVENT_PDS_ENABLE` carries TIMER, `EVENT_PDS_EXEC` resolves exactly to the PDS0 buffer, `EUR_CR_PDS` has `DOUT_TIMEOUT_DISABLE` set, the PDS clock is forced ON, `EVENT_TIMER` cycles at 1 kHz — the microkernel's tick counter reads **1** and never advances, and `EVENT_STATUS` b29 stays latched.  Clearing b29 through `EVENT_HOST_CLEAR` does **not** revive the dispatch (measured: `timer_edge` node).  So the fault is downstream of the host configuration.  **Next test:** a `GETMISCINFO` submit (no client PD) — if the doorbell path also fails, the PDS/EDM execution itself is the fault, not the event routing; the `pds` node makes the fetched bytes visible, so compare them with the manifest again after any change. |
 | 7 | `USE_CODE_BASE` present or not | Write/read 0x0a0c+n and see whether it sticks; run one USSE task. |
 | 8 | The ISA (pairing, phases, `efo`, F16, C10) | The instruction-level hardware tests, once a USSE task runs. |
 | 9 | Texture/render-target limits, samplers, varyings, temporaries | Render at increasing sizes; read the TSP/ISP state from a capture; dEQP limit queries. |

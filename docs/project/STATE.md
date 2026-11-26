@@ -1,10 +1,134 @@
 # Current state
 
-## Current state — 2026-11-26 (session 75)
+## Current state — 2026-11-26 (session 76)
 
-**The open `powervr_sgx` SGX540 microkernel STARTS on silicon but its event
-program is entered ONCE and never again — and the NULL job that "passed" was the
-driver's own 2 s timeout.**  Nothing is published upstream (DECISIONS §110).
+**The SGX's interrupt now reaches the CPU for the first time in the port's
+history — and four real defects were found and fixed — but the EDM still
+dispatches only once, so no job completes from the microkernel.**  Nothing is
+published upstream (DECISIONS §110).
+
+**And the vendor's own SGX540 microkernel — source *and* a prebuilt binary for
+this exact part — has been found in the DDK 1.8 drop.**  It shows that the event
+program is a **PDS dispatcher over `ir0`/`ir1`** (a different bit map from the
+`EUR_CR_EVENT_STATUS` this port polls) whose constants the host patches at load
+— which our loader never does.  That is the leading explanation for the stall
+and, more importantly, it makes *running the vendor image* a real option for the
+first time.  See the paragraph below and
+`docs/captures/sgx540-vendor-ukernel-source-2026-11-26.txt`.
+
+**The big one: the interrupt was never wired to the CPU.**  The SGX core's
+request does not go to the GIC directly on OMAP4 — it enters the `ti,sysc`
+target module's **`IRQSTATUS_2` (0xfe38)** and the wrapper forwards it only
+while **`IRQENABLE_SET_2` (0xfe44) bit 0** is set.  The DDK's own OMAP4 platform
+code enables exactly that pair and maps the **whole 64 KiB** window
+(`SYS_OMAP4430_SGX_REGS_SIZE` 0xFFFF, `gpvOCPRegsLinAddr = gsSGXRegsCPUVAddr`);
+on Linux it also defines `SGX_OCP_NO_INT_BYPASS`, so `THALIA_INT_BYPASS` is
+**not** the path there.  Our driver mapped only **0x4000** (`PVRSGX_REGS_MIN`)
+and never touched the wrapper, so `EVENT_STATUS` b31 (MASTER_INTERRUPT) could
+sit set forever with irq 147 at **count 0**.  With the gate opened, irq 147 ran
+**0 → 100000**.  Userspace cannot do this — a `/dev/mem` write to the wrapper is
+an **external abort** (L4 firewall) — so it had to go in the driver.
+[fact sheet, "Events and kicks"]
+
+**The interrupt storm it exposed, and its cause in our own microkernel.**  With
+the gate open, irq 147 climbed to exactly **100000** — the kernel's unhandled
+interrupt limit — and the line was disabled.  Cause: the image's `init_set` ORed
+**`EVENT_TIMER` (b29) into `EVENT_HOST_ENABLE`**, so every 1 kHz tick raised a
+host interrupt.  But `EVENT_HOST_ENABLE` says *which sources interrupt the host*
+— `srvinit` writes **SW_EVENT only** (`0x4000`) and the vendor ISR acks only
+SW_EVENT — while **`EVENT_PDS_ENABLE` (0x0a58) is the dispatch mask** and
+already carries TIMER (`0x2204b00f`).  The bits belong to different registers.
+Removed; `EVENT_HOST_ENABLE` now reads `0x00004000` and no stuck b31.
+
+**Three PDS defects, all in the launch program.**  (1) The single-context
+`edm_init` branch assembled a **12-word** data segment into `PVRSGX_FW_PDS0`'s
+**0x18-byte** slot, so the program needed words 0..13 while PDS1 — built after
+it at **+0x20** — occupies words 8..21 and **overwrote its `DS1[0]` and its
+`DOUTU`/`HALT`**.  It still started init because PDS1's `DOUTU` encodes the same
+code base and offset, but the task ran with PDS1's inputs.  Now assembled with
+`data = 4` so it fits (words 0-2 data, 4 `MOVS`, 5 `HALT`), verified byte-exact
+through a new **`pds`** debugfs node.  (2) **`EVENT_PDS_DATA` (0x0a6c) is the
+data segment's size in 16-byte units**; it said **3** = 48 bytes for that
+24-byte slot.  Now **1**.  (3) **`EUR_CR_PDS` (0x0abc) was never written**;
+its `DOUT_TIMEOUT_DISABLE` (b6) left the PDS data-store timeout armed.  Now
+`0x40`, as `srvinit` writes it.
+
+**`FIX_HW_BRN_30852`: the PDS must not auto-gate its clock.**  The SGX540's
+**rev-120** errata block defines it, commented *"turns off PDS auto clock
+gating"*.  `srvinit` writes `CLKGATECTL_PDS_CLKG_ON` where every other unit gets
+`_AUTO`, and excludes the PDS bit from the gating poll mask.  The driver set
+**every** unit to AUTO: `CLKGATECTL` read `0x000aa6aa` and `CLKGATESTATUS` bit 7
+(PDS) read **set** — the PDS was parked.  Now a per-core quirk
+(`PVRSGX_QUIRK_BRN_30852`); `CLKGATECTL` reads **`0x000a66aa`**.
+
+**What is still broken, and it is now precisely located.**  With every
+host-side input measured correct — `EVENT_PDS_ENABLE` carries TIMER,
+`EVENT_PDS_EXEC` resolves **exactly** to the PDS0 buffer, `EUR_CR_PDS`
+`DOUT_TIMEOUT_DISABLE` set, PDS clock forced ON, `EVENT_TIMER` cycling at 1 kHz —
+the microkernel's dynamic tick counter reads **1** and never advances, and
+`EVENT_STATUS` b29 stays latched.  **Clearing b29 through `EVENT_HOST_CLEAR`
+does not revive it** (measured with a new `timer_edge` node).  So the fault is
+**downstream of everything the host can configure**: the EDM does not re-fetch
+the event program.  That is the same class as session 74's "a store at the top
+of the event entry faults" — the microkernel task's *admission*, not the host's
+setup.
+
+**What the vendor source says the missing piece is — and a prebuilt image that
+has it.**  The DDK 1.8 drop ships the SGX540 microkernel as **source and as a
+finished binary**, and `services4/srvinit/devices/sgx/eventhandler.pds.asm` is
+the program `EVENT_PDS_EXEC` points at: a **PDS dispatcher** that reads the EDM
+interrupt registers `ir0`/`ir1`, DOUTUs them into a host attribute block, and
+`halt`s — it processes no commands itself.  Two consequences.  (1) The event
+bits are **`EURASIA_PDS_IR0_EDM_EVENT_TIMER` = bit 1**, not `EUR_CR_EVENT_STATUS`
+bit 29, which is what this port's hand-written entry polls; the vendor's USSE
+`EventHandler` also reads `ui32PDSIn0/1` and never polls STATUS for the timer.
+(2) Those PDS constants are **patched at load** (`sgxinit.c:2507-2510`,
+`PDSUKERNEL_EVENTSSetINPUT_*`; the exact words are in the generated
+`eventhandler_pds.h` — IR0 `[17]`, IR1 `[20]`, …), and **our loader patches only
+`ctlblk` and `pdtable`**, doing no input routing at all.  The prebuilt vendor
+image is `binary2_540_omap4430_android_{debug,release}/…/ukernel.bin` (22 192 B
+`cfc577aa…` / 19 984 B `ff69e400…`) with `ukernel_labels.h`'s per-command entry
+table (`EVENTHANDLER 0x50`, `TIMER 0x2AD0`, `GETMISCINFO 0xEE0`).  It is not a
+drop-in — it predates this port's `ukfw_header` — so the next session's first
+decision is **adapter for the vendor image, or keep retargeting our
+reassembly**.  Extract: `docs/captures/sgx540-vendor-ukernel-source-2026-11-26.txt`;
+fact sheet "Events and kicks"; session note addendum 2.
+
+**A misreading I caught before writing it down.**  `submit-null-job-many`
+reported *"600 null jobs in 2160 ms"* and printed `ok`, which reads like
+dispatch.  It is not: the CCB's `issued` counter moved by **1** across the whole
+run and the boot logged **one** timeout for it.  The 600 submits are being
+accounted host-side (the driver's noop counter advances on `pvrsgx_ccb_send`,
+before anything reaches the microkernel).  **Do not read that test as a GPU
+result** — the same trap-388 family as `1/1 passed`.
+
+**Suite position:** **25/50** subtests (was 0/1 before the interrupt gate), with
+`submit-null-job-timeline` and `submit-all-or-nothing` now passing and
+`submit-null-job` passing exactly **once per context** then failing — a real
+dispatch that happens once, matching the tick counter reading 1.
+
+**Bench at the close:** region 0 `0x02C1DDC2` (no flash), firmware
+`sgx540_ukernel.bin` = **`tick2`** build (md5 `7b44b33a…`), module
+`37a329a6…` (all five fixes + the `pds` and `timer_edge` nodes), `resets`
+rising once per job, irq 147 delivering when the core raises it.  **Every
+change this session was a module or firmware FILE on hd3**, reverted by copying
+the `.before-*` copies back.
+
+**Measured on the unit (sessions 74-76).**  `powervr_sgx` binds `56000000.gpu`
+and reports `open microkernel <build>, interface 1.0, features 0x8`, `EDM init`,
+`microkernel started`; its debugfs agrees — `firmware running: 1`,
+`hostctl init 0x1`, `uk-lockups 0`, `BIF_INT_STAT 0x00008000`
+(`FLUSH_COMPLETE`, **no fault**), `BIF_FAULT 0`.  `card1`/`renderD129` =
+`powervr_sgx`; `card0`/`renderD128` stay `omapdrm`.  **Starting it needs
+`edm_init=1`** (the driver's §9 single-context launch, a boot default on hd3).
+
+## Previous state — 2026-11-26 (session 75)
+
+**The event program was entered once and never again; the timer fired but
+nothing consumed it; and the `1/1 passed` was the driver's own 2 s timeout.**
+Superseded by session 76, which found *why* nothing consumed it (the interrupt
+never reached the CPU: the OCP wrapper's gate) and fixed four defects around it.
+The session-75 body below is kept because its measurements still stand.
 
 **Measured, one firmware swap and one reboot.**  The session-74 kernel-CCB trace
 could not tell "the event never reached `kick`" from "`kick` ran and found the

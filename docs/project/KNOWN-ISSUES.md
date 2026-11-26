@@ -3959,8 +3959,72 @@ report 121 §3/§11/§12.
          `0x20004000`, bit 14 set — so the field is real, just not a *PDS
          dispatch source* here.  **Do not "fix" a missing PDS bit again without
          the sweep: a header naming a mask is not evidence that the register
-         holds it** (the same lesson as trap 392, one level down).  (Session 75;
-         capture `sgx540-pds-enable-sweep-2026-11-26.txt`.)
+          holds it** (the same lesson as trap 392, one level down).  (Session 75;
+          capture `sgx540-pds-enable-sweep-2026-11-26.txt`.)
+
+398. **The "panel goes black on fast bar taps" is catacomb's double-tap SLEEP
+          gesture, and the black that will not come back is the trap-298 DSI
+          resume wedge.**  catacomb's `on_double_tap()`
+          (`src/windows/mod.rs`) splits the bottom gesture handle into
+          40% / 20% / 40%; a double-tap in the **centre 20%** calls
+          `set_display_status(false)`, while `src/input.rs` calls
+          `set_display_status(true)` on **every** double-tap — so a double-tap in
+          the notch does ON then OFF.  A double-tap needs two taps within
+          **300 ms** and ~44 px (`MAX_DOUBLE_TAP_DURATION` /
+          `MAX_DOUBLE_TAP_DISTANCE`), which is exactly why ~1 s taps do nothing
+          and ~0.2–0.5 s taps trigger it.  Measured with kprobes on
+          `drm_panel_disable`/`_enable`/`bl_power_store` (session 76): a fast-tap
+          burst gave **4 disable + 4 enable, all `comm="catacomb"`**, and one
+          cycle was `enable @196.06` then `disable @196.09` — **34 ms apart**.
+          The panel disable/enable is `backlight_disable`/`enable`, which is why
+          `bl_power` flips 0↔4 while the DRM connector's `dpms` stays `On` (a
+          real `catacomb msg dpms off` moves **both**: `bl_power=4` *and*
+          `dpms=Off`).  That sub-frame ON→OFF tears the DSI down while it is
+          re-initialising (~2.5 s) — the trap-298 wedge: backlight returns,
+          picture dead, only `reboot -f` clears it.  **Fix (applied session 76):**
+          `catacomb msg gesture-handle --height 0` in `/etc/catacomb/initrc`
+          removes the notch zone, because `ui_rect(false)` subtracts the handle
+          height so `on_double_tap`'s `point.y < bottom` early-return always
+          fires — measured **0** disable/enable afterwards, panel stayed lit.
+          Trade-off: the handle's window-cycle gestures are lost.  **Do NOT read
+          this as a rendering race** — swapping softpipe for llvmpipe made the
+          desktop snappier but did not stop the blanking, which is what pointed
+          at the gesture.  The operator also saw it from the top bar; the
+          `on_double_tap` y-guard should reject above-handle taps, so re-check
+          the top bar after this fix rather than assuming a second vector.
+          (Session 76.)
+
+399. **The SGX540 microkernel is in the DDK 1.8 drop as SOURCE and as a PREBUILT
+          BINARY — and the vendor's event path is a PDS dispatcher over
+          `ir0`/`ir1`, not a poll of `EUR_CR_EVENT_STATUS`.**  HANDOFF §5
+          predicted the source might answer the PDS-exec question; it does, and
+          it reframes the remaining work.  `services4/srvinit/devices/sgx/
+          eventhandler.pds.asm` is the program `EVENT_PDS_EXEC` points at: it
+          declares six `data dword INPUT_*` constants, starts
+          `movs douta, ir0, INPUT_IR0_PA_DEST`, branches on those bits, and ends
+          `movs doutu, INPUT_GENERIC_DOUTU0/1/2` + `halt` — a pure dispatcher
+          into the USSE `EventHandler`, which also reads `PA(ui32PDSIn0/1)`.
+          **`EURASIA_PDS_IR0_EDM_EVENT_TIMER` is bit 1
+          (`hwdefs/sgxdefs.h:3270`), not `EUR_CR_EVENT_STATUS` bit 29.**  The
+          constants are patched at load (`sgxinit.c:2507-2510`,
+          `PDSUKERNEL_EVENTSSetINPUT_*`) and the generated
+          `eventhandler_pds.h` gives the exact words (IR0 `[17]`, IR1 `[20]`,
+          timestamp `[16]`, DOUTU1 `[1],[5],[9],[13]`, DOUTU2 `[29]`, generic
+          DOUTU0 `[12]`, 3D `[0]`, TA `[4]`, SPM `[8]`; segment 144 B).
+          **This port's loader patches only `ctlblk` and `pdtable`, so no PDS
+          input routing exists at all** — a concrete candidate for "entered once,
+          never again".  Also in the drop: a **complete prebuilt vendor 540
+          microkernel**, `binary2_540_omap4430_android_{debug,release}/…
+          /ukernel/ukernel.bin` (22 192 B `cfc577aa…` / 19 984 B `ff69e400…`),
+          plus `ukernel_labels.h`'s per-command entry table and the 2D/3D/SPM/TA
+          splits; it decodes as SGX540 code with this repo's disassembler.  It
+          is not a drop-in (it predates this port's `ukfw_header`), so the next
+          session's first decision is *adapter for the vendor image vs keep
+          retargeting our reassembly* — do not keep re-deriving what the vendor
+          shipped.  **Do not "fix" `event_pds_data0` to the vendor's 9 on this
+          basis**: 144 B is the dispatcher's segment, ours is a 4-word stub whose
+          16 B is genuinely 1 (session 76 retracted exactly that in place).
+          (Session 76; capture `sgx540-vendor-ukernel-source-2026-11-26.txt`.)
 
 ## 3. Corrections to older reports
 

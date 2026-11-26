@@ -1,13 +1,13 @@
 # Session numbering
 
-The project spans **seventy-five sessions** so far (and continues).  Two numbering schemes are in use and they
+The project spans **seventy-six sessions** so far (and continues).  Two numbering schemes are in use and they
 must not be confused:
 
 > **Scope.**  These sessions are *this* project: a native, CRC-path boot of
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-75`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-76`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
 * **Linux-era** ("session 1…69") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
