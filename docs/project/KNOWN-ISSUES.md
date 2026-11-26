@@ -3820,6 +3820,61 @@ report 121 §3/§11/§12.
          `/home/psyden/Pdrive/GFX_Linux_DDK-master/eurasia/hwdefs/sgx540defs.h`.
          (Session 74.)
 
+388. **A NULL job that prints `1/1 passed` here is the driver's 2 s timeout — the
+          fence is signalled *without* an error, so `syncobj_wait` returns 0.**
+          The test's syncobj is bound to **`drm_sched`'s** `s_fence->finished`
+          (`drm_syncobj_replace_fence(sig->syncobj, &job->base.s_fence->finished)`),
+          not to `job->hw_fence`.  `pvrsgx_timedout_job()` sets `-ETIME` on
+          `job->hw_fence` and resets, then `drm_sched_start(sched, 0)` re-adds a
+          callback on the *parent* fence and finishes it with `errno = 0`
+          (`drm_sched_job_done_cb` passes `f->error`, the parent's), and
+          `drm_syncobj_array_wait_timeout()` never inspects the error — it returns
+          0 as soon as `dma_fence_is_signaled()`.  Both 2000 ms, so the race is
+          invisible.  Evidence: the two "passing" runs read `2016806` and
+          `2020499` µs against `job_timeout_ms = 2000`, with the context then
+          marked `GUILTY` (so an immediate second run reads `0/1`), and six
+          back-to-back jobs gave six resets.  **Never read `1/1 passed` as "the
+          microkernel did something" in this configuration** — check
+          `/sys/kernel/debug/dri/1/status`'s `resets` (it rises) and the
+          control-block `kick` counters (they do not).  `pvrsgx_job.c`,
+          `drm_sched_stop`/`drm_sched_start` (`sched_main.c`),
+          `drm_syncobj.c`.  (Session 75; report 278, capture
+          `sgx540-ukernel-kick-counter-2026-11-26.txt`.)
+
+389. **`consumed` is an artefact after a GPU reset — `consumed == issued`, so the
+          `consumed 2..5` in report 277 measured nothing.**  `pvrsgx_fw_start()`
+          calls `pvrsgx_ccb_reset()`, which sets `ccb WO := 0`, `RO := 0` and
+          `ccb_reset_seq := ccb_issued`; `pvrsgx_ccb_consumed()` then returns
+          `ccb_issued - min(pending, issued - reset_seq)`, i.e. `issued` when the
+          ring is empty.  An idle boot reads `ccb wo 0 ro 0 issued 1 consumed 1`.
+          While a job is stuck, the kernel side shows `wo 1 ro 0` and the verdict
+          is correctly `consumed 8` — again the pre-job value.  **Read the ring
+          (`wo`/`ro` in `status`, and the microkernel's own `UK_CCBLOG` words
+          0x39/0x3a), never `consumed`, as "commands the microkernel took".**
+          (Session 75; report 278.)
+
+390. **The build id in `dmesg` names what was really loaded; the file on hd3 may
+          already be a different build.**  The whole of session 75 ran on
+          `open microkernel ccb2` (the session-74 `UK_CCBLOG` trace build, md5
+          `7056fc74…`) while hd3's `/lib/firmware/powervr_sgx/sgx540_ukernel.bin`
+          had been switched to `invfix` (md5 `12f12abb…`) afterwards without a
+          reboot — the firmware is read only at module load, so the swap was
+          inert until the next boot.  This is trap 380's "never let a stale copy
+          linger" from the other direction: the **handoff's record** of which
+          build is loaded can be stale even when the file is current.  Always
+          confirm with `dmesg | grep 'open microkernel'` before attributing a
+          result to a build.  (Session 75.)
+
+391. **hd3's dropbear has no `scp` and no `sftp-server`, so `tools/pbscp.sh`
+          cannot push a file to this root.**  Both backends fail
+          (`/usr/libexec/sftp-server: not found`, then `scp: not found`), so a
+          firmware push silently leaves the old file in place — verify with
+          `md5sum` before rebooting, or the boot tests the previous image.  Use
+          the ssh stream instead:
+          `cat FILE | tools/pbssh.sh 'cat > /path'`.  `pbscp.sh`'s "DIRECTORIES
+          NEED -O" note is about the QNX door; this root has no `scp` at all.
+          (Session 75.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

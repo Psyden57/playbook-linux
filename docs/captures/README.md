@@ -262,9 +262,16 @@ Three captures from the session that got the microkernel running:
 | `sgx540-ukernel-start-2026-11-26.txt` | the first silicon run: `open microkernel …, features 0x8`, `EDM init: event status 0xa0000000, BIF int 0x8000`, **`microkernel started`**, the driver's own `status`/`ctlblk` dump, the `edm_init=1` requirement, and the corrected reading of trap 380 (the driver reads **hd3**, not the initramfs) |
 | `sgx540-ukernel-first-job-2026-11-26.txt` | the NULL job: `1/1 passed` against a universal `consumed 0`, the pass/stall pattern per reset, the `FIX_HW_BRN_31620` experiment (tested, rejected, revert proven byte-identical), the corrected CCB trace and what it showed, and the new `/dev/mem` constraint |
 
+Session **75** added one more, and it answers the question the three above left
+open:
+
+| file | what it shows |
+|---|---|
+| `sgx540-ukernel-kick-counter-2026-11-26.txt` | **HANDOFF-74 §0b, answered**: the `UK_KICKLOG` instrument (control-block words 0x3d/0x3e, read through the existing `ctlblk` node — no `/dev/mem`), its offline negative control (3 entries / 3 empty exits) and its one-flag revert, then the measurement — **0 in every sample of a whole job window**, `ccb wo 1 ro 0` on the kernel side against `0/0` on the microkernel side, and six jobs → six resets.  Also the mechanism for `1/1 passed` (the 2 s timeout signals `drm_sched`'s finished fence *without* an error, so `syncobj_wait` returns 0 at 2016806/2020499 µs), two corrected session-74 figures (`consumed` is a ring-reset artefact; the boot ran `ccb2`, not `invfix`), and the ssh-stream workaround for hd3 having no `scp` |
+
 `docs/reference/sgx540-ddk18-facts.md` carries the **K** facts from the
-operator-supplied GPL-2 DDK 1.8 drop; traps 384-387 are the operational record
-for session 74, and report 277 is the report.
+operator-supplied GPL-2 DDK 1.8 drop; traps 384-391 are the operational record
+for sessions 74-75, and reports 277/278 are the reports.
 
 `docs/reports/data/` is indexed by the reports that produced it; the report
 INDEX (`docs/reports/INDEX.md`) says which report is current for a topic.

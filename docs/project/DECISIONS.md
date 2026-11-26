@@ -4154,10 +4154,48 @@ The DDK drop lives **outside the repository**
 path and line, as with the QNX material.  The closed-material boundary is
 recorded in `docs/reference/sgx540-ddk18-facts.md` §9 so it is not re-litigated.
 The acceptance criterion for a "port" is still *runs and draws*, and what is
-reached so far is a started microkernel that completes a NULL job.
+reached so far is a started microkernel whose event program is entered once;
+session 75 measured that it is never re-dispatched (§113), so "completes a NULL
+job" is withdrawn — that job was the driver's timeout.
 
 **Evidence.**  Report 277; `docs/reference/sgx540-ddk18-facts.md` (the K facts
 with citations); `docs/captures/sgx540-ukernel-{list0,start,first-job}-2026-11-26.txt`;
 `rootfs/powervr-sgx/0002-sgx540-one-context-list0.patch`;
 `ukernel/golden/check.py` green after every change; traps 384-387;
 `docs/contradictions/sgx540-ukernel-srvinit-vs-powervr_sgx.md` (resolved).
+
+## 113. An instrument counts entries, not state; and a uAPI "pass" is not evidence until its fence is understood (session 75)
+
+**Decision.**  When a hardware symptom has two opposite explanations that both
+predict "the word is 0", the instrument must **count an event** rather than store
+a state, and it must be **negative-controlled** before its zeros are believed.
+Correspondingly, do not accept a uAPI subtest's pass/fail as evidence about the
+microkernel until the fence it waits on is known, and prefer the driver's own
+counters (`resets`) and the microkernel's own counters over a test binary's
+verdict.
+
+**Why.**  Session 74's kernel-CCB trace stored WO/RO at the timer test and at
+`kick` entry, and every word read 0 for a job that "passed" — which is equally
+consistent with *the event never reached `kick`* (doorbell closed) and *`kick`
+ran, found `WO == RO`, and returned*.  A count of entries separates them, and on
+silicon both counters stayed 0 through a whole job window, settling the first.
+In the same boot the "passes" turned out to be the driver's own
+`job_timeout_ms = 2000` firing at 2016806/2020499 µs: the test's syncobj is bound
+to `drm_sched`'s finished fence, which the reset finishes **without** an error,
+and `drm_syncobj_array_wait_timeout()` never inspects the error, so the expiry
+returns 0 and prints `ok`.  Had the suite's verdict been trusted, the port would
+have gone looking for a completion path for a dispatch that never happened.
+
+**Constraint.**  The counter lives in free control-block words (0x3d/0x3e here)
+gated on its own build flag, and the SGX545 serial image plus the un-instrumented
+SGX540 build stay **byte-identical** so the revert is one flag
+(`rootfs/powervr-sgx/0003-sgx540-kick-counter.patch`; with `UK_KICKLOG` unset the
+same command reproduces `7056fc74…`).  A store at the top of the event entry is
+**not** a valid instrument on this core — it faults (session 74) — so an entry
+counter must ride after an existing read.  Register evidence still comes only
+from inside the driver (trap 384).
+
+**Evidence.**  Report 278 and `docs/captures/sgx540-ukernel-kick-counter-2026-11-26.txt`
+(the run, its negative control, the timing figures); traps 388-391
+(`1/1 passed` semantics, `consumed` after a reset, the build id in `dmesg`, and
+hd3's missing `scp`).

@@ -1,0 +1,190 @@
+# SGX540: the EDM is never dispatched after its init kick (session 75)
+
+The one experiment HANDOFF-74 §0b specified, run on the reference unit
+(`0x50175127`, OMAP4430 ES2.2).  **Read live on the unit; one firmware swap, one
+reboot.**
+
+## The instrument
+
+HANDOFF §0b asked for *one* counter that the EDM advances per dispatch and the
+host can read.  The earlier kernel-CCB trace could not answer the question
+because every word it wrote read **0** for a job that "passed" — and a word left
+at 0 cannot distinguish *"the event never reached `kick`"* from *"`kick` ran and
+found the CCB empty"*.  So this experiment counts **entries**, not state:
+
+* `UK_KICKLOG=1` in `ukernel/ukernel.py` increments control-block word **0x3d**
+  at `kick` entry, placed **after** the WO/RO read (so the store adds no new EDM
+  admission path — an entry-top store faulted on this core, see the session-74
+  cold-boot capture), and word **0x3e** at the empty-CCB exit (`kick_log_empty`).
+* Both words are the free ones: `FO_3D/0x3e/0x3f` are used only under
+  `UK_FRAMEPROF`, which this build does not set (trap 386's lesson: diff every
+  candidate word against `cores/<core>.py` **and** the diagnostic flags).
+* Host-readable without `/dev/mem`: `ctlblk` prints the whole `ta3dctl` block,
+  words 0x3c-0x3f being the last line.
+
+Built and verified offline before the boot:
+
+```
+ukernel/build.py sgx540          UK_CCBLOG=1 UK_KICKLOG=1 UK_BUILD_ID=kick1
+mkukfw.py --manifest             -> image 0x3988 crc 0xe1595f88
+                                 md5 229b838cdbf0c2787472f0b48fa1c5c2, 14848 B
+ukernel/test_emu.py sgx540       all OK (incl. the pd-table load case)
+ukernel/golden/check.py          SGX545 serial image still 83b5b0a7…, 14536 B
+```
+
+**Negative control (the counter is not dead by construction).** Driving the same
+image through the offline emulator, `init` + three bare doorbell events with an
+empty kernel CCB give `0x3d = 3`, `0x3e = 3`.  So on the emulator the counters
+move; a zero on hardware is a measurement, not a broken instrument.
+
+**Revert is one `md5sum`:** with `UK_KICKLOG` unset the build reproduces the
+image that was running before this session byte-for-byte (md5
+`7056fc74b42af666fc6c1c15f17d18df`, `UK_CCBLOG=1 UK_BUILD_ID=ccb2`).  Every
+change is inside `if KICK_LOG:`.
+
+Deployed with `cat > …` over ssh (hd3's dropbear has **no** `scp` and no
+`sftp-server`, so `tools/pbscp.sh` cannot be used on this root):
+
+```
+cat /tmp/sgx540_kick1.bin | tools/pbssh.sh 'cat > /lib/firmware/powervr_sgx/sgx540_ukernel.bin'
+md5sum … -> 229b838c…  (read back, byte-true)
+reboot -f
+dmesg -> open microkernel kick1, interface 1.0, features 0x8
+         EDM init: event status 0xa0000000, BIF int 0x8000
+         microkernel started
+```
+
+## The measurement
+
+`ctlblk` words 0x38-0x3f (last line), sampled every 150 ms through the whole
+2 s job window.  The driver's own picture of the ring is in the same line to its
+left, from `/sys/kernel/debug/dri/1/status`.
+
+**Job 1, from a clean boot (`resets 0`):**
+
+```
+  null job signalled in 2033835 us
+  ok
+1/1 passed
+[drm] *ERROR* job timed out (ccb 1, consumed 0, ... events 0xa0000000/0x0); resetting
+[drm] microkernel started again
+```
+
+**Every sample, 12/12 samples over the whole window:**
+
+```
+sample  1..12: 0x38-0x3f = 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+```
+
+All eight words — the whole control block from 0x38 up — stayed **0**
+throughout, including both new counters (`0x3d`, `0x3e`).  The driver held the
+command the whole time:
+
+```
+during: ccb wo 1 ro 0 issued 9 consumed 8 | ctlblk 0x38-0x3f: 00000000 … (all zero)
+```
+
+and the microkernel's own read of the very same ring is `WO 0 / RO 0`
+(`UK_CCBLOG`'s words `0x39`/`0x3a`, also 0).  So the doorbell did not open and
+the event program was not re-entered: **`kick` never ran once in two seconds**.
+
+**Six jobs back to back, no reboot — every one cost a reset:**
+
+```
+run 1: 0/1 passed
+run 2: 1/1 passed   null job signalled in 2016806 us
+run 3: 0/1 passed
+run 4: 1/1 passed   null job signalled in 2020499 us
+run 5: 0/1 passed
+run 6: 0/1 passed
+--- resets now: 8 ---               (was 2 before the six)
+--- ctlblk 0x38-0x3f: all 0 ---
+```
+
+## What the two passes actually are
+
+**They are the driver's own timeout, not a completion.**  The two "passing"
+runs read `2016806` and `2020499` µs, and `job_timeout_ms` is **2000**.  The
+chain, read from the kernel sources:
+
+1. `pvrsgx_timedout_job()` (`pvrsgx_job.c`) signals every fence on the GPU:
+   `dma_fence_set_error(…, -ETIME); dma_fence_signal_locked(…)`, then
+   `drm_sched_start(&sdev->sched, 0)`.
+2. The test's syncobj is bound to the **scheduler's** `s_fence->finished`
+   (`drm_syncobj_replace_fence(sig->syncobj, done)` with `done =
+   &job->base.s_fence->finished`), not to `job->hw_fence`.
+   `drm_sched_start(sched, 0)` re-adds a callback on that parent fence and calls
+   `drm_sched_job_done(s_job, fence->error ?: errno)` with `errno = 0`, and
+   `drm_sched_job_done_cb` passes `f->error` — the *parent's*, which is 0.
+   So the finished fence is signalled **without an error**.
+3. `drm_syncobj_array_wait_timeout()` (`drm_syncobj.c`) returns **0** as soon as
+   `dma_fence_is_signaled()`; it never inspects the fence's error.  So
+   `syncobj_wait(…, 2000000000)` returns **0** — the test prints `1/1 passed`.
+4. Everything else in the same path fails: the reset marks the context
+   `GUILTY` and counts the failure.  Interleaving a run into two jobs on one
+   context gives `0/1` (the context is guilty), which is exactly the observed
+   `0/1` next to `1/1`.
+
+So "a passing job" and "the driver reports a timeout" are **one event**: the
+2 s expiry that both signals the fence and resets the GPU.  `1 passed` is a
+timing artefact of `syncobj_wait` using the same 2000 ms as the job timeout, not
+evidence that the microkernel did anything.
+
+## What it means for the four outcomes in HANDOFF-74 §0b
+
+The document listed four readings.  This is **outcome 3** —
+
+> *"The counter never advances, yet job 1 passes → the pass does not come from
+> the microkernel's completion path at all.  Then the driver's own accounting is
+> the thing to trust, and the question becomes 'what does the test's fence
+> actually wait on'."*
+
+It is outcome 3 with the mechanism now identified: the fence waits on
+`drm_sched`'s finished fence, which the reset signals without an error.  The
+same run also rules out outcome 1's premise ("one or two jobs pass immediately
+after a GPU reset, then none"): **every** job after a reset resets again, six
+for six, and none is consumed.
+
+## Also measured, and it corrects the handoff
+
+* **The `consumed 2..5` figure in report 277 is an artefact.**  `pvrsgx_fw_start()`
+  calls `pvrsgx_ccb_reset()` (`ccb WO := 0`, `RO := 0`,
+  `ccb_reset_seq := ccb_issued`), and `pvrsgx_ccb_consumed()` returns
+  `ccb_issued - pending`, so immediately after a reset `consumed == issued`.  On
+  an idle boot the dump reads `ccb wo 0 ro 0 issued 1 consumed 1` — it says
+  nothing about what the microkernel took.  **Do not read `consumed` as
+  "commands taken" in this configuration.**
+* **The microkernel is alive and never latches an event bit.**  Twelve seconds
+  after its start it reads `firmware running: 1`, `uk-lockups 0`, and
+  `EVENT_STATUS = 0xa0000000` — the *same* value `EDM init` printed.  There is no
+  dispatch, no ack, and no tick: `EVENT_HOST_ENABLE = 0x20004000` (SW_EVENT +
+  TIMER) is set and the timer source enabled, but nothing is dispatched.
+* **The boot ran `ccb2`, not `invfix`.**  The session-74 handoff records the
+  durable image as `invfix` (md5 `12f12abb…`); the boot that was up for the
+  whole session loaded `open microkernel ccb2` (the `UK_CCBLOG` trace build, md5
+  `7056fc74…`) and hd3's file was swapped to `invfix` afterwards without a
+  reboot.  Both load and start; neither dispatches.  Trap 380's rule ("never let
+  a stale copy linger") applies to the *build id in `dmesg`*, which names what
+  was really loaded.
+
+## The next experiment this points at (not run)
+
+The instrument is in place and free; what it says is that the **event program is
+not re-owned at all**.  The one non-invasive follow-up is the driver's own doorbell
+path: `ccb_write()` writes `EVENT_KICK` (0xac8, `NOW` b0) and then polls.  Whether
+that write reaches the core is a register question — and §0b says do not ask
+another register question before this one, which is now answered.  The next
+session's unit is therefore **the doorbell (`EUR_CR_EVENT_KICK` 0xac8 / the
+`EVENT_KICKER` 0xac4 address field on a 28-bit core) and the `EVENT_PDS_ENABLE`
+dispatch the DDK derives (`0x2204f00f`)**, read from *inside the driver*
+(trap 384), not from userspace.
+
+## Bench at the close
+
+Region 0 **`0x02C1DDC2`** (unchanged — no flash this session, the firmware swap
+is a file on hd3), region 1 `20a5edd3…`, hd3 the Nura ext4 rw; `BOOTCTR_FCTRY`
+**`0x1e`** (`dmesg | grep pbrpmb`: `0x1e000000`, `>= threshold 0x1e, no write`);
+battery Full 4.151 V / 100 %; `nproc` 2, PID 1 affinity `0,1`; `wlan0`
+`192.168.0.231`; `card1`/`renderD129` = `powervr_sgx`, `card0` = `omapdrm`;
+`firmware running: 1`, `uk-lockups 0`, `BIF_FAULT 0`, **`resets 9`** (this
+session's jobs: 2 + 6 + 1); desktop on `swrast`.

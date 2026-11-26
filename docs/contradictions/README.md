@@ -42,6 +42,7 @@ note after it is what a reader needs before opening the file.
 | `safety-no-emmc-mount-vs-readonly-root.md` | **resolved (session 17), extended (session 18)** — read-only eMMC/QNX6 mounts are allowed; the operator has now dropped the blanket writable-eMMC prohibition **for our own data** (NVRAM, the MCT, and dangerous RPMB still forbidden).  Rule in `SAFETY.md` §4/§6, decisions `DECISIONS.md` §17/§18; `hd3` to be repurposed (report 141) |
 | `sgx540-ukernel-srvinit-vs-powervr_sgx.md` | **resolved (session 74)** — the open microkernel is a complete, validated SGX5xx microkernel (emulator tests, golden SGX545 image), but `powervr_sgx` cannot load it on a **single-context** core: `mkukfw.py` requires `SINGLE_CONTEXT` + a **`pdtable` patch**, and the image routes TA/3D to **list 1** and assumes list 0 is `srvinit`'s shared kernel PD (its own source says so).  Settled, and it took four corrections rather than one: no 0xc38/0xc78 on this core, a PD-table slot for `page_dir`, the SINGLE_CONTEXT feature bits, and (the decisive one) `0x138` having one completion group.  The image is now accepted and a NULL job completes; one or two jobs pass per GPU reset before it stalls (report 277; traps 384-387) |
 | `sgx540-use-code-base.md` | **open** — the upstream `powervr_sgx` guide says 535/540 have no `USE_CODE_BASE` registers, but our vendored GPL DDK 1.17 `sgx540defs.h` defines them (16 entries at `0x0A0C+4X`, addr b0-23, DM b24-25).  Needs one hardware write/read on our rev-120 SGX540 (report 276; `docs/reference/sgx540-factsheet.md` §Gaps #7) |
+| `sgx540-event-kick2-offset.md` | **open (session 75)** — the SGX540's second kick register is at **0x0ac0** per the fact sheet and our `sgx540_regs`, but `pvrsgx_regs.h` keeps the SGX545's **0x0ae8**.  `pvrsgx_fw_start()` prefers `event_kick2` over `EVENT_KICK` (0x0ac8), so the init kick and every job kick are aimed at different addresses — a sufficient cause for the measured "init runs once, nothing after" (report 278).  *Would settle it:* read `0x0ab0`/`0x0ac0`/`0x0ac8`/`0x0ae8` back from inside the driver around one NULL job |
 | `touch-bus-i2c2-vs-i2c3.md` | **resolved 2026-11-08 (session 36, report 193)** — the board selects `driver = munin`, and `libmtouch-munin` opens QNX `/dev/i2c1` (I²C2 `0x48072000`, live Linux `i2c-1`) at `0x65`; the Pegasus `/dev/i2c2` string was the other driver.  Linux also needed the i2c2 pads muxed (`0x4A100126`/`0x4A100128` were `0x011F` = safe mode; `0x0110` made `0x65` ACK) |
 | `twl-clk32kg-on-both-vs-0xbd-be-difference.md` | **resolved 2026-11-08 (session 35, report 192 §7)** — `CLK32KG` is base `0x8C` (`CFG_GRP`/`CFG_TRANS`/`CFG_STATE` = `0x8C`/`0x8D`/`0x8E`), not the FreeBSD `0xBC`.  QNX `01/05/05` vs Linux `07/05/55`: `CFG_TRANS` identical, `CFG_STATE` APP-ON in both (CON/MOD bits differ), `CFG_GRP` differs.  `0xBC`–`0xBE` is a different, still-unnamed non-regulator resource |
 | `usb-vusb-drop-idle-vs-intermittent.md` | **open (trigger only)** — the *classification* is settled as intermittent: session 64 called the USB gadget teardown "idle runtime PM at ~32 s"; session 65 measured 30 s with 15 s keepalives, 90 s with SSH traffic, and **no drop at all in a 376 s boot** (240 s of continuous ACM reads + 90 s idle).  Only `twl6030_usb_irq()` disables `usb3v3`; the trigger (spurious `VBUS_DET`, the `twl6030_charger` module, or a host event) is not settled.  Report 263 §4/§4a; trap 337 |
@@ -92,10 +93,16 @@ IFS rebuild, but each changes how a result should be read:
    registers.  The vendored DDK header defines them; the upstream `powervr_sgx`
    guide says 535/540 have none.  *Would settle it:* a named write/read of
    `0x0A0C+4X` on our rev-120 SGX540, or a question to the upstream maintainers.
-9. **`sgx540-ukernel-srvinit-vs-powervr_sgx.md`** — the open microkernel is a
-   two-context `srvinit` image; `powervr_sgx` needs a one-context one with a
-   `pdtable` patch and a list-0 load.  *Would settle it:* implement both and boot
-   to a kick.
+9. **`sgx540-ukernel-srvinit-vs-powervr_sgx.md`** — **resolved (session 74)**; the
+   one-context image with a `pdtable` patch and a list-0 load is what starts
+   (report 277).  Superseded as the live question by item 10.
+10. **`sgx540-event-kick2-offset.md`** — where the SGX540's second kick register
+    lives: the fact sheet and `sgx540_regs` say **0x0ac0**, `pvrsgx_regs.h` says
+    **0x0ae8**.  Because `pvrsgx_fw_start()` prefers `event_kick2` over
+    `EVENT_KICK`, the **init** kick and every **job** kick currently go to
+    different addresses — a sufficient cause for "the init runs once and nothing
+    after" (report 278).  *Would settle it:* read `0x0ab0`/`0x0ac0`/`0x0ac8`/
+    `0x0ae8` back from inside the driver, around one NULL job.
 
 *(`bt-firmware-tiinit-vs-wl1283.md` was open here until session 53; it is now
 resolved — see the table above and report 238 §3.  Left out of the live list so

@@ -442,12 +442,30 @@ flasher can replace at every point:
     (`rootfs/powervr-sgx/0002-sgx540-one-context-list0.patch`), each gated on the
     per-core `SINGLE_CONTEXT` flag with the SGX545 serial image kept
     byte-identical (DECISIONS §112), and the driver needs `edm_init=1` (its §9
-    single-context launch).  **Open: the EDM does not dispatch after its init
-    task** — one or two jobs pass per GPU reset then it stalls, and a passing job
-    is still reported `consumed 0`; HANDOFF §0b is the one experiment that
-    separates "the task runs" from "the driver accounts for it".  Then a kick, then
+    single-context launch).  Then a kick, then
     the register tables (hypothesis), `sgx540_init_regs`, `USE_CODE_BASE`
     existence (the unit is settled: shift 8, DM at 24), and Mesa;
+    (a1f) **HANDOFF-74 §0b is ANSWERED: the EDM is never re-dispatched, and the
+    "passing" job was the driver's own timeout (session 75).**
+    `rootfs/powervr-sgx/0003-sgx540-kick-counter.patch` counts `kick` entries and
+    empty-CCB exits in control-block words 0x3d/0x3e; over a whole job window
+    **both stayed 0**, the kernel ring held the command (`ccb wo 1 ro 0`) while
+    the microkernel read `0/0`, and six back-to-back jobs cost **six** resets.
+    The two `1/1 passed` runs read **2016806** and **2020499** µs against
+    `job_timeout_ms = 2000`: `pvrsgx_timedout_job()` signals the fences with
+    `-ETIME`, but the test's syncobj is bound to `drm_sched`'s
+    `s_fence->finished`, which `drm_sched_start(sched, 0)` finishes **without**
+    an error, and `drm_syncobj_array_wait_timeout()` never inspects the error —
+    so the wait returns 0 at the 2 s expiry.  Two handoff figures are corrected:
+    **`consumed` is an artefact after a reset** (`pvrsgx_ccb_reset()` sets
+    `reset_seq = issued`, so `consumed == issued`; the idle boot reads
+    `issued 1 consumed 1`), and the boot ran **`ccb2`**, not `invfix`.
+    [capture `docs/captures/sgx540-ukernel-kick-counter-2026-11-26.txt`,
+    report 278]  **The next session's unit is the doorbell
+    (`EUR_CR_EVENT_KICK` 0xac8 / `EVENT_KICKER` 0xac4, 28-bit) and
+    `EVENT_PDS_ENABLE` (`0x2204f00f`), read from inside the driver** (trap 384).
+    Then one interaction to make the EDM dispatch at all, and the aim after that
+    is a frame.
     (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b)

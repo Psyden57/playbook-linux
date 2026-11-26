@@ -1,20 +1,21 @@
-# Handoff — session 74 (absolute) → session 75
+# Handoff — session 75 (absolute) → session 76
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§6).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — this handoff is for **absolute 75 = Linux-era 69**, written at the
-session-74 close.  See `docs/sessions/NUMBERING.md`.
+`N+6` — this handoff is for **absolute 76 = Linux-era 70**, written at the
+session-75 close.  See `docs/sessions/NUMBERING.md`.
 
-> **SESSION 74 RESULT: the open `powervr_sgx` SGX540 microkernel STARTS on
-> silicon and completes a NULL job; one or two jobs pass per GPU reset, then it
-> stalls.**  `open microkernel invfix, interface 1.0, features 0x8` →
-> `EDM init: event status 0xa0000000, BIF int 0x8000` → `microkernel started`,
-> with the driver's own debugfs agreeing (`firmware running: 1`, `uk-lockups 0`,
-> `BIF_FAULT 0`).  `submit-null-job` went from a universal **`consumed 0`**
-> timeout to **`1/1 passed`**.  Four SGX545-shaped assumptions were corrected;
-> the decisive one is `EUR_CR_PDS_CACHE_STATUS` (0x138) having **one**
-> completion group, not two.  Report **277**; traps **384–387**;
-> `docs/reference/sgx540-ddk18-facts.md`.
+> **SESSION 75 RESULT: the SGX540 microkernel's event program is entered ONCE
+> and never again — and the NULL job that "passed" in session 74 was the
+> driver's own 2 s timeout, not a completion.**  An entry-counting instrument
+> (free control-block words 0x3d/0x3e, read via `ctlblk`, no `/dev/mem`) read
+> **0 in every sample of a whole job window**; the kernel ring held the command
+> (`ccb wo 1 ro 0`) while the microkernel's own read was `0/0`; six back-to-back
+> jobs cost **six** GPU resets.  The two `1/1 passed` runs took **2016806** and
+> **2020499** µs against `job_timeout_ms = 2000`, and the fence the test waits on
+> is finished by the reset *without* an error.  Report **278**; traps
+> **388–391**; DECISIONS **§113**; capture
+> `docs/captures/sgx540-ukernel-kick-counter-2026-11-26.txt`.
 
 ## 0. The job, and where it stands
 
@@ -27,7 +28,43 @@ a GPU-accelerated desktop (compositor **and** clients), and a modern browser.
 §107/§108): the closed pvr DDK's GBM cannot export dmabufs, which is what blocks
 the browser (report 275).  This session is that port.
 
-## 0a. Session 74's result in brief (do not re-derive)
+## 0a. Session 75's result in brief (do not re-derive)
+
+* **The event program is entered once and never again.**  An entry-counting
+  instrument (`UK_KICKLOG`, control-block words **0x3d** = `kick` entries and
+  **0x3e** = empty-CCB exits, free words, read through the existing `ctlblk`
+  debugfs node) read **0 at every sample of a whole 2 s job window**.  The kernel
+  ring held the command (`ccb wo 1 ro 0`) while the microkernel's own read of the
+  same ring was `0/0` (`UK_CCBLOG`'s words 0x39/0x3a).  **Six back-to-back NULL
+  jobs cost six GPU resets.**  So the doorbell never opened; `kick` never ran.
+* **A uAPI `1/1 passed` here is the driver's 2 s timeout** (trap 388).  The two
+  passing runs took **2016806** and **2020499** µs against
+  `job_timeout_ms = 2000`.  The test's syncobj is bound to `drm_sched`'s
+  `s_fence->finished`, which `pvrsgx_timedout_job()` finishes through
+  `drm_sched_start(sched, 0)` with `errno = 0` and no error bit, and
+  `drm_syncobj_array_wait_timeout()` returns 0 the moment the fence is signalled
+  without ever inspecting the error.  The context is then `GUILTY`, so the next
+  run on it reads `0/1`.  **Do not use the suite's pass column as evidence about
+  the microkernel**; use `resets` and the control-block counters.
+* **Two session-74 figures are withdrawn.**  `consumed 2..5` measured nothing —
+  `pvrsgx_fw_start()` calls `pvrsgx_ccb_reset()`, which sets
+  `ccb_reset_seq := ccb_issued`, so an idle ring reports `consumed == issued`
+  (the idle boot read `issued 1 consumed 1`); read `wo`/`ro`, not `consumed`
+  (trap 389).  And that boot ran build **`ccb2`**, not `invfix` — the file on
+  hd3 was swapped after its module load, and the firmware is read only at module
+  load (trap 390); `dmesg | grep 'open microkernel'` is the only truth.
+* **The instrument is in the durable patch series**:
+  `rootfs/powervr-sgx/0003-sgx540-kick-counter.patch`, built with
+  `UK_CCBLOG=1 UK_KICKLOG=1 UK_BUILD_ID=kick1` → md5
+  `229b838cdbf0c2787472f0b48fa1c5c2`.  With `UK_KICKLOG` unset the same command
+  reproduces the un-instrumented build **byte-for-byte** (`7056fc74…`), and
+  `ukernel/golden/check.py` keeps the SGX545 image at `83b5b0a7…`.  A negative
+  control in the emulator (`init` + 3 empty events) gives `0x3d=3`, `0x3e=3`.
+* **hd3 has no `scp` and no `sftp-server`**, so `tools/pbscp.sh` cannot push a
+  firmware file there.  Use `cat FILE | tools/pbssh.sh 'cat > /path'` and always
+  `md5sum` before rebooting (trap 391).
+
+## 0a2. Session 74's result in brief (still true, do not re-derive)
 
 * **The driver accepts the image and the microkernel runs.**  `features 0x8`
   (SINGLE_CONTEXT set, SECURE clear) with both `ctlblk` and `pdtable` patches;
@@ -59,18 +96,64 @@ the browser (report 275).  This session is that port.
   `docs/reference/sgx540-ddk18-facts.md`.  Its microkernel spec PDFs are
   "Strictly Confidential" and **unusable**.
 
-## 0b. The one experiment for session 75
+## 0b. The one experiment for session 76
 
-**Question: after the init task, does the microkernel's task run at all?**
+**Question: does the driver's doorbell reach the core?**
 
-Why it is the blocker: a passing NULL job is reported with **`consumed 0`** by
-the driver on the same boot, and a kernel-CCB trace showed **not one** of the
-microkernel's own stores running even for a job that passed — while one or two
-jobs pass immediately after a GPU reset and then none do.  Until "the task runs"
-is separated from "the driver accounts for it", every further register question
-is built on sand.
+Why it is now the blocker: session 75 measured that the event program is never
+re-entered — the `kick` counters stayed 0 through a whole job window and the
+microkernel's own view of the kernel CCB stayed `WO 0 / RO 0` while the driver's
+said `1 / 0`.  Nothing downstream can be tested until a command is dispatched
+once.  The write side is `ccb_write()`: it writes **`EUR_CR_EVENT_KICK` (0xac8,
+`NOW` b0)** after storing the command, and the address form is
+**`EVENT_KICKER` (0xac4, address b4-27, a 24-bit field at shift 4)** — on a
+**28-bit** core that field has one more bit of range than the SGX545's 32-bit
+register, which the `regs` table may still be copying.  The dispatch mask is
+`EVENT_PDS_ENABLE` (0x0a58), programmed `0x2204f00f` by the DDK's own
+derivation and never read back.
 
-**Inputs (all present and verified this session):**
+**One concrete suspicion to check first.**  `sgx540_regs` sets
+`.event_kick2 = 0x0ac0`, and `pvrsgx_fw_start()` prefers `event_kick2` over
+`EVENT_KICK` whenever it is non-zero — so on this core the **init** kick goes to
+`0x0ac0`, not to the 0xac8 `ccb_write()` uses.  The fact sheet's table
+(`docs/reference/sgx540-factsheet.md`, "Events and kicks") puts the 540's
+`EVENT_KICK1`/`EVENT_KICK2` at **0x0ab0 / 0x0ac0** with `EVENT_KICK` at 0x0ac8,
+and the driver's `pvrsgx_regs.h` puts `EVENT_KICK2` at **0x0ae8**.  Both cannot
+be right; if the two registers are meant to be *the same* one, the init kick
+landed on a different address from the per-job kick, which would explain
+"init runs once, nothing after".  Read `0x0ab0`, `0x0ac0` and `0x0ac8` back
+before anything else — it is one boot and it is free.
+
+**Method — one boot, three reads, no new instrument.**  Add a temporary debugfs
+line (or a `pr_info` in `ccb_write()`, rate-limited) that prints all three
+**from inside the driver**, around one NULL job:
+`EVENT_PDS_ENABLE` (0x0a58) as programmed and as read back, `EVENT_KICKER`
+(0xac4), `EVENT_KICK` (0xac8) read just after the write, and `EVENT_STATUS`
+(0x12c).  Everything is a register the driver already has in its `regs` table, so
+this is arithmetic, not new machinery.  **Register access must come from inside
+the driver** (trap 384) — `/dev/mem` is closed in this configuration.
+
+**What each result means:**
+
+* **`EVENT_KICK` reads back 0 and `EVENT_STATUS` gains a bit** → the doorbell
+  *did* fire and the microkernel ignores it.  Then the fault is the microkernel's
+  entry: with `kick` never entered, look at whether the event program's first
+  store is even reached — `k_getmiscinfo` is the one command that does not need
+  a client PD, so a `GETMISCINFO` submit is the cheapest thing that would prove
+  the entry runs at all (the driver sends one at init, which is why `SC_VERSION`
+  is set).
+* **`EVENT_KICK` reads back 0 and `EVENT_STATUS` is unchanged** → the write does
+  not land.  Next: `EVENT_KICKER`'s field width and the `SGX540` `regs` entry
+  against `sgx540defs.h`, and whether the core needs the kick through
+  `EVENT_KICK2` (0xac0) or a PDS exec-address pair instead.
+* **`EVENT_PDS_ENABLE` does not read back `0x2204f00f`** → the write did not
+  stick (a gated unit, or the wrong offset).  Settle that before anything else.
+* **The three read back correctly and nothing changes** → the doorbell path is
+  right and the fault is in the microkernel's own event admission (the §9 launch
+  admits only the launch task; an entry-top store faulted in session 74, which is
+  the same class of symptom).
+
+**Inputs (all present and verified — session 75 re-verified them):**
 
 * Region 0: **`0x02C1DDC2`** (`boot/chainloader/kernel.img`, 10,450,520 B,
   sha256 `70474c01…`), which carries the corrected microkernel
@@ -100,21 +183,22 @@ invocation): read the counter after job 1 and after job 2.
 
 **What each result means:**
 
-* **The counter advances for both jobs, and job 2 still fails** → the task runs;
-  the fault is downstream (a wait, the DPM free list, the completion write).
-  Next: the image's `UK_WAITLOG` (`+0x35` wait-site) on that failure.
-* **The counter advances for job 1 only** → the EDM stops being dispatched after
-  its first post-init task.  Next: `EVENT_PDS_ENABLE`/`EVENT_STATUS` read from
-  *inside* the driver at job 2, plus `SC_TAFLIGHT`/`SC_INFLIGHT` (control-block
-  words `0x36`/`0x14`) to see whether it is stuck in a defer branch rather than
-  never entered.
-* **The counter never advances, yet job 1 passes** → the pass does not come from
-  the microkernel's completion path at all.  Then the driver's own accounting is
-  the thing to trust, and the question becomes "what does the test's fence
-  actually wait on".
-* **`k_cleanup`'s force-complete marker (`0x3c = 0x0C1E`) appears** → the
-  microkernel deferred and then force-completed; that is a different failure
-  again and the defer counter (`0x1c`) is the next read.
+* **`EVENT_KICK` reads back 0 and `EVENT_STATUS` gains a bit** → the doorbell
+  fired and the microkernel ignored it.  Next: does the event entry execute at
+  all past init?  `k_getmiscinfo` is the one command that needs no client PD.
+* **`EVENT_KICK` reads back 0 and `EVENT_STATUS` is unchanged** → the write does
+  not land.  Next: `EVENT_KICKER`'s field width and the two `event_kick2`
+  offsets — see the suspicion above, and
+  `docs/contradictions/sgx540-event-kick2-offset.md`.
+* **`EVENT_PDS_ENABLE` does not read back `0x2204f00f`** → the write did not
+  stick (a gated unit, or the wrong offset).  Settle that first.
+* **All three read back correctly and nothing changes** → the doorbell path is
+  right and the fault is the microkernel's own event admission.  Session 74's
+  entry-top store faulted with the same shape (`BIF int 0xc002 fault
+  0x7ac0000`), so look at what the §9 launch admits.
+
+**Do not** spend this boot on anything else: a NULL job costs a GPU reset, and
+the counters are read through `ctlblk`, which is free.
 
 ## 0c. The media, and the way back
 
@@ -141,23 +225,23 @@ invocation): read the counter after job 1 and after job 2.
   (the printed image CRC did not change).  Verify by extracting the firmware
   from the built cpio and comparing md5s.
 
-## 1. Bench state at the session-74 close (read on the unit)
+## 1. Bench state at the session-75 close (read on the unit)
 
 | item | value |
 |---|---|
 | OS | **Linux `7.3.3 #5 SMP`**, ARMv7, dual-core 1008 MHz — not TabletOS |
-| region 0 | CRC **`0x02C1DDC2`** — media trailer `1f2dc8d7 c2ddc102` (read this session).  File `boot/chainloader/kernel.img`, 10,450,520 B, sha256 `70474c01…` |
-| region 1 | sha256 **`20a5edd3a791a37ef5e6ab9a50d1c83f8967d8257ed76c9fe23a318d4b887422`** (re-read this session) |
-| hd3 | the session-71 rebaked image **`5d3eac8f…`** at `0x4915`, grown to 62.5 G; `/dev/loop0` ext4 rw, 56.5 G, 682 M used |
-| `BOOTCTR_FCTRY` | **`0x1f`** (`dmesg \| grep pbrpmb`: `0x1f000000`, `>= 0x1e, no write`; `/init` tops up below `0x1e`) |
+| region 0 | CRC **`0x02C1DDC2`** — media trailer `1f2dc8d7 c2ddc102`.  File `boot/chainloader/kernel.img`, 10,450,520 B, sha256 `70474c01…` (**no flash this session**) |
+| region 1 | sha256 **`20a5edd3a791a37ef5e6ab9a50d1c83f8967d8257ed76c9fe23a318d4b887422`** |
+| hd3 | the session-71 rebaked image **`5d3eac8f…`** at `0x4915`, grown to 62.5 G; `/dev/loop0` ext4 rw, 56.5 G |
+| `BOOTCTR_FCTRY` | **`0x1e`** (`dmesg \| grep pbrpmb`: `0x1e000000`, `>= threshold 0x1e, no write`; `/init` tops up below `0x1e`) |
 | CPU | `nproc` 2; PID 1 affinity **`0,1`** |
-| battery | Full, 100 % (`VOLTAGE_NOW` 4 150 000 µV) |
-| GPU | `card1`/`renderD129` = **`powervr_sgx`** (open driver), microkernel running; `card0`/`renderD128` = `omapdrm` |
-| microkernel | `/lib/firmware/powervr_sgx/sgx540_ukernel.bin` = **`invfix`**, md5 `12f12abb…`, 16,640 B; the session-73 raw 14,536 B image is beside it as `.session73-raw` (inert) |
+| battery | Full, 100 % (`VOLTAGE_NOW` 4 151 000 µV) |
+| GPU | `card1`/`renderD129` = **`powervr_sgx`** (open driver), microkernel running, **`resets 9`**; `card0`/`renderD128` = `omapdrm` |
+| microkernel | `/lib/firmware/powervr_sgx/sgx540_ukernel.bin` = **`invfix`** (md5 `12f12abb…`, 16,640 B, **reverted and `md5sum`-proven**); the session-75 instrument is beside it as `.kick1` (`229b838c…`, inert), the pre-session copy as `.before-kick1`, the session-73 raw as `.session73-raw`.  **The boot that produced report 278 ran `ccb2`, not `invfix`** (trap 390) |
 | module | `/lib/modules/7.3.3/kernel/drivers/gpu/drm/powervr_sgx.ko` = `2e138afc…`; `.bak` (session 73) and `.brn31620` (the reverted experiment) beside it |
 | desktop | `swrast` (the closed DDK is blocked by the operator's standing direction; the open driver is the work) |
 | panel | 0 DSI errors, `bl_power` 0 |
-| WLAN | **up** at **`192.168.0.231`** |
+| WLAN | **up**, but the DHCP lease moved during the session: **`10.195.132.240/13`**, default via `10.192.0.1`, not the `192.168.0.231` of the session-74 close.  `usb0` is `169.254.0.1/16` either way, so **the SSH path is unaffected** — this only matters if a session wants to reach the unit over the LAN.  Read `ip -br addr` before quoting an address |
 | SSH | `PB_LINK=usb tools/pbssh.sh` works; if it times out check the cable, the host VPN (trap 341) and ufw (trap 342) |
 | device-side files | `/etc/modprobe.d/powervr-open.conf`, `/etc/modprobe.d/powervr-sgx-opts.conf`, the firmware above, the module above, `/tmp/powervr_sgx_test` (**`/tmp` is on the ext4**, trap 354 — the binary survives a reboot but is not in the flasher image) |
 | host | clone `local/work/powervr_sgx` (`95f78ca` + our patches); assembler `local/work/sgxasm/sgx-asm`; trees `local/kernel-tree` (good) and `local/kernel-tree-sgx` (open driver); **GPL-2 DDK 1.8 reference at `/home/psyden/Pdrive/GFX_Linux_DDK-master` (outside the repo)** |
@@ -183,26 +267,35 @@ invocation): read the counter after job 1 and after job 2.
 * `docs/reference/sgx540-factsheet.md` — the SGX540 facts, **C** where measured.
 * `docs/reference/sgx540-ddk18-facts.md` — every K fact from the DDK 1.8 drop,
   with the closed-material boundary and two retractions.
-* `docs/captures/sgx540-ukernel-{list0,start,first-job}-2026-11-26.txt` — this
-  session's three stages, verbatim.
+* `docs/captures/sgx540-ukernel-kick-counter-2026-11-26.txt` — **this session**:
+  the instrument, its negative control, the measurement and the fence mechanism.
+* `docs/captures/sgx540-ukernel-{list0,start,first-job}-2026-11-26.txt` — the
+  session-74 stages (read with trap 388 in hand: the `1/1 passed` there is the
+  timeout).
 * `rootfs/powervr-sgx/` — the patch series (`0001` core entry, `0002` the
-  one-context path), `sgx540.py`, `README.md`, `firmware/`.  **Nothing is
-  upstream** (DECISIONS §110).
-* `drm/tests/powervr_sgx_test.c` — the uAPI suite; `submit-null-job` is the gate.
-  Build recipe in `docs/reports/277` and `§0b` above.
+  one-context path, `0003` the kick counter), `sgx540.py`, `README.md`,
+  `firmware/`.  **Nothing is upstream** (DECISIONS §110).
+* `drm/tests/powervr_sgx_test.c` — the uAPI suite; `submit-null-job` is the gate,
+  but its verdict is not evidence without trap 388.  Build recipe in
+  `docs/reports/277` and `§0b` above.
 * `local/work/powervr_sgx/ukernel/` — the microkernel; `build.py`,
   `test_emu.py` (8/8 per core), `golden/check.py` (the SGX545 byte-identity
   gate), `cores/{sgx540,sgx545}.py` (all per-core values live here).
-* Reports **277** (this session), 276 (the scope, with its session-73 addendum
-  and §8), 275 (the Kumo negative), 274 (the browser build).
+* Reports **278** (this session), 277 (the session-74 run), 276 (the scope, with
+  its session-73 addendum and §8), 275 (the Kumo negative), 274 (the browser
+  build).
 
 ## 4. What could not be verified
 
-* **That the EDM dispatches more than once.**  Measured only as "one or two
-  NULL jobs pass per GPU reset, then none", which is a behaviour, not a
-  mechanism (§0b is how to settle it).
-* **Why a passing job is reported as `consumed 0`.**  Both statements come from
-  the same boot and are not yet reconciled.
+* **ANSWERED in session 75, do not re-derive:** *does the EDM dispatch more than
+  once?* — no, the entry counter stayed 0 through a whole job window and six jobs
+  cost six resets (report 278).  *Why is a passing job reported `consumed 0`?* —
+  it is not a passing job; `consumed` is a ring-reset artefact and the "pass" is
+  the timeout (traps 388/389).
+* **Why the doorbell does not open.**  The next experiment (§0b).  Nothing
+  between "the driver wrote `EVENT_KICK`" and "the entry ran" is measured.
+* **Whether the event entry executes at all past init.**  A `GETMISCINFO` submit
+  would settle it cheaply — it is the one command needing no client PD.
 * **Any microkernel register table.**  No kick has ever been *exercised*: the
   values 0x618, 0x62c, 0x694, TA 0x200, 3D 0x428 remain carried-over
   hypothesis, because the EDM does not dispatch far enough to use them.
@@ -233,64 +326,81 @@ invocation): read the counter after job 1 and after job 2.
 ## 6. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 75 (absolute; Linux-era 69)
+PlayBook (OMAP4430 "winchester") — session 76 (absolute; Linux-era 70)
 
 Workspace: this repository — a git checkout.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 368-387) and §3,
-DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 108-112, docs/reports/INDEX.md,
-reports 277 (this session), 276 (graphics route + addendum), 275 (Kumo),
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 368-391) and §3,
+DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 108-113, docs/reports/INDEX.md,
+report 278 (this session's predecessor), 277 (the run it corrects), 276
+(graphics route + addendum), 275 (Kumo),
 docs/reference/sgx540-factsheet.md AND docs/reference/sgx540-ddk18-facts.md,
-docs/captures/sgx540-ukernel-{list0,start,first-job}-2026-11-26.txt,
-docs/sessions/session-74.md and session-73.md.
+docs/captures/sgx540-ukernel-kick-counter-2026-11-26.txt,
+docs/contradictions/sgx540-event-kick2-offset.md,
+docs/sessions/session-75.md and session-74.md.
 
 WHERE IT STANDS: Linux 7.3.3 #5 SMP ARMv7, dual-core 1008 MHz; region 0
 0x02C1DDC2 (trailer 1f 2d c8 d7 c2 dd c1 02; keep the image FILE — it is not
 byte-reproducible), region 1 20a5edd3..., hd3 = 5d3eac8f flashed at 0x4915 and
-grown to 62.5 G; BOOTCTR_FCTRY 0x1f; card1/renderD129 = powervr_sgx with its
+grown to 62.5 G; BOOTCTR_FCTRY 0x1e; card1/renderD129 = powervr_sgx with its
 microkernel RUNNING, card0/renderD128 = omapdrm; desktop on swrast; wlan0 up
 192.168.0.231; 0 DSI errors.
 
-THE OPEN SGX540 PORT RUNS: the driver accepts the image
-("open microkernel invfix, interface 1.0, features 0x8"), starts it
-("EDM init: event status 0xa0000000, BIF int 0x8000", "microkernel started") and
-its debugfs agrees (firmware running: 1, uk-lockups 0, BIF_FAULT 0).  The NULL
-job went from "consumed 0" to 1/1 passed.  Four SGX545-shaped assumptions were
-corrected this session -- one directory list (no 0xc38/0xc78), page_dir is a
-PD-table slot, SINGLE_CONTEXT feature bits, and (the decisive one)
-EUR_CR_PDS_CACHE_STATUS 0x138 has ONE completion group so 0x27/0x4b could never
-be satisfied.  It needs modprobe powervr_sgx edm_init=1 (the driver's §9
-single-context launch; now a boot default).  NOTHING IS PUBLISHED UPSTREAM
-(DECISIONS 110).
+THE SGX540 MICROKERNEL STARTS BUT ITS EVENT PROGRAM IS ENTERED ONCE AND NEVER
+AGAIN, and the "1/1 passed" everyone has been quoting was the driver's own 2 s
+timeout.  Measured (session 75): an entry counter (control-block 0x3d/0x3e, free
+words, read via the ctlblk debugfs node) stayed 0 at every sample of a whole job
+window; the kernel ring held the command (ccb wo 1 ro 0) while the microkernel's
+own view was 0/0; six back-to-back NULL jobs cost SIX GPU resets.  The two
+"passing" runs took 2016806 and 2020499 us against job_timeout_ms = 2000 -- the
+test's syncobj is bound to drm_sched's finished fence, which the reset finishes
+WITHOUT an error, and drm_syncobj_array_wait_timeout() never inspects the error
+(trap 388).  Also withdrawn: "consumed 2..5" (a ring-reset artefact, trap 389)
+and "the boot ran invfix" (it ran ccb2, trap 390).  Four SGX545-shaped
+assumptions were corrected in session 74 and are still correct -- they are what
+makes the image START (one directory list, page_dir a PD-table slot,
+SINGLE_CONTEXT bits, and 0x138's single completion group).  It needs
+modprobe powervr_sgx edm_init=1 (the driver's §9 single-context launch, a boot
+default).  NOTHING IS PUBLISHED UPSTREAM (DECISIONS 110).
 
-WHAT REMAINS: one or two jobs pass per GPU reset, then none; a passing job is
-still reported as "consumed 0"; and a kernel-CCB trace showed NONE of the
-microkernel's own stores running even for a passing job.  HANDOFF §0b is the one
-experiment: instrument ONE counter the EDM advances per dispatch, read it from
-inside the driver (the /dev/mem path is CLOSED now -- trap 384), submit two NULL
-jobs, and interpret against the four outcomes listed there.  Do not ask another
-register question before that.
+WHAT REMAINS: HANDOFF §0b is the one experiment, and it is now about the
+DOORBELL: read EUR_CR_EVENT_KICK (0xac8), EVENT_KICKER (0xac4) and
+EVENT_PDS_ENABLE (0x0a58) back from INSIDE the driver (trap 384 closes /dev/mem)
+around one NULL job, and read 0x0ab0/0x0ac0/0x0ac8/0x0ae8 for the kick2 offset
+question (docs/contradictions/sgx540-event-kick2-offset.md -- sgx540_regs uses
+0x0ac0 for the init kick while ccb_write uses 0x0ac8 for every job kick, which
+is a sufficient cause for the symptom).  Do not instrument the microkernel again
+until that is read.
 
-TRAPS THAT COST TIME: /dev/mem cannot reach the GPU once powervr_sgx owns it
-(Errno 13; /proc/iomem shows the reservation; trap 384) -- register evidence must
-come from inside the driver.  edm_init=1 is required to start the microkernel and
-is a supported path, not a hack (trap 385).  A modprobe -r is impossible while
-elogind holds card1, so a module change costs a reboot.  Control-block words are
-feature-flag dependent: 0x3a/0x3b belong to UK_WAITLOG and 0x3c to the cleanup
-marker, so diff every candidate word against cores/<core>.py before
-instrumenting (trap 386).  Build only from local/kernel-tree or a copy of it
-(trap 378), rebuild the initramfs cpio or a firmware change is silently
-dropped, and check that the zImage actually relinked.  Never unbind pvrsrvkm
-live (trap 383).  grim captures the compositor's buffers, not the panel.
+TRAPS THAT COST TIME: a uAPI "1/1 passed" is the driver's timeout here, not a
+completion (trap 388); "consumed" after a reset equals "issued" and proves
+nothing (trap 389); dmesg's "open microkernel <build>" is the only truth about
+which firmware ran (trap 390); hd3 has no scp/sftp-server, so push a file with
+cat FILE | tools/pbssh.sh 'cat > /path' and md5sum it first (trap 391).  /dev/mem
+cannot reach the GPU once powervr_sgx owns it (trap 384) -- register evidence
+must come from inside the driver.  edm_init=1 is required to start the microkernel
+and is a supported path, not a hack (trap 385).  A modprobe -r is impossible
+while elogind holds card1, so a module change costs a reboot.  Control-block
+words are feature-flag dependent: diff every candidate word against
+cores/<core>.py AND the diagnostic flags before instrumenting (trap 386), and an
+instrumentation store at the top of the event entry FAULTS (session 74).
+Build only from local/kernel-tree or a copy of it (trap 378), rebuild the
+initramfs cpio or a firmware change is silently dropped, and check that the
+zImage actually relinked.  Never unbind pvrsrvkm live (trap 383).  grim captures
+the compositor's buffers, not the panel.
 
 BENCH: region 0 0x02C1DDC2; region 1 20a5edd3...; hd3 live /dev/loop0 ext4 rw,
-56.5 G; BOOTCTR 0x1f; nproc 2, PID 1 affinity 0,1; battery Full 100 %
-(4.150 V); panel 0 DSI errors; wlan0 up 192.168.0.231.  SSH: PB_LINK=usb
+56.5 G; BOOTCTR 0x1e; nproc 2, PID 1 affinity 0,1; battery Full 100 %
+(4.151 V); panel 0 DSI errors; wlan0 up 192.168.0.231.  SSH: PB_LINK=usb
 tools/pbssh.sh works; if it times out check the cable, the host VPN (trap 341)
 and ufw (trap 342) first.  The uAPI test binary is already at
 /tmp/powervr_sgx_test (rebuild from drm/tests/powervr_sgx_test.c, static, with
--Idocs/uapi -I$SYSROOT/usr/include -I$SYSROOT/usr/include/drm).  Kernel printk
+-Idocs/uapi -I$SYSROOT/usr/include -I$SYSROOT/usr/include/drm).  The instrumented
+firmware of session 75 is on hd3 as sgx540_ukernel.bin.kick1 (md5 229b838c...,
+inert); the live one is invfix (12f12abb...).  Building a variant image must use
+EXPLICIT output paths -- a default-output build writes sgx540_ukernel.bin, and
+clobbering that makes the offline emulator read garbage.  Kernel printk
 goes to the panel; use reboot -f; ask the operator for visual checks; do not
 screenshot; do not restart tinydm (trap 353) and do not kill Kumo (trap 367).
 An agent never writes RPMB; NVRAM read-only.  Revert experiments and prove the

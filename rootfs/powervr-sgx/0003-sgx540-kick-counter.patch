@@ -1,0 +1,107 @@
+# 0003 - the kick-dispatch counter (UK_KICKLOG=1) and the CCB trace's corrected words
+#
+# Two things, both debug-only and both behind their own flag:
+#
+#   1. The session-74 kernel-CCB trace wrote 0x3c/0x3d at the timer test and
+#      0x3e/0x3f at kick entry -- words UK_FRAMEPROF also uses. The corrected
+#      trace (what the session-74 capture actually ran) uses 0x39/0x3a and
+#      0x3b/0x07; that relocation was in the bench tree but never in 0002, so it
+#      is here.
+#   2. UK_KICKLOG=1 counts *entries*: control-block word 0x3d at `kick` entry
+#      (after the WO/RO read, so no new admission path) and 0x3e at the
+#      empty-CCB exit. Both free unless UK_FRAMEPROF is on. A word left at 0
+#      cannot distinguish "the event never reached kick" from "kick ran and found
+#      the CCB empty", which is why it exists.
+#
+# Built with UK_CCBLOG=1 UK_KICKLOG=1 UK_BUILD_ID=kick1 -> md5
+# 229b838cdbf0c2787472f0b48fa1c5c2 (image 0x3988 crc 0xe1595f88). With
+# UK_KICKLOG unset the same command reproduces the ccb2 image byte-for-byte
+# (md5 7056fc74b42af666fc6c1c15f17d18df), so the revert is a build flag.
+# Offline: test_emu.py sgx540 all OK, golden/check.py 83b5b0a7... intact, and a
+# negative control (init + 3 empty events) gives 0x3d=3, 0x3e=3.
+#
+# Result: docs/captures/sgx540-ukernel-kick-counter-2026-11-26.txt -- the EDM is
+# never re-entered after its init kick.
+#
+# Applies after 0002.
+diff --git a/ukernel/ukernel.py b/ukernel/ukernel.py
+index 243ae66..64b037e 100644
+--- a/ukernel/ukernel.py
++++ b/ukernel/ukernel.py
+@@ -85,10 +85,23 @@ TMR_LOG = os.environ.get("UK_TMRLOG") == "1"
+ # do_ta/ta_finished/do_3d/render_done), 0x3b = tick counter.
+ WAIT_LOG = os.environ.get("UK_WAITLOG") == "1"
+ # Kernel-CCB trace (UK_CCBLOG=1): store the WO/RO pair the microkernel reads, at
+-# the timer test (0x3c/0x3d) and at kick entry (0x3e/0x3f). A job that times out
++# the timer test (0x39/0x3a) and at kick entry (0x3b/0x07). A job that times out
+ # with "consumed 0" is either a command it cannot see or a doorbell that never
+ # opened, and these four words tell the two apart.
+ CCB_LOG = os.environ.get("UK_CCBLOG") == "1"
++# Kick-dispatch counter (UK_KICKLOG=1): the kernel-CCB trace above reads the WO/RO
++# pair the task sees, but a word left at 0 cannot tell "the event never reached
++# kick" from "kick ran and found the CCB empty" -- and every store the earlier
++# trace placed in the normal path read 0 for a job that passed. So count the
++# *entries* here: an unsynchronised `ldr/++/store` of a free control-block word at
++# `kick` entry, AFTER the WO/RO read (so it adds no new EDM admission path, which
++# an entry-top store faulted on -- trap 385), and a second counter at `kick_end`
++# when the empty test sent the task home. Host-readable: ctlblk words 0x3d/0x3e
++# are free unless UK_FRAMEPROF is on (its busy-tick words), and this build does
++# not set it. A NULL job that "passes" while both stay 0 means the pass comes from
++# outside the microkernel's dispatch path entirely.
++KICK_LOG = os.environ.get("UK_KICKLOG") == "1"
++KICK_COUNT, KICK_EMPTY = 0x3d, 0x3e   # control-block words: kick entries, empty-CCB exits
+ # Frame profile: UK_FRAMEPROF=1 stamps the EDM tick counter at the four render
+ # phases so the host can split a frame into TA (vertex) vs 3D (pixel). The counter (ctlblk 0x3b) increments on
+ # every EDM timer tick (~1 kHz keep-alive = ~1 ms); each phase copies it to its own ctlblk word, host-readable
+@@ -550,8 +563,8 @@ def build(a):
+     a.i("ld.a.d r7, r5, #1 [moe]")                 # read offset
+     a.i("wdf")
+     if CCB_LOG:
+-        a.st_sa(SA_SELF, 0x3c, 6)                  # WO as the microkernel reads it
+-        a.st_sa(SA_SELF, 0x3d, 7)                  # RO
++        a.st_sa(SA_SELF, 0x39, 6)                  # WO as the microkernel reads it
++        a.st_sa(SA_SELF, 0x3a, 7)                  # RO
+     a.i("test.xor.ne p0, r6, r7")                  # WO != RO -> a command is waiting
+     a.i("(p0) ba kick")                            # service the coincident doorbell
+     a.label("tmr_tick_end")
+@@ -686,9 +699,20 @@ def build(a):
+     a.i("ld.a.d r3, r1, #1 [moe]")              # read offset (slot index)
+     a.i("wdf")
+     if CCB_LOG:
+-        a.st_sa(SA_SELF, 0x3e, 2)                  # WO at kick entry
+-        a.st_sa(SA_SELF, 0x3f, 3)                  # RO
++        a.st_sa(SA_SELF, 0x3b, 2)                  # WO at kick entry
++        a.st_sa(SA_SELF, 0x07, 3)                  # RO at kick entry
++    if KICK_LOG:
++        # How many times the event reached this entry at all (free word 0x3d).
++        # Placed after the WO/RO read, so the store adds no new admission path.
++        a.i(f"ld.a.d r4, r17, #{KICK_COUNT} [moe]"); a.i("wdf")
++        a.inc32(4, 0)
++        a.i(f"st.a.d r17, #{KICK_COUNT}, r4 [moe]")
++        a.i("idf")
++        a.i("wdf")
+     a.i("test.xor.eq p0, r2, r3")               # empty?
++    if KICK_LOG:
++        # Not empty -> fall through to the command; empty -> kick_end counts it.
++        a.i("(p0) ba kick_log_empty")
+     a.i("(p0) ba kick_end")
+     # command = kernel CCB base + read_offset * 32
+     a.i(f"ld.a.d r6, r17, #{SA_KCCB} [moe]")
+@@ -1219,6 +1243,17 @@ def build(a):
+     a.i("st.a.d r1, #1, r3 [moe]")
+     a.i("idf")
+     a.i("wdf")
++    if KICK_LOG:
++        # A serviced command ends here; skip the empty counter below.
++        a.i("ba kick_end")
++        # The empty case's own exit. Count it, so "kick ran but found the CCB empty"
++        # is a number and not an inference from a word that never moved.
++        a.label("kick_log_empty")
++        a.i(f"ld.a.d r4, r17, #{KICK_EMPTY} [moe]"); a.i("wdf")
++        a.inc32(4, 0)
++        a.i(f"st.a.d r17, #{KICK_EMPTY}, r4 [moe]")
++        a.i("idf")
++        a.i("wdf")
+     a.label("kick_end")
+     # active-power idle signal: if the kernel CCB is now empty and nothing is in
+     # flight, tell the host the microkernel is idle so it can power the core
