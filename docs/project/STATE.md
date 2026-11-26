@@ -37,14 +37,36 @@ swapped after that boot's module load, and the firmware is read only at module
 load, so `dmesg | grep 'open microkernel'` is the only truth about what ran
 (trap 390).
 
-**The next unit of work: the doorbell.**  `ccb_write()` writes
-`EUR_CR_EVENT_KICK` (0xac8, `NOW` b0) and `EVENT_KICKER` (0xac4, a **28-bit**
-address field at shift 4), and the driver programs `EVENT_PDS_ENABLE = 0x2204f00f`
-— none of it read back.  **Two cheaper explanations were checked statically at
-the session's end and both are clean**, so do not re-run them: the init kick
-using `EVENT_KICK2` while jobs use `EVENT_KICK` is the vendor's own
-`MULTI_EVENT_KICK` shape (trap 392, and the earlier "sufficient cause" reading is
-withdrawn), and the event program's address matches `srvinit`'s derivation and
+**And then, measured directly: the EDM timer never fires.**  A **dynamic** tick
+counter (`UK_TICKLOG`, a 32-bit value split across free control-block words
+0x2c/0x2d) read **0 after twelve seconds idle**, with the boot's `resets` still 0
+and IRQ 147 never having asserted.  The static `ctlblk` word the session-75
+instrument used could never have shown a 1 kHz event (trap 394).  The driver also
+hands the microkernel a `HOSTCTL_UK_TIMER_CLOCK` that is **1000×** the DDK's
+count (307 200 vs the vendor's `ui32CoreClockSpeed / ui32uKernelFreq` = 307 for
+its 1 kHz tick — trap 395).  What is *proved* is that the timer does not
+dispatch; whether the 1000× value is why is the next read
+(`EUR_CR_EVENT_TIMER` 0x0acc is not in the driver's `status` dump).
+[report 278 §8; `docs/captures/sgx540-tick-counter-2026-11-26.txt`]
+
+**Also settled: the init task really does run.**  Three independent proofs, none
+of them the driver's own log line (with `edm_init=1` the *host* writes
+`ui32InitStatus`, trap 396): `SC_VERSION` (control block 0x18) = `0x00010000`, a
+microkernel-only store; `EVENT_HOST_ENABLE` b29 set (`0x20004000`), ORed in by
+`init_set` after the timer write; and `BIF_FAULT 0` throughout.
+
+**The next unit of work: two reads, one boot.**  First
+`EUR_CR_EVENT_TIMER` (0x0acc) — if it reads 0 the 1000× period is being blanked
+and the timer can never fire, which settles the paragraph above.  Then the
+doorbell: `ccb_write()` writes `EUR_CR_EVENT_KICK` (0xac8, `NOW` b0) and
+`EVENT_KICKER` (0xac4, a **28-bit** address field at shift 4), and the driver
+programs `EVENT_PDS_ENABLE = 0x2204f00f` — none of it read back.  The doorbell
+does **not** depend on the timer, so it is worth reading in the same boot (a
+`GETMISCINFO` submit needs no client PD and no timer).  **Two cheaper
+explanations were checked statically and both are clean**, so do not re-run
+them: the init kick using `EVENT_KICK2` while jobs use `EVENT_KICK` is the
+vendor's own `MULTI_EVENT_KICK` shape (trap 392; the earlier "sufficient cause"
+reading is withdrawn), and the event program's address matches `srvinit`'s and
 sits 8 MiB inside `OTHER_PDS_EXEC`'s 18-bit field (trap 393).  Read those three
 **from inside the driver** (trap 384; a debugfs line is cheapest) around one
 doorbell, plus `EVENT_STATUS` to see whether anything is latched or acked.  The

@@ -195,3 +195,32 @@ hd3; reverted to `invfix`, md5 `12f12abb…`, proven by `md5sum`), region 1
 Full 4.151 V; `nproc` 2, PID 1 affinity `0,1`; `wlan0` `192.168.0.231`;
 `card1` = `powervr_sgx`, `card0` = `omapdrm`; `firmware running: 1`,
 `uk-lockups 0`, `BIF_FAULT 0`, `resets 9`.
+
+## 8. Added after this report's own measurements: the timer never fires, and the
+instrument that showed it
+
+Two follow-ups were run with one more boot.  Evidence:
+`docs/captures/sgx540-tick-counter-2026-11-26.txt` and the reading that suggested
+it, `docs/captures/sgx540-timer-clock-2026-11-26.txt`.
+
+* **The EDM timer does not run at all.**  §2's instrument read `ctlblk`, which is
+  *static memory* — a 1 kHz event can never move a word there, so its zeros said
+  nothing about the timer (trap 394).  `UK_TICKLOG` instead increments a 32-bit
+  value in the microkernel's own memory, split across free control-block words
+  0x2c/0x2d, and the host compares two reads: **0 after twelve seconds idle**,
+  with `resets 0` and IRQ 147 never having asserted.  So nothing re-enters the
+  event program after the init task — the same statement §2 reached from the
+  `kick` counters, now measured from the dispatch side too.
+* **The driver's timer period is 1000× the DDK's count** (trap 395):
+  `pvrsgx_fw_start()` stores `pvrsgx_clock_hz() / UKERNEL_TIMER_HZ` = 307 200,
+  and `init_set` programs it verbatim into `EUR_CR_EVENT_TIMER`, whose `VALUE`
+  field is b0-23.  The DDK's own `ui32CoreClockSpeed / ui32uKernelFreq` is 307
+  for its 1 kHz tick.  Whether the oversized value is *why* the timer never fires
+  is **not** established — reading 0x0acc back is the next cheap step.
+* **The init task does run**, on three independent proofs — `SC_VERSION` (0x18 =
+  `0x00010000`, a microkernel-only store), `EVENT_HOST_ENABLE` b29 set
+  (`0x20004000`, ORed in by `init_set` after the timer write), `BIF_FAULT 0`.
+  Necessary to say because with `edm_init=1` the **host** writes
+  `ui32InitStatus` itself, so the `microkernel started` log line is not the
+  microkernel's report (trap 396); §1's claim that it "is live" rested on that
+  line and on `firmware running: 1`, which is the same bit.

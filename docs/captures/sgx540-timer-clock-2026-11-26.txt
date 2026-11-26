@@ -1,0 +1,95 @@
+# SGX540: the timer period the microkernel programs is 7.9x too long (session 75)
+
+Found while preparing the session-76 doorbell experiment.  **Host analysis plus
+three zero-cost reads on the unit; no boot, no firmware change.**
+
+## What is measured on the unit (read only)
+
+```
+# /proc/interrupts
+147:          0          0  WUGEN      21 Level     powervr_sgx      <- the GPU's IRQ, never fired
+
+# /sys/kernel/debug/dri/1/ctlblk, hostctl word 6 (HOSTCTL_UK_TIMER_CLOCK)
+hostctl @ 0x0f003100:
+  00000001 00000000 00000000 00000000 00000000 00000000 0004b000 00000000
+                                                      ^^^^^^^^ 0x0004b000 = 307 200
+
+# the whole microkernel control block, one boot after the last reset
+ta3dctl @ 0x0f003000:
+  0f003000 0f003100 0f002000 00000000 …   (self, host_ctl, ccb_ctl = host-written)
+  …
+  0f000000 …                               (0x14/0x49: a heap/page address)
+  00010000 …                               (0x18: SC_VERSION -- the ONLY
+                                            microkernel-written word)
+  … all zero …                             (0x3d/0x3e kick counters: 0; 0x27
+                                            SC_COMPLETED: 0; 0x30/0x31: 0)
+```
+
+`0x18 = SC_VERSION (0x00010000)` is written by the microkernel's `init_set`
+store and by nothing else in the driver (`ta3dctl_fill()` writes only words
+0-2, 0x16, 0x17), so **the init task did execute**: it loaded `r17` from the
+`ctlblk` patch, ran `init_set`, and ended.  That is why `hostctl init 0x1` and
+`firmware running: 1` are trustworthy — but note (below) that they are the
+*host's* own bit, set by `pvrsgx_fw_start()` after `msleep(20)`, not a report
+from the microkernel.
+
+## What is read from the driver and the microkernel source
+
+* `pvrsgx_fw_start()` writes `hc[HOSTCTL_UK_TIMER_CLOCK] =
+  pvrsgx_clock_hz(sdev) / UKERNEL_TIMER_HZ` with `UKERNEL_TIMER_HZ 1000`
+  (`pvrsgx_fw.c:83`, `:659`).  `pvrsgx_clock_hz()` returns the core's assigned
+  clock, which the DTS sets to **307.2 MHz** — so the word is **307 200**.
+* The microkernel's `init_set` reads that word and programs
+  `EUR_CR_EVENT_TIMER = period | EVENT_TIMER_ENABLE` verbatim
+  (`ukernel/ukernel.py:638-644`).  Unlike the DDK's user-mode `srvinit`, no side
+  converts it: the DDK writes a *count*.
+* `EVENT_TIMER` is `ENABLE` b24 with `VALUE` b0-23 (`sgx540defs.h`), so the
+  programmed value is `0x004B0000` — a period of **4 915 200 ticks**, not 307.
+
+## The consequence, and why it matters
+
+The microkernel relies on this timer for its keep-alive: `init_set`'s own
+comment says a periodic task keeps the EDM moving so the host watchdog does not
+false-recover a quiescent core.  A 7.9× error does not stop the *first* pass —
+which is the one pass this port has ever seen — but it stretches every period
+after it by the same factor.  Whether that is fatal or merely slow is not
+measurable from here; it is a driver bug either way.
+
+**So this is a hypothesis about the timer, not a claim about the doorbell.**  The
+doorbell's own path (`EVENT_KICK` 0xac8) is independent of the timer, and the
+measurement that points at it stands: `kick` was never entered over a whole job
+window while the ring held the command.
+
+## The check it suggests (not run)
+
+`UK_KICKLOG` reads its counters through the `ctlblk` debugfs node, which is
+static memory — so a *dynamic* pair of words is possible at no cost: have the EDM
+tick counter increment **two** free control-block words, one per-bit
+(`0x2c = word0`, `0x2d = word1`, both unused on this core and clear of
+`WAIT_3D` 0x1d / `WAIT_FREE` 0x1e), and read them **twice in a row** while the
+GPU sits idle.  Memory has no periodic snapshot to beat:
+
+* both advance -> the EDM timer **is** dispatching, and the doorbell question is
+  the only one left;
+* both static -> the timer never fires, and the timer-clock bug above is
+  confirmed on silicon rather than inferred;
+* word0 at 0xffff and word1 behind -> arithmetic, not a fault.
+
+That is one boot for a result that no snapshot of a 1 kHz counter could give.
+
+## Also measured, and it narrows the next experiment
+
+The `edm_init` launch path owns `ui32InitStatus`: it does `msleep(20)`, checks
+`BIF_INT_STAT` for a fault, then writes `INIT_COMPLETE` **itself** — the regular
+path polls for the microkernel to set it.  So the `EDM init: … microkernel
+started` log line is the host's bit, not the microkernel's, and the loopback
+observation follows: `SC_VERSION` is set, yet `0x02`/`0x03` (words 0-3) and
+`SC_COMPLETED` (0x27) are all still zero.
+
+## Bench state when this was read
+
+Region 0 **`0x02C1DDC2`** (no flash), hd3's firmware `invfix` (`12f12abb…`),
+`card1` = `powervr_sgx` with `resets 9`, `firmware running: 1`,
+`firmware running` / `uk-lockups 0`, IRQ 147 count **0**, `BOOTCTR_FCTRY 0x1e`,
+battery 4.152 V / 100 %, 0 DSI errors, `wlan0` `10.195.132.240/13`,
+`usb0` `169.254.0.1/16`.

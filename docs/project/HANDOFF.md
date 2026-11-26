@@ -6,16 +6,16 @@ Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolut
 session-75 close.  See `docs/sessions/NUMBERING.md`.
 
 > **SESSION 75 RESULT: the SGX540 microkernel's event program is entered ONCE
-> and never again — and the NULL job that "passed" in session 74 was the
-> driver's own 2 s timeout, not a completion.**  An entry-counting instrument
-> (free control-block words 0x3d/0x3e, read via `ctlblk`, no `/dev/mem`) read
-> **0 in every sample of a whole job window**; the kernel ring held the command
-> (`ccb wo 1 ro 0`) while the microkernel's own read was `0/0`; six back-to-back
-> jobs cost **six** GPU resets.  The two `1/1 passed` runs took **2016806** and
-> **2020499** µs against `job_timeout_ms = 2000`, and the fence the test waits on
-> is finished by the reset *without* an error.  Report **278**; traps
-> **388–391**; DECISIONS **§113**; capture
-> `docs/captures/sgx540-ukernel-kick-counter-2026-11-26.txt`.
+> and never again; the EDM timer never fires at all; and the NULL job that
+> "passed" in session 74 was the driver's own 2 s timeout.**  A dynamic tick
+> counter read **0 after 12 s idle** with the GPU IRQ never asserted; an
+> entry-counting instrument read **0 over a whole job window**; the kernel ring
+> held the command while the microkernel's own read was `0/0`; six back-to-back
+> jobs cost **six** GPU resets, and the two `1/1 passed` runs took **2016806**
+> and **2020499** µs against `job_timeout_ms = 2000`.  The init task *does* run
+> (`SC_VERSION`, `EVENT_HOST_ENABLE` b29).  Report **278** (§8 is the timer);
+> traps **388–396**; DECISIONS **§113**; captures
+> `docs/captures/sgx540-{ukernel-kick-counter,tick-counter}-2026-11-26.txt`.
 
 ## 0. The job, and where it stands
 
@@ -53,10 +53,33 @@ the browser (report 275).  This session is that port.
   (trap 389).  And that boot ran build **`ccb2`**, not `invfix` — the file on
   hd3 was swapped after its module load, and the firmware is read only at module
   load (trap 390); `dmesg | grep 'open microkernel'` is the only truth.
+* **The EDM timer never fires, measured directly.**  `UK_TICKLOG` increments a
+  **32-bit dynamic** counter in the microkernel's own memory (free control-block
+  words 0x2c/0x2d) once per pass through the timer branch; the host compares two
+  reads.  After **12 s idle**: **0**, with `resets 0` and IRQ 147 never having
+  asserted.  The session-75 `ctlblk` word could never have shown a 1 kHz event —
+  it is static memory — so this needed a different shape of instrument (trap
+  394).  The emulator control confirms it moves: `init`, three timer events, one
+  bare doorbell → `0x2c` = 0 → 3 → 3.
+* **The driver's timer period is 1000× the DDK's count** (trap 395):
+  `pvrsgx_fw_start()` stores `pvrsgx_clock_hz() / UKERNEL_TIMER_HZ` = **307 200**
+  and `init_set` programs it verbatim into `EUR_CR_EVENT_TIMER`, whose `VALUE`
+  field is b0-23; the DDK's own `ui32CoreClockSpeed / ui32uKernelFreq` is 307 for
+  its 1 kHz tick.  **Whether that is why the timer never fires is NOT
+  established** — reading 0x0acc back is the next cheap step.
+* **The init task really does run**, on three independent proofs, none of them
+  the `microkernel started` log line: `SC_VERSION` (0x18) = `0x00010000` (a
+  microkernel-only store), `EVENT_HOST_ENABLE` b29 set (`0x20004000`, ORed in by
+  `init_set` after the timer write), and `BIF_FAULT 0` throughout.  With
+  `edm_init=1` the **host** writes `ui32InitStatus` itself, so that log line is
+  the host's own bit (trap 396).
 * **The instrument is in the durable patch series**:
-  `rootfs/powervr-sgx/0003-sgx540-kick-counter.patch`, built with
-  `UK_CCBLOG=1 UK_KICKLOG=1 UK_BUILD_ID=kick1` → md5
-  `229b838cdbf0c2787472f0b48fa1c5c2`.  With `UK_KICKLOG` unset the same command
+  `rootfs/powervr-sgx/0003-sgx540-kick-counter.patch` and
+  `0004-sgx540-tick-counter.patch` (the second is the dynamic one).  Built
+  `UK_CCBLOG=1 UK_KICKLOG=1 UK_BUILD_ID=kick1` → md5 `229b838c…` and
+  `UK_CCBLOG=1 UK_KICKLOG=1 UK_TICKLOG=1 UK_BUILD_ID=tick1` → md5 `c94d8d2f…`;
+  applying 0001→0004 to a pristine `95f78ca` reproduces both byte-for-byte.  With
+  the new flags unset the same command
   reproduces the un-instrumented build **byte-for-byte** (`7056fc74…`), and
   `ukernel/golden/check.py` keeps the SGX545 image at `83b5b0a7…`.  A negative
   control in the emulator (`init` + 3 empty events) gives `0x3d=3`, `0x3e=3`.
@@ -98,13 +121,21 @@ the browser (report 275).  This session is that port.
 
 ## 0b. The one experiment for session 76
 
-**Question: does the driver's doorbell reach the core?**
+**Question, in this order: (1) what does `EUR_CR_EVENT_TIMER` read back, and
+(2) does anything reach the event program when a job is submitted?**
 
-Why it is now the blocker: session 75 measured that the event program is never
-re-entered — the `kick` counters stayed 0 through a whole job window and the
-microkernel's own view of the kernel CCB stayed `WO 0 / RO 0` while the driver's
-said `1 / 0`.  Nothing downstream can be tested until a command is dispatched
-once.  The write side is `ccb_write()`: it writes **`EUR_CR_EVENT_KICK` (0xac8,
+Why (1) is first: session 75 measured that the timer branch never runs — a
+dynamic counter read 0 after 12 s idle (`UK_TICKLOG`) — and separately that the
+driver hands the microkernel a period 1000× the DDK's count (trap 395).  If
+`EUR_CR_EVENT_TIMER` (0x0acc) reads 0, the 23-bit `VALUE` field is blanking
+`0x004B0000` and the timer can never fire, which is a one-line driver fix.  That
+register is **not** in the driver's `status` dump, so it needs one added line.
+
+Why (2) still matters and does not depend on (1): a *job* is submitted through
+`EVENT_KICK`, not the timer.  The `kick` counters stayed 0 through a whole job
+window, so nothing re-enters the event program after init by that route either.
+
+The write side is `ccb_write()`: it writes **`EUR_CR_EVENT_KICK` (0xac8,
 `NOW` b0)** after storing the command, and the address form is
 **`EVENT_KICKER` (0xac4, address b4-27, a 24-bit field at shift 4)** — on a
 **28-bit** core that field has one more bit of range than the SGX545's 32-bit
@@ -341,7 +372,7 @@ PlayBook (OMAP4430 "winchester") — session 76 (absolute; Linux-era 70)
 Workspace: this repository — a git checkout.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 368-393) and §3,
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 368-396) and §3,
 DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 108-113, docs/reports/INDEX.md,
 report 278 (this session's predecessor), 277 (the run it corrects), 276
 (graphics route + addendum), 275 (Kumo),
@@ -375,10 +406,16 @@ SINGLE_CONTEXT bits, and 0x138's single completion group).  It needs
 modprobe powervr_sgx edm_init=1 (the driver's §9 single-context launch, a boot
 default).  NOTHING IS PUBLISHED UPSTREAM (DECISIONS 110).
 
-WHAT REMAINS: HANDOFF §0b is the one experiment, and it is now about the
-DOORBELL: read EUR_CR_EVENT_KICK (0xac8), EVENT_KICKER (0xac4) and
-EVENT_PDS_ENABLE (0x0a58) back from INSIDE the driver (trap 384 closes /dev/mem)
-around one NULL job.  Two cheap explanations were CLEARED statically at the end
+WHAT REMAINS: the microkernel's init task DOES run (SC_VERSION, EVENT_HOST_ENABLE
+b29 -- not the "microkernel started" line, which the host writes itself under
+edm_init=1, trap 396), but nothing re-enters the event program: the EDM timer
+never fires (a dynamic counter read 0 after 12 s idle), the GPU IRQ 147 has never
+asserted, kick is never entered, and the ring keeps the command.  HANDOFF §0b is
+one boot with two reads: EUR_CR_EVENT_TIMER (0x0acc -- the driver hands the
+microkernel a period 1000x the DDK's count, trap 395), then the doorbell,
+EUR_CR_EVENT_KICK (0xac8), EVENT_KICKER (0xac4) and EVENT_PDS_ENABLE (0x0a58),
+all read from INSIDE the driver (trap 384 closes /dev/mem) around one NULL job.
+Two cheap explanations were CLEARED statically at the end
 of session 75 and must not be re-run: the init kick going to EVENT_KICK2
 (0x0ac0) while jobs use EVENT_KICK (0x0ac8) is the vendor's own shape for a
 MULTI_EVENT_KICK core (trap 392), and event_pds_addr() agrees with srvinit and

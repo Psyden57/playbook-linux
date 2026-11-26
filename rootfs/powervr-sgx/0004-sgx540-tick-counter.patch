@@ -1,0 +1,94 @@
+# 0004 - the EDM tick counter (UK_TICKLOG=1), the session-75 timer instrument
+#
+# Why a DYNAMIC counter: the 0003 instrument reads `ctlblk`, which is static
+# memory, so a 1 kHz event can never move a word there -- a snapshot cannot see a
+# tick.  This one increments a 32-bit value split across two free control-block
+# words (0x2c low 16, 0x2d high 16; unused on this core and clear of the
+# rendezvous flags WAIT_3D 0x1d / WAIT_FREE 0x1e), carrying on wrap, and the host
+# compares two reads.
+#
+# Built UK_CCBLOG=1 UK_KICKLOG=1 UK_TICKLOG=1 UK_BUILD_ID=tick1 -> image 0x3a08
+# crc 0xc8ed4b9f, md5 c94d8d2fe30087c36d24b130fa054b8d.  With UK_TICKLOG unset
+# the same command reproduces the ccb2 image byte-for-byte (7056fc74...), and
+# ukernel/golden/check.py keeps the SGX545 serial image at 83b5b0a7....
+#
+# Emulator negative control (init, 3 timer events, 1 bare doorbell): 0x2c goes
+# 0 -> 3 -> 3, i.e. it advances once per timer event and a doorbell is not a tick.
+#
+# Result: docs/captures/sgx540-tick-counter-2026-11-26.txt -- the timer branch
+# does not run at all, and the GPU's IRQ has never fired.
+#
+# Applies after 0003.
+diff --git a/ukernel/ukernel.py b/ukernel/ukernel.py
+index 64b037e..d43604f 100644
+--- a/ukernel/ukernel.py
++++ b/ukernel/ukernel.py
+@@ -89,17 +89,34 @@ WAIT_LOG = os.environ.get("UK_WAITLOG") == "1"
+ # with "consumed 0" is either a command it cannot see or a doorbell that never
+ # opened, and these four words tell the two apart.
+ CCB_LOG = os.environ.get("UK_CCBLOG") == "1"
+-# Kick-dispatch counter (UK_KICKLOG=1): the kernel-CCB trace above reads the WO/RO
+-# pair the task sees, but a word left at 0 cannot tell "the event never reached
+-# kick" from "kick ran and found the CCB empty" -- and every store the earlier
+-# trace placed in the normal path read 0 for a job that passed. So count the
+-# *entries* here: an unsynchronised `ldr/++/store` of a free control-block word at
+-# `kick` entry, AFTER the WO/RO read (so it adds no new EDM admission path, which
+-# an entry-top store faulted on -- trap 385), and a second counter at `kick_end`
+-# when the empty test sent the task home. Host-readable: ctlblk words 0x3d/0x3e
+-# are free unless UK_FRAMEPROF is on (its busy-tick words), and this build does
+-# not set it. A NULL job that "passes" while both stay 0 means the pass comes from
+-# outside the microkernel's dispatch path entirely.
++# EDM tick counter (UK_TICKLOG=1): does the periodic timer task run at all?
++#
++# Session 75 measured that `kick` is never entered (counters 0x3d/0x3e static over
++# a whole job window), and read the driver's `HOSTCTL_UK_TIMER_CLOCK` = 307 200,
++# which `init_set` programs verbatim into `EUR_CR_EVENT_TIMER` -- a period of
++# 4 915 200 ticks where the DDK writes a COUNT of 307 (capture
++# `sgx540-timer-clock-2026-11-26.txt`).  Before blaming the doorbell, settle
++# whether the tick happens at all.
++#
++# The kernel-CCB trace could not: it reads `ctlblk`, which is STATIC MEMORY -- a
++# counter sampled through it tells you nothing about a 1 kHz event.  This
++# instrument is therefore DYNAMIC: the tick increments a 32-bit value split
++# across two free control-block words, and the host reads the pair twice and
++# compares.  A dynamic counter cannot be hidden by a snapshot.
++#
++# Words 0x2c (low 16) and 0x2d (high 16): unused on this core, and clear of the
++# rendezvous flags WAIT_3D 0x1d / WAIT_FREE 0x1e and of UK_FRAMEPROF's 0x37-0x3f.
++# Emitted only when UK_TICKLOG=1, so the default and the SGX545 golden images are
++# byte-identical.
++TICK_LOG = os.environ.get("UK_TICKLOG") == "1"
++TK_LO, TK_HI = 0x2c, 0x2d   # control-block words: EDM ticks, low and high 16 bits
++# Kick-dispatch counter (UK_KICKLOG=1): how many times the event reached `kick` at
++# all, and how many of those found the CCB empty -- an unsynchronised
++# `ldr/++/store` of two free control-block words (0x3d/0x3e, free unless
++# UK_FRAMEPROF sets its busy-tick words), placed AFTER the WO/RO read so the store
++# adds no new EDM admission path (an entry-top store faulted -- trap 385).  This
++# complements UK_TICKLOG: that one says whether the timer dispatches, this one
++# whether a dispatch reaches the kick handler.
+ KICK_LOG = os.environ.get("UK_KICKLOG") == "1"
+ KICK_COUNT, KICK_EMPTY = 0x3d, 0x3e   # control-block words: kick entries, empty-CCB exits
+ # Frame profile: UK_FRAMEPROF=1 stamps the EDM tick counter at the four render
+@@ -555,6 +572,22 @@ def build(a):
+     # (WO != RO) -> `kick` services it; empty -> end directly (NOT via kick_end, whose
+     # idle ACTIVE_POWER raise would fire a host IRQ every 1 kHz tick).
+     a.label("tmr_tick_check")
++    if TICK_LOG:
++        # One EDM tick, low 16 bits; carry into the high word.  Written before the
++        # CCB test so a tick is counted whether or not a command is waiting.
++        a.i(f"ld.a.d r4, r17, #{TK_LO} [moe]"); a.i("wdf")
++        a.inc32(4, 0)                              # low += 1 (imae truncates at 16 bits)
++        a.i(f"st.a.d r17, #{TK_LO}, r4 [moe]")
++        a.i("idf")
++        a.i("wdf")
++        a.i("test.and.eq p0, r4, r4")              # wrapped to 0 -> carry
++        a.i("(!p0) ba tmr_tick_nocarry")
++        a.i(f"ld.a.d r4, r17, #{TK_HI} [moe]"); a.i("wdf")
++        a.inc32(4, 0)
++        a.i(f"st.a.d r17, #{TK_HI}, r4 [moe]")
++        a.i("idf")
++        a.i("wdf")
++        a.label("tmr_tick_nocarry")
+     # (Escape (b), the OOM terminate watchdog, was dropped: not DDK behaviour. The next-OOM grant
+     # is the real scene-finish mechanism, and the teardown + 0x658 fixes removed the hang it guarded.)
+     a.i(f"ld.a.d r5, r17, #{SA_KCCBCTL} [moe]")

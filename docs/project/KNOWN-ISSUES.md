@@ -3904,6 +3904,44 @@ report 121 §3/§11/§12.
           vendor's own (`srvinit`, which subtracts `sDevVAddrPDSExecBase` for
           exactly this core) rather than against itself.  (Session 75.)
 
+394. **A counter read through `ctlblk` is a STATIC snapshot — it can never show a
+        1 kHz event, so "the word stayed 0" from that path says nothing about
+         whether a periodic task ran.**  `ctlblk` prints the microkernel's
+         control block through a normal memory read; the session-75 instrument
+         stored its counters there and concluded "the event program is never
+         re-entered" from words that could not have moved either way for a
+         timer.  The fix is a **dynamic** counter: increment a value in the
+         microkernel's own memory and have the host read it twice.  With one
+         (`UK_TICKLOG`, control-block `0x2c`/`0x2d`) the answer was immediate —
+         **0 after 12 s idle**, i.e. the timer branch never runs at all
+         (capture `sgx540-tick-counter-2026-11-26.txt`).  Note the conclusion it
+         replaced (`kick` never entered) still stands: that one *is* valid from a
+         static word, because it is a count of entries, not of time.
+         (Session 75.)
+
+395. **`HOSTCTL_UK_TIMER_CLOCK` is 1000× the DDK's count — the driver divides by
+         1000 after already applying the 1 kHz.**  `pvrsgx_fw_start()` stores
+         `pvrsgx_clock_hz() / UKERNEL_TIMER_HZ` = 307 200 000 / 1000 =
+         **307 200**, and the microkernel's `init_set` programs that word
+         verbatim into `EUR_CR_EVENT_TIMER`.  The DDK computes the same quotient
+         (`sgxpower.c:125`, `ui32CoreClockSpeed / ui32uKernelFreq`) with
+         `ui32uKernelFreq` = **1000**, so its word is a **count for a 1 kHz
+         tick**.  Measured on the unit, the register's `VALUE` field is b0-23, so
+         `0x004B0000` may simply be blanked — which is why the timer never fires
+         is *not* yet established, only that it does not.  Read
+         `EUR_CR_EVENT_TIMER` (0x0acc) back; it is not in the driver's `status`
+         dump.  (Session 75.)
+
+396. **With `edm_init=1` the HOST writes `ui32InitStatus` itself, so "microkernel
+         started" in `dmesg` is not the microkernel's report.**  The branch does
+         `msleep(20)`, checks `BIF_INT_STAT` for a fault, then writes
+         `INIT_COMPLETE`; the regular path polls for the microkernel to set it.
+         The image's `init_set` *also* writes it.  Use the independent evidence
+         instead — and there is plenty: `SC_VERSION` (control block 0x18 =
+         `0x00010000`, a microkernel-only store) and `EVENT_HOST_ENABLE` b29
+         (`0x0130` = `0x20004000`, ORed in by `init_set` after the timer write)
+         both prove the init task ran to its end.  (Session 75.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

@@ -4218,5 +4218,16 @@ rules, both earned by mistakes in this session:
    check come from the same assumption, say so, and compare the *derivation*
    against the vendor's instead.
 
+3. **An instrument for a periodic event must be dynamic.**  A counter stored
+   somewhere the host *samples* (a debugfs dump of static memory) cannot show a
+   1 kHz event at all — however carefully it is placed.  Session 75's first
+   instrument was of that shape and its zeros were read as "the task never ran",
+   which happened to be the right answer for the wrong reason; the same
+   instrument would have missed a running timer entirely.  `UK_TICKLOG` writes a
+   value into the microkernel's own memory and the host compares two reads —
+   that is the shape to copy.  (The static count of `kick` *entries* was still
+   valid: it counted events, not time, trap 394.)
+
 Both are the same class as the report-271 lesson (log a syscall's arguments, not
-its result): prefer the primary source's *use* over a plausible-looking number.
+its result): prefer the primary source's *use* over a plausible-looking number,
+and prefer a counter you can read twice over a word you can only snapshot.

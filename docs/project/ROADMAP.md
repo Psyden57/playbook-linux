@@ -464,10 +464,18 @@ flasher can replace at every point:
     report 278]  **The next session's unit is the doorbell
     (`EUR_CR_EVENT_KICK` 0xac8 / `EVENT_KICKER` 0xac4, 28-bit) and
     `EVENT_PDS_ENABLE` (`0x2204f00f`), read from inside the driver** (trap 384).
-    Two cheaper explanations were cleared statically at the session's end and
-    must not be re-run: the differing init/job kick offsets are the vendor's own
-    `MULTI_EVENT_KICK` behaviour (trap 392), and the event program's address
-    matches `srvinit`'s derivation (trap 393).
+    Two cheaper explanations were cleared statically and must not be re-run: the
+    differing init/job kick offsets are the vendor's own `MULTI_EVENT_KICK`
+    behaviour (trap 392), and the event program's address matches `srvinit`'s
+    derivation (trap 393).  **Then measured directly: the EDM timer never fires**
+    — a dynamic counter (`UK_TICKLOG`, free control-block words 0x2c/0x2d; a
+    static `ctlblk` word can never show a 1 kHz event, trap 394) read 0 after
+    12 s idle with IRQ 147 never asserting, while the driver hands the
+    microkernel a period **1000×** the DDK's count (trap 395).  The init task
+    *does* run (`SC_VERSION`, `EVENT_HOST_ENABLE` b29 — not the "microkernel
+    started" line, which the host writes itself under `edm_init=1`, trap 396).
+    So the next boot reads `EUR_CR_EVENT_TIMER` (0x0acc) first, then the
+    doorbell.
     Then one interaction to make the EDM dispatch at all, and the aim after that
     is a frame.
     (a2) a

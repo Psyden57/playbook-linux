@@ -1,0 +1,133 @@
+# SGX540: the EDM timer never fires, measured directly (session 75, boot 2)
+
+The session-76 experiment, run early.  **One firmware swap, one reboot,
+read-only afterwards.**  This supersedes the "timer hypothesis" capture beside it
+(`sgx540-timer-clock-2026-11-26.txt`), which contains the reading that suggested
+it.
+
+## The instrument
+
+`UK_TICKLOG=1` increments a **32-bit** value split across two free control-block
+words — `0x2c` (low 16) and `0x2d` (high 16), both unused on this core and clear
+of the rendezvous flags `WAIT_3D` 0x1d / `WAIT_FREE` 0x1e — once per pass
+through the timer branch, carrying into the high word on wrap.  It is a
+**dynamic** counter, and that is the whole point: the session-75 instrument read
+`ctlblk`, which is *static memory*, so a 1 kHz event could never move a word
+there.  A dynamic counter cannot be hidden by a snapshot; the host reads the
+pair twice and compares.
+
+Built `UK_CCBLOG=1 UK_KICKLOG=1 UK_TICKLOG=1 UK_BUILD_ID=tick1`
+→ image `0x3a08` crc `0xc8ed4b9f`, md5 `c94d8d2fe30087c36d24b130fa054b8d`,
+14 976 B.  Gates held before deploying:
+
+```
+ukernel/golden/check.py            SGX545 serial image 83b5b0a7…, 14536 B  (unchanged)
+TICKLOG/KICKLOG unset, same cmd    md5 7056fc74…  (the ccb2 image, byte-identical)
+ukernel/test_emu.py sgx540         all OK
+```
+
+**Negative control in the emulator** — `init`, then three timer events
+(`EVENT_STATUS` b29), then one bare doorbell:
+
+```
+after init:             0x2c = 0x0   0x2d = 0x0
+after 3 timer events:   0x2c = 0x3   0x2d = 0x0      <- advances, once per tick
+after 1 bare doorbell:  0x2c = 0x3   0x2d = 0x0      <- a doorbell is NOT a tick
+```
+
+## The measurement
+
+Deployed with `cat … | tools/pbssh.sh 'cat > …'` (trap 391 — hd3 has no `scp`),
+md5 read back byte-true, `reboot -f`.  On boot:
+
+```
+open microkernel tick1, interface 1.0, features 0x8
+EDM init: event status 0xa0000000, BIF int 0x8000, timer 0x01033a66
+microkernel started
+firmware running: 1 lost: 0 resets: 0 irqs: 0
+```
+
+Then, **idle, nothing submitted, sampled every 3 s** (the block's 7th row is
+words 0x28-0x2f, so `0x2c`/`0x2d` are its 5th and 6th):
+
+```
+t+3s:   0 0 0 0 0 0 0 0
+t+6s:   0 0 0 0 0 0 0 0
+t+9s:   0 0 0 0 0 0 0 0
+t+12s:  0 0 0 0 0 0 0 0
+
+/proc/interrupts:  147:  0  0  WUGEN  21 Level  powervr_sgx     <- still never fired
+status:             firmware running: 1 ... resets: 0
+```
+
+**Twelve seconds idle and the timer branch has not run once.**  If it were
+ticking at the 1 kHz the driver asks for, `0x2c` would be reading ≈12 000 even
+under the suspected 7.9× divisor; it reads 0.  So this is not a divisor question
+— the periodic dispatch does not happen at all, and the GPU's interrupt has never
+asserted since boot.
+
+Both are consistent with the same statement: **nothing re-enters the event
+program after the init task.**
+
+## What is measured, and what is not
+
+* **Measured:** the timer branch does not run; the interrupt never fires; the
+  init task *does* run (session 75: `SC_VERSION` 0x18 = 0x00010000 is a
+  microkernel-only store); `kick` is never entered (session 75).
+* **Read, not measured — a bug:** `pvrsgx_fw_start()` stores
+  `HOSTCTL_UK_TIMER_CLOCK = pvrsgx_clock_hz() / UKERNEL_TIMER_HZ` = 307 200 000
+  / 1000 = **307 200**, and the microkernel's `init_set` programs that word
+  verbatim into `EUR_CR_EVENT_TIMER`.  The DDK does the same arithmetic
+  (`sgxpower.c:125`, `ui32CoreClockSpeed / ui32uKernelFreq`) with
+  `ui32uKernelFreq` = **1000**, i.e. a **count for a 1 kHz tick**.  The open
+  driver divides by 1000 but has already applied the 1 kHz in
+  `UKERNEL_TIMER_HZ`, so its word is 1000× the count.  (`sgx540defs.h` would
+  truncate it to 23 bits, but nothing has measured whether that blanking
+  silently produces 0 — that is the next read, not a conclusion.)
+* **Three independent proofs that `init_set` ran, read on the unit:**
+
+  | evidence | where | value |
+  |---|---|---|
+  | `SC_VERSION` | control block `0x18` | `0x00010000` — a microkernel-only store; `ta3dctl_fill()` writes only words 0-2, 0x16, 0x17 |
+  | `EVENT_HOST_ENABLE` b29 | register `0x0130` | **set** (`0x20004000`) — ORed in by `init_set` *after* the timer write, and nothing else writes that bit |
+  | the init's own `INIT_COMPLETE` | `hostctl` word 0 | `0x1` |
+
+* **So the init runs to its end, and it read `HOSTCTL_UK_TIMER_CLOCK` = 307 200.**
+  Neither the read nor the store faulted — `BIF_FAULT 0`, no `0xc002` launch
+  fault, and the boot does not take the `edm_init` fault path.
+* **Not explained, and it matters:** with `edm_init=1` the driver **writes the
+  period, kicks, waits 20 ms, checks `BIF_INT_STAT`, then writes `INIT_COMPLETE`
+  itself** (`pvrsgx_fw.c:696-712`), and the microkernel's `init_set` *also*
+  writes it (`ukernel.py:676-681`).  The host and the image therefore both claim
+  the same completion and neither confirms the other; "microkernel started" in
+  `dmesg` is the host's own bit.  That does not change the conclusion above —
+  the independent evidence is `SC_VERSION` and `EVENT_HOST_ENABLE` b29, not the
+  log line.
+* **Why a period of 4 915 200 ticks would never fire is not established.**  Low
+  probability, but real: `0x004B0000` may be outside what this counter accepts.
+  Less exotic and more likely is that the dispatch is gated by something else the
+  init did not set.  `EUR_CR_EVENT_TIMER` (0x0acc) is **not** in the driver's
+  `status` dump, so reading it back is the next cheap step — and it is the only
+  register that tells the two apart.
+
+## Consequence for the next experiment
+
+The doorbell read-back (§0b) is still worth doing but is no longer first: a
+command cannot be found by the timer if the timer never runs, so the ordering is
+
+1. **read `EUR_CR_EVENT_TIMER` (0x0acc) back** after `init_set` — if it reads 0,
+   the 1000× value is being blanked and the timer can never fire;
+2. only then the doorbell (`EVENT_KICK` 0xac8 / `EVENT_KICKER` 0xac4 /
+   `EVENT_PDS_ENABLE` 0x0a58), because that is how a *job* is submitted and does
+   not depend on the timer at all.
+
+Both are one boot if done together, and both are reads of registers the driver
+already has in its `regs` table.
+
+## Bench at this reading
+
+Region 0 **`0x02C1DDC2`** (no flash), hd3 firmware `tick1` (md5 `c94d8d2f…`,
+deployed for this measurement; `invfix` beside it as `.before-kick1`),
+`card1` = `powervr_sgx`, `resets 0`, `firmware running: 1`, `uk-lockups 0`,
+IRQ 147 count **0**, `BOOTCTR_FCTRY` **`0x32`** (the boot topped up
+`0x1d → 0x32`, `PASS`), battery Full 100 %, 0 DSI errors.
