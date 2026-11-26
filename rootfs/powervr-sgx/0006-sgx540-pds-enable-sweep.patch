@@ -1,0 +1,109 @@
+# 0006 - a write/read-back sweep of EVENT_PDS_ENABLE (session 75, boot 4)
+#
+# A debugfs node whose .show WRITES the register: the full word the driver
+# programs, then each bit of that word alone, reading back between each, then the
+# original value (and the restore is read back).
+#
+# Why: boot 3 found EVENT_PDS_ENABLE (0x0a58) reading 0x2204b00f where the driver
+# writes 0x2204f00f - bit 14 missing.  "Not implemented" and "masked by a
+# neighbour" produce an identical single read; writing each bit alone separates
+# them, and nothing else does.
+#
+# Result: every bit of 0x2204f00f sticks except bit 14, and bit 14 fails when
+# written ALONE - so it is not masking.  EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK is
+# named in sgx540defs.h but the register does not hold it on this silicon, which
+# makes SGX540_CR_EVENT_PDS_ENABLE_ALL (0001) functionally identical to the
+# SGX545 constant it replaced.  Capture sgx540-pds-enable-sweep-2026-11-26.txt.
+#
+# Safe by construction - 0x0a58 takes no address and no side effect beyond which
+# sources dispatch.  BUT it writes on read, which a read should not do: this node
+# exists for one deliberate `cat`.  Revert to 0005 (read-only registers) once the
+# question is settled; the bench is left on the 0005 module.
+#
+# Applies after 0005 to drm/powervr_sgx/pvrsgx_debugfs.c.
+diff --git a/drm/powervr_sgx/pvrsgx_debugfs.c b/drm/powervr_sgx/pvrsgx_debugfs.c
+index 5f9528f..e735e19 100644
+--- a/drm/powervr_sgx/pvrsgx_debugfs.c
++++ b/drm/powervr_sgx/pvrsgx_debugfs.c
+@@ -87,10 +87,81 @@ static int render_show(struct seq_file *m, void *unused)
+ 	return 0;
+ }
+ 
++/*
++ * A write/read-back sweep of the event-PDS enable register, one bit at a time.
++ *
++ * The SGX540's header defines EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK (b14) and
++ * this driver writes it (SGX540_CR_EVENT_PDS_ENABLE_ALL 0x2204f00f), yet the
++ * register reads back 0x2204b00f — that bit alone is missing, stably.  Either it
++ * is not implemented here or the store is masked, and the two look identical
++ * from a single read.  Writing each bit of the word *alone* and reading it back
++ * separates them: a bit that will not read back by itself is not implemented; a
++ * bit that reads back alone but not in the full word is being masked by a
++ * neighbour.  The original value is restored before returning.
++ *
++ * Safe by construction: this register takes no address and no side effect beyond
++ * which event sources dispatch the event program, the microkernel is already up
++ * and idle when the sweep runs, and the value is restored to what the driver
++ * programmed.  Reading the node runs the sweep.
++ */
++static int pds_enable_sweep(struct seq_buf *sb, struct pvrsgx_device *sdev)
++{
++	const struct pvrsgx_core_regs *cr = sdev->cr;
++	u32 orig = sgx_rd(sdev, cr->event_pds_enable), wrote = cr->event_pds_enable_all;
++	int idx;
++	u32 found = 0;
++
++	if (!drm_dev_enter(&sdev->base, &idx))
++		return -ENODEV;
++	seq_buf_printf(sb, "event_pds_enable 0x%04x orig 0x%08x driver writes 0x%08x\n",
++		       cr->event_pds_enable, orig, wrote);
++	/* Whole word first, so the reference value is in the log. */
++	sgx_wr(sdev, cr->event_pds_enable, wrote);
++	seq_buf_printf(sb, "  full     0x%08x -> 0x%08x %s\n", wrote,
++		       sgx_rd(sdev, cr->event_pds_enable),
++		       sgx_rd(sdev, cr->event_pds_enable) == wrote ? "same" : "DIFFERS");
++	/* Then each bit of the word alone. */
++	for (int b = 0; b < 32; b++) {
++		u32 bit = BIT(b), got;
++
++		if (!(wrote & bit))
++			continue;
++		sgx_wr(sdev, cr->event_pds_enable, bit);
++		got = sgx_rd(sdev, cr->event_pds_enable);
++		if (got & bit)
++			found |= bit;
++		seq_buf_printf(sb, "  bit %2d   0x%08x -> 0x%08x %s\n", b, bit, got,
++			       (got & bit) ? "sticks" : "** does NOT stick **");
++	}
++	seq_buf_printf(sb, "bits of 0x%08x that stick alone: 0x%08x\n", wrote, found);
++	sgx_wr(sdev, cr->event_pds_enable, orig);
++	seq_buf_printf(sb, "restored 0x%08x, reads 0x%08x\n", orig,
++		       sgx_rd(sdev, cr->event_pds_enable));
++	drm_dev_exit(idx);
++	return 0;
++}
++
++static int dispen_show(struct seq_file *m, void *unused)
++{
++	struct drm_debugfs_entry *entry = m->private;
++	struct pvrsgx_device *sdev = to_pvrsgx_device(entry->dev);
++	struct seq_buf sb;
++	char *buf = kmalloc(SZ_4K, GFP_KERNEL);
++
++	if (!buf)
++		return -ENOMEM;
++	seq_buf_init(&sb, buf, SZ_4K);
++	pds_enable_sweep(&sb, sdev);
++	seq_puts(m, seq_buf_str(&sb));
++	kfree(buf);
++	return 0;
++}
++
+ static const struct drm_debugfs_info pvrsgx_debugfs_list[] = {
+ 	{ "status", status_show, 0 },
+ 	{ "ctlblk", ctlblk_show, 0 },
+ 	{ "render", render_show, 0 },
++	{ "disp_enable", dispen_show, 0 },
+ };
+ 
+ void pvrsgx_debugfs_init(struct drm_minor *minor)

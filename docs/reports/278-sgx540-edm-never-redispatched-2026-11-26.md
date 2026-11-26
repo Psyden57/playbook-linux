@@ -261,3 +261,40 @@ The next test is narrow and one boot: a per-bit write/read-back of **0x0a58**
 from inside the driver, to separate "not implemented" from "store masked".  Note
 that "the event program is not entered" and "the bit does not stick" are not yet
 proven to be the same fact — they are two measurements that happen to agree.
+
+## 10. Fourth boot: bit 14 is absent, and session 74's PDS correction was a no-op
+
+A debugfs node (`disp_enable`) whose `.show` **writes** 0x0a58 — the full word,
+then each bit of it alone, reading back between each, then restores.  Safe by
+construction (no address, no side effect beyond which sources dispatch), and the
+restore is read back.
+
+```
+  full     0x2204f00f -> 0x2204b00f DIFFERS
+  bit 14   0x00004000 -> 0x00000000 ** does NOT stick **
+  (every other bit of the word -> sticks)
+bits of 0x2204f00f that stick alone: 0x2204b00f
+```
+
+**Bit 14 fails when written alone, so it is absent, not masked.**  Two
+consequences, the second of them uncomfortable:
+
+1. `EU_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK` is in `sgx540defs.h`, but this silicon
+   does not implement it *in that register*.  It **is** implemented in
+   `EVENT_HOST_ENABLE` (0x130 reads `0x20004000`), so the field is real and the
+   header is not simply wrong — it is mis-attributed by register, which is a new
+   kind of error for the fact sheet (its first **C** fact contradicting a **K**).
+2. **Session 74's `SGX540_CR_EVENT_PDS_ENABLE_ALL 0x2204f00f` had no effect.**
+   §3 of report 277 lists it as one of the four corrections, and it writes a bit
+   the hardware ignores, so it is functionally identical to the SGX545 constant it
+   replaced.  The other three corrections stand.  And the change was already
+   unattributable: §3/§4 of *this* report show the `1/1 passed` it was credited
+   with is the driver's timeout (trap 388) and the `consumed 0 → 2..5` is a
+   ring-reset artefact (trap 389), so nothing measured in session 74 improved.
+
+The dispatch picture is now: a PDS source (TIMER) that is enabled and fires, an
+event (`EVENT_STATUS` b29) that latches and is never cleared, a host interrupt
+(IRQ 147) that has never fired, and an event program that is never entered.  The
+unexamined step between "a source fires" and "the program is entered" is the PDS
+exec address itself — `EVENT_PDS_EXEC` = `0x00804090`, which reads back as written
+but has never been shown to point at code this core executes.

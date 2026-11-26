@@ -4228,6 +4228,22 @@ rules, both earned by mistakes in this session:
    that is the shape to copy.  (The static count of `kick` *entries* was still
    valid: it counted events, not time, trap 394.)
 
+4. **A mask named in a GPL header is not evidence that the silicon holds it —
+   and "it does not read back" is not a diagnosis until each bit is written
+   alone.**  Session 74 added `EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK` (bit 14) to
+   the driver's dispatch word and presented it as one of four corrections that
+   made the microkernel start.  A per-bit write/read-back sweep shows the register
+   does **not** implement that bit — it reads 0 even when written on its own, so
+   it is absent rather than masked — and the constant is functionally identical
+   to the value it replaced.  One `cat` would have saved the claim.  A single
+   read cannot separate "absent" from "masked by a neighbour"; a per-bit sweep
+   can, and it is a debugfs node away.
+5. **Corollary for the fact sheet's tags:** a **C** measurement may contradict a
+   **K** header, and when it does, the register attribution is the thing that is
+   wrong, not necessarily the field.  `SW_EVENT` exists — in
+   `EVENT_HOST_ENABLE`, not `EVENT_PDS_ENABLE`.  Record both, and do not "fix"
+   the driver toward the header without the read-back.
+
 Both are the same class as the report-271 lesson (log a syscall's arguments, not
 its result): prefer the primary source's *use* over a plausible-looking number,
 and prefer a counter you can read twice over a word you can only snapshot.

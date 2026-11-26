@@ -1,0 +1,101 @@
+# SGX540: `EVENT_PDS_ENABLE` bit 14 (`SW_EVENT`) does not exist on this core
+
+Session 75, boot 4.  One module change (a debugfs node that writes the register),
+one reboot.  **Read-only afterwards except for the deliberate sweep.**
+
+## Why a single read could not answer it
+
+Boot 3 found `EVENT_PDS_ENABLE` (0x0a58) reading `0x2204b00f` where the driver
+writes `0x2204f00f` — bit 14 missing, stable.  Two explanations produce the
+identical read: the bit is **not implemented**, or the store is **masked by a
+neighbour**.  A per-bit sweep separates them, and nothing else does.
+
+## The instrument
+
+A debugfs node, `disp_enable`, whose `.show` writes the register: first the full
+word the driver programs, then **each bit of that word alone**, reading back
+between each, then the original value.  Safe by construction — 0x0a58 takes no
+address and has no side effect beyond which sources dispatch the event program,
+the microkernel is up and idle, and the original value is restored (and the
+restore is read back).  Module md5 `a4aa13a9d85d347d6d5bb88a8f70852f`; the
+previous (read-only dump) module is on the unit as `.dumpregs-prev`.
+
+Note this node **writes on read**, which is not what a read should do.  It is
+there for one deliberate `cat`; the next session should revert to the dump module
+afterwards (see `HANDOFF` §1).
+
+## The measurement
+
+```
+event_pds_enable 0x0a58 orig 0x2204b00f driver writes 0x2204f00f
+  full     0x2204f00f -> 0x2204b00f DIFFERS
+  bit  0   0x00000001 -> 0x00000001 sticks
+  bit  1   0x00000002 -> 0x00000002 sticks
+  bit  2   0x00000004 -> 0x00000004 sticks
+  bit  3   0x00000008 -> 0x00000008 sticks
+  bit 12   0x00001000 -> 0x00001000 sticks
+  bit 13   0x00002000 -> 0x00002000 sticks
+  bit 14   0x00004000 -> 0x00000000 ** does NOT stick **
+  bit 15   0x00008000 -> 0x00008000 sticks
+  bit 18   0x00040000 -> 0x00040000 sticks
+  bit 25   0x02000000 -> 0x02000000 sticks
+  bit 29   0x20000000 -> 0x20000000 sticks
+bits of 0x2204f00f that stick alone: 0x2204b00f
+restored 0x2204b00f, reads 0x2204b00f
+```
+
+**Every bit of the word sticks except bit 14, and bit 14 fails when written
+alone** — so this is not masking.  `EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK` is
+named in `sgx540defs.h` but the register does not hold it on this silicon.
+
+## What this kills
+
+* **Session 74's `SGX540_CR_EVENT_PDS_ENABLE_ALL 0x2204f00f` is a no-op on this
+  core.**  Changing the driver's value from the SGX545's `0x2204b00f` to
+  `0x2204f00f` writes a bit the hardware ignores, so the two constants are
+  **functionally identical here**.  Report 277 §3 presents that change as one of
+  the four corrections; it is inert.  (The other three — one directory list, the
+  PD-table slot, the `SINGLE_CONTEXT` feature bits — are unaffected and stand.)
+* **The "decisive fix" attribution was already broken** for an independent
+  reason: session 75 showed the `1/1 passed` that motivated it is the driver's own
+  2 s timeout (trap 388) and the `consumed 0 → 2..5` change is a ring-reset
+  artefact (trap 389).  So nothing measured in session 74 actually improved.
+
+## What it does *not* kill
+
+The bit is a real field in `sgx540defs.h`, so it exists on *some* SGX540
+configuration — most likely the one the header was written for.  The distinction
+that survives is between the two registers that carry it:
+
+| register | bit 14 `SW_EVENT` | reads |
+|---|---|---|
+| `EVENT_HOST_ENABLE` (0x130) | **sticks** | `0x20004000` |
+| `EVENT_PDS_ENABLE` (0x0a58) | **does not stick** | `0x2204b00f` |
+
+So `SW_EVENT` works as a **host enable**, not as a **PDS dispatch source** on this
+core.  That is a K→**C** fact and it belongs in the fact sheet: the bit is real
+but only in the other register.
+
+## Where the dispatch stands after four boots
+
+| fact | evidence |
+|---|---|
+| the event program is never entered after init | dynamic tick counter 0 over 12 s; `kick` counters 0 over a job window |
+| the timer is a dispatch source and it fires | `EVENT_TIMER` cycling in its 1 ms period; b29 sticks in PDS_ENABLE |
+| the TIMER event is latched and never cleared | `EVENT_STATUS` = `0xa0000000` at every reading |
+| the host is never interrupted | GPU IRQ 147 count 0 |
+| the init task does run | `SC_VERSION` 0x18; `EVENT_HOST_ENABLE` b29 |
+| `SW_EVENT` is not a PDS source here | this sweep |
+
+That combination is now genuinely strange: a source that is enabled and firing,
+an event that latches, and a program that is never entered.  The next unit is
+therefore not another microkernel instrument — it is the **missing step between
+"a PDS source fires" and "the event program is entered"**, and the register that
+mediates it is the PDS exec address (`EVENT_PDS_EXEC` = `0x00804090`), which reads
+back as written but has never been shown to point at code this core executes.
+
+## Bench
+
+Region 0 `0x02C1DDC2` (no flash), firmware `invfix` (`12f12abb…`), module
+`a4aa13a9…` (the sweep), `resets 0`, IRQ 147 count 0, `BOOTCTR_FCTRY` 0x32,
+battery Full 100 %.

@@ -164,6 +164,18 @@ This is the SGX545's fine-grained split, not the SGX530's coarse one — the
   **not** a defect.  (An earlier session-75 note suspected they were; retracted.)
 * `EVENT_KICKER`'s address is **28-bit** (b4-27), matching the device address
   space (§BIF).
+* **`EVENT_PDS_ENABLE` (0x0a58) does NOT implement bit 14 `SW_EVENT` on this
+  silicon — C, measured.**  `sgx540defs.h:2043` names
+  `EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK 0x00004000`, but a per-bit
+  write/read-back sweep writes every bit of `0x2204f00f` alone and **only bit 14
+  fails to read back** (0 even when written on its own, so absent rather than
+  masked).  The driver's `SGX540_CR_EVENT_PDS_ENABLE_ALL 0x2204f00f` is
+  therefore functionally identical to the SGX545 `0x2204b00f` on this core.
+  `SW_EVENT` **is** present in `EVENT_HOST_ENABLE` (0x130 = `0x20004000`), so the
+  field exists — it is simply not a PDS dispatch source here.  Correlation:
+  `EVENT_STATUS` b29 (TIMER) stays latched and the GPU's IRQ has never fired.
+  (Session 75; capture `sgx540-pds-enable-sweep-2026-11-26.txt`.)  This is the
+  first **C** fact in this sheet that contradicts a **K** one.
 * **The event PDS register pair.**  Two exist per requestor on this core, and
   the microkernel's is the `OTHER` one:
   `EUR_CR_EVENT_PIXEL_PDS_EXEC/DATA/INFO` at **0x0a5c/0x0a60/0x0a64** and

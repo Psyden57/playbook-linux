@@ -3945,20 +3945,22 @@ report 121 §3/§11/§12.
          (`0x0130` = `0x20004000`, ORed in by `init_set` after the timer write)
          both prove the init task ran to its end.  (Session 75.)
 
-397. **`EVENT_PDS_ENABLE` (0x0a58) reads back `0x2204b00f` although the driver
-         writes `0x2204f00f` — bit 14 (`SW_EVENT`) does not stick, and the
-         SGX540's header defines it.**  `sgx540defs.h:2043` has
-         `EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK 0x00004000`, and session 74
-         changed the entry to `SGX540_CR_EVENT_PDS_ENABLE_ALL 0x2204f00f`
-         precisely to add it — the bit that turned a universal timeout into
-         `1/1 passed`.  Read back on the unit the register holds
-         **`0x2204b00f`**, i.e. the SGX545 value, and it is *stable* across
-         reads (not self-clearing).  So either the bit is not implemented in
-         this register on this core, or the store is masked.  `SW_EVENT` is the
-         microkernel→host signal, so if it is not a dispatch source here the
-         host can never be interrupted — which is consistent with IRQ 147 having
-         never fired.  **Unresolved; the next test is a write/read-back of
-         0x0a58 with each bit, from inside the driver.**  (Session 75.)
+397. **`EVENT_PDS_ENABLE` (0x0a58) bit 14 (`SW_EVENT`) is NOT IMPLEMENTED on
+         this core — and session 74's `SGX540_CR_EVENT_PDS_ENABLE_ALL` is
+         therefore a no-op.**  `sgx540defs.h:2043` names
+         `EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK 0x4000`, and session 74 changed
+         the entry's value to `0x2204f00f` to add it, presenting that as one of
+         four corrections that made the microkernel "start".  A per-bit
+         write/read-back sweep settles it: writing **each bit of the word
+         alone**, every bit sticks **except 14**, which returns 0 even on its
+         own — so it is absent, not masked.  The driver's value therefore
+         behaves identically to the SGX545 constant it replaced.  **`SW_EVENT`
+         does work in the other register** — `EVENT_HOST_ENABLE` (0x130) reads
+         `0x20004000`, bit 14 set — so the field is real, just not a *PDS
+         dispatch source* here.  **Do not "fix" a missing PDS bit again without
+         the sweep: a header naming a mask is not evidence that the register
+         holds it** (the same lesson as trap 392, one level down).  (Session 75;
+         capture `sgx540-pds-enable-sweep-2026-11-26.txt`.)
 
 ## 3. Corrections to older reports
 

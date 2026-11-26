@@ -6,18 +6,19 @@ Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolut
 session-75 close.  See `docs/sessions/NUMBERING.md`.
 
 > **SESSION 75 RESULT: the SGX540 microkernel's event program is entered ONCE
-> and never again; the timer fires but nothing consumes it; one dispatch bit
-> does not stick; and the NULL job that "passed" in session 74 was the driver's
-> own 2 s timeout.**  Three boots.  A dynamic tick counter read **0 over 12 s**
-> while `EUR_CR_EVENT_TIMER` cycles inside its period; `EVENT_STATUS` b29 stays
-> **latched and unacknowledged**; IRQ 147 has **never** fired; `kick` is never
-> entered and six jobs cost six resets; and the two `1/1 passed` runs took
-> **2016806** / **2020499** µs against `job_timeout_ms = 2000`.  Of the whole
-> dispatch configuration exactly one field is not what the driver wrote:
-> **`EVENT_PDS_ENABLE` reads `0x2204b00f` where it writes `0x2204f00f`** (bit 14
-> `SW_EVENT`).  The init task *does* run (`SC_VERSION`, `EVENT_HOST_ENABLE` b29).
-> Report **278** (§8 timer, §9 registers); traps **388–397**; DECISIONS **§113**;
-> captures `docs/captures/sgx540-{ukernel-kick-counter,tick-counter,dispatch-regs}-2026-11-26.txt`.
+> and never again; the timer fires but nothing consumes it; one dispatch bit is
+> simply absent on this silicon; and the NULL job that "passed" in session 74 was
+> the driver's own 2 s timeout.**  Four boots.  A dynamic tick counter read **0
+> over 12 s** while `EUR_CR_EVENT_TIMER` cycles inside its 1 ms period;
+> `EVENT_STATUS` b29 stays **latched and unacknowledged**; IRQ 147 has **never**
+> fired; `kick` is never entered; six jobs cost six resets; and the two `1/1
+> passed` runs took **2016806** / **2020499** µs against
+> `job_timeout_ms = 2000`.  A per-bit sweep of `EVENT_PDS_ENABLE` shows **bit 14
+> `SW_EVENT` does not exist in that register here** — so session 74's
+> `0x2204f00f` was a no-op and the SGX545's `0x2204b00f` is equivalent.  The init
+> task *does* run (`SC_VERSION`, `EVENT_HOST_ENABLE` b29).  Report **278** (§8
+> timer, §9 registers, §10 sweep); traps **388–397**; DECISIONS **§113**;
+> captures `docs/captures/sgx540-{ukernel-kick-counter,tick-counter,dispatch-regs,pds-enable-sweep}-2026-11-26.txt`.
 
 ## 0. The job, and where it stands
 
@@ -64,11 +65,18 @@ the browser (report 275).  This session is that port.
   consumed: `EVENT_STATUS` b29 stays **latched**, nothing acknowledges it, and
   IRQ 147 has never asserted.  A static `ctlblk` word could never have shown a
   1 kHz event (trap 394) — that is why the counter had to be dynamic.
-* **`EVENT_PDS_ENABLE` loses bit 14.**  The driver writes `0x2204f00f` and the
-  register reads `0x2204b00f`; the bit is `SW_EVENT`, it is stable across reads,
-  and it was session 74's "decisive fix" — the microkernel→host signal.  Every
-  other dispatch register reads back as written (`EVENT_KICKER`,
-  `EVENT_PDS_EXEC/DATA/INFO`).  Trap 397.
+* **`EVENT_PDS_ENABLE` bit 14 is ABSENT on this silicon — and session 74's
+  "correction" was a no-op.**  The driver writes `0x2204f00f` and reads
+  `0x2204b00f`.  A debugfs node that **writes** 0x0a58, one bit at a time, shows
+  every bit of the word sticks **except 14**, which returns 0 even when written
+  on its own — absent, not masked.  `SW_EVENT` *is* implemented in
+  `EVENT_HOST_ENABLE` (0x130 = `0x20004000`), so the header field is real and
+  merely mis-attributed by register: the fact sheet's first **C** fact to
+  contradict a **K** one.  **Consequence: `SGX540_CR_EVENT_PDS_ENABLE_ALL
+  0x2204f00f` is functionally identical to the SGX545's `0x2204b00f`, so that
+  part of session 74 changed nothing.**  The other three corrections stand (and
+  the improvement it was credited with is separately withdrawn — traps 388/389).
+  Trap 397.
 * **The init task really does run**, on three independent proofs, none of them
   the `microkernel started` log line: `SC_VERSION` (0x18) = `0x00010000` (a
   microkernel-only store), `EVENT_HOST_ENABLE` b29 set (`0x20004000`, ORed in by
@@ -123,24 +131,32 @@ the browser (report 275).  This session is that port.
 
 ## 0b. The one experiment for session 76
 
-**Question: is `EVENT_PDS_ENABLE`'s bit 14 (`SW_EVENT`) implemented on this
-core, and does a job's `EVENT_KICK` reach the event program?**
+**Question: does `EVENT_PDS_EXEC` (`0x00804090`) point at code this core will
+execute — i.e. is the PDS program where the exec address says it is?**
 
-Why (1) is first: with the dump registers in place, **every** field of the
-dispatch configuration now reads back as the driver wrote it — `EVENT_TIMER`
-cycling inside its period, `EVENT_KICKER` the driver's own word,
-`EVENT_PDS_EXEC/DATA/INFO` unchanged — **except `EVENT_PDS_ENABLE`**, which
-reads `0x2204b00f` where the driver writes `0x2204f00f`.  One bit, `SW_EVENT`,
-stable across reads, not self-clearing.  `SW_EVENT` is the microkernel→host
-signal *and* a dispatch source, so if it cannot be set the host is never
-interrupted — which is what IRQ 147's zero count and the permanently latched
-`EVENT_STATUS` b29 both say.  The test is a per-bit write/read-back of
-**0x0a58** from inside the driver: set each bit of `0x2204f00f` alone, read back,
-restore.  That separates "not implemented" from "store masked" in one run.
+Why this is now the leader: the sweep closed the alternatives one by one.  The
+timer is a PDS source, it is enabled and it **fires**; the event latches in
+`EVENT_STATUS` b29; nothing acknowledges it; the host IRQ has never fired; and
+bit 14 (`SW_EVENT`) does not exist in `EVENT_PDS_ENABLE` at all (trap 397).  With
+every *enable* path now either working or absent, the remaining untested link
+between "a source fires" and "the event program is entered" is the address the
+program is fetched from.
 
-Why (2) does not depend on (1): a *job* is submitted through `EVENT_KICK`, and
-the `kick` counters stayed 0 through a whole job window.  Read the doorbell in
-the same boot.
+`check_event_pds()` compares it against our own derivation, so it proves the
+store landed and nothing about the target.  The cheap test is a **read of the
+PDS program's first words through the CPU-side mapping** — `sdev->fw.cpu[
+PVRSGX_FW_PDS0]` and `pds_base + addr` — and comparing the entry it points at
+with the manifest, which names the image's `event` entry.  If the address lands
+mid-instruction or in the wrong heap, that is the answer; if it lands exactly on
+the entry, the fault is downstream again.
+
+A job is still worth submitting in the same boot: `EVENT_KICK` does not depend
+on the timer or the PDS source, and the `kick` counters stayed 0 through a whole
+job window.
+
+**Note:** the bench is left on the **read-only dump module** (`9a0ebbe3…`), not
+the sweep module (`a4aa13a9…`), because its node *writes on read*.  If the sweep
+is needed again, `.sweep` is beside it on the unit; do not leave it installed.
 
 The write side is `ccb_write()`: it writes **`EUR_CR_EVENT_KICK` (0xac8,
 `NOW` b0)** after storing the command, and the address form is
@@ -229,24 +245,22 @@ invocation): read the counter after job 1 and after job 2.
 
 **What each result means:**
 
-* **`EVENT_KICK` reads back 0 and `EVENT_STATUS` gains a bit** → the doorbell
-  fired and the microkernel ignored it.  Next: does the event entry execute at
-  all past init?  `k_getmiscinfo` is the one command that needs no client PD.
-* **`EVENT_KICK` reads back 0 and `EVENT_STATUS` is unchanged** → the write does
-  not land.  The offsets and the PDS address are already cleared (above), so the
-  candidates left are the **shared IRQ** (`request_threaded_irq(...,
-  IRQF_SHARED)`, so a level that the display also latches could be missed) and
-  the **PDS program itself** — whether the image that address points at is the
-  one this core executes.  `vdc_ack()` in the ISR is the display-latch half.
-* **`EVENT_PDS_ENABLE` does not read back `0x2204f00f`** → the write did not
-  stick (a gated unit, or the wrong offset).  Settle that first.
-* **All three read back correctly and nothing changes** → the doorbell path is
-  right and the fault is the microkernel's own event admission.  Session 74's
-  entry-top store faulted with the same shape (`BIF int 0xc002 fault
-  0x7ac0000`), so look at what the §9 launch admits.
+* **The exec address lands ON the image's `event` entry** → the PDS program is
+  where it should be, and the fault is downstream of the fetch: the microkernel's
+  own event admission (§9 launch) or the core's PDS execution.  Then a
+  `GETMISCINFO` submit is the cheapest proof that the entry runs at all.
+* **It lands mid-instruction, in the wrong heap, or off the image** → that is the
+  bug, and it is ours: `event_pds_addr()` would be wrong despite agreeing with
+  `srvinit`'s *shape*.
+* **The PDS program reads back as a copy still holding `0xdbeef` patch
+  placeholders** → the loader never patched the image it is executing, i.e. the
+  firmware and the PDS buffer are not the same copy (`fw_build`'s
+  `pvrsgx_fw_pds_entry` path).
+* **A job still resets with `kick` counters 0** → unchanged; that is the doorbell,
+  which does not depend on any of this.
 
 **Do not** spend this boot on anything else: a NULL job costs a GPU reset, and
-the counters are read through `ctlblk`, which is free.
+the control block is free to read.
 
 ## 0c. The media, and the way back
 
@@ -281,12 +295,12 @@ the counters are read through `ctlblk`, which is free.
 | region 0 | CRC **`0x02C1DDC2`** — media trailer `1f2dc8d7 c2ddc102`.  File `boot/chainloader/kernel.img`, 10,450,520 B, sha256 `70474c01…` (**no flash this session**) |
 | region 1 | sha256 **`20a5edd3a791a37ef5e6ab9a50d1c83f8967d8257ed76c9fe23a318d4b887422`** |
 | hd3 | the session-71 rebaked image **`5d3eac8f…`** at `0x4915`, grown to 62.5 G; `/dev/loop0` ext4 rw, 56.5 G |
-| `BOOTCTR_FCTRY` | **`0x32`** (the last boot's `/init` topped `0x1d → 0x32`, `PASS`; it tops up below `0x1e`) |
+| `BOOTCTR_FCTRY` | **`0x2f`** (`>= threshold 0x1e, no write`).  It was topped to `0x32` earlier in the session and the four experiment boots spent the difference; `/init` refills below `0x1e` |
 | CPU | `nproc` 2; PID 1 affinity **`0,1`** |
 | battery | Full, 100 % (`VOLTAGE_NOW` 4 151 000 µV) |
 | GPU | `card1`/`renderD129` = **`powervr_sgx`** (open driver), microkernel running, **`resets 0`** (the last two boots submitted nothing); `card0`/`renderD128` = `omapdrm`; GPU IRQ **147, count 0 — never fired** |
 | microkernel | `/lib/firmware/powervr_sgx/sgx540_ukernel.bin` = **`invfix`** (md5 `12f12abb…`, 16,640 B, **reverted and `md5sum`-proven**); the session-75 instrument is beside it as `.kick1` (`229b838c…`, inert), the pre-session copy as `.before-kick1`, the session-73 raw as `.session73-raw`.  **The boot that produced report 278 ran `ccb2`, not `invfix`** (trap 390) |
-| module | `/lib/modules/7.3.3/kernel/drivers/gpu/drm/powervr_sgx.ko` = **`9a0ebbe3…`**, the session-75 build of the module **plus the seven dispatch registers added to `pvrsgx_dump.c`** (session 273's `2e138afc…` kept as `.live-prev`; revert by copying it back and rebooting).  Built from `local/kernel-tree-sgx`; with the dump edit reverted the same tree reproduces `2e138afc…` byte-for-byte.  `.bak` (session 73) and `.brn31620` (the reverted experiment) also beside it |
+| module | `/lib/modules/7.3.3/kernel/drivers/gpu/drm/powervr_sgx.ko` = **`9a0ebbe3…`** — the session-75 build of the module **plus the seven dispatch registers added to `pvrsgx_dump.c`** (patches 0005).  Session 273's `2e138afc…` is `.live-prev` (revert by copying it back and rebooting).  **`.sweep` (`a4aa13a9…`, patch 0006) is the per-bit sweep and it WRITES the register on read — do not leave it installed**; it is reverted already.  `.bak` (session 73) and `.brn31620` (the reverted experiment) also beside it |
 | desktop | `swrast` (the closed DDK is blocked by the operator's standing direction; the open driver is the work) |
 | panel | 0 DSI errors, `bl_power` 0 |
 | WLAN | **up**, but the DHCP lease moved during the session: **`10.195.132.240/13`**, default via `10.192.0.1`, not the `192.168.0.231` of the session-74 close.  `usb0` is `169.254.0.1/16` either way, so **the SSH path is unaffected** — this only matters if a session wants to reach the unit over the LAN.  Read `ip -br addr` before quoting an address |
@@ -322,6 +336,8 @@ the counters are read through `ctlblk`, which is free.
 * `docs/captures/sgx540-dispatch-regs-2026-11-26.txt` — **the register read**:
   the whole dispatch configuration, `EVENT_TIMER` cycling, and the one field
   (`EVENT_PDS_ENABLE` bit 14) that does not read back as written.
+* `docs/captures/sgx540-pds-enable-sweep-2026-11-26.txt` — **the per-bit sweep**:
+  bit 14 is absent (not masked), which makes session 74's PDS constant a no-op.
 * `docs/captures/sgx540-ukernel-{list0,start,first-job}-2026-11-26.txt` — the
   session-74 stages (read with trap 388 in hand: the `1/1 passed` there is the
   timeout).
@@ -398,6 +414,7 @@ docs/reference/sgx540-factsheet.md AND docs/reference/sgx540-ddk18-facts.md,
 docs/captures/sgx540-ukernel-kick-counter-2026-11-26.txt,
 docs/captures/sgx540-tick-counter-2026-11-26.txt,
 docs/captures/sgx540-dispatch-regs-2026-11-26.txt,
+docs/captures/sgx540-pds-enable-sweep-2026-11-26.txt,
 docs/contradictions/sgx540-event-kick2-offset.md (resolved; read so you do NOT
 re-run it),
 docs/sessions/session-75.md and session-74.md.

@@ -7,8 +7,9 @@
 > job.
 
 Date: 2026-11-26.  Unit at the end: **Linux `7.3.3 #5 SMP`** on hd3, region 0
-**`0x02C1DDC2`**, region 1 `20a5edd3…`, `BOOTCTR_FCTRY` **`0x32`** (the last
-boot topped up `0x1d → 0x32`, `PASS`), `nproc` 2 / PID 1 affinity `0,1`,
+**`0x02C1DDC2`**, region 1 `20a5edd3…`, `BOOTCTR_FCTRY` **`0x2f`** (topped to
+`0x32` mid-session; the experiment boots spent the difference, `/init` refills
+below `0x1e`), `nproc` 2 / PID 1 affinity `0,1`,
 battery Full 4.152 V, panel 0 DSI errors, `wlan0` `10.195.132.240/13` (`usb0`
 `169.254.0.1/16`), `card1` = `powervr_sgx`, `firmware running: 1`,
 `uk-lockups 0`, `BIF_FAULT 0`, `resets 0` (the last boot was the tick
@@ -95,6 +96,30 @@ installed module plus exactly that change (reverted, it rebuilds `2e138afc…`).
   session 74's "decisive fix" and the microkernel→host signal (trap 397).  Every
   other dispatch register reads back as written.
 
+## Fourth measurement — the per-bit sweep
+
+One module change (a debugfs node whose `.show` **writes** 0x0a58), one reboot.
+
+```
+  full     0x2204f00f -> 0x2204b00f DIFFERS
+  bit 14   0x00004000 -> 0x00000000 ** does NOT stick **
+  (every other bit of the word -> sticks)
+bits of 0x2204f00f that stick alone: 0x2204b00f
+```
+
+* **Bit 14 (`SW_EVENT`) is absent from `EVENT_PDS_ENABLE` on this silicon** —
+  written *alone* it still reads 0, so it is not masked.  It *is* implemented in
+  `EVENT_HOST_ENABLE` (0x130 = `0x20004000`), so the header's field is real and
+  mis-attributed by register.  This is the fact sheet's first **C** fact to
+  contradict a **K** one.
+* **Therefore session 74's `SGX540_CR_EVENT_PDS_ENABLE_ALL 0x2204f00f` was a
+  no-op** — it writes a bit the hardware ignores, so it is functionally identical
+  to the SGX545's `0x2204b00f`.  Report 277 §3 lists it as one of four
+  corrections; the other three stand, and the improvement it was credited with is
+  separately withdrawn (traps 388/389).  Nothing measured in session 74 improved.
+* The bench was left on the **read-only** dump module; the sweep node writes on
+  read, so it is reverted.
+
 ## Inferred (reasoning from evidence, not directly measured)
 
 * **The fault is on the doorbell side, not in the microkernel's handlers.**  The
@@ -124,6 +149,10 @@ installed module plus exactly that change (reverted, it rebuilds `2e138afc…`).
   ring-reset artefact.  The ring itself (`wo`/`ro`) says the opposite.
 * **"`1/1 passed` means one job completed."**  Killed by the 2016806 µs times and
   by the reset count rising while nothing moved.
+* **"`EVENT_PDS_ENABLE`'s missing bit 14 is a defect we can fix."**  Session 74
+  added that bit as a "correction"; the per-bit sweep shows the register does not
+  implement it at all, so the constant change was inert.  A mask named in a GPL
+  header is not evidence the silicon holds it (trap 397).
 * **"The timer period is 1000× too long."**  Killed by reading the register: the
   counter cycles inside its period.  The comparison put a **count of clock
   cycles** (307 200) against a **rate** (307 kHz) and called the ratio a factor.
@@ -136,6 +165,11 @@ installed module plus exactly that change (reverted, it rebuilds `2e138afc…`).
 
 ## Unknown / open questions
 
+* **Does `EVENT_PDS_EXEC` point at code this core will execute?**  The sweep closed
+  every enable-path alternative (the source fires; the event latches; the bit is
+  absent), so the untested link is the exec address `0x00804090` — and
+  `check_event_pds()` only compares it with our own derivation.  This is §0b of
+  the new handoff.
 * **Why the doorbell does not open.**  §0b of the new handoff is the experiment:
   read `EVENT_PDS_ENABLE` (0x0a58), `EVENT_KICKER` (0xac4), `EVENT_KICK` (0xac8)
   and `EVENT_STATUS` (0x12c) back **from inside the driver** around one NULL job.
@@ -177,7 +211,12 @@ installed module plus exactly that change (reverted, it rebuilds `2e138afc…`).
   dynamic counter, its emulator control, and the zeros on the unit.
 * `docs/captures/sgx540-dispatch-regs-2026-11-26.txt` — the register read, the
   retraction of the "1000×" claim, and the one dispatch bit that does not stick.
+* `docs/captures/sgx540-pds-enable-sweep-2026-11-26.txt` — the per-bit sweep:
+  bit 14 absent, so the session-74 PDS constant measures nothing.
+* `rootfs/powervr-sgx/0006-sgx540-pds-enable-sweep.patch` — the sweep node.
 * `rootfs/powervr-sgx/0004-sgx540-tick-counter.patch` — the dynamic instrument.
+* `rootfs/powervr-sgx/0005-sgx540-dispatch-regs-dump.patch` — the seven
+  read-only dispatch registers in `status`.
 * `rootfs/powervr-sgx/0003-sgx540-kick-counter.patch` — the instrument plus the
   session-74 CCB-trace word relocation that had never been in 0002; applying
   0001→0003 to a pristine `95f78ca` reproduces both `ukernel.py` and the

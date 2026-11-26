@@ -50,11 +50,22 @@ long" reading was **wrong** — it compared a count against a rate; trap 395 is
 retracted.)  [report 278 §8; captures
 `sgx540-tick-counter-2026-11-26.txt`, `sgx540-dispatch-regs-2026-11-26.txt`]
 
-**The sharpest new lead: `EVENT_PDS_ENABLE` loses a bit.**  The driver writes
-**`0x2204f00f`** and the register reads **`0x2204b00f`** — bit 14 `SW_EVENT`,
-stable across reads, not self-clearing.  That bit was session 74's "decisive
-fix", and it is the microkernel→host signal.  If it is not a dispatch source on
-this core, the host can never be interrupted.  [trap 397]
+**The one field that differed is now explained, and it kills a session-74
+"correction".**  A per-bit write/read-back sweep (a debugfs node that writes
+0x0a58) shows **every bit of `0x2204f00f` sticks except 14**, which returns 0
+even when written alone — so `EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK` is **not
+implemented in that register** on this silicon (it *is* in `EVENT_HOST_ENABLE`,
+0x130 = `0x20004000`).  Therefore session 74's `SGX540_CR_EVENT_PDS_ENABLE_ALL
+0x2204f00f` was a **no-op**: the driver's value behaves identically to the
+SGX545's `0x2204b00f`.  The other three session-74 corrections stand.  [trap 397;
+capture `sgx540-pds-enable-sweep-2026-11-26.txt`]
+
+**So the dispatch picture is now: a PDS source (TIMER) enabled and firing, an
+event (`EVENT_STATUS` b29) latched and never cleared, a host IRQ that has never
+fired, and an event program never entered.**  The unexamined step between "a
+source fires" and "the program is entered" is the PDS exec address itself —
+`EVENT_PDS_EXEC` = `0x00804090`, which reads back as written but has never been
+shown to point at code this core executes.
 
 **Also settled: the init task really does run.**  Three independent proofs, none
 of them the driver's own log line (with `edm_init=1` the *host* writes
@@ -62,12 +73,12 @@ of them the driver's own log line (with `edm_init=1` the *host* writes
 microkernel-only store; `EVENT_HOST_ENABLE` b29 set (`0x20004000`), ORed in by
 `init_set` after the timer write; and `BIF_FAULT 0` throughout.
 
-**The next unit of work: the `SW_EVENT` bit.**  Everything else on the dispatch
-side now reads correctly — the timer cycles, the kicker address is the driver's
-own word, the PDS exec/data/info are the values written.  The exception is
-`EVENT_PDS_ENABLE`'s bit 14 (trap 397), so the next step is a per-bit
-write/read-back of **0x0a58** from inside the driver, to learn whether the bit is
-implemented at all.  Then the doorbell: `ccb_write()` writes
+**The next unit of work: the PDS exec address.**  Every register on the dispatch
+side now reads back as written, and the one that did not stick is explained
+(bit 14 is absent; trap 397).  What has never been examined is whether
+`EVENT_PDS_EXEC` (`0x00804090`) — 18-bit field, `(addr − PDS_EXEC_BASE) >> 4` —
+points at code this core will execute: `check_event_pds()` only compares it with
+our own derivation.  Then the doorbell: `ccb_write()` writes
 `EUR_CR_EVENT_KICK` (0xac8, `NOW` b0) and
 `EVENT_KICKER` (0xac4, a **28-bit** address field at shift 4).  Both now read
 back as written; `EVENT_KICK` (0xac8) is self-clearing, so a read of it proves
@@ -156,7 +167,7 @@ specification PDFs are marked **"Strictly Confidential"** and are therefore
 **`0x02C1DDC2`** (`boot/chainloader/kernel.img`, 10,450,520 B, sha256
 `70474c01…`; media trailer `1f2dc8d7 c2ddc102`; carries the corrected
 microkernel, `image_crc32 0xc1eebfaf`), region 1 `20a5edd3…`;
-`BOOTCTR_FCTRY` **`0x1e`**; root `/dev/loop0` ext4 rw 56.5 G; `nproc` 2, PID 1
+`BOOTCTR_FCTRY` **`0x2f`**; root `/dev/loop0` ext4 rw 56.5 G; `nproc` 2, PID 1
 affinity `0,1`; battery Full 4.151 V; panel 0 DSI errors; `wlan0` **up** but
 its DHCP lease moved to `10.195.132.240/13` (session 74 recorded
 `192.168.0.231`), while `usb0` stays `169.254.0.1/16` so SSH is unaffected;

@@ -475,11 +475,16 @@ flasher can replace at every point:
     "1000×" claim is retracted (trap 395).  `EVENT_STATUS` b29 stays latched and
     IRQ 147 never fires.  Of the whole dispatch configuration exactly one field is
     not what the driver wrote: **`EVENT_PDS_ENABLE` reads `0x2204b00f` where it
-    writes `0x2204f00f`** — bit 14 `SW_EVENT`, session 74's "decisive fix",
-    stable across reads (trap 397).  The init task *does* run (`SC_VERSION`,
-    `EVENT_HOST_ENABLE` b29 — not the "microkernel started" line, which the host
-    writes under `edm_init=1`, trap 396).  Next: a per-bit write/read-back of
-    0x0a58 from inside the driver, then the doorbell.
+    writes `0x2204f00f`** — bit 14 `SW_EVENT`, stable across reads.  **A per-bit
+    sweep then settled it: bit 14 is absent from that register on this silicon**
+    (every other bit sticks; bit 14 returns 0 when written alone), so session
+    74's `SGX540_CR_EVENT_PDS_ENABLE_ALL 0x2204f00f` was a **no-op** — the one
+    session-74 "correction" that measured nothing, and the fact sheet's first
+    **C** fact to contradict a **K** one (trap 397).  The other three stand.  The
+    init task *does* run (`SC_VERSION`, `EVENT_HOST_ENABLE` b29 — not the
+    "microkernel started" line, which the host writes under `edm_init=1`, trap
+    396).  Next: whether `EVENT_PDS_EXEC` (`0x00804090`, 18-bit field) points at
+    code this core executes, then the doorbell.
     Then one interaction to make the EDM dispatch at all, and the aim after that
     is a frame.
     (a2) a
