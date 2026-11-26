@@ -168,10 +168,9 @@ specification PDFs are marked **"Strictly Confidential"** and are therefore
 `70474c01…`; media trailer `1f2dc8d7 c2ddc102`; carries the corrected
 microkernel, `image_crc32 0xc1eebfaf`), region 1 `20a5edd3…`;
 `BOOTCTR_FCTRY` **`0x2f`**; root `/dev/loop0` ext4 rw 56.5 G; `nproc` 2, PID 1
-affinity `0,1`; battery Full 4.151 V; panel 0 DSI errors; `wlan0` **up** but
-its DHCP lease moved to `10.195.132.240/13` (session 74 recorded
-`192.168.0.231`), while `usb0` stays `169.254.0.1/16` so SSH is unaffected;
-SSH `PB_LINK=usb tools/pbssh.sh` works.  Desktop on `swrast`
+affinity `0,1`; battery Full 4.130 V; panel 0 DSI errors; `wlan0`
+`192.168.0.231/24` (a `10.195.132.240` lease seen mid-session was transient),
+`usb0` `169.254.0.1/16`; SSH `PB_LINK=usb tools/pbssh.sh` works.  Desktop on `swrast`
 (the closed DDK blocked by the operator's standing direction — this work is the
 open driver).  **No flash this session**: the experiment was a firmware *file*
 swap on hd3, reverted to `invfix` (md5 `12f12abb…`, proven with `md5sum`), with
@@ -187,9 +186,10 @@ BRN-31620 build are beside it.  **`tools/pbscp.sh` cannot push to this root**
 **The open SGX540 microkernel started and a NULL job printed `1/1 passed`; a
 running EDM was the open question.**  Superseded by session 75, which measured
 that the event program is entered once and never again and that the `1/1 passed`
-was the driver's own 2 s timeout.  Its snapshot is
-[`docs/sessions/session-74.md`](../sessions/session-74.md), its report is 277
-(two of its figures corrected by 278).
+was the driver's own 2 s timeout.  Full snapshot:
+[`docs/history/STATE-HISTORY.md`](../history/STATE-HISTORY.md)
+(`## Previous state — 2026-11-26 (session 74)`); its report is 277, with two
+figures withdrawn by 278.
 
 ## Previous state — 2026-11-26 (session 73)
 

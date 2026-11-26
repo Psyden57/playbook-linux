@@ -6,6 +6,97 @@ state is [`docs/project/STATE.md`](../project/STATE.md).
 
 ## Previous states
 
+## Previous state — 2026-11-26 (session 74)
+
+> **Superseded by session 75**, which measured that the event program is
+> entered once and never again, that the timer fires but nothing consumes it,
+> and that this session's `1/1 passed` was the driver's own 2 s timeout.  Two
+> figures below are withdrawn: `consumed 2..5` and the `0x2204f00f` PDS
+> correction.  Kept as written; report 278 is current.
+
+**The open `powervr_sgx` SGX540 microkernel STARTS on silicon and completes a
+NULL job; one or two jobs pass per GPU reset, then it stalls.**  Nothing is
+published upstream (DECISIONS §110).
+
+**Measured on the unit.**  `powervr_sgx` binds `56000000.gpu` and reports
+`open microkernel invfix, interface 1.0, features 0x8`, `EDM init: event status
+0xa0000000, BIF int 0x8000` (the trailing `timer` word is a free-running counter
+and differs per boot), **`microkernel started`**; its
+debugfs agrees — `firmware running: 1`, `hostctl init 0x1`, `uk-lockups 0`,
+`BIF_INT_STAT 0x00008000` (`FLUSH_COMPLETE`, **no fault**), `BIF_FAULT 0`.
+`card1`/`renderD129` = `powervr_sgx`; `card0`/`renderD128` stay `omapdrm`.
+[report 277; `docs/captures/sgx540-ukernel-start-2026-11-26.txt`]
+
+**Starting it needs `edm_init=1`.**  Without it the probe fails 20 ms after
+`open microkernel …` (`BIF int 0xc002, fault 0x8779000`, `error -110`); with
+`modprobe powervr_sgx edm_init=1` it completes.  That is the driver's documented
+§9 single-context launch, now the boot default on hd3
+(`/etc/modprobe.d/powervr-sgx-opts.conf`).
+
+**`submit-null-job` goes from `consumed 0` to `1/1 passed`.**  Four SGX545
+assumptions in the image were corrected, each gated on the per-core
+`SINGLE_CONTEXT` flag, with the SGX545 serial image kept **byte-identical**
+(`83b5b0a7…`):
+
+| the image assumed | the SGX540 has |
+|---|---|
+| client PD in `BIF_DIR_LIST_BASE1` (0xc38), routed via `BIF_BANK0` (0xc78) | neither register exists; one list, `DIR_LIST_BASE0` 0xc84 |
+| a HW context's `page_dir` word is a directory address | a **slot** into the driver's PD table at `kernel_code.base + 0xf000` |
+| `features = SECURE`, no pdtable patch | `SINGLE_CONTEXT` set, `SECURE` clear, pdtable patch |
+| `0x138` masks `0x27`/`0x4b` (SGX545's two groups) | **one** group, bits 0-4 → mask `0x1F` (the decisive fix) |
+
+**Blockers in play, in order:**
+
+1. **The EDM does not dispatch after the init task.**  One or two NULL jobs pass
+   immediately after a GPU reset, then none, and a kernel-CCB trace showed not
+   one of the microkernel's own stores running even for a *passing* job — while
+   the driver still reports `consumed 0` for it.  Separate "does the task run"
+   from "does the driver account for it" **before** any further register
+   question.  This gates everything.
+2. **`0xb14` is `EUR_CR_USE1_SERV_PIXEL`** — a USSE pixel service queue
+   (COUNT/EMPTY), not the EDM task-progress register the image treats as its
+   keep-alive.  Unfixed.  [DDK 1.8 `sgx540defs.h`]
+3. **`sgx540_init_regs`** — not derivable statically; needs a capture from a
+   working microkernel boot.
+4. **The microkernel register tables** (0x618, 0x62c, 0x694, TA/3D kick …) are
+   carried over from the SGX545 as **hypothesis**.
+5. **`USE_CODE_BASE` presence on rev 120** — the *unit* is now settled as a K
+   fact (shift 8, DM at 24); only "do the registers exist" is open, and it wants
+   a write/read-back **inside the driver**.
+6. **The DPM/TA/ISP/TSP/PBE/PDS state map** (fact sheet Gap 10).
+7. Unchanged from earlier: the **hd3 rebake** must add `wpewebkit` + `kumo`;
+   `pvr-dbmfix` needs packaging; the GEM-growth walk; the CPU supply/OPP items;
+   the intermittent USB teardown (trap 337); the memory-throughput re-measure;
+   and why the first modeset after a boot fails on some boots (trap 377).
+
+**New bench constraint: `/dev/mem` no longer reaches the GPU.**  All windows
+return `Errno 13` in the open-driver configuration while `CONFIG_STRICT_DEVMEM`
+is off and `IO_STRICT_DEVMEM` is absent from the config; `/proc/iomem` shows
+`56000000-56003fff : 56000000.gpu powervr_sgx`.  **The userspace register read
+that opened this port is unavailable while the open driver owns the GPU** —
+further register evidence must come from inside the driver.  [trap 384]
+
+**A new K source, and a boundary.**  The operator supplied a GPL-2 DDK drop
+("Android SGX DDK UM version 1.8", `PVRVERSION_BUILD 869593`, TI OMAP,
+`/home/psyden/Pdrive/GFX_Linux_DDK-master`, *outside* the repo) whose
+`eurasia/hwdefs/sgx540defs.h` is the **540-specific 3150-line header** our
+vendored 1.17 drop lacks, plus the user-mode `srvinit` and the full errata
+table.  It is **K** evidence and is summarised in
+`docs/reference/sgx540-ddk18-facts.md`.  The same drop's microkernel
+specification PDFs are marked **"Strictly Confidential"** and are therefore
+**not** usable evidence.
+
+**Bench at the close (session 74)**: Linux `7.3.3 #5 SMP` ARMv7 on hd3, region 0
+**`0x02C1DDC2`** (`boot/chainloader/kernel.img`, 10,450,520 B, sha256
+`70474c01…`; media trailer `1f2dc8d7 c2ddc102`; carries the corrected
+microkernel, `image_crc32 0xc1eebfaf`), region 1 `20a5edd3…`;
+`BOOTCTR_FCTRY` **`0x1f`**; root `/dev/loop0` ext4 rw 56.5 G; `nproc` 2, PID 1
+affinity `0,1`; battery Full 4.150 V; panel 0 DSI errors; `wlan0`
+`192.168.0.231`; SSH `PB_LINK=usb tools/pbssh.sh` works.  Desktop on `swrast`
+(the closed DDK blocked by the operator's standing direction — this work is the
+open driver).  hd3's `powervr_sgx.ko` is the rebuilt module
+`2e138afc…`; `.bak` and the reverted BRN-31620 build are beside it.
+
 ## Previous state — 2026-11-26 (session 73)
 
 **The open SGX540 port reached hardware: the driver binds and identifies the

@@ -297,13 +297,13 @@ the control block is free to read.
 | hd3 | the session-71 rebaked image **`5d3eac8f…`** at `0x4915`, grown to 62.5 G; `/dev/loop0` ext4 rw, 56.5 G |
 | `BOOTCTR_FCTRY` | **`0x2f`** (`>= threshold 0x1e, no write`).  It was topped to `0x32` earlier in the session and the four experiment boots spent the difference; `/init` refills below `0x1e` |
 | CPU | `nproc` 2; PID 1 affinity **`0,1`** |
-| battery | Full, 100 % (`VOLTAGE_NOW` 4 151 000 µV) |
+| battery | Full, 100 % (`VOLTAGE_NOW` 4 130 000 µV) |
 | GPU | `card1`/`renderD129` = **`powervr_sgx`** (open driver), microkernel running, **`resets 0`** (the last two boots submitted nothing); `card0`/`renderD128` = `omapdrm`; GPU IRQ **147, count 0 — never fired** |
 | microkernel | `/lib/firmware/powervr_sgx/sgx540_ukernel.bin` = **`invfix`** (md5 `12f12abb…`, 16,640 B, **reverted and `md5sum`-proven**); the session-75 instrument is beside it as `.kick1` (`229b838c…`, inert), the pre-session copy as `.before-kick1`, the session-73 raw as `.session73-raw`.  **The boot that produced report 278 ran `ccb2`, not `invfix`** (trap 390) |
 | module | `/lib/modules/7.3.3/kernel/drivers/gpu/drm/powervr_sgx.ko` = **`9a0ebbe3…`** — the session-75 build of the module **plus the seven dispatch registers added to `pvrsgx_dump.c`** (patches 0005).  Session 273's `2e138afc…` is `.live-prev` (revert by copying it back and rebooting).  **`.sweep` (`a4aa13a9…`, patch 0006) is the per-bit sweep and it WRITES the register on read — do not leave it installed**; it is reverted already.  `.bak` (session 73) and `.brn31620` (the reverted experiment) also beside it |
 | desktop | `swrast` (the closed DDK is blocked by the operator's standing direction; the open driver is the work) |
 | panel | 0 DSI errors, `bl_power` 0 |
-| WLAN | **up**, but the DHCP lease moved during the session: **`10.195.132.240/13`**, default via `10.192.0.1`, not the `192.168.0.231` of the session-74 close.  `usb0` is `169.254.0.1/16` either way, so **the SSH path is unaffected** — this only matters if a session wants to reach the unit over the LAN.  Read `ip -br addr` before quoting an address |
+| WLAN | **up** at **`192.168.0.231/24`**, default via `192.168.0.1`; `usb0` `169.254.0.1/16`.  (A `10.195.132.240/13` lease was observed mid-session and was transient — but read `ip -br addr` before quoting an address, since the DHCP lease can move.) |
 | SSH | `PB_LINK=usb tools/pbssh.sh` works; if it times out check the cable, the host VPN (trap 341) and ufw (trap 342) |
 | device-side files | `/etc/modprobe.d/powervr-open.conf`, `/etc/modprobe.d/powervr-sgx-opts.conf`, the firmware above, the module above, `/tmp/powervr_sgx_test` (**`/tmp` is on the ext4**, trap 354 — the binary survives a reboot but is not in the flasher image) |
 | host | clone `local/work/powervr_sgx` (`95f78ca` + our patches); assembler `local/work/sgxasm/sgx-asm`; trees `local/kernel-tree` (good) and `local/kernel-tree-sgx` (open driver); **GPL-2 DDK 1.8 reference at `/home/psyden/Pdrive/GFX_Linux_DDK-master` (outside the repo)** |
@@ -422,9 +422,9 @@ docs/sessions/session-75.md and session-74.md.
 WHERE IT STANDS: Linux 7.3.3 #5 SMP ARMv7, dual-core 1008 MHz; region 0
 0x02C1DDC2 (trailer 1f 2d c8 d7 c2 dd c1 02; keep the image FILE — it is not
 byte-reproducible), region 1 20a5edd3..., hd3 = 5d3eac8f flashed at 0x4915 and
-grown to 62.5 G; BOOTCTR_FCTRY 0x1e; card1/renderD129 = powervr_sgx with its
+grown to 62.5 G; BOOTCTR_FCTRY 0x2f; card1/renderD129 = powervr_sgx with its
 microkernel RUNNING, card0/renderD128 = omapdrm; desktop on swrast; wlan0 up
-192.168.0.231; 0 DSI errors.
+192.168.0.231; 0 DSI errors; GPU IRQ 147 count 0 (never fired).
 
 THE SGX540 MICROKERNEL STARTS BUT ITS EVENT PROGRAM IS ENTERED ONCE AND NEVER
 AGAIN, and the "1/1 passed" everyone has been quoting was the driver's own 2 s
