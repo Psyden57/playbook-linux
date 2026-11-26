@@ -222,5 +222,16 @@ they run on the unit without a compiler).  Each records the **kernel's** view
 Report 272 §4.  The wedge is the trap-353 class, likely triggered by the
 power-button release → DPMS binding; `reboot -f` cleared it.
 
+## Kumo / WPE WebKit GBM export (session 72)
+
+| file | what it shows |
+|---|---|
+| `kumo-gbm-export-2026-11-26.txt` | the live re-run of the GBM/PRIME probes (`gbmplane.py`, `gbmprime.c`, `gbmprime2.c`) on `renderD129`/`card1`/`card0`, and the two Kumo logs.  **The pvr node gives a rendering buffer `plane_count=1` but no fd and no GEM handle** (`gbm_bo_get_fd` = -1, `handle_for_plane` = `0xffffffff`, `drmPrimeHandleToFD` = -1), while omapdrm exports; `card1` is already DRM-master (`EBUSY`); there is no `CREATE_DUMB` (a real DRI image).  Plus `Failed to extract DMA-buf attributes from GBM buffer` and the `SGXKickSubmit`/`FreeResourceByPtr` lines |
+
+This is the evidence behind report 275: WebKit's `AcceleratedSurface` needs a GBM
+dmabuf and the closed pvr DDK cannot export the buffer it allocates.  The probes
+are tracked at `tools/bench/gpu/`.  The probe output is reproducible; the `dmesg`
+chain was measured live during the runs and is gone after the reboots (§E).
+
 `docs/reports/data/` is indexed by the reports that produced it; the report
 INDEX (`docs/reports/INDEX.md`) says which report is current for a topic.

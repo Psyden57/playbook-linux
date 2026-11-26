@@ -40,13 +40,14 @@ note after it is what a reader needs before opening the file.
 | `ring-survives-a-qnx-boot.md` | **open** — earlier sessions read the `0x88000000` DEBUG_LL ring *from QNX* with real content in it (`docs/captures/playbook-live-spare-2026-10-26-clean-ring-88000000.txt`, captured with the stock 1917 RCFS days before the session-43 prune); session 61 measured `0xAA` fill in `0x88000000`, `0x90000000` and the pbmon shadow after booting the full modified 1917 RCFS, while `0x80000000` keeps real data.  Unresolved: which image/which boot each capture shows, and who writes the fill.  *Would settle it:* the stock RCFS read at the earliest moment, two consecutive oracle boots compared, or the fill's writer found in `startup`/`procnto`.  Report 254 §2 |
 | `rpmb-page-rodata-contents.md` | **open (mechanism); contents measured** — report 92 says `page+0x20/+0x40` hold the `.rodata` constants, report 141 says nothing writes them; the live page measures the constants, but who writes them is unknown (session 19) |
 | `safety-no-emmc-mount-vs-readonly-root.md` | **resolved (session 17), extended (session 18)** — read-only eMMC/QNX6 mounts are allowed; the operator has now dropped the blanket writable-eMMC prohibition **for our own data** (NVRAM, the MCT, and dangerous RPMB still forbidden).  Rule in `SAFETY.md` §4/§6, decisions `DECISIONS.md` §17/§18; `hd3` to be repurposed (report 141) |
+| `sgx540-use-code-base.md` | **open** — the upstream `powervr_sgx` guide says 535/540 have no `USE_CODE_BASE` registers, but our vendored GPL DDK 1.17 `sgx540defs.h` defines them (16 entries at `0x0A0C+4X`, addr b0-23, DM b24-25).  Needs one hardware write/read on our rev-120 SGX540 (report 276; `docs/reference/sgx540-factsheet.md` §Gaps #7) |
 | `touch-bus-i2c2-vs-i2c3.md` | **resolved 2026-11-08 (session 36, report 193)** — the board selects `driver = munin`, and `libmtouch-munin` opens QNX `/dev/i2c1` (I²C2 `0x48072000`, live Linux `i2c-1`) at `0x65`; the Pegasus `/dev/i2c2` string was the other driver.  Linux also needed the i2c2 pads muxed (`0x4A100126`/`0x4A100128` were `0x011F` = safe mode; `0x0110` made `0x65` ACK) |
 | `twl-clk32kg-on-both-vs-0xbd-be-difference.md` | **resolved 2026-11-08 (session 35, report 192 §7)** — `CLK32KG` is base `0x8C` (`CFG_GRP`/`CFG_TRANS`/`CFG_STATE` = `0x8C`/`0x8D`/`0x8E`), not the FreeBSD `0xBC`.  QNX `01/05/05` vs Linux `07/05/55`: `CFG_TRANS` identical, `CFG_STATE` APP-ON in both (CON/MOD bits differ), `CFG_GRP` differs.  `0xBC`–`0xBE` is a different, still-unnamed non-regulator resource |
 | `usb-vusb-drop-idle-vs-intermittent.md` | **open (trigger only)** — the *classification* is settled as intermittent: session 64 called the USB gadget teardown "idle runtime PM at ~32 s"; session 65 measured 30 s with 15 s keepalives, 90 s with SSH traffic, and **no drop at all in a 376 s boot** (240 s of continuous ACM reads + 90 s idle).  Only `twl6030_usb_irq()` disables `usb3v3`; the trigger (spurious `VBUS_DET`, the `twl6030_charger` module, or a host event) is not settled.  Report 263 §4/§4a; trap 337 |
 
 ## Still open — keep these in mind
 
-Nine files have a genuinely open question left; none of them blocks the
+The files below have a genuinely open question left; none of them blocks the
 IFS rebuild, but each changes how a result should be read:
 
 1. **`ring-survives-a-qnx-boot.md`** — whether a QNX boot preserves or fills the
@@ -86,6 +87,10 @@ IFS rebuild, but each changes how a result should be read:
    90 s, and no drop in 376 s).  Only `twl6030_usb_irq()` disables `usb3v3`.
    *Would settle it:* a kmsg capture that spans the disconnect (the session-65
    run outlived the event), or a `VBUS_DET`/`linkstat` log in that handler.
+8. **`sgx540-use-code-base.md`** — whether the SGX540 has the `USE_CODE_BASE`
+   registers.  The vendored DDK header defines them; the upstream `powervr_sgx`
+   guide says 535/540 have none.  *Would settle it:* a named write/read of
+   `0x0A0C+4X` on our rev-120 SGX540, or a question to the upstream maintainers.
 
 *(`bt-firmware-tiinit-vs-wl1283.md` was open here until session 53; it is now
 resolved — see the table above and report 238 §3.  Left out of the live list so

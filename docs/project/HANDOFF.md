@@ -137,7 +137,7 @@ the project's porting guide, **with** the non-per-core work our core needs:
 | panel | `connected`, backlight 255, **0 DSI errors** on the final boot |
 | GEM | fresh (`3` objects early, ~9.9 MB settled) |
 | browser | `wpewebkit 2.54.3-r1000` + `kumo 1.10.0-r1000` installed on the **live root**; **Kumo cannot present** (report 275) |
-| WLAN | **down** at the close (the 5 GHz SSID was not in the scan; `gorm` is the path) |
+| WLAN | **up** at the close (`wlan0` `192.168.0.232`; it was down mid-session and the operator reconnected via `gorm`) |
 | SSH | `PB_LINK=usb tools/pbssh.sh` works; if it times out check the cable, the host VPN (trap 341) and ufw (trap 342) |
 
 ## 2. Working rules (unchanged)

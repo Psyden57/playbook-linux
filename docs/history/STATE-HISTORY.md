@@ -1912,3 +1912,85 @@ both-halves container (`both-0xE85217E5-overlay.signed`, 635 961 936 B, sha256
   `pbcon.py 'reboot -f'`), boot the overlay root and check the DE/WLAN.  The
   flash is destructive but flasher-restorable; region 1 stays intact.  [report
   242 §5; HANDOFF]
+
+## Previous state — 2026-11-25 (session 71)
+
+**The hd3 rebake is done: the GPU result, the pitch fix, the ARMv7 modules and
+the desktop permissions are now in the flasher-restorable image, which has been
+flashed and validated.**  Report 272; DECISIONS §105; traps 356–359.  The
+recorded session-70 delta was **incomplete in three ways**, each found by
+reading the image instead of the notes:
+
+* **The image's module set was ARMv6** (flat 44-module
+  `/lib/modules/7.3.3/kernel/`, vermagic `ARMv6 p2v8`) while the kernel is
+  ARMv7 SMP; a flash without replacing it would fail every `modprobe`
+  (`pvrsrvkm`, WLAN, BT).  **Trap 356.**
+* **The catacomb APK's `/etc/catacomb/initrc` is the wrong file.**
+  `/etc/catacomb/initrc` is owned by `postmarketos-ui-catacomb`, and the APK
+  carries the upstream default (`squeekboard`/`swayidle`, md5 `f829d28d…`), not
+  the bench pvr variant (`00fdff84…`); `apk --upgrade` would file-conflict and
+  clobber it.  **Trap 357.**
+* **The session-70 permissions set was absent** from the image and the live
+  root, so the bar could not change brightness or enable Wi-Fi and there was no
+  swap.  **Trap 358** records the `udevadm trigger` `--action=add` bug.
+
+**The image:** `local/work/nura/images/blackberry-playbook-root-gpu-20261125.img`,
+**sha256 `5d3eac8f…`**, 625,999,872 B, `e2fsck -fn` clean, UUID unchanged, no
+`/etc/pb-grown`.  Base is the untouched `07555bde…`; the first (GPU-only) rebake
+is kept as `…-20261125-preperm.img` (`9b656d36…`).  Delta, all verified in the
+image: `catacomb 1.5.0-r10003` (+ DB/world pins), `epitaph 1.4.0-r10008`, the
+inittab affinity line, the pitch shim + wrapper + `Exec=`, the live **842-module
+ARMv7** tree, and the permissions (polkit rule `root:polkitd` 0640, backlight
+udev rule, `/etc/deviceinfo` `lzo-rle`, `playbook` in `video`).
+
+**How:** `tools/rebake_hd3.py` (called by `tools/rebake-hd3.sh`) applies the
+delta **file by file** — loop mount as root, `debugfs` as a normal user — and
+splices the package records from `local/work/rebake-ref/`.  It needs no host
+`apk`, and it checks the initrc md5, versions, module vermagic, `modules.dep`
+and the permissions before printing the hash.
+
+**Flashed** at block `0x4915` (`COMPLETE`, 626,065,440 B, ~4 min).  **The
+flasher then reset with `reboot -f` is enough** — a warm reset runs the
+bootrom; no physical power cycle is needed.
+
+* **First boot** grew the root to 62.5 G, then wedged the DSI at boot+37 s
+  (`Failed to set dsi_if_enable to 0`, `NO PACKET_SENT`) after the eMMC
+  `Card stuck being busy`; black panel, backlight on, compositor alive.  The
+  likely trigger is the **power-button release binding**, which toggles DPMS
+  (trap-353 class).  A `reboot -f` cleared it; **the second boot had 0 DSI
+  errors** and was responsive.
+* **Acceptance on the flashed image:** `apk list -I` shows r10003/r10008; the
+  inittab line; initrc md5 `00fdff84…`; `pvrsrvkm`/`wlcore` loaded with
+  vermagic `7.3.3 SMP … ARMv7 p2v8`; `nproc` 2 / PID 1 mask 3; the root at
+  56.5 G; the panel `connected` with **0 DSI errors**; catacomb/epitaph/tabula
+  map `pvr_dri` **and** `dbmfix.so`; the largest GEM object **2,457,600 B**;
+  **8/8** re-rendering pvr clients clean at a flat **20.66 MiB** pinned.
+  `BOOTCTR_FCTRY` `0x31 → 0x30 → 0x2f`.  **Trap 349 does not reproduce.**
+* **Permissions measured after the flash, from the image alone:** the backlight
+  node is `root:video 0664`, `playbook` writes brightness, `nmcli radio wifi
+  off/on` succeeds, and `postmarketos-zram-swap` activates **1489 MB lzo-rle**.
+  `gorm` launches and scans ≈10 APs, and the operator joined
+  `TeleCentro-AW-5G` — `wlan0` has DHCP `192.168.0.231`, the gateway and
+  `1.1.1.1` ping, and DNS resolves.  **The Wi-Fi icon is connection-state-driven,
+  not radio-state-driven** (it does not change on a bare radio toggle, and it
+  did change on association — trap 359; an earlier "refresh defect" reading is
+  withdrawn).
+* **The browser project is built (reports 273/274).**  The API gate passes
+  statically (the fork's `WPEGestureController`/`WPEView` symbols match Kumo's
+  bindings).  **WPE WebKit 2.54.3** from the fork (official WPE tarball + the six
+  commits as patches; `-DPORT=WPE`, `ENABLE_WPE_PLATFORM=ON`, legacy libwpe and
+  the built-in backends OFF because Kumo supplies its own `WPEDisplay`) is
+  `wpewebkit-2.54.3-r1000.apk` (34 MB, sha256 `032e5121…`); **Kumo 1.10.0** is
+  `kumo-1.10.0-r1000.apk` (2.6 MB, sha256 `b312ecfb…`).  Both are **installed on
+  the live root** (`kumo --version` runs); the **GUI experiment is next
+  session**.  They are **not in the flashed hd3 image** — the next rebake must
+  include them.  The build fixes are traps 360–364.
+* **Bench at the close:** region 0 trailer `1f 2d c8 d7 13 d6 47 35` = CRC
+  **`0x3547D613`** (measured from `/dev/mmcblk1`); region 1 sha256
+  **`20a5edd3…`** (64 MiB at `0x29000000`, measured); hd3 live ext4 (`/dev/loop0`
+  magic `53 ef`), 56.5 G, the flashed image `5d3eac8f…`; `BOOTCTR_FCTRY`
+  **`0x2f`**; `nproc` 2, PID 1 mask 3.  The 5 h boot had **1 transient DSI
+  error** (t=1911 s, null packets sent after 1 poll — not the `NO_PACKET_SENT`
+  wedge).  GEM: **84 objects, 166 MiB total, 25.6 MiB pinned**, largest 9.7 MB;
+  the six 9.7 MB objects are mostly unpinned (at least four).  Reboot before the
+  Kumo test.

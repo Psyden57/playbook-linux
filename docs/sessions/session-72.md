@@ -6,9 +6,11 @@
 > the browser stack and left this as the one experiment.
 
 Date: 2026-11-26.  Unit at the end: **Linux 7.3.3 `#109 SMP`** on hd3, region 0
-**`0x3547D613`** (**no media write this session**), `BOOTCTR_FCTRY` **`0x28`**,
-`nproc` 2 / PID 1 mask 3, the desktop up on `pvr_dri`, **0 DSI errors** on the
-final boot.  Wi-Fi down (the 5 GHz SSID was not in the scan).
+**`0x3547D613`** (media trailer measured; **no media write this session**) and
+region 1 sha256 **`20a5edd3a791…7422`** (re-measured this session),
+`BOOTCTR_FCTRY` **`0x28`**, `nproc` 2 / PID 1 mask 3, the desktop up on
+`pvr_dri`, **0 DSI errors**, GEM 9 objects / 17,121,280 B, `wlan0` **up**
+(`192.168.0.232`), sshd up, **Kumo not running**.
 
 ## Goal of this session
 
@@ -152,6 +154,15 @@ our vendored GPL DDK 1.17 headers (the "K" source):
 * **Killing Kumo to stop it wedges the pvr driver** and freezes the panel with
   0 DSI errors; use `reboot -f`.
 
+* **"The SGX works on GBM / `EGL_MESA_image_dma_buf_export` is present" (reports
+  267/268) does not mean WebKit's GBM dmabuf export works.**  That is the
+  EGL/libdbm path, which exports **PRIME handles from a dumb buffer**; WebKit
+  allocates through the DDK image API, which gives the buffer **no GEM handle**.
+  Killed by `gbmprime.c` (`gbm_bo_get_fd` = -1, `handle_for_plane` =
+  `0xffffffff`).  [report 275 §2.2]
+* **"A WebKit PRIME fallback could fix it."**  Killed by the same probe: there is
+  no handle to fall back to.  [report 275 §3, DECISIONS §107]
+
 ## Unknown / open questions
 
 * Does the pvr GBM export a dmabuf when the device is a **display-capable**
@@ -177,6 +188,10 @@ our vendored GPL DDK 1.17 headers (the "K" source):
 * `docs/reference/sgx540-factsheet.md` — the drafted SGX540 fact sheet (upstream
   format: identity, register map, clock/reset/events, 28-bit BIF/MMU, USSE/code
   base, OMAP glue, gaps).
+* `docs/captures/kumo-gbm-export-2026-11-26.txt` — the live probe re-run and the
+  Kumo logs (the evidence behind report 275).
+* `docs/contradictions/sgx540-use-code-base.md` — the `USE_CODE_BASE` conflict
+  (DDK header vs the upstream guide), open.
 * `tools/bench/gpu/gbmplane.py` — the GBM plane-API probe (the decisive
   measurement; working copy `local/work/gbmplane.py`).
 * `tools/bench/gpu/gbmprime.c` — the PRIME-handle probe that ruled out a WebKit

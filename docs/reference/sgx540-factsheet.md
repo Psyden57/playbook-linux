@@ -7,7 +7,7 @@ goes into the driver tables.  **Nothing here has been read from the SGX540's
 GPU registers on our unit yet** (see §Gaps); it is the K/L groundwork for that
 read.
 
-Method and tags are the project's ([`docs/porting/state.md`]): every fact carries
+Method and tags are the project's (see the upstream `docs/porting/state.md`): every fact carries
 a tag and stays below **C** until our own hardware read confirms it.
 
 | Tag | Meaning |

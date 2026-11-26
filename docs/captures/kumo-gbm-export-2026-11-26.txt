@@ -1,0 +1,149 @@
+# Kumo / WPE WebKit GBM-export probes — 2026-11-26 (session 72)
+
+Live text from the unit, re-run at the session-72 wrap-up.  Read-only: the probes
+open a DRM node, create one 64x64 AR24 buffer and destroy it; nothing on media is
+written.  **This is the evidence behind report 275.**
+
+Unit at the capture: Linux `7.3.3 #109 SMP` on hd3 (the session-71 rebaked image),
+`pvrsrvkm 56000000.gpu` bound, catacomb running, Kumo **not** running.
+`renderD129`/`card1` = `DRIVER=pvrsrvkm`; `renderD128`/`card0` = `DRIVER=omapdrm`.
+
+The probes are tracked at `tools/bench/gpu/` (`gbmplane.py`, `gbmprime.c`,
+`gbmprime2.c`, `ioctllog.c`).  A copy of each was in `/tmp` on the unit.
+
+## A. `gbmplane.py` (the plane API WebKit's `fromGBMBufferObject` uses)
+
+```
+/dev/dri/renderD129 [rend|scan] -> gbm_bo_create FAILED
+/dev/dri/renderD129 [rend] plane_count=1 fd_for_plane0=-1 gbm_bo_get_fd=-1 stride=256 stride_plane0=256 offset0=0 modifier=0xffffffffffffff
+/dev/dri/card1 [rend|scan] -> gbm_bo_create FAILED
+/dev/dri/card1 [rend] -> gbm_bo_create FAILED
+/dev/dri/card0 [rend|scan] plane_count=1 fd_for_plane0=6 gbm_bo_get_fd=7 stride=256 stride_plane0=256 offset0=0 modifier=0xffffffffffffff
+/dev/dri/card0 [rend] plane_count=1 fd_for_plane0=6 gbm_bo_get_fd=7 stride=256 stride_plane0=256 offset0=0 modifier=0xffffffffffffff
+/dev/dri/renderD128 [rend|scan] plane_count=1 fd_for_plane0=7 gbm_bo_get_fd=8 stride=256 stride_plane0=256 offset0=0 modifier=0xffffffffffffff
+/dev/dri/renderD128 [rend] plane_count=1 fd_for_plane0=7 gbm_bo_get_fd=8 stride=256 stride_plane0=256 offset0=0 modifier=0xffffffffffffff
+```
+plus, from the driver:
+```
+PVR:(Error): PVRDRIPlaneCreate: Cannot create display buffer without a display device [0, ]
+PVR:(Error): PVRDRIBufferCreate: Failed to create plane [0, ]
+```
+**Reading:** the pvr node cannot make a scan-out buffer, and a rendering buffer on
+it reports `plane_count=1` but **no fd** (`-1`).  The omapdrm nodes export.
+
+## B. `gbmprime.c` (PRIME handle + `drmPrimeHandleToFD`)
+
+```
+### /dev/dri/renderD129
+node /dev/dri/renderD129
+fd 3
+gbm device 0x411780
+bo 0xb650b450
+plane_count 1  gbm_bo_get_fd -1
+handle_for_plane(0) u32=0xffffffff
+drmPrimeHandleToFD rc=-1 outfd=-1
+
+### /dev/dri/card0 (control)
+fd 3
+gbm device 0x421780
+bo 0xb656b490
+plane_count 1  gbm_bo_get_fd 6
+handle_for_plane(0) u32=0x1
+drmPrimeHandleToFD rc=0 outfd=7
+```
+**Reading:** on the pvr node there is **no GEM handle** (`0xffffffff`), so PRIME
+export cannot work — the DDK, not Mesa, lacks the handle.
+
+## C. `gbmprime2.c` (master/usage variants)
+
+```
+### renderD129  RENDERING  master=0
+node /dev/dri/renderD129 usage=0x4 master=0
+fd 3
+gbm device 0x421790
+bo 0xb64dc800
+plane_count 1  gbm_bo_get_fd -1  fd_for_plane0 -1
+handle_for_plane0=0xffffffff drmPrimeHandleToFD rc=-1 outfd=-1
+
+### card1  RENDERING|SCANOUT  master=1
+node /dev/dri/card1 usage=0x5 master=1
+fd 3
+drmSetMaster rc=-1 errno=16
+gbm device 0x481790
+bo 0
+
+### card0 (control)  RENDERING|SCANOUT  master=0
+fd 3
+gbm device 0x4a1790
+bo 0xb65a4840
+plane_count 1  gbm_bo_get_fd 6  fd_for_plane0 7
+handle_for_plane0=0x1 drmPrimeHandleToFD rc=0 outfd=8
+```
+**Reading:** `errno=16` is `EBUSY` — the pvr primary `card1` already has a DRM
+master, so a display-node allocation could not be tested; the render-node result
+is the reproducible one.  The `ioctllog.c` run (same session) showed **no
+`CREATE_DUMB`** on `renderD129`, i.e. the BO is a real DRI image, not the dumb
+fallback.
+
+## D. The Kumo logs (`/tmp`, on the ext4)
+
+Run 1, default session env (`MESA_LOADER_DRIVER_OVERRIDE=pvr`, `DBMFIX=1`,
+`LD_PRELOAD=/usr/local/lib/dbmfix.so`), `kumo http://…/`:
+```
+2026-11-26T03:05:26.286715Z  INFO kumo: 139: Started Kumo
+2026-11-26T03:05:26.294467Z  INFO configory::ipc: 134: Starting config IPC
+2026-11-26T03:05:26.295108Z  INFO configory::monitor: 45: Starting config monitor for "/home/playbook/.config/kumo/kumo.toml"
+PVR:(Error): SGXKickSubmit: failed call to SGXDoKick (150) [0, ]
+
+** (WPEWebProcess:2133): ERROR **: 03:08:08.711: WebProcess didn't exit as expected after the UI process connection was closed
+```
+Run 2, `WPE_DRM_DEVICE=/dev/dri/renderD129`:
+```
+2026-11-26T03:09:48.871246Z  INFO kumo: 139: Started Kumo
+2026-11-26T03:09:48.882782Z  INFO configory::ipc: 134: Starting config IPC
+2026-11-26T03:09:48.883789Z  INFO configory::monitor: 45: Starting config monitor for "/home/playbook/.config/kumo/kumo.toml"
+
+Failed to extract DMA-buf attributes from GBM buffer of size 360x590
+PVR:(Error): SGXKickSubmit: failed call to SGXDoKick (149) [0, ]
+```
+
+## E. The kernel-side chain during the runs (from `dmesg`, unfiltered)
+
+Measured live during the session; the wedged boots' `dmesg` is gone after the
+reboots (report 275 §1 quotes it):
+```
+PVR_K:(Error): GetHandleStructure: Handle not allocated (index: 545)
+PVR_K:(Error): PVRSRVLookupHandle: Error looking up handle (150)
+... (run 2, WPE_DRM_DEVICE=renderD129)
+PVR_K:(Error): GetHandleStructure: Handle index out of range (6255103 >= 768)
+PVR_K:(Error): PVRSRVLookupHandle: Error looking up handle (149)
+PVR_K:(Error): GetHandleStructure: Handle index out of range (4294967295 >= 768)
+...
+PVR_K:(Error): FreeResourceByPtr: ERROR calling FreeResource function   (after stopping Kumo)
+```
+
+## What this proves
+
+* WebKit's `AcceleratedSurface` fails at `DMABufBufferAttributes::fromGBMBufferObject`
+  because the pvr GBM cannot export the buffer: `plane_count=1` but the plane fd
+  is `-1` and there is no GEM handle.  This is the DDK's buffer model, not a Mesa
+  policy or a WebKit bug (report 275 §2, §2.2).
+* The omapdrm control exports normally, so the probe and the environment are
+  sound.
+* Earlier "the SGX works on GBM / `EGL_MESA_image_dma_buf_export` is present"
+  (reports 267/268) is **not** contradicted: that is the EGL/libdbm path, which
+  exports via PRIME from a dumb buffer; WebKit's path allocates through the DDK
+  image API and hits the missing handle.
+
+## Reproducing
+
+```sh
+# the tracked probes are musl/armv7 binaries; build with $MUSL_CC (tools/env.sh)
+# on the unit, as playbook (or root for the drmSetMaster variant):
+python3 /tmp/gbmplane.py
+/tmp/gbmprime /dev/dri/renderD129
+/tmp/gbmprime /dev/dri/card0
+/tmp/gbmprime2 /dev/dri/renderD129 rend 0
+/tmp/gbmprime2 /dev/dri/card1 rendscan 1     # EBUSY expected: card1 is already mastered
+/tmp/gbmprime2 /dev/dri/card0 rendscan 0
+```
