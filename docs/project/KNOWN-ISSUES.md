@@ -3722,6 +3722,26 @@ report 121 §3/§11/§12.
         to `list 1`/`BANK0`/`0xc78` — not as a `cores/sgx540.py` data file.
         (Session 73.)
 
+383. **Never unbind `pvrsrvkm` from `56000000.gpu` at runtime — it oopses, and the
+        rebind deadlocks.**  Freeing the GPU for another driver by writing the
+        device name to `/sys/bus/platform/drivers/pvrsrvkm/unbind` crashed the
+        closed DDK:
+
+        ```
+        Internal error: Oops - undefined instruction: 0 [#2] SMP ARM
+        PC is at PVRLinuxFenceDeInit+0x50/0x68 [pvrsrvkm_omap4_sgx540_120]
+        ... PVRLinuxFenceDeInit <- PVRCore_Cleanup <- pvr_drm_unload <- pvr_remove
+        ```
+
+        The device was left unbound, and the follow-up write to
+        `/sys/bus/platform/drivers/powervr_sgx/bind` then hung in D state inside
+        `device_driver_attach` (`/proc/<pid>/wchan`), which only a reboot cleared.
+        To give the open driver the GPU, **block `pvrsrvkm` at boot** (a modprobe.d
+        `install … /bin/false`, trap 381) and boot the open-driver image — do not
+        unbind the closed driver live.  Note the asymmetry that makes this
+        tempting: **loading** `pvrsrvkm` at runtime is harmless and was used to
+        restore the bench.  (Session 73.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

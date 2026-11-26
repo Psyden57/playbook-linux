@@ -14,7 +14,7 @@ session-73 close.  See `docs/sessions/NUMBERING.md`.
 > silicon**.  The SGX540 microkernel assembles (3-byte delta from the SGX545
 > image) and passes all 7 offline tests, but the driver rejects it: it is a
 > **two-context `srvinit` image** and a one-context core needs a `pdtable` patch
-> and a list-0 load.  DECISIONS **§109/§110/§111**; traps **368–382**; captures
+> and a list-0 load.  DECISIONS **§109/§110/§111**; traps **368–383**; captures
 > `docs/captures/sgx540-{identity,bind,ukernel}-2026-11-26.txt`.
 
 ## 0. The job, and where it stands
@@ -31,9 +31,11 @@ installed.  Session 72 proved the browser is **blocked on the closed pvr DDK**
 (its GBM cannot export dmabufs — report 275), fixing the direction: the open
 `powervr_sgx` stack.
 
-**Session 73** did Track A's zero-risk first step (§0a): the SGX540 identity read
-and a re-read of the upstream tree, which turns the port from "multi-session of
-new driver code" into "data plus a captured init script".
+**Session 73** did Track A: the SGX540 identity read, the driver entry (built,
+then **bound on hardware**), and the first microkernel attempt.  The port turned
+out to be **more than "data plus a captured init script"** — the entry is data and
+works, but the microkernel is a two-context `srvinit` image that needs list-0 /
+PD-table work before `powervr_sgx` will run it (§0a).
 
 ## 0a. Session 73's result in brief (do not re-derive)
 
@@ -62,13 +64,36 @@ new driver code" into "data plus a captured init script".
   errata and `USE_CODE_BASE` facts; the contradiction file has the 24-vs-25-bit
   evidence.  [DECISIONS §109]
 * **Operational:** `/dev/mem` `mmap` needs a **page-aligned** offset (trap 368);
-  read only the registers the guide names (trap 369).
+  read only the registers the guide names (trap 369).  **A register *named* in a
+  header is not thereby safe to read** — `USE_CODE_BASE` is named in
+  `sgx540defs.h` and is not on the guide's list; reading it wedged the unit
+  (trap 376, causation unproven, risk unnecessary).
+* **The driver BINDS and IDENTIFIES the part** on a flashed image: `SGX core id
+  0x01140000 revision 0x00010200: TI OMAP4430 (SGX540 1.2.0)`, and the
+  `allow_unisolated` guard refuses then accepts the one-context core as designed.
+  [capture `docs/captures/sgx540-bind-2026-11-26.txt`; DECISIONS §111]
+* **The SGX540 microkernel builds and passes all 7 offline tests**, delta from the
+  SGX545 image = **3 bytes**, SGX545 golden hash intact — but the driver rejects
+  it: it is a **two-context `srvinit` image**, and a single-context core needs
+  `SINGLE_CONTEXT` + a **`pdtable` patch** and a **directory-list-0 load**.  [trap
+  382; `docs/captures/sgx540-ukernel-2026-11-26.txt`;
+  `docs/contradictions/sgx540-ukernel-srvinit-vs-powervr_sgx.md`]
+* **Three operational traps that cost boots:** the firmware must be in the
+  **initramfs** (probe at t≈0.9 s, before hd3 is mounted — trap 380);
+  `modprobe.blacklist=` does **not** stop OpenRC's exact-name load, a modprobe.d
+  `install … /bin/false` does (trap 381); and building from
+  `local/pristine/linux-7.3.3` produces an image that **will not boot** (no board
+  support — trap 378).
+* **Do not unbind `pvrsrvkm` live (trap 383).**  `echo … > .../pvrsrvkm/unbind` oopses inside
+  `PVRLinuxFenceDeInit` (undefined instruction, from `pvr_remove`), and the
+  subsequent bind deadlocks in `device_driver_attach`.  Block it at boot instead.
 
 ## 0b. The two tracks for session 74 (operator's choice)
 
 **Track A (durable, chosen) — the SGX540 microkernel, on to a kick.**  The tree is
 `local/work/powervr_sgx` (gitignored, upstream `95f78ca` plus our patches).
-**Nothing goes upstream until the core draws** — no issue, no PR (DECISIONS §110).
+**Nothing goes upstream until the SGX540 runs on the unit** — no issue, no PR
+(DECISIONS §110; the bar is *running*, not a table entry).
 
 0. **ALREADY DONE, do not redo:**
    * The **driver binds and identifies** the core on hardware (C facts) — see §0
@@ -79,7 +104,7 @@ new driver code" into "data plus a captured init script".
      never `local/pristine/linux-7.3.3` (trap 378, fell back to bootrom); block
      the closed DDK with a modprobe.d `install … /bin/false`, not the kernel
      `modprobe.blacklist=` parameter (trap 381); the firmware goes in the
-     **initramfs** (trap 380); never unbind `pvrsrvkm` live (it oopses).
+     **initramfs** (trap 380); never unbind `pvrsrvkm` live (it oopses in `PVRLinuxFenceDeInit` — trap 383).
 1. **THE NEXT STEP (§4 in full): give the microkernel a list-0 / PD-table path.**
    Add the `pdtable` patch site to `ukernel/ukernel.py` + `cores/sgx540.py`, load
    directory list 0 from it, set the single-context feature bits (drop `SECURE`,
@@ -120,8 +145,16 @@ new driver code" into "data plus a captured init script".
   root, not booted.
 * **hd3 = the session-71 rebaked image** `5d3eac8f…` (625,999,872 B), flashed at
   loader block `0x4915`, grown to 62.5 G; live root `/dev/loop0` ext4.  It
-  carries catacomb r10003, epitaph r10008, the pitch shim, the 842-module ARMv7
-  tree and the permissions; **it does not carry `wpewebkit`/`kumo`**.
+  carries catacomb r10003, epitaph r10008, the pitch shim, the **842-module ARMv7
+  tree** (measured this session: 847 `.ko` on the live root, of which **5 are the
+  open-driver modules deployed in session 73** — 847 − 5 = 842, the baked count)
+  and the permissions.  **It does NOT carry `wpewebkit`/`kumo`** — verified two
+  ways on the baked image this session: no `P:wpewebkit`/`P:kumo` record in the
+  apk database, and **zero** occurrences of `WPEWebProcess`,
+  `libWPEWebKit-2.0.so.1` or `wpe-webkit-2.0` anywhere in the 626 MB file.  The
+  **live root** does show both installed (`apk list -I`), i.e. they were installed
+  after the bake, so **a re-flash loses them** — the "next rebake must add
+  wpewebkit+kumo" item stands.
 * **To boot the ORACLE:** flash `local/work/ifs-shim-sealed.ifs` at block
   `0x825`; qconn `169.254.0.1:9090`, `PB_LINK=door tools/pbssh.sh`.
 * **To stock TabletOS:** the 1917 IFS at `0x825` **and**
@@ -143,13 +176,13 @@ new driver code" into "data plus a captured init script".
 | hd3 | the session-71 rebaked image **`5d3eac8f…`**, flashed at `0x4915`, grown to 62.5 G; live root `/dev/loop0` ext4 rw, 56.5 G |
 | `BOOTCTR_FCTRY` | **`0x2c`** (`dmesg \| grep pbrpmb`; `/init` tops up below `0x1e`) |
 | CPU | `nproc` 2, `taskset -p 1` → **3** |
-| battery | Full, 4.149 V, 100 % |
+| battery | Full, 100 % (`VOLTAGE_NOW` 4.126–4.152 V across the session) |
 | GPU | `pvrsrvkm_omap4_sgx540_120` owns `56000000.gpu`; `card1`/`renderD129`; core id 0x0114 / rev 0x00010200 |
 | desktop | catacomb + `tabula`/`epitaph`/`wvkbd-mobintl` running, clients on **`pvr_dri`**; **Kumo not running** |
 | panel | `connected`, `bl_power` 0, **0 DSI errors** |
 | WLAN | **up** at **`192.168.0.232`** |
 | SSH | `PB_LINK=usb tools/pbssh.sh` works; no door (Linux image, trap 88); if it times out check the cable, the host VPN (trap 341), ufw (trap 342) |
-| device-side, inert | `/lib/firmware/powervr_sgx/sgx540_ukernel.bin`; modules `powervr_sgx`, `drm_exec`, `drm_gpuvm`, `drm_shmem_helper`, `gpu-sched` in `/lib/modules/7.3.3/...`.  Reverted: `/etc/modprobe.d/powervr-open.conf`, `/etc/modules-load.d/powervr_sgx.conf` |
+| device-side, **not loaded** | `/lib/firmware/powervr_sgx/sgx540_ukernel.bin` and the modules `powervr_sgx`, `drm_exec`, `drm_gpuvm`, `drm_shmem_helper`, `gpu-sched` are installed in `/lib/modules/7.3.3/...` but **unloaded** (`lsmod` shows none; `56000000.gpu` is `pvrsrvkm`'s).  **They were still loaded at the first wrap-up** — leftovers from the boot that used `/etc/modules-load.d/powervr_sgx.conf` — and were unloaded by hand; if a boot brings them back, that drop-in is present again.  Reverted: `/etc/modprobe.d/powervr-open.conf`, `/etc/modules-load.d/powervr_sgx.conf` |
 | host | clone `local/work/powervr_sgx` (`95f78ca` + patches); assembler `local/work/sgxasm/sgx-asm`; test trees `local/kernel-tree` (good), `local/kernel-tree-sgx` (open driver), `local/work/kbench` |
 
 ## 2. Working rules (unchanged)
@@ -213,9 +246,13 @@ Exact inputs:
 * `local/work/powervr_sgx` (upstream `95f78ca` + `rootfs/powervr-sgx/0001-…patch`
   + `rootfs/powervr-sgx/sgx540.py`); assembler at `local/work/sgxasm/sgx-asm`
   (`SGX_ASM=…`); build with `python3 ukernel/build.py sgx540`.
-* Wrap with `drm/tools/mkukfw.py IMAGE -o OUT --manifest JSON` (it reads
-  `entries.event`, `patches.ctlblk`, `features`, `build_id`); the `pdtable` patch
-  must be added to the manifest first.
+* Wrap with `drm/tools/mkukfw.py IMAGE -o OUT --manifest JSON`.  It takes
+  `entries.event` from the manifest and **every** entry in `patches`, mapping each
+  name through `{"ctlblk": ta3dctl, "pdtable": pdtable}` — so a manifest that
+  already carries a `pdtable` offset is packaged correctly with no extra flag.  It
+  reads `features`/`build_id` too, and **errors out** if `features` has bit 3
+  (SINGLE_CONTEXT) set without a `pdtable` patch.  `--check FILE` prints and
+  verifies a packaged image as the driver does.
 * Embed the result in `initramfs/root/lib/firmware/powervr_sgx/` (trap 380), rebuild
   from `local/kernel-tree-sgx`, flash region 0.
 * Block the closed DDK with `install pvrsrvkm_omap4_sgx540_120 /bin/false` in a
@@ -224,29 +261,58 @@ Exact inputs:
 * Guard for the next tree problem: build from `local/kernel-tree` or a copy of it,
   never `local/pristine/linux-7.3.3` (trap 378).
 
-What each result means:
+What each result means (the strings are verbatim in `pvrsgx_fw.c`):
 * **`powervr_sgx … open microkernel <id>, interface 1.x, features 0x…`** then a
   probe that completes → the image is accepted and the core is running our code.
   Next: a kick, and only then do the carried-over register tables get tested.
-* **`not a microkernel file`** → the `mkukfw` header is still wrong (magic, CRC, or
-  a table past the image).
-* **`not an image for a single-context core`** → the feature bits; `SINGLE_CONTEXT`
-  must be set and `SECURE` clear.
+* **`not a microkernel file`** → `ukfw_parse()` returned `-ENOENT`, which is
+  **only** bad magic (`SGX5`/`UKRN`) or a file shorter than the 0x60-byte header.
+  The driver prints no `why` text for this case — so it does *not* cover CRC or
+  table faults.
+* **`bad sizes` / `interface or features not supported` / `image CRC mismatch` /
+  `bad entry or patch table`** → packaging is wrong in that specific way;
+  `ukfw_parse()`'s own `why` is printed as `<file>: <why>`.
+* **`not an image for a single-context core`** → the feature bits are the other
+  way round on a one-context core: `SINGLE_CONTEXT` must be **set** and `SECURE`
+  **clear**.
+* **`an image for a single-context core`** → the reverse: a one-context image on a
+  multi-context core.
 * **`a PD table patch on a multi-context core`**, or a BIF fault with
-  `DIR_LIST_BASE0` idle → the list-0 load is not wired.
+  `DIR_LIST_BASE0` idle → the list-0 wiring is wrong.
+* **No `powervr_sgx` line at all** → the probe never ran: check that
+  `56000000.gpu` is not owned by `pvrsrvkm` (trap 381) before assuming the image
+  is at fault.
 
 Do **not** probe `USE_CODE_BASE` from userspace (trap 376) and do **not** unbind
-`pvrsrvkm` live (it oopses in `PVRLinuxFenceDeInit`).  Publish nothing upstream
-before a frame (DECISIONS §110).
+`pvrsrvkm` live (trap 383).  Publish nothing upstream
+before the core runs on the unit (DECISIONS §110).
 
 ## 5. What could not be verified
-## 5. What could not be verified
 
-* Whether `USE_CODE_BASE` exists on our rev-120 silicon (needs a write/read-back).
+* **That the `SINGLE_CONTEXT`/`pdtable` gate is what is failing on hardware.**  The
+  driver rejected the image at the *earlier* gate (`not a microkernel file`, no
+  `SGX5`/`UKRN` header); the list-0 requirement is a reading of
+  `mkukfw.py`/`pvrsgx_fw.c`, never reached on silicon.
+* **Any SGX540 microkernel register or init value.**  No kick has ever run, so the
+  carried-over tables (0x618, 0x62c, 0x694, TA 0x200, 3D 0x428) and
+  `sgx540_init_regs` are untested hypothesis.
+* Whether `USE_CODE_BASE` exists on our rev-120 silicon (needs a write/read-back
+  **inside the driver**, trap 376).
 * `OCP_DEBUG_CONFIG` bit 31 (`THALIA_INT_BYPASS`) after module enable (a read,
   not done).
-* The 28-bit heap layout the SGX540 needs, and the DPM/TA/ISP/TSP/PBE/PDS state.
+* The DPM/TA/ISP/TSP/PBE/PDS state map (not in any GPL header).
+* **Whether the SGX540's 28-bit heap layout is *right*.**  It is sourced from the
+  DDK's `sgxconfig.h` 28-bit block and passes `heaps_fit()`/`pds_reach()`/
+  non-overlap, and the driver accepted it far enough to identify the core — but no
+  allocation has ever succeeded through it, so the texture/general split is still
+  ours, not measured.
+* **dma-buf export from the open stack.**  Code reading only (`PRIME_HANDLE_TO_FD`
+  via the generic GEM path); never measured.  This is the thing that would unblock
+  the browser (report 275).
 * Kumo's RSS/first-render/touch behaviour (it never presents — report 275).
+* The panel after the final restore: **not** confirmed visually by the operator
+  this session; `dmesg` shows 0 DSI errors and `grim` is not evidence either way
+  (trap 377).
 
 ## 6. Paste-ready kickoff prompt
 
@@ -256,7 +322,7 @@ PlayBook (OMAP4430 "winchester") — session 74 (absolute; Linux-era 68)
 Workspace: this repository — a git checkout.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 368-382) and §3,
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 368-383) and §3,
 DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 109-111, docs/reports/INDEX.md,
 reports 276 (graphics route, with its session-73 addendum and §8), 275 (the Kumo
 runtime result), docs/reference/sgx540-factsheet.md (has C facts and the
@@ -288,8 +354,8 @@ and the unit falls back to bootrom (trap 378).  The GPU firmware must be in the
 INITRAMFS; the probe runs at ~0.9 s, before hd3 is mounted (trap 380).  The kernel
 modprobe.blacklist= parameter does NOT stop OpenRC's exact-name load; use a
 modprobe.d "install <mod> /bin/false" (trap 381).  NEVER unbind pvrsrvkm live -- it
-oopses in PVRLinuxFenceDeInit and the rebind deadlocks; use a boot with it blocked
-(trap/decisions).  Do not probe USE_CODE_BASE from userspace (trap 376).  grim
+oopses in PVRLinuxFenceDeInit and the rebind deadlocks (trap 383); use a boot
+with it blocked.  Do not probe USE_CODE_BASE from userspace (trap 376).  grim
 captures the compositor's buffers, not the panel.
 
 THE NEXT WORK — two tracks, operator's choice.
@@ -306,7 +372,7 @@ package pvr-dbmfix; the GEM-growth walk; trap 350 + a heavy-redraw measurement; 
 CPU items; the USB teardown; the boot-time DSI wedge (trap 377).
 
 BENCH: region 0 0xBC5FB130; region 1 20a5edd3...; hd3 live /dev/loop0 ext4 rw,
-56.5 G; BOOTCTR 0x2c; nproc 2, PID 1 mask 3; battery Full 4.149 V; panel
+56.5 G; BOOTCTR 0x2c; nproc 2, PID 1 mask 3; battery Full 100 % (~4.15 V); panel
 connected, bl_power 0, 0 DSI errors; wlan0 up 192.168.0.232.  SSH: PB_LINK=usb
 tools/pbssh.sh works; if it times out check the cable, the host VPN (trap 341) and
 ufw (trap 342) first.  Kernel printk goes to the panel; use reboot -f; ask the
