@@ -70,10 +70,10 @@ index 4eae6cf..255fdbe 100644
  
  	  Say N unless this kernel is for such an SoC.
 diff --git a/drm/powervr_sgx/pvrsgx_core.c b/drm/powervr_sgx/pvrsgx_core.c
-index e0f2639..543eff4 100644
+index e0f2639..1e13f3f 100644
 --- a/drm/powervr_sgx/pvrsgx_core.c
 +++ b/drm/powervr_sgx/pvrsgx_core.c
-@@ -148,6 +148,116 @@ static const struct pvrsgx_heap_layout sgx530_heaps = {
+@@ -148,6 +148,120 @@ static const struct pvrsgx_heap_layout sgx530_heaps = {
  	.pb_max_pages = 0x2000,
  };
  
@@ -140,11 +140,15 @@ index e0f2639..543eff4 100644
 +	 */
 +	.use_code_base_addr_shift = 8,
 +	.cr_b30 = 0x0b30,
-+	/* The event PDS registers are not in the GPL header; the SGX545's offsets
-+	 * are a guess here, checked by reading back before the first kick.
++	/* The event PDS registers are not in the 1.17 GPL header the rest of this
++	 * table comes from; the offsets are the SGX545's and are checked by reading
++	 * back before the first kick.  The enable value is not a guess any more: the
++	 * GPL-2 DDK 1.8's own srvinit derives 0x2204f00f for this core (see
++	 * SGX540_CR_EVENT_PDS_ENABLE_ALL in pvrsgx_hw.h), which differs from the
++	 * SGX545's by SW_EVENT -- the source the microkernel raises to signal the host.
 +	 */
 +	.event_pds_enable = SGX545_CR_EVENT_PDS_ENABLE,
-+	.event_pds_enable_all = SGX545_CR_EVENT_PDS_ENABLE_ALL,
++	.event_pds_enable_all = SGX540_CR_EVENT_PDS_ENABLE_ALL,
 +	.event_pds_base = SGX545_CR_EVENT_PDS_BASE,
 +	.event_pds_data0 = SGX545_CR_EVENT_PDS_DATA0,
 +	.event_pds_data1 = SGX545_CR_EVENT_PDS_DATA1,
@@ -190,7 +194,7 @@ index e0f2639..543eff4 100644
  static const struct pvrsgx_core_family families[] = {
  	{
  		.name = "SGX545",
-@@ -185,6 +295,26 @@ static const struct pvrsgx_core_family families[] = {
+@@ -185,6 +299,26 @@ static const struct pvrsgx_core_family families[] = {
  		.init_regs = sgx530_init_regs,
  		.num_init_regs = ARRAY_SIZE(sgx530_init_regs),
  	},
@@ -217,7 +221,7 @@ index e0f2639..543eff4 100644
  };
  
  static const struct pvrsgx_core_info cores[] = {
-@@ -229,10 +359,23 @@ static const struct pvrsgx_core_info cores[] = {
+@@ -229,10 +363,23 @@ static const struct pvrsgx_core_info cores[] = {
  		.clock_hz = 200000000,
  		.fw_name = "powervr_sgx/sgx530_ukernel.bin",
  	},
@@ -241,6 +245,28 @@ index e0f2639..543eff4 100644
  
  /*
   * Without EDM_VERTEX_PDSADDR_FULL_RANGE, a heap the EDM runs PDS code from
+diff --git a/drm/powervr_sgx/pvrsgx_hw.h b/drm/powervr_sgx/pvrsgx_hw.h
+index acb0c09..3d00446 100644
+--- a/drm/powervr_sgx/pvrsgx_hw.h
++++ b/drm/powervr_sgx/pvrsgx_hw.h
+@@ -22,6 +22,17 @@
+  */
+ #define SGX545_CR_EVENT_PDS_ENABLE		0x0a58	/* host events start the event program */
+ #define   SGX545_CR_EVENT_PDS_ENABLE_ALL	0x2204b00f
++/*
++ * The SGX540's value, from the GPL-2 DDK 1.8 (eurasia/services4/srvinit/
++ * devices/sgx/sgxinit.c, the non-SGX_FEATURE_MP branch, with
++ * EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK defined in sgx540defs.h): BREAKPOINT |
++ * DPM_OUT_OF_MEMORY_ZLS | SW_EVENT | TIMER, then TA_FINISHED | TA_TERMINATE |
++ * DPM_REACHED_MEM_THRESH | DPM_OUT_OF_MEMORY_GBL | DPM_OUT_OF_MEMORY_MT |
++ * DPM_3D_MEM_FREE | PIXELBE_END_RENDER.  It differs from the SGX545's by
++ * exactly one bit -- SW_EVENT (0x4000) -- which is the source the microkernel
++ * raises to signal the host.
++ */
++#define   SGX540_CR_EVENT_PDS_ENABLE_ALL	0x2204f00f
+ #define SGX545_CR_EVENT_PDS_BASE		0x0a68	/* the event PDS program, 16-byte aligned */
+ #define SGX545_CR_EVENT_PDS_DATA0		0x0a6c
+ #define SGX545_CR_EVENT_PDS_DATA1		0x0a70
 diff --git a/drm/powervr_sgx/pvrsgx_of.c b/drm/powervr_sgx/pvrsgx_of.c
 index f287604..cc857c8 100644
 --- a/drm/powervr_sgx/pvrsgx_of.c
@@ -348,37 +374,3 @@ index 08abeb5..605ebb4 100644
  }
  
  uint32_t
-diff --git a/ukernel/test_emu.py b/ukernel/test_emu.py
-index b41a557..24154c3 100644
---- a/ukernel/test_emu.py
-+++ b/ukernel/test_emu.py
-@@ -37,10 +37,13 @@ def patch_limm(code, off, v):
-     struct.pack_into("<II", code, off, lo, hi)
- 
- 
--def load():
--    binp = os.path.join(HERE, "sgx545_ukernel.bin")
--    manp = os.path.join(HERE, "sgx545_ukernel.json")
--    subprocess.run([sys.executable, os.path.join(HERE, "build.py"), binp, manp], check=True)
-+def load(core="sgx545"):
-+    binp = os.path.join(HERE, core + "_ukernel.bin")
-+    manp = os.path.join(HERE, core + "_ukernel.json")
-+    # build.py takes the core as an optional leading token; the handler logic is
-+    # core-independent, so every core's image gets the same assertions.
-+    subprocess.run([sys.executable, os.path.join(HERE, "build.py"), core, binp, manp],
-+                   check=True)
-     man = json.load(open(manp))
-     # patch the control-block-base limm as srvinit -o does on the box
-     code = bytearray(open(binp, "rb").read())
-@@ -212,8 +215,9 @@ def test_xfer_counter_32bit(code, man):
- 
- 
- def main():
--    code, man = load()
--    print("microkernel offline tests:")
-+    core = sys.argv[1] if len(sys.argv) > 1 else "sgx545"
-+    code, man = load(core)
-+    print(f"microkernel offline tests ({core}):")
-     test_init(code, man)
-     test_recovery_init(code, man)
-     test_raise_irq(code, man)

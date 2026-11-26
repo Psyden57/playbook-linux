@@ -1,118 +1,105 @@
 # Current state
 
-## Current state — 2026-11-26 (session 73)
+## Current state — 2026-11-26 (session 74)
 
-**The open SGX540 port reached hardware: the driver binds and identifies the core,
-and the first microkernel builds.  The next blocker is the microkernel's list-0 /
-PD-table path.**  Nothing is published upstream (DECISIONS §110).
+**The open `powervr_sgx` SGX540 microkernel STARTS on silicon and completes a
+NULL job; one or two jobs pass per GPU reset, then it stalls.**  Nothing is
+published upstream (DECISIONS §110).
 
-**Measured on the unit (C facts).**  `CORE_ID` id **0x0114**, `CORE_REVISION`
-**`0x00010200`** (Rev 120), `DESIGNER_REV_FIELD1/2` **0**, at 0x0020/0x0024;
-ti-sysc `rev` **`0x40000000`** / `sysc` **`0x0000003c`**; `BIF_INT_STAT` at idle
-`0x00008000` (`FLUSH_COMPLETE`).  Read-only via `/dev/mem` (`CONFIG_STRICT_DEVMEM`
-off).  [DECISIONS §109; `docs/captures/sgx540-identity-2026-11-26.txt`]
+**Measured on the unit.**  `powervr_sgx` binds `56000000.gpu` and reports
+`open microkernel invfix, interface 1.0, features 0x8`, `EDM init: event status
+0xa0000000, BIF int 0x8000, timer 0x01003e29`, **`microkernel started`**; its
+debugfs agrees — `firmware running: 1`, `hostctl init 0x1`, `uk-lockups 0`,
+`BIF_INT_STAT 0x00008000` (`FLUSH_COMPLETE`, **no fault**), `BIF_FAULT 0`.
+`card1`/`renderD129` = `powervr_sgx`; `card0`/`renderD128` stay `omapdrm`.
+[report 277; `docs/captures/sgx540-ukernel-start-2026-11-26.txt`]
 
-**The open driver binds and identifies the part on silicon.**  On a flashed
-`local/kernel-tree-sgx` boot (copy of `local/kernel-tree`, closed DDK off,
-`allow_unisolated=1`) it logged `SGX core id 0x01140000 revision 0x00010200: TI
-OMAP4430 (SGX540 1.2.0)` — the exact string the entry was written to produce, so
-the `regs` offsets, `core_id` match and `cores[]` lookup are **C**.
-[DECISIONS §111; `docs/captures/sgx540-bind-2026-11-26.txt`]
+**Starting it needs `edm_init=1`.**  Without it the probe fails 20 ms after
+`open microkernel …` (`BIF int 0xc002, fault 0x8779000`, `error -110`); with
+`modprobe powervr_sgx edm_init=1` it completes.  That is the driver's documented
+§9 single-context launch, now the boot default on hd3
+(`/etc/modprobe.d/powervr-sgx-opts.conf`).
 
-**The microkernel builds, and is rejected for a structural reason.**  It assembles
-(`ukernel/cores/sgx540.py`; 3-byte delta from the SGX545 image) and passes all 7
-offline tests, with the SGX545 golden hash untouched.  On the unit the driver
-**finds** it (from the **initramfs** — the probe runs at t≈0.9 s, before hd3 is
-mounted) but rejects it: no `SGX5`/`UKRN` header, and a single-context core also
-needs a **`pdtable` patch**.  The image routes TA/3D to **list 1** and assumes
-list 0 is `srvinit`'s shared kernel PD, so it is a **two-context `srvinit` image**
-— not a one-context `powervr_sgx` one.  [trap 382;
-`docs/captures/sgx540-ukernel-2026-11-26.txt`]
+**`submit-null-job` goes from `consumed 0` to `1/1 passed`.**  Four SGX545
+assumptions in the image were corrected, each gated on the per-core
+`SINGLE_CONTEXT` flag, with the SGX545 serial image kept **byte-identical**
+(`83b5b0a7…`):
+
+| the image assumed | the SGX540 has |
+|---|---|
+| client PD in `BIF_DIR_LIST_BASE1` (0xc38), routed via `BIF_BANK0` (0xc78) | neither register exists; one list, `DIR_LIST_BASE0` 0xc84 |
+| a HW context's `page_dir` word is a directory address | a **slot** into the driver's PD table at `kernel_code.base + 0xf000` |
+| `features = SECURE`, no pdtable patch | `SINGLE_CONTEXT` set, `SECURE` clear, pdtable patch |
+| `0x138` masks `0x27`/`0x4b` (SGX545's two groups) | **one** group, bits 0-4 → mask `0x1F` (the decisive fix) |
 
 **Blockers in play, in order:**
 
-1. **The microkernel's list-0 / PD-table path** — add the `pdtable` patch site and
-   load directory list 0 from it; set the single-context feature bits; re-audit
-   the ~39 references to `list 1`/`BANK0`/`0xc78`.  This gates everything.
-2. **`USE_CODE_BASE` presence on rev 120** (fact sheet Gap 7) — settle inside the
-   driver's reset sequence, never by a userspace read (trap 376).
+1. **The EDM does not dispatch after the init task.**  One or two NULL jobs pass
+   immediately after a GPU reset, then none, and a kernel-CCB trace showed not
+   one of the microkernel's own stores running even for a *passing* job — while
+   the driver still reports `consumed 0` for it.  Separate "does the task run"
+   from "does the driver account for it" **before** any further register
+   question.  This gates everything.
+2. **`0xb14` is `EUR_CR_USE1_SERV_PIXEL`** — a USSE pixel service queue
+   (COUNT/EMPTY), not the EDM task-progress register the image treats as its
+   keep-alive.  Unfixed.  [DDK 1.8 `sgx540defs.h`]
 3. **`sgx540_init_regs`** — not derivable statically; needs a capture from a
    working microkernel boot.
 4. **The microkernel register tables** (0x618, 0x62c, 0x694, TA/3D kick …) are
-   carried over from the SGX545 as **hypothesis** — no GPL header names them.
-5. **DPM/TA/ISP/TSP/PBE/PDS state map** (fact sheet Gap 10).
-6. Unchanged from earlier sessions: the **hd3 rebake** must add `wpewebkit` +
-   `kumo`; `pvr-dbmfix` needs packaging; the GEM-growth walk; the CPU supply/OPP
-   items; the intermittent USB teardown (trap 337); the memory-throughput
-   re-measure.
-7. **Display, not GPU:** why the first modeset after a boot fails on some boots
-   (`NO_PACKET_SENT`, `polls=2000` vs a healthy `polls=1`; trap 377).
+   carried over from the SGX545 as **hypothesis**.
+5. **`USE_CODE_BASE` presence on rev 120** — the *unit* is now settled as a K
+   fact (shift 8, DM at 24); only "do the registers exist" is open, and it wants
+   a write/read-back **inside the driver**.
+6. **The DPM/TA/ISP/TSP/PBE/PDS state map** (fact sheet Gap 10).
+7. Unchanged from earlier: the **hd3 rebake** must add `wpewebkit` + `kumo`;
+   `pvr-dbmfix` needs packaging; the GEM-growth walk; the CPU supply/OPP items;
+   the intermittent USB teardown (trap 337); the memory-throughput re-measure;
+   and why the first modeset after a boot fails on some boots (trap 377).
 
-**Bench at the close (session 73)**: Linux `7.3.3 #111 SMP` on hd3, region 0
-**`0xBC5FB130`** (`local/work/kernel-restore-20261126.img`, verified byte-true on
-media; `0x3547D613` could not be rebuilt because `CONFIG_LOCALVERSION_AUTO` embeds
-`git describe` — keep the image file), region 1 `20a5edd3…`; root `/dev/loop0`
-ext4 rw, 56.5 G; `BOOTCTR_FCTRY` **`0x2c`**; `nproc` 2, PID 1 mask `3`;
-`pvrsrvkm` owns the GPU, desktop up, backlight on, **0 DSI errors**; battery Full
-4.149 V; `wlan0` up `192.168.0.232`; SSH `PB_LINK=usb tools/pbssh.sh` works (no
-door — Linux image).  Inert on hd3: `/lib/firmware/powervr_sgx/sgx540_ukernel.bin`
-and the five modules (`powervr_sgx`, `drm_exec`, `drm_gpuvm`, `drm_shmem_helper`,
-`gpu-sched`).  Reverted: `/etc/modprobe.d/powervr-open.conf`,
-`/etc/modules-load.d/powervr_sgx.conf`.
+**New bench constraint: `/dev/mem` no longer reaches the GPU.**  All windows
+return `Errno 13` in the open-driver configuration while `CONFIG_STRICT_DEVMEM`
+is off and `IO_STRICT_DEVMEM` is absent from the config; `/proc/iomem` shows
+`56000000-56003fff : 56000000.gpu powervr_sgx`.  **The userspace register read
+that opened this port is unavailable while the open driver owns the GPU** —
+further register evidence must come from inside the driver.  [trap 384]
+
+**A new K source, and a boundary.**  The operator supplied a GPL-2 DDK drop
+("Android SGX DDK UM version 1.8", `PVRVERSION_BUILD 869593`, TI OMAP,
+`/home/psyden/Pdrive/GFX_Linux_DDK-master`, *outside* the repo) whose
+`eurasia/hwdefs/sgx540defs.h` is the **540-specific 3150-line header** our
+vendored 1.17 drop lacks, plus the user-mode `srvinit` and the full errata
+table.  It is **K** evidence and is summarised in
+`docs/reference/sgx540-ddk18-facts.md`.  The same drop's microkernel
+specification PDFs are marked **"Strictly Confidential"** and are therefore
+**not** usable evidence.
+
+**Bench at the close (session 74)**: Linux `7.3.3 #5 SMP` ARMv7 on hd3, region 0
+**`0x02C1DDC2`** (`boot/chainloader/kernel.img`, 10,450,520 B, sha256
+`70474c01…`; media trailer `1f2dc8d7 c2ddc102`; carries the corrected
+microkernel, `image_crc32 0xc1eebfaf`), region 1 `20a5edd3…`;
+`BOOTCTR_FCTRY` **`0x1f`**; root `/dev/loop0` ext4 rw 56.5 G; `nproc` 2, PID 1
+affinity `0,1`; battery Full 4.150 V; panel 0 DSI errors; `wlan0`
+`192.168.0.231`; SSH `PB_LINK=usb tools/pbssh.sh` works.  Desktop on `swrast`
+(the closed DDK blocked by the operator's standing direction — this work is the
+open driver).  hd3's `powervr_sgx.ko` is the rebuilt module
+`2e138afc…`; `.bak` and the reverted BRN-31620 build are beside it.
+
+## Previous state — 2026-11-26 (session 73)
+
+**The open SGX540 port reached hardware: the driver binds and identifies the
+core, and the first microkernel builds.  The next blocker is the microkernel's
+list-0 / PD-table path.**  Superseded by session 74, which gave it that path;
+the full snapshot is in
+[`docs/history/STATE-HISTORY.md`](../history/STATE-HISTORY.md)
+(`## Previous state — 2026-11-26 (session 73)`).
 
 ## Previous state — 2026-11-26 (session 72)
 
 **The Kumo/WPE WebKit experiment ran and is a proven negative: the engine is on
 the SGX, but the PowerVR GBM backend cannot export dmabufs, so the page never
-composes.**  Report **275**; DECISIONS §107; traps 365–367.
-
-* **Kumo launches and loads the page** — its window and URL bar draw, the page
-  is fetched (host server logged `GET /` + favicon), and **both `kumo` and
-  `WPEWebProcess` map `pvr_dri` + `libGLESv2_PVR_MESA`** (the engine *is* on the
-  SGX).  So the packages, `/usr/libexec/wpe-webkit-2.0/` helpers, the
-  WPEPlatform ABI and display/view creation are all fine; the failure is **not**
-  the handoff's missing-helper / `swrast` / display-abort branches.
-* **The page area is gray.**  WebKit's
-  `AcceleratedSurface::RenderTargetEGLImage::create()` makes a GBM buffer and
-  cannot extract its dmabuf attributes (`Failed to extract DMA-buf attributes
-  from GBM buffer of size 1024x515`) → no page surface.  **Proven directly**
-  with `local/work/gbmplane.py`: on `/dev/dri/renderD129` (pvr)
-  `gbm_bo_create(AR24, …, GBM_BO_USE_RENDERING)` succeeds
-  (`plane_count=1`) but **`gbm_bo_get_fd_for_plane(bo,0)` and `gbm_bo_get_fd(bo)`
-  are both `-1`**; on `/dev/dri/card1` `gbm_bo_create` fails outright
-  (`PVRDRIPlaneCreate: Cannot create display buffer without a display device`).
-  The omapdrm nodes export fine.  The desktop is unaffected because libdbm/pvr
-  clients export **PRIME handles** (`drmPrimeHandleToFD`), not the GBM plane API.
-* **No `WPE_*` environment variable fixes it.**  `WPE_DRM_DEVICE=/dev/dri/renderD129`
-  gave garbage pvr handles (`6255103 >= 768`, `0xFFFFFFFF`) and wedged;
-  `WPE_BUFFER_FORMAT=AR24:0:rendering` + `WPE_DRM_DEVICE=/dev/dri/card1` removed
-  the pvr *render* errors (GEM stayed 10 MB) but the export still calls
-  `gbm_bo_get_fd_for_plane()` — still gray, plus `GLib-GObject-CRITICAL`.
-* **Software is blocked twice**: Kumo panics without a DRM node path
-  (`main.rs:385`, only the pvr driver yields one), and `swrast` cannot bind over
-  this GBM (`gbm: did not find extension DRI_DRI2`).  A per-process `LD_PRELOAD`
-  shim (`local/work/softshim.c`) confirmed the helper path but not a render.
-* **Operational hazards learned**: stopping a running Kumo/WPE wedges the pvr
-  driver (`FreeResourceByPtr`) and freezes the panel with **0 DSI errors**
-  (running it also drives GEM to 109–113 MiB of the 128 MiB TILER); a boot can
-  then show the DSI `NO_PACKET_SENT` wedge after the power-button/DPMS toggle.
-  **Use `reboot -f`, never kill Kumo**, and expect a second reboot to clear the
-  DSI.  All wedges cleared cleanly.
-* **Fix direction (not a session task)**: the closed DDK gives the pvr GBM buffer
-  **no GEM handle**, so a Mesa-only or WebKit-only fix cannot work
-  (`tools/bench/gpu/gbmprime.c`, `gbmprime2.c`, `ioctllog.c`).  The durable route
-  is the open **`powervr_sgx` SGX540 port**, scoped in **report 276** — our SGX540
-  is **USSE1, 4-pipe, multi-kick, but 28-bit / single-context / no
-  `USE_CODE_BASE`**, so it needs the 28-bit + single-context + code-base work and
-  OMAP4 glue, not just a table entry (multi-session; start with the fact sheet and
-  a "New SGX core" issue).  Keep the closed stack meanwhile.  DECISIONS §107/§108.
-* **Bench at the close**: region 0 trailer `1f 2d c8 d7 13 d6 47 35` =
-  **`0x3547D613`** (**no media write**); `BOOTCTR_FCTRY` **`0x28`** (`0x2f` at
-  the start, the experiment's reboots spent the rest, each `≥ 0x1e, no write`);
-  `nproc` 2, PID 1 mask `3`; panel `connected`, backlight 255, **0 DSI errors**;
-  `wlan0` **up** (`192.168.0.232`; it was down mid-session and the operator
-  reconnected via `gorm`).  Desktop on the SGX (`pvr_dri`), GEM 9 objects /
-  17,121,280 B; Kumo not running.
+composes.**  Full snapshot in
+[`docs/history/STATE-HISTORY.md`](../history/STATE-HISTORY.md)
+(`## Previous state — 2026-11-26 (session 72)`).
 
 ## Previous state — 2026-11-25 (session 71)
 

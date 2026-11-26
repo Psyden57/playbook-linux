@@ -24,6 +24,33 @@ tested".
 | patch | what |
 |---|---|
 | `0001-sgx540-core-entry.patch` | the core entry: `sgx540_regs`, `sgx540_heaps`, `sgx540_init_regs`, `pvrsgx_cmd_core_sgx540`, the `cores[]` part, the `of_device_id` row, the Kconfig text and a KUnit case |
+| `0002-sgx540-one-context-list0.patch` | the microkernel's one-context path: list 0 instead of `DIR_LIST_BASE1`/`BIF_BANK0` (neither exists on this core), the `pdtable` slot resolution, the `SINGLE_CONTEXT`/`SECURE` feature bits, and the `test_pd_table_load` case |
+
+## What `0002` established (session 74)
+
+Four SGX545-shaped assumptions in the open image, each corrected from a GPL-2
+primary source; full detail in `docs/reference/sgx540-ddk18-facts.md` and
+`docs/captures/sgx540-ukernel-{list0,start,first-job}-2026-11-26.txt`.
+
+| the image assumed | the SGX540 has | effect of the fix |
+|---|---|---|
+| client PD in `BIF_DIR_LIST_BASE1` (0xc38), routed via `BIF_BANK0` (0xc78) | **neither register exists** — one directory list, `DIR_LIST_BASE0` 0xc84 | the image now loads list 0 and writes no bank register |
+| a HW context's `page_dir` word is a directory address | a **slot** into the driver's PD table at `kernel_code.base + 0xf000` (`pdtable_init`) | resolved through a new `pdtable` patch site (`r14`) |
+| `features` = SECURE, no pdtable patch | single-context: `SINGLE_CONTEXT` set, `SECURE` clear, pdtable patch required | the driver's `ukfw_load` now accepts the image |
+| `EUR_CR_PDS_CACHE_STATUS` (0x138) masks `0x27`/`0x4b` (two groups) | **one** group, `CSC_INV` b0 / `DSC_INV0` b1 / `DSC_INV1` b2 / `DSC_INV3` b4 | mask `0x1F`; **the NULL job went from `consumed 0` to `1/1 passed`** |
+
+Every change is behind the per-core `SINGLE_CONTEXT` flag, so the SGX545 serial
+image is still byte-identical (`83b5b0a7…`, 14536 B) and `mkukfw.py --check`
+passes on the wrapped SGX540 image (`features 0x8`, both `ctlblk` and
+`pdtable` patches).
+
+**Measured on the unit, same session:** the driver binds, accepts the image
+(`open microkernel … features 0x8`), starts the microkernel
+(`microkernel started`) and one NULL job completes per GPU reset, with
+`BIF_INT_STAT 0x8000` (no fault), `uk-lockups 0`, and a clean recovery from the
+remaining timeout (`microkernel started again`).  Starting it needs
+`modprobe powervr_sgx edm_init=1` on a cold module load — the §9 single-context
+launch path, which the driver documents for exactly this core class.
 
 ## What `0001` was validated against (session 73)
 

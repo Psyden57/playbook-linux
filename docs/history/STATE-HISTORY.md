@@ -6,6 +6,67 @@ state is [`docs/project/STATE.md`](../project/STATE.md).
 
 ## Previous states
 
+## Previous state — 2026-11-26 (session 73)
+
+**The open SGX540 port reached hardware: the driver binds and identifies the
+core, and the first microkernel builds.  The next blocker is the microkernel's
+list-0 / PD-table path.**  Session 74 gave it that path; the facts below are
+that session's own snapshot.
+
+**Measured on the unit (C facts).**  `CORE_ID` id **0x0114**, `CORE_REVISION`
+**`0x00010200`** (Rev 120), `DESIGNER_REV_FIELD1/2` **0**, at 0x0020/0x0024;
+ti-sysc `rev` **`0x40000000`** / `sysc` **`0x0000003c`**; `BIF_INT_STAT` at idle
+`0x00008000` (`FLUSH_COMPLETE`).  Read-only via `/dev/mem` (`CONFIG_STRICT_DEVMEM`
+off).  [DECISIONS §109; `docs/captures/sgx540-identity-2026-11-26.txt`]
+
+**The open driver binds and identifies the part on silicon.**  On a flashed
+`local/kernel-tree-sgx` boot (copy of `local/kernel-tree`, closed DDK off,
+`allow_unisolated=1`) it logged `SGX core id 0x01140000 revision 0x00010200: TI
+OMAP4430 (SGX540 1.2.0)` — the exact string the entry was written to produce, so
+the `regs` offsets, `core_id` match and `cores[]` lookup are **C**.
+[DECISIONS §111; `docs/captures/sgx540-bind-2026-11-26.txt`]
+
+**The microkernel builds, and is rejected for a structural reason.**  It assembles
+(`ukernel/cores/sgx540.py`; 3-byte delta from the SGX545 image) and passes all 7
+offline tests, with the SGX545 golden hash untouched.  On the unit the driver
+**finds** it (from the **initramfs** — the probe runs at t≈0.9 s, before hd3 is
+mounted) but rejects it: no `SGX5`/`UKRN` header, and a single-context core also
+needs a **`pdtable` patch**.  The image routes TA/3D to **list 1** and assumes
+list 0 is `srvinit`'s shared kernel PD, so it is a **two-context `srvinit` image**
+— not a one-context `powervr_sgx` one.  [trap 382;
+`docs/captures/sgx540-ukernel-2026-11-26.txt`]
+
+**Blockers in play, in order:**
+
+1. **The microkernel's list-0 / PD-table path** — add the `pdtable` patch site and
+   load directory list 0 from it; set the single-context feature bits; re-audit
+   the ~39 references to `list 1`/`BANK0`/`0xc78`.  This gates everything.
+2. **`USE_CODE_BASE` presence on rev 120** (fact sheet Gap 7) — settle inside the
+   driver's reset sequence, never by a userspace read (trap 376).
+3. **`sgx540_init_regs`** — not derivable statically; needs a capture from a
+   working microkernel boot.
+4. **The microkernel register tables** (0x618, 0x62c, 0x694, TA/3D kick …) are
+   carried over from the SGX545 as **hypothesis** — no GPL header names them.
+5. **DPM/TA/ISP/TSP/PBE/PDS state map** (fact sheet Gap 10).
+6. Unchanged from earlier sessions: the **hd3 rebake** must add `wpewebkit` +
+   `kumo`; `pvr-dbmfix` needs packaging; the GEM-growth walk; the CPU supply/OPP
+   items; the intermittent USB teardown (trap 337); the memory-throughput
+   re-measure.
+7. **Display, not GPU:** why the first modeset after a boot fails on some boots
+   (`NO_PACKET_SENT`, `polls=2000` vs a healthy `polls=1`; trap 377).
+
+**Bench at the close (session 73)**: Linux `7.3.3 #111 SMP` on hd3, region 0
+**`0xBC5FB130`** (`local/work/kernel-restore-20261126.img`, verified byte-true on
+media; `0x3547D613` could not be rebuilt because `CONFIG_LOCALVERSION_AUTO` embeds
+`git describe` — keep the image file), region 1 `20a5edd3…`; root `/dev/loop0`
+ext4 rw, 56.5 G; `BOOTCTR_FCTRY` **`0x2c`**; `nproc` 2, PID 1 mask `3`;
+`pvrsrvkm` owns the GPU, desktop up, backlight on, **0 DSI errors**; battery Full
+4.149 V; `wlan0` up `192.168.0.232`; SSH `PB_LINK=usb tools/pbssh.sh` works (no
+door — Linux image).  Inert on hd3: `/lib/firmware/powervr_sgx/sgx540_ukernel.bin`
+and the five modules (`powervr_sgx`, `drm_exec`, `drm_gpuvm`, `drm_shmem_helper`,
+`gpu-sched`).  Reverted: `/etc/modprobe.d/powervr-open.conf`,
+`/etc/modules-load.d/powervr_sgx.conf`.
+
 **The session-41 state snapshot** (2026-11-11) is at git commit `6dcef9a` in
 `docs/project/STATE.md`; it was replaced by the session-42 state and is not
 duplicated here because the commit preserves it verbatim.

@@ -432,8 +432,22 @@ flasher can replace at every point:
     delta from the SGX545 image, all 7 offline tests pass, SGX545 golden hash
     intact; the driver rejects it because a one-context core needs a **`pdtable`
     patch and a list-0 load**, and the image routes TA/3D to **list 1** (trap 382).
-    **Open: the list-0 / PD-table work**, then a kick, then the register tables
-    (hypothesis), `sgx540_init_regs`, `USE_CODE_BASE` (Gap 7), and Mesa;
+    **Resolved in session 74** — see (a1e).
+    (a1e) **the SGX540 microkernel STARTS on silicon and completes a NULL job
+    (session 74).**  `open microkernel invfix, interface 1.0, features 0x8` →
+    `EDM init: event status 0xa0000000, BIF int 0x8000` → `microkernel started`,
+    with the driver's debugfs agreeing (`firmware running: 1`, `uk-lockups 0`,
+    `BIF_FAULT 0`); `submit-null-job` went from a universal `consumed 0` timeout
+    to **`1/1 passed`**.  Four SGX545 assumptions were corrected
+    (`rootfs/powervr-sgx/0002-sgx540-one-context-list0.patch`), each gated on the
+    per-core `SINGLE_CONTEXT` flag with the SGX545 serial image kept
+    byte-identical (DECISIONS §112), and the driver needs `edm_init=1` (its §9
+    single-context launch).  **Open: the EDM does not dispatch after its init
+    task** — one or two jobs pass per GPU reset then it stalls, and a passing job
+    is still reported `consumed 0`; HANDOFF §0b is the one experiment that
+    separates "the task runs" from "the driver accounts for it".  Then a kick, then
+    the register tables (hypothesis), `sgx540_init_regs`, `USE_CODE_BASE`
+    existence (the unit is settled: shift 8, DM at 24), and Mesa;
     (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b)

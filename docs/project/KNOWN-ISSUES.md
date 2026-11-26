@@ -3697,6 +3697,29 @@ report 121 §3/§11/§12.
         `initramfs/root/lib/firmware/` is gitignored as a built artifact.
         (Session 73.)
 
+        **Corrected in session 74: the t≈0.9 s figure is a *different* boot's.**
+        With the driver built as `=m` (`CONFIG_DRM_POWERVR_SGX=m`) and nothing
+        bound in the initramfs, the firmware is requested when the **module**
+        loads, which on this root is **after** hd3 is mounted:
+
+        ```
+        [ 1.923889] EXT4-fs (loop0): mounted filesystem … r/w      <- hd3 up
+        [ 6.914581] powervr_sgx 56000000.gpu: … microkernel         <- probe
+        ```
+
+        and the file the driver actually read was the **raw 14,536-byte** image
+        left at hd3's `/lib/firmware/powervr_sgx/`, not the wrapped one in the
+        initramfs: moving it aside made the load fail with
+        `Direct firmware load … failed with error -2`, which proves which copy was
+        in use.  So in *this* configuration the **root's** `/lib/firmware` is the
+        effective one and the initramfs copy is inert.  The trap stands for a
+        **built-in** driver or one loaded before the root is up; the rule that
+        avoids both is: **keep the two copies identical and never let a stale one
+        linger** — a stale root copy is what made the corrected image look
+        broken for a whole boot cycle.  `open microkernel <build id>` in `dmesg`
+        names the build that was actually loaded.  (Session 74; report 277 §1,
+        `docs/captures/sgx540-ukernel-start-2026-11-26.txt`.)
+
 381. **`modprobe.blacklist=` does not stop OpenRC loading a module by name.**  The
         kernel parameter only suppresses *alias-based* autoloading;
         `/etc/init.d/modules` reads `/etc/modules` and runs
@@ -3741,6 +3764,61 @@ report 121 §3/§11/§12.
         unbind the closed driver live.  Note the asymmetry that makes this
         tempting: **loading** `pvrsrvkm` at runtime is harmless and was used to
         restore the bench.  (Session 73.)
+
+384. **`/dev/mem` cannot reach the GPU once `powervr_sgx` owns it — the userspace
+         register read that opened this port is unavailable in the open-driver
+         configuration.**  `mmap`/`read` at `0x56000000` returns
+         `[Errno 13] Permission denied`, and the RAM and control windows refuse
+         the same way.  It is **not** a devmem hardening option:
+         `CONFIG_STRICT_DEVMEM` is off and `IO_STRICT_DEVMEM` is not in the
+         config at all.  The cause is the driver's own reservation —
+         `grep 56000000 /proc/iomem` prints
+         `56000000-56003fff : 56000000.gpu powervr_sgx`.  Session 73's identity
+         read was necessarily taken with the closed `pvrsrvkm` bound, and that is
+         the only configuration in which it works.  **Consequence:** any further
+         register evidence has to come from *inside* the driver (a debugfs node, a
+         module parameter, a print), not from a userspace peek.  Do not spend a
+         boot rediscovering this.  (Session 74; report 277 §7.)
+
+385. **The open SGX540 microkernel is started by `edm_init=1`, and the image alone
+         is not enough.**  With the corrected image the probe reaches
+         `open microkernel …, features 0x8` and then, 20 ms later, fails:
+         `microkernel did not start (EDM launch faulted: BIF int 0xc002 fault
+         0x8779000, event status 0x0)` / `probe … failed with error -110`.  With
+         `modprobe powervr_sgx edm_init=1` it completes (`EDM init: event status
+         0xa0000000, BIF int 0x8000`, `microkernel started`).  That is the
+         driver's own `pvrsgx_edm_init`, documented as "the §9 bare-DOUTU launch
+         folded into the real init" for **single-context cores** — a supported
+         path, not a workaround.  `modprobe -r` cannot unload the module while
+         anything holds `card1` (`elogind` does, from session start), so an image
+         or module change costs a reboot.  (Session 74; report 277 §1.)
+
+386. **The control block's free words differ by feature flag: an instrumentation
+         store can silently land on a word the image already uses.**
+         The first kernel-CCB trace written this session used `0x3a`/`0x3b`
+         (which `UK_WAITLOG` writes) and `0x3c` (the cleanup force-complete
+         marker, written unconditionally on that path), and its reading was
+         meaningless — it reported "no wait spinning" for a build where that could
+         not be known.  Before instrumenting the control block, diff the candidate
+         words against **every** definition in `ukernel/cores/<core>.py` *and* the
+         image's optional diagnostic flags; `0x39`/`0x3a`/`0x3b`/`0x07` were the
+         genuinely free ones.  The same class of mistake as trap 368 (an off-by-one
+         reader) and as report 271's "log the arguments, not the result".
+         (Session 74.)
+
+387. **The image's `0xb14` "keep-alive" is not an EDM progress register on this
+         core.**  `ukernel/` advances `0xb14`/`0xb20` each timer task, inherited
+         from the SGX545; on the SGX540 the GPL-2 DDK 1.8 header names
+         `0xb14` `EUR_CR_USE1_SERV_PIXEL` — a USSE **pixel service queue**
+         (`COUNT` b0-15, `EMPTY` b16) — and `0xb20` `EUR_CR_USE_FILTER2_LEFT`.
+         So a stall diagnosed as "the keep-alive stopped" is not thereby a stall
+         of the EDM, and the write may be consuming a queue rather than ticking a
+         clock.  Likewise `0xa74` is `EUR_CR_DMS_CTRL` (its *value* is right —
+         `0x208200` = 32 EDM / 32 vertex / 32 pixel tasks; see
+         `docs/reference/sgx540-ddk18-facts.md` §3) and `0xa78` is
+         `EUR_CR_DMS_AGE`.  Header:
+         `/home/psyden/Pdrive/GFX_Linux_DDK-master/eurasia/hwdefs/sgx540defs.h`.
+         (Session 74.)
 
 ## 3. Corrections to older reports
 

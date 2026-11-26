@@ -251,6 +251,7 @@ CMDTA_SHARED = 0x58          # ui32CCBOffset points here; command base is 0x58 b
 # ---- EUR_CR registers (byte offset) ---------------------------------------
 CR_EVENT_STATUS = 0x12C
 CR_EVENT_HOST_CLEAR = 0x134
+CR_EVENT_HOST_ENABLE = 0x130   # which event sources dispatch the EDM (K)
 CR_EVENT_STATUS2 = 0x118
 CR_EVENT_HOST_CLEAR2 = 0x114
 CR_TA_KICK = 0x200           # starts the VDM/TA (unnamed in the GPL header)
@@ -279,8 +280,22 @@ CR_DPM_LOADSEL = 0x65c       # DPM load-select gate around the slot store/load i
 CR_OTPM = 0x24C
 CR_TPC = 0x224
 CR_EVENT_HOST_CLEAR_0x140 = 0x140    # the invalidate-done acknowledge register
-INV_DONE_TA = 0x27           # 0x138 bits for the TA-side invalidate
-INV_DONE_3D = 0x4B           # 0x138 bits for the 3D-side invalidate
+# Invalidate completion, from the GPL-2 DDK 1.8 `sgx540defs.h` (the 540-specific
+# 3150-line header; our vendored 1.17 drop omits these microkernel-side registers):
+#   0x0138 EUR_CR_PDS_CACHE_STATUS   0x013c EUR_CR_PDS_CACHE_HOST_ENABLE
+#   0x0140 EUR_CR_PDS_CACHE_HOST_CLEAR   0x0804 EUR_CR_CACHE_CTRL
+#   0x0a08 EUR_CR_USE_CACHE
+# The 540 has a SINGLE invalidate group -- CSC_INV b0, DSC_INV0 b1, DSC_INV1 b2,
+# DSC_INV3 b4 -- where the SGX545 has two (DSC0 b0-4, DSC1 b5-7).  The SGX545's
+# 0x27/0x4b poll bits 5-7, which do not exist here, so those waits could never
+# complete; 0x1f is every bit this core defines.  (Session 74 measured the job
+# timeout with the CCB never consumed and no wait-site spinning -- the port was
+# not reaching the waits at all -- so this is a correctness fix, not yet the
+# proven cause of that timeout.)
+INV_DONE_TA = 0x1F           # every PDS-cache invalidate bit the 540 defines
+INV_DONE_3D = 0x1F
+CR_PDS_CACHE_STATUS = 0x138
+CR_PDS_CACHE_HOST_CLEAR = 0x140
 SW_EVENT = 0x4000
 DCU_INVALID = 0x400          # EUR_CR_EVENT_STATUS2: a data-cache-unit invalidate
                              # completion. Pending after the kernel's SysFinalise;
@@ -337,3 +352,27 @@ T3_CMD = [(0x4c4, 0), (0x4bc, 1), (0x4b8, 2), (0x404, 3), (0x408, 4), (0x414, 5)
 # fixed transfer-start constants (the render's 0x63c=3 is 0 for a transfer; no PB)
 T3_CONST = [(0x480, 0), (0x63c, 0), (0x43c, 1)]
 TRANSFERCMD_SHARED = 0xac     # ui32SharedCmdCCBOffset points here; command base is 0xac before
+
+# ---- BIF directory lists (the one-context path) ---------------------------
+# sgx540defs.h's whole 0x0C00 block is CTRL/INT_STAT/FAULT/DIR_LIST_BASE0/
+# TA_REQ_BASE/MEM_REQ_STAT/3D_REQ_BASE/ZLS_REQ_BASE: there is NO
+# EUR_CR_BIF_DIR_LIST_BASE1 (0xc38) and NO EUR_CR_BIF_BANK0 (0xc78) -- one
+# directory list, no per-requestor index.  The SGX545 image routes the TA/3D
+# requestors to list 1 through those two registers; here that code would be a
+# write to an unnamed register on a gated core (trap 369), so it must not run.
+# List 0 serves the EDM, the TA and the 3D alike, and the driver maps the kernel
+# code / kernel data / sync heaps into every VM's directory
+# (pvrsgx_share_fw_heaps()), so the microkernel's own fetches work through
+# whichever client list 0 holds.  The one-context rule is therefore: load the
+# client PD into 0x0c84 and write no bank register.
+SINGLE_CONTEXT = True
+CR_DIR_LIST0 = 0xc84          # EUR_CR_BIF_DIR_LIST_BASE0, shared by every requestor
+# There is no BANK0 slot to fill, so the .pat/manifest keep both names at 0 (the
+# generator skips a zero offset explicitly; see ukernel.py's BIF sites).
+CR_DIR_LIST1 = 0
+CR_BIF_BANK0 = 0
+# A HW context's page_dir word is a *slot* in the driver's PD table
+# (pvrsgx_fw.c: pdtable_init() allocates it at kernel_code.base + 0xf000 and
+# pvrsgx_vm_pd_word() returns vm->pd_slot), not a directory address.  Only
+# pdtable[slot] is a GPU-readable directory, so pd_load() resolves it there.
+VM_PD_IS_SLOT = True

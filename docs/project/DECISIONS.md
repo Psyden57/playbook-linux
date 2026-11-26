@@ -4126,3 +4126,38 @@ usable desktop.  Revert by re-flashing region 0.
 (the vendored DDK); `powervr_sgx/Kconfig` ("Not compatible with the out-of-tree
 PowerVR services driver … bind one or the other"); `KNOWN-ISSUES.md` traps
 375/378; operator suggestion, session 73.
+
+## 112. The SGX540 port's per-core values are ours and gated on `SINGLE_CONTEXT`; the DDK 1.8 drop is K (session 74)
+
+**Decision.**  Keep every SGX540 difference from the SGX545 **inside the
+per-core configuration** (`drm/powervr_sgx/pvrsgx_core.c`'s `sgx540` entry and
+`ukernel/cores/sgx540.py`), gated on a `SINGLE_CONTEXT` flag, and hold the SGX545
+serial image **byte-identical** (`ukernel/golden/sgx545.sha256`) as the gate on
+every such change.  Take SGX540 register and structure facts from the
+operator-supplied **GPL-2 DDK 1.8 drop** as **K** evidence; treat the same drop's
+microkernel specification PDFs as **unusable**, because they are marked "Strictly
+Confidential".
+
+**Why.**  Four SGX545-shaped assumptions had to be corrected before the driver
+would run the microkernel, and each is the same shape: a value that is *right for
+the core the image was developed on* and wrong here.  Three of the four came from
+a GPL-2 header or the DDK's own source; the decisive one
+(`EUR_CR_PDS_CACHE_STATUS` 0x138 having **one** completion group, not two) was
+invisible in our vendored 1.17 drop, which omits the microkernel-side registers
+entirely.  Keeping the changes in the per-core table is what makes them safe: the
+SGX545 image has stayed byte-identical through all of them, so a regression
+there is impossible, and the diff is reviewable as data rather than as logic.
+
+**Constraint.**  Nothing goes upstream until the core draws (DECISIONS §110).
+The DDK drop lives **outside the repository**
+(`/home/psyden/Pdrive/GFX_Linux_DDK-master`) and no copy is kept — cite it by
+path and line, as with the QNX material.  The closed-material boundary is
+recorded in `docs/reference/sgx540-ddk18-facts.md` §9 so it is not re-litigated.
+The acceptance criterion for a "port" is still *runs and draws*, and what is
+reached so far is a started microkernel that completes a NULL job.
+
+**Evidence.**  Report 277; `docs/reference/sgx540-ddk18-facts.md` (the K facts
+with citations); `docs/captures/sgx540-ukernel-{list0,start,first-job}-2026-11-26.txt`;
+`rootfs/powervr-sgx/0002-sgx540-one-context-list0.patch`;
+`ukernel/golden/check.py` green after every change; traps 384-387;
+`docs/contradictions/sgx540-ukernel-srvinit-vs-powervr_sgx.md` (resolved).

@@ -1,0 +1,350 @@
+# SGX540: the microkernel CONSUMES and COMPLETES a job (session 74)
+
+The first job through the open `powervr_sgx` SGX540 microkernel: one NULL job
+completed, and later jobs are consumed.  Read live on the reference unit.
+
+## The before/after
+
+Session 73 and the first half of session 74: every job timed out with
+**`consumed 0`**.  After the invalidate-mask fix below the same test reads:
+
+```
+submit-null-job
+  ok
+1/1 passed
+```
+
+and with three jobs submitted back to back:
+
+```
+  ok          1/1 passed
+  FAILED      0/1 passed
+  FAILED      0/1 passed
+
+[drm] *ERROR* job timed out (ccb 3, consumed 2, done word 0x0 for 0x0, events 0xa0000000/0x00000000); resetting
+[drm] EDM init: event status 0xa0000000, BIF int 0x8000, timer 0x0102994b
+[drm] microkernel started again
+```
+
+**`consumed 2`** — the microkernel now takes commands off the kernel CCB (it
+took **none** before), and the first NULL job completed and signalled its
+fence.  Jobs 2 and 3 then stall, so this is progress, not a fix.
+
+## The fix: the invalidate-done masks were the SGX545's
+
+From the GPL-2 DDK 1.8 drop the operator supplied (`GFX_Linux_DDK-master`,
+"Android SGX DDK UM version 1.8", `PVRVERSION_BUILD 869593`, TI OMAP), whose
+`eurasia/hwdefs/sgx540defs.h` is the **540-specific 3150-line header** our
+vendored 1.17 drop lacks:
+
+```
+SGX540  EUR_CR_PDS_CACHE_STATUS  0x0138     SGX545  EUR_CR_PDS_CACHE_STATUS 0x0138
+  DSC_INV3   b4   0x10                        DSC1_INV3  b7  0x80
+  DSC_INV1   b2   0x04                        DSC1_INV1  b6  0x40
+  DSC_INV0   b1   0x02                        DSC1_INV0  b5  0x20
+  CSC_INV    b0   0x01                        DSC0_INV3  b4  0x10
+                                              DSC0_INV1  b3  0x08
+                                              DSC0_INV0  b2  0x04
+                                              CSC1_INV   b1  0x02
+                                              CSC0_INV   b0  0x01
+```
+
+**One invalidate group on the 540, two on the 545.**  The open microkernel's
+wait masks were `INV_DONE_TA = 0x27` and `INV_DONE_3D = 0x4B` — the SGX545's
+two-group layout.  `0x27` needs bits 5 (`DSC1_INV0`) and `0x4b` needs bits 6 and
+7, which do not exist on this core, so **every invalidate wait span forever**.
+The 540's whole group is bits 0-4, so the mask is `0x1F`.
+
+Applied in `cores/sgx540.py` (`INV_DONE_TA`/`INV_DONE_3D = 0x1F`, plus
+`CR_PDS_CACHE_STATUS 0x138` / `CR_PDS_CACHE_HOST_CLEAR 0x140`), with
+`ukernel.py`'s `invalidate()`/`invalidate3d()` taking the register and mask from
+the core config.  The SGX545 keeps `0x27`/`0x4b` and its serial image is still
+byte-identical (`83b5b0a7…`, 14536 B), so the change is provably core-scoped.
+
+## Still open, and what is now known
+
+The remaining timeout is a **partial** consumption (`ccb 3, consumed 2`), i.e.
+the microkernel takes a command, acts on it, and then stops taking more; the
+`done word` stays `0x0`.  Recorded while still true at the point of the fix:
+
+* `EVENT_STATUS = 0xa0000000` at the timeout: **MASTER_INTERRUPT (b31) +
+  TIMER (b29) + TA_DPM_FAULT (b28)**.  The EDM's own fault bit is set, and it is
+  set *before* any geometry runs, so the first thing to decode is `b28` — the
+  DDK 1.8 header names it `EUR_CR_EVENT_STATUS_TA_DPM_FAULT_MASK` and
+  `EUR_CR_EVENT_PDS_ENABLE_TA_DPM_FAULT_MASK`, i.e. it is a *dispatchable
+  source* on `EVENT_PDS_ENABLE` (`0xa58`), not only a status bit.
+* The initialisation dump is clean: `BIF_INT_STAT 0x8000` (FLUSH_COMPLETE only,
+  **no fault**), `BIF_FAULT 0`, `EVENT_STATUS2 0`, `uk-lockups 0`.
+* Host events on this core are dispatched by **`EUR_CR_EVENT_PDS_ENABLE`
+  (0x0a58)**, not only by `EVENT_HOST_ENABLE` — the driver programs
+  `0x2204b00f` there (bits 0-3, 12, 13, 15, 18, 25 and **29 TIMER**), and the
+  1.17 header our image was written against does not contain the register at
+  all.  The image currently also ORs TIMER into `EVENT_HOST_ENABLE` (0x130),
+  which the DDK never writes.
+* `0xa74` is **`EUR_CR_DMS_CTRL`** on this core, not a TA-flags word — the image
+  read-modify-writes `0xa74` to carry the TA/3D flag fields.  That is a
+  candidate for `b28` and needs its field map (`sgx540defs.h:2202`).
+
+## Reproduction
+
+```
+modprobe -r powervr_sgx; modprobe powervr_sgx edm_init=1
+/tmp/powervr_sgx_test submit-null-job          # built from drm/tests/
+```
+
+with the wrapped image at `/lib/firmware/powervr_sgx/sgx540_ukernel.bin`.
+
+## The next blocker, derived from the DDK's own srvinit (K)
+
+The DDK 1.8 drop's **user-mode** half (`eurasia/services4/srvinit/devices/sgx/
+sgxinit.c`) builds `EUR_CR_EVENT_PDS_ENABLE` (`0x0a58`) — the register that
+actually dispatches the EDM per event source — like this:
+
+```c
+psSrvInfo->ui32EventPDSEnable = 0 |
+    EUR_CR_EVENT_PDS_ENABLE_BREAKPOINT_MASK |              /* 0x00008000 */
+    EUR_CR_EVENT_PDS_ENABLE_DPM_OUT_OF_MEMORY_ZLS_MASK |   /* 0x02000000 */
+#if defined(EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK)
+    EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK |                /* 0x00004000 */
+#endif
+    EUR_CR_EVENT_PDS_ENABLE_TIMER_MASK;                    /* 0x20000000 */
+...
+/* SGX_FEATURE_MP is NOT defined for the SGX540, so the non-MP branch: */
+psSrvInfo->ui32EventPDSEnable |= EUR_CR_EVENT_PDS_ENABLE_TA_FINISHED_MASK |      /* 0x2000 */
+                                 ... TA_TERMINATE | DPM_REACHED_MEM_THRESH |
+                                 DPM_OUT_OF_MEMORY_GBL | DPM_OUT_OF_MEMORY_MT |
+                                 DPM_3D_MEM_FREE | PIXELBE_END_RENDER;          /* -> 0x0004300f */
+```
+
+`EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK` **is** defined in the 540's header
+(`sgx540defs.h:2043`), so for our core the DDK programs
+
+```
+EVENT_PDS_ENABLE = 0x2204f00f
+```
+
+while the driver's `pvrsgx_core.c` entry programs
+
+```
+EVENT_PDS_ENABLE = 0x2204b00f      (SGX545_CR_EVENT_PDS_ENABLE_ALL)
+```
+
+The two differ in **exactly one bit: `SW_EVENT` (0x4000)** — missing from the
+driver's value, and the only source in the DDK's list that is.  This is a **K**
+fact with the DDK's own source for it, not an inference: the kernel-side driver
+inherits an SGX545 constant, and the SGX540's documented value also enables
+SW_EVENT.
+
+It is a strong candidate for the remaining stall, because SW_EVENT is how the
+microkernel signals *the host* and how the host's ISR acks: with it disabled as
+a PDS source, the microkernel's `raise_host_irq` has no dispatch path, and the
+observed `EVENT_STATUS` at every timeout is `0xa0000000` — MASTER_INTERRUPT
+(b31) **set**, which is the aggregate the host ISR keys on.
+
+### Fix, in our tree (one constant, our patch series)
+
+`drm/powervr_sgx/pvrsgx_core.c`, the `sgx540` entry:
+`.event_pds_enable_all = SGX545_CR_EVENT_PDS_ENABLE_ALL | 0x4000`  — or better,
+its own `SGX540_CR_EVENT_PDS_ENABLE_ALL = 0x2204f00f` with the DDK citation, so
+the SGX545 entry is untouched.  Then: rebuild the module, reflash region 0 with
+the open-driver config, and re-run `submit-null-job` three times.
+
+## Why the EDM runs exactly once: `0xb14` is not a task counter here
+
+Measured, on every boot of the open-driver configuration:
+
+* the kernel CCB does carry the command (`ccb 1`), the microkernel **consumes** it
+  (`consumed 2..4`), and **exactly one** NULL job completes per GPU reset;
+* the image's own event-entry counter (control block +0x3b, a plain
+  `ldr/++/store` at the top of the timer branch) reads **1**, i.e. the event
+  program is entered once and never again;
+* `EVENT_STATUS` sits at `0xa0000000` (MASTER|TIMER|TA_DPM_FAULT), and the
+  driver's own `EVENT_PDS_ENABLE` (`0x0a58`) does contain TIMER (b29) and, after
+  the one-bit fix above, SW_EVENT (b14) too.
+
+The DDK 1.8 headers explain the `1`: the open microkernel keeps itself alive by
+advancing **`0xb14`** each timer task, and on this core
+
+```
+EUR_CR_USE1_SERV_PIXEL    0x0B14   COUNT b0-15, EMPTY b16
+EUR_CR_USE1_SERV_VERTEX   0x0B18   COUNT b0-15, EMPTY b16
+EUR_CR_USE1_SERV_EVENT    0x0B1C   COUNT b0-15, EMPTY b16
+EUR_CR_DMS_CTRL           0x0A74   MAX_NUM_{VERTEX,PIXEL}_PARTITIONS b22-28,
+                                   MAX_NUM_EDM_TASKS b16-21,
+                                   MAX_NUM_{VERTEX,PIXEL}_TASKS b4-21,
+                                   DISABLE_DM b0-3
+```
+
+`0xb14` is a **USSE pixel service queue**, not an EDM task/progress register
+(the SGX545, where the open microkernel was written and validated, treats it as
+one).  So the image is advancing a queue counter that the EDM does not use, and
+the real per-task progress surface on this core is `DMS_CTRL` / `DMS_AGE`
+(`0xa74`/`0xa78`) — the same `0xa74` the image is *currently* read-modify-writing
+as if it were a TA-flags word.
+
+That is now three separate SGX545-shaped assumptions in the image, each with a
+GPL citation:
+
+| the image assumes | the SGX540 actually has |
+|---|---|
+| `INV_DONE_TA/3D = 0x27/0x4b` (two-group 0x138) | one group, bits 0-4 (**fixed**, session 74) |
+| `EVENT_PDS_ENABLE_ALL = 0x2204b00f` | `0x2204f00f` (**fixed**, session 74) |
+| `0xb14`/`0xb20` = EDM task progress | USSE service-queue COUNT/EMPTY |
+| `0xa74` = TA/3D flags | `DMS_CTRL`: max partitions/tasks, DISABLE_DM |
+
+## State of the bench
+
+`card1` = `powervr_sgx`, microkernel started, `BIF_INT_STAT 0x8000` (no fault),
+`BIF_FAULT 0`, one job completed per reset, `uk-lockups 0`.  `hd3`'s
+`powervr_sgx.ko` is the rebuilt one (`.bak` kept beside it); the region-0 image
+now carries the swapped-in kernel.  The image at
+`/lib/firmware/powervr_sgx/sgx540_ukernel.bin` is build `invfix`
+(md5 `12f12abb297d8d0b8aebfb0b10467ee5`), with `UK_WAITLOG`/`UK_CCBLOG` on.
+
+## Bench state when this note was written
+
+* **region 0 = `0x02C1DDC2`** (`boot/chainloader/kernel.img`, 10,450,520 B,
+  sha256 `70474c01…`).  Media trailer read back on the unit:
+  `1f2dc8d7 c2ddc102` — **byte-true**.  This image differs from the session-73
+  `0xBC5FB130` / mid-session `0x8F1B3C75` only in the **embedded initramfs**:
+  it carries the fixed microkernel (`image_crc32 0xc1eebfaf`, build `invfix`,
+  verified by decompressing the zImage's XZ payload and reading the wrapped
+  image's own header CRC).  The earlier images carried build `list0`/`e7b96a2e…`,
+  which a reflash would have silently reverted to.
+* **hd3's `powervr_sgx.ko` is rebuilt** from `local/work/powervr_sgx`
+  (4,102,220 B, `SGX540_CR_EVENT_PDS_ENABLE_ALL`); the previous module is kept
+  beside it as `powervr_sgx.ko.bak`.
+* Boot: `open microkernel invfix, interface 1.0, features 0x8`, then
+  `EDM init: event status 0xa0000000, BIF int 0x8000`,
+  `microkernel started`.  `card1` = `powervr_sgx`, `uk-lockups 0`,
+  `BIF_FAULT 0`.  `swrast` desktop (the closed DDK is blocked by the operator's
+  earlier direction; the open driver is the work).
+* `/etc/modprobe.d/powervr-sgx-opts.conf` = `options powervr_sgx edm_init=1`
+  (so it starts on a plain boot), and
+  `/etc/modprobe.d/powervr-open.conf` = `install pvrsrvkm_omap4_sgx540_120
+  /bin/false` (trap 381's working form; `modprobe -n -v` prints nothing).
+* The session-73 raw image is at
+  `/lib/firmware/powervr_sgx/sgx540_ukernel.bin.session73-raw`, inert.
+* `BOOTCTR_FCTRY` was **read this session as `0x2c`** (`dmesg | grep pbrpmb`,
+  `0x2c000000`, `>= 0x1e, no write`); a later `dmesg -C` in the same session
+  cleared that line, so the value was not re-read after the final flash.
+
+## `FIX_HW_BRN_31620` tested: not the stall, reverted
+
+The GPL-2 DDK 1.8 encodes `FIX_HW_BRN_31620` (in our rev-120 errata block) as a
+host-side MMU burn: every page directory must carry a valid read-only PTE at
+PDE index 0 / PTE index 1, whatever the client allocated.  Our tree has no trace
+of it, and `share_fw_heaps_init()` preallocated only kernel code / kernel data /
+sync — not `general`, whose base is *exactly* that offset (`0x1000`).
+
+So it was worth one boot.  Added `pvrsgx_mmu_prealloc(kernel_mmu,
+heaps->general.base, +SGX_MMU_PAGE_SIZE)` to the single-context path, rebuilt
+just the module, installed it and booted:
+
+* the microkernel still starts cleanly (`microkernel started`,
+  `BIF int 0x8000`, `uk-lockups 0`) — the change is not harmful;
+* the first run of five NULL jobs looked like an improvement, **two
+  consecutive passes** (`ok ok FAIL FAIL FAIL`) instead of one;
+* but repeating it read **0/5** and **1/5**, and the driver still times out with
+  `ccb 5, consumed 4`, so the pass rate decays exactly as before.
+
+**Conclusion: not the stall.**  Reverted — `git checkout` on
+`pvrsgx_device.c` and a module rebuild reproduce **`2e138afc0e832a4e7b41d97f74452508`**,
+byte-identical to the module on hd3, which is what is installed again.  The
+DDK's own workaround stays recorded in `docs/reference/sgx540-ddk18-facts.md` §7
+for whoever picks this up.
+
+The honest reading of the pass pattern (1–2 passes immediately after a reset,
+then none) is that something the reset reinitialises is correct and something
+else is consumed or corrupted by the first job or two.  That is a different
+class of bug from the ones fixed so far, and it wants a *counter* that survives
+a job (the image's own `SC_COMPLETED` already sits at 0 after a passing run,
+which contradicts that idea and is the next thing to explain).
+
+## The sharpest datapoint: the job passes, and no microkernel store runs
+
+Rebuilt the image with the kernel-CCB trace on **genuinely free** control-block
+words (my first attempt wrote 0x3a/0x3b, which `UK_WAITLOG` also uses, and 0x3c,
+which the cleanup force-complete marker uses — so that reading was invalid and
+is withdrawn).  The trace now stores the WO/RO pair the microkernel reads, at the
+timer test and at `kick` entry, into **0x39/0x3a/0x3b/0x07**.
+
+Verified running: `open microkernel ccb2, interface 1.0, features 0x8`, md5
+`7056fc74b42af666fc6c1c15f17d18df` — matches what was pushed.
+
+Measured, in one shot, *during* and *after* a NULL job:
+
+```
+=== DURING:                          === AFTER:
+  +0x39 WO@timer     = 0x0             +0x39 WO@timer     = 0x0
+  +0x3a RO@timer     = 0x0             +0x3a RO@timer     = 0x0
+  +0x3b WO@kick      = 0x0             +0x3b WO@kick      = 0x0
+  +0x07 RO@kick      = 0x0             +0x07 RO@kick      = 0x0
+  +0x27 SC_COMPLETED = 0x0             +0x27 SC_COMPLETED = 0x0
+  +0x31 SC_CMD       = 0x0             +0x31 SC_CMD       = 0x0
+  1/1 passed
+[drm] *ERROR* job timed out (ccb 1, consumed 0, done word 0x0 for 0x0, events 0xa0000000/0x0); resetting
+[drm] microkernel started again
+```
+
+Three facts at once, and they change what to look at next:
+
+1. **The job completes** (`1/1 passed`) — at that moment the client is done and
+   its fence signalled.
+2. **The driver still reports `consumed 0`** and times out on the *same* boot,
+   ~2 s later — so the command the test submitted and the command the driver is
+   waiting for are not the same accounting.  "One pass per reset" is therefore
+   not "one job consumed per reset".
+3. **Not one of the microkernel's own stores ran** — not the timer-test pair, not
+   the `kick`-entry pair, not `do_ta`'s scratch (`SC_CMD`), not the completion
+   seqno.  Since those stores sit in the *normal* dispatch path, the EDM is not
+   executing a normal path at all, and the "it is entered once and stalls" model
+   is too generous: on this boot it looks like it never dispatches.
+
+That inverts the priority: before another register question, the thing to
+establish is **whether the microkernel's task runs at all after the init one** —
+by reading an EDM-visible progress counter, not by inferring from the driver's
+CCB accounting.
+
+## A new operational constraint: the open driver claims the GPU window
+
+Session 73 read the SGX registers from userspace through `/dev/mem` **while the
+closed `pvrsrvkm` was bound**.  In the open-driver configuration that no longer
+works:
+
+```
+$ python3 - <<< 'mmap /dev/mem at 0x56000000'
+cannot map /dev/mem: [Errno 13] Permission denied      (GPU, RAM and CTRL windows all refuse)
+$ grep 56000000 /proc/iomem
+56000000-56003fff : 56000000.gpu powervr_sgx          <- the driver holds the region
+$ zcat /proc/config.gz | grep STRICT_DEVMEM
+# CONFIG_STRICT_DEVMEM is not set                       (and IO_STRICT_DEVMEM is not in the config at all)
+```
+
+So `powervr_sgx` reserves the window through its own mapping and `/dev/mem`
+refuses it afterwards — meaning **the zero-risk userspace register read that
+started this whole port is unavailable once the open driver owns the GPU**.  Any
+further register evidence has to come from inside the driver (a debugfs node, a
+module parameter, or a print), not from a userspace peek.  That is a real change
+to the bench method worth knowing before planning another session; it also
+explains why the identity read in session 73 had to be done with `pvrsrvkm`
+bound rather than with no driver at all.
+
+(Unrelated to this: `/etc/modules` still names
+`pvrsrvkm_omap4_sgx540_120`, which `modprobe.d` blocks; leaving it is harmless
+but confusing, and worth cleaning up when the port lands.)
+
+## Bench snapshot at this point
+
+* region 0 = **`0x02C1DDC2`** (media byte-true), carrying the corrected
+  microkernel (`image_crc32 0xc1eebfaf`).
+* hd3's module = the rebuilt one, `2e138afc0e832a4e7b41d97f74452508` (the
+  `invfix` module with `SGX540_CR_EVENT_PDS_ENABLE_ALL`); the BRN-31620
+  experiment's module is kept as `powervr_sgx.ko.brn31620`.
+* `/lib/firmware/powervr_sgx/sgx540_ukernel.bin` is a **debug build** of the
+  microkernel (`UK_CCBLOG=1`, build `ccb2`, md5
+  `7056fc74b42af666fc6c1c15f17d18df`).  The durable tree holds the clean
+  `invfix` image (`12f12abb297d8d0b8aebfb0b10467ee5`); swapping it back is one
+  `cp`, and the bench should be left on the durable one.
+* `card1` = `powervr_sgx`, `firmware running: 1`, `lost: 0`, `BIF_FAULT 0`,
+  `uk-lockups 0`; `wlan0` up; 0 DSI errors.

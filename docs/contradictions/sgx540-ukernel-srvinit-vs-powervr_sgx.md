@@ -61,6 +61,41 @@ Never resolve by guessing: the register tables themselves (0x618, 0x62c, 0x694,
 TA kick 0x200, 3D kick 0x428) are also unmeasured on the SGX540 and are carried
 over from the SGX545 as hypothesis; they are a *separate* unknown from this one.
 
-**Status: open** (session 73).  Evidence:
-`docs/captures/sgx540-ukernel-2026-11-26.txt`,
-`docs/reference/sgx540-factsheet.md` §"The microkernel".
+## Resolved — session 74: the work was done, and it was more than the pdtable
+
+Both claims were right and the settlement was the one named above ("add the
+pdtable patch site + a list-0 load, boot, and see"), but the work turned out
+larger than the file anticipated — **four** SGX545 assumptions, not one:
+
+1. a `pdtable` patch site and a list-0 load (as stated here);
+2. but on this core there is **no `BIF_DIR_LIST_BASE1` (0xc38) and no
+   `BIF_BANK0` (0xc78)** at all, so the "routes TA/3D to list 1" code must not
+   run rather than be ported;
+3. the HW context's `page_dir` word is a **slot** into the driver's PD table at
+   `kernel_code.base + 0xf000`, so list 0's value must be resolved, not copied;
+4. `EUR_CR_PDS_CACHE_STATUS` (0x138) has **one** completion group on this core,
+   so the SGX545's `0x27`/`0x4b` invalidate-done masks could never be satisfied —
+   this, not the pdtable, is what kept the job at `consumed 0`.
+
+After all four, on silicon: the driver accepts the image
+(`open microkernel …, features 0x8`), the microkernel starts
+(`EDM init: event status 0xa0000000, BIF int 0x8000`, `microkernel started`), and
+the NULL job passes (`1/1 passed`, from a universal `consumed 0`).  So **A is
+true for a one-context core as well**, and the file's closing condition ("If
+`powervr_sgx` then accepts the image and the core reaches a kick, **A** is true
+for a one-context core too and this file closes") is met — with the caveat that
+what was reached is a *completed job*, not a kick that draws: one or two jobs
+pass per GPU reset, then it stalls.
+
+What this file predicted correctly and is worth keeping: the register tables
+(0x618, 0x62c, 0x694, TA 0x200, 3D 0x428) are still unmeasured, and the
+`CLEANUP_V2`/`DONE_SEQ` semantics have still not been checked against what the
+driver expects.
+
+Evidence: report 277 and
+`docs/captures/sgx540-ukernel-{list0,start,first-job}-2026-11-26.txt`;
+`rootfs/powervr-sgx/0002-sgx540-one-context-list0.patch`.
+
+**Status: resolved (session 74)**, with the caveats in the section above: the image
+is accepted and a job completes, but one or two jobs pass per GPU reset before
+it stalls, so this closes the *loading* question, not the *running* one.

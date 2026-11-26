@@ -1,0 +1,101 @@
+# SGX540 microkernel: the list-0 / PD-table path (session 74)
+
+Host only; no device write.  Follows `sgx540-ukernel-2026-11-26.txt` (session 73),
+which ended with the driver rejecting the image for want of the SGX5/UKRN header
+and, for a single-context core, a `pdtable` patch and a list-0 load.
+
+## What changed, and why the SGX545 image is still byte-identical
+
+Three structural facts drive it; two were established by reading the vendored
+GPL headers this session and one by reading the driver.
+
+1. **There is no `BIF_BANK0` and no `DIR_LIST_BASE1` on this core.**
+   `sgx540defs.h`'s whole `0x0C00`–`0x0CFF` block is `BIF_CTRL` 0x0c00,
+   `BIF_INT_STAT` 0x0c04, `BIF_FAULT` 0x0c08, `DIR_LIST_BASE0` **0x0c84**,
+   `TA_REQ_BASE` 0x0c90, `MEM_REQ_STAT` 0x0ca8, `3D_REQ_BASE` 0x0cac,
+   `ZLS_REQ_BASE` 0x0cb0.  The SGX530's header has the same shape.  So the
+   SGX545 image's routing (`0xc38` = the client PD, `0xc78` = EDM 15 / TA 1 /
+   3D 1) names two registers this silicon does not have — on a gated core those
+   are exactly the unnamed-register writes trap 369 warns about.  List 0 serves
+   the EDM, TA and 3D alike.
+
+2. **The driver already supports that.**  `pvrsgx_core_single_context()` is
+   `!MULTIPLE_MEM_CONTEXTS`; `pvrsgx_share_fw_heaps()` maps the kernel code,
+   kernel data and sync heaps into **every** VM's directory on such a core, and
+   `pvrsgx_idle_mmu()` returns the kernel MMU, so nothing depends on a separate
+   EDM list.  `pvrsgx_reset()` only writes `DIR_LIST_BASE0` there.
+
+3. **A HW context's `page_dir` word is a slot, not an address.**
+   `pvrsgx_vm_pd_word()` returns `vm->pd_slot` on a single-context core, and
+   `pdtable_init()` allocates the table at `kernel_code.base + 0xf000`
+   (`PDTABLE_OFFSET`), fills every slot with the firmware's directory and hands
+   out slots from 1 with an IDA.  The comment is explicit: "the microkernel loads
+   list 0 from this table, by the slot a HW context names, so no directory
+   address it loads is GPU-writable."  So the image must read `pdtable[slot]`
+   for the slot in the context word, and only then may it program a directory.
+
+## The image
+
+Built from `ukernel/build.py sgx540` with the one-list path; wrapped by
+`drm/tools/mkukfw.py --manifest`.
+
+| | multi-context (SGX545) | one-context (SGX540) |
+|---|---|---|
+| `features` | `0x2` (SECURE) | **`0x8`** (SINGLE_CONTEXT, SECURE clear) |
+| patches | `ctlblk` | `ctlblk`, **`pdtable`** |
+| manifest patches | `ctlblk=0x8` | `ctlblk=0x8`, **`pdtable=0x10`** |
+| BIF list | client PD → **0x0c38**, route via **0x0c78** | client PD → **0x0c84**, **no** bank register |
+| `page_dir` word | a directory address | a **slot** → `pdtable[slot]` via the `r14` patch |
+
+`mkukfw.py --check` on the wrapped image, verbatim:
+
+```
+header 0x78, interface 1.0, features 0x8, image 0x3880 crc 0x9af637fb, core rev 0x0, build 'dev'
+  entry: program 0 at 0x0
+  patch: 0x8 <- ta3dctl
+  patch: 0x10 <- pdtable
+```
+
+and the multi-context guard still refuses it where it should
+(`pvrsgx_fw.c`: `(features & (SECURE|SINGLE_CONTEXT)) != SINGLE_CONTEXT` →
+"not an image for a single-context core").  The wrapper's own selftest passes
+(`mkukfw.py --selftest`), i.e. dropping the pdtable patch is caught.
+
+## Offline checks
+
+* `ukernel/test_emu.py sgx540` — **8/8**, including a new
+  `test_pd_table_load` that decodes the image and asserts list 0 (0xc84) is
+  written, that neither 0xc78 nor 0xc38 is, and that the slot is resolved
+  through `r14`.
+* `ukernel/test_emu.py sgx545` — **8/8**; the new case self-skips (the
+  multi-context core keeps the address form).
+* `ukernel/golden/check.py` — the SGX545 serial image is **byte-identical**
+  (`83b5b0a7…`, 14536 B).  Holding that constant is what makes the new path
+  safe: every single-context change is behind `SINGLE_CONTEXT`, and the one
+  site that needed care (the `do_ta` BIF_BANK0 write, which never had a
+  read-back fence) is reproduced exactly.
+
+## Frame-level A/B in the emulator
+
+Driving the real `event` entry with the `fake.trace` kick, the PD table seeded
+per slot, and the HW context's `page_dir` word set to a slot:
+
+| slot seeded | 0x0c84 written | 0xc78 / 0xc38 written |
+|---|---|---|
+| 1 → `0x0e500000` | `0x0e500000` | none |
+| 3 → `0x0e600000` | `0x0e600000` | none |
+
+and a full kick → TA-finished → 3D-end → DPM-free sequence completes
+(`SC_INFLIGHT` back to 0, completion seqno 1).  This is emulator evidence, not
+silicon: the register *values* are ours, the *behaviour* is the reference model.
+
+## What this does not prove
+
+* Nothing runs on the SGX540 yet.  The next gate is the driver accepting the
+  image (`open microkernel … interface 1.0, features 0x8` then
+  `microkernel started`), which needs a flashed boot with `pvrsrvkm` blocked.
+* The 28-bit heap layout, `sgx540_init_regs`, the `EVENT_PDS_*` offsets and
+  every microkernel register table (0x618, 0x62c, 0x694, TA 0x200, 3D 0x428)
+  remain carried-over hypothesis.
+* That the driver's `PDTABLE_SLOTS`/read-only PTE and the GPU's reads of it
+  agree is a reading of `pdtable_init()`, never observed.

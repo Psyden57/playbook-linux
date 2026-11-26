@@ -250,7 +250,21 @@ Three captures from the first hardware work on the open `powervr_sgx` port:
 The probes are tracked at `tools/bench/gpu/sgxcoreid.py` (safe) and
 `sgxusecodebase.py` (**DO NOT RUN** — trap 376).  The fact sheet
 `docs/reference/sgx540-factsheet.md` carries the **C** facts; DECISIONS §109-§111
-and traps 368-382 are the operational record.
+and traps 368-382 are the operational record for session 73.
+
+## SGX540 open microkernel, first run (session 74)
+
+Three captures from the session that got the microkernel running:
+
+| file | what it shows |
+|---|---|
+| `sgx540-ukernel-list0-2026-11-26.txt` | **host only**: the one-context image (list 0 instead of 0xc38/0xc78, the `pdtable` slot resolution, `SINGLE_CONTEXT`/`SECURE`), `mkukfw --check` output, the 8/8 offline suites, the SGX545 golden hash still intact, and the frame-level A/B in the emulator (slot 1 → `0x0e500000`, slot 3 → `0x0e600000`, no bank write) |
+| `sgx540-ukernel-start-2026-11-26.txt` | the first silicon run: `open microkernel …, features 0x8`, `EDM init: event status 0xa0000000, BIF int 0x8000`, **`microkernel started`**, the driver's own `status`/`ctlblk` dump, the `edm_init=1` requirement, and the corrected reading of trap 380 (the driver reads **hd3**, not the initramfs) |
+| `sgx540-ukernel-first-job-2026-11-26.txt` | the NULL job: `1/1 passed` against a universal `consumed 0`, the pass/stall pattern per reset, the `FIX_HW_BRN_31620` experiment (tested, rejected, revert proven byte-identical), the corrected CCB trace and what it showed, and the new `/dev/mem` constraint |
+
+`docs/reference/sgx540-ddk18-facts.md` carries the **K** facts from the
+operator-supplied GPL-2 DDK 1.8 drop; traps 384-387 are the operational record
+for session 74, and report 277 is the report.
 
 `docs/reports/data/` is indexed by the reports that produced it; the report
 INDEX (`docs/reports/INDEX.md`) says which report is current for a topic.

@@ -1,0 +1,379 @@
+# SGX540: the open microkernel STARTS on silicon (session 74)
+
+First run of the open `powervr_sgx` microkernel on the SGX540.  Read live on the
+reference unit (`0x50175127`, OMAP4430 ES2.2).
+
+## The two lines that matter
+
+```
+powervr_sgx 56000000.gpu: [drm] SGX540 has one memory context: clients are not isolated from the firmware or from each other (allow_unisolated=1)
+powervr_sgx 56000000.gpu: [drm] SGX core id 0x01140000 revision 0x00010200: TI OMAP4430 (SGX540 1.2.0)
+powervr_sgx 56000000.gpu: [drm] powervr_sgx/sgx540_ukernel.bin: open microkernel dev, interface 1.0, features 0x8
+powervr_sgx 56000000.gpu: [drm] EDM init: event status 0x20000000, BIF int 0x8000, timer 0x010255e2
+powervr_sgx 56000000.gpu: [drm] microkernel started
+[drm] Initialized powervr_sgx 1.0.0 for 56000000.gpu on minor 1
+```
+
+* `open microkernel … features 0x8` — the image was **accepted**: the `SGX5`/`UKRN`
+  header, the interface, and the `SINGLE_CONTEXT`-set / `SECURE`-clear gate with
+  its `pdtable` patch all pass (`ukfw_load`, `pvrsgx_fw.c`).  Session 73 stopped
+  one gate earlier at `not a microkernel file`.
+* **`microkernel started`** — `ebr_init` reached `EDM_INIT_COMPLETE`.  The image
+  runs.
+* `event status 0x20000000` = `EVENT_TIMER` pending, `BIF int 0x8000` =
+  `FLUSH_COMPLETE` only (**no fault**), `timer 0x010255e2` counting.
+* `DRIVER=powervr_sgx` for `card1` / `renderD129`; `card0`/`renderD128` stay
+  `omapdrm`.  Both are registered with DRM (`powervr_sgx dev=56000000.gpu`,
+  `omapdrm dev=omapdrm.0`).
+
+## What made it start: `edm_init=1`
+
+The image is correct but **not sufficient**.  On a single-context core the
+microkernel's normal init path does not complete, and the probe fails one second
+in:
+
+```
+powervr_sgx 56000000.gpu: [drm] *ERROR* microkernel did not start (init status 0x0, event status 0x0; BIF int 0xc002 fault 0x8779000 req 0x0)
+powervr_sgx 56000000.gpu: probe with driver powervr_sgx failed with error -110
+```
+
+`BIF int 0xc002` = `FLUSH_COMPLETE` (b15) + `PF_N_RW` (b14) + **fault requestor
+b1**.  The driver has a documented path for exactly this: a boolean module
+parameter,
+
+```c
+bool pvrsgx_edm_init;
+module_param_named(edm_init, pvrsgx_edm_init, bool, 0444);
+MODULE_PARM_DESC(edm_init, "Start the open microkernel via the §9 launch folded into real init (single-context cores)");
+```
+
+i.e. *"Real EDM init (docs/porting/cores/sgx530-edm-path.md): start the open
+microkernel on a single-context core (the SGX530) through the §9 bare-DOUTU
+launch folded into the real init.  The §9 launch writes the task's code base 15
+with data-master 3, which makes it the EDM requestor, so EDMPROTECT admits its
+stores."*  So the faulting requestor is the microkernel's own stores to an
+EDMPROTECT page until the §9 launch marks it as the EDM — the class of bug the
+SGX530 hit first.
+
+With `modprobe powervr_sgx edm_init=1` the probe completes.  The branch also
+takes over `ui32InitStatus` (the host writes `INIT_COMPLETE` after 20 ms and does
+not poll), so it is a deliberate two-way choice, not a workaround to be replaced
+later without reading the guide.
+
+## Reproduction
+
+```
+modprobe -r powervr_sgx
+modprobe powervr_sgx edm_init=1
+```
+
+with the wrapped image at `/lib/firmware/powervr_sgx/sgx540_ukernel.bin`.
+
+## Trap 380 is narrower than it says: the driver reads hd3, not the initramfs
+
+Session 73 concluded "the GPU firmware must live in the initramfs" because the
+probe runs at t≈0.9 s.  **That was a misreading of the t≈0.9 s line.**  With the
+module built as `=m` and nothing bound in the initramfs, the firmware is
+requested when the module loads, which on this root is **after** hd3 is mounted:
+
+```
+[ 1.923889] EXT4-fs (loop0): mounted filesystem … r/w      <- hd3 up
+[ 6.914581] powervr_sgx 56000000.gpu: ... microkernel       <- probe
+```
+
+and the file the driver read was the **raw 14,536-byte** image session 73 had
+left at `/lib/firmware/powervr_sgx/`, not the wrapped one embedded in the
+initramfs: moving that file aside made the load fail with `-2`
+(`Direct firmware load … failed with error -2`), which proves which copy was in
+use.  So on **this** configuration the root's `/lib/firmware` is the effective
+one and the initramfs copy is inert.  Keep both in step (the initramfs one costs
+nothing and is correct for a built-in or early-loading driver); what must not
+happen again is a *stale* file on either.
+
+## Not yet
+
+* No job has been submitted: this is `microkernel started`, not a render.  The
+  next gate is a kick (`SGXScheduleCCBCommand`) and, past it, the carried-over
+  register tables.
+* Nothing of Mesa/the display stack has been pointed at the open driver; the
+  desktop is on the closed `pvrsrvkm` stack in the other configuration.
+* Whether `edm_init=1` is the *right* long-term path or the §9 launch should
+  become the default on a single-context core is a driver decision for the
+  upstream port, and is recorded, not decided, here.
+
+## The driver's own dump, with the microkernel running
+
+`/sys/kernel/debug/dri/1/status` and `…/ctlblk`, read live while bound
+(`DRIVER=powervr_sgx`, `card1`):
+
+```
+firmware running: 1 lost: 0 resets: 0 irqs: 0
+kernel PD 0x87044000 idle PD 0x87044000
+ccb wo 0 ro 0 issued 0 consumed 0
+hostctl init 0x1 power 0x0 uk-lockups 0 int 0x0/0x0 assert 0x0
+powered: 1
+CLKGATECTL           0x0000 0x000aa6aa
+CLKGATECTL2          0x0004 0x002aaaaa
+CLKGATESTATUS        0x0008 0x001000a0
+CORE_ID              0x0020 0x01140000
+CORE_REVISION        0x0024 0x00010200
+SOFT_RESET           0x0080 0x00000000
+EVENT_STATUS         0x012c 0x20000000
+EVENT_STATUS2        0x0118 0x00000000
+EVENT_HOST_ENABLE    0x0130 0x00004000
+BIF_CTRL             0x0c00 0x00000000
+BIF_INT_STAT         0x0c04 0x00008000
+BIF_FAULT            0x0c08 0x00000000
+BIF_DIR_LIST_BASE0   0x0c84 0x87044000
+```
+
+```
+ta3dctl @ 0x0f003000:
+  0f003000 0f003100 0f002000 00000000 …    (self, host_ctl, ccb_ctl)
+  …
+  00010000 …                                (0x60: SC_VERSION, word 0x18)
+```
+
+* **`firmware running: 1`, `hostctl init 0x1`** — the microkernel completed its
+  init and is live; `uk-lockups 0`, `resets 0`.
+* **`idle PD == kernel PD`** — the driver took the single-context branch
+  (`pvrsgx_idle_mmu()` returns the kernel MMU), i.e. the one-list assumption the
+  image was built for holds at run time, not only in the code.
+* **`BIF_INT_STAT 0x00008000`** — `FLUSH_COMPLETE` only, **no fault**;
+  `BIF_FAULT 0`; and **`BIF_DIR_LIST_BASE0 = 0x87044000` = the kernel PD**.
+* **`EVENT_STATUS 0x20000000`** — the microkernel's keep-alive `EVENT_TIMER`
+  ticking (`EVENT_HOST_ENABLE 0x00004000` = SW_EVENT), which is what
+  `init_script_part2` and the image's `init_set` arrange.
+* `CLKGATECTL 0x000aa6aa` / `CLKGATECTL2 0x002aaaaa` — every unit's 2-bit field
+  at `10` (auto-gated), the DPM's forced on: `SGX_CLKG_ALL(…, AUTO) & ~dpm |
+  dpm ON`, as the driver programs it.
+* `ccb wo 0 ro 0 issued 0 consumed 0` — **no job has been submitted**.  This is
+  a started microkernel, not a render; the kick is the next gate.
+
+## The first kick: the NULL job times out (same session)
+
+The guide's own first gate (`docs/porting/kernel.md` §6) is a NULL job before any
+geometry: `powervr_sgx_test submit-null-job`.  Built for the unit from
+`drm/tests/powervr_sgx_test.c` (`arm-buildroot-linux-gnueabihf-gcc -static`,
+`-Idocs/uapi -I$SYSROOT/usr/include -I$SYSROOT/usr/include/drm`) and run live:
+
+```
+submit-null-job
+  FAIL drm/tests/powervr_sgx_test.c:686: syncobj_wait(fd, s, 2000000000ll) == -62, expected 0 == 0
+0/1 passed
+```
+
+and the driver:
+
+```
+[drm] parameter buffer: 0x1022 pages
+[drm] *ERROR* job timed out (ccb 1, consumed 0, done word 0x0 for 0x0, events 0x20000000/0x00000000); resetting
+[drm] EDM init: event status 0x20000000, BIF int 0x8000, timer 0x01012973
+[drm] microkernel started again
+```
+
+**So the job reached the CCB (`ccb 1`) and was never consumed (`consumed 0`)**,
+with only `EVENT_TIMER` pending and `EVENT_STATUS2 0x0`.  The driver's recovery
+path works: the timeout resets the GPU and the microkernel **restarts**
+(`microkernel started again`, `BIF int 0x8000` clean).
+
+`/sys/kernel/debug/dri/1/render` reads `no render submitted`, so the microkernel
+never opened a render: it did not get as far as reading the command's type as a
+TA.  Either the doorbell did not reach the event program, or it entered and
+stopped in the pre-dispatch invalidate path — which is exactly where the port's
+remaining structural gap is:
+
+| the open microkernel's invalidate path | in `sgx540defs.h`? |
+|---|---|
+| `0x138` invalidate-done bit groups (spin `0x27` TA / `0x4b` 3D) | **no** |
+| `0x140` invalidate-done acknowledge | **no** |
+| `0x804` bit 28, the MADD cache-invalidate request | **no** |
+| `0xa08` USE-cache invalidate | **no** |
+
+`docs/UKERNEL.md` itself lists the `0x138` decomposition as *"inferred, not
+confirmed on hardware"*, and the address is absent from the SGX530 header too —
+so it is a `srvinit`/SGX545-supported value, not a GPL one.  The `EVENT_STATUS`
+side of the protocol **is** in the header: bit 26 `MADD_CACHE_INVALCOMPLETE`
+(same bit number the image waits on) and the `PDS_INV0`/`PDS_INV1`/`PDS_INV_CSC`
+requests at `0xad0`/`0xad4`/`0xae0` are all 540 registers.  So the fix is
+specific: **wait for the invalidate's completion in `EVENT_STATUS`, not in
+`0x138`** — the same shape the MADD wait already uses.
+
+That is a hypothesis, not a measurement: the 2-second timeout plus "consumed 0"
+is equally consistent with the doorbell not being taken.  The next step is the
+image's own `UK_WAITLOG`/debug instrumentation (the wait-site word at control
+block +0x35), which names the exact spin, before changing any wait.
+
+## State at this point
+
+`card1`/`renderD129` = `powervr_sgx`, microkernel running, `uk-lockups 0`,
+`BIF_FAULT 0`, one job issued and consumed after the reset.  The desktop is on
+`swrast` (the closed DDK is blocked and nothing has pointed Mesa at the open
+driver yet), by the operator's direction — this session works on the open driver,
+not on the desktop.
+
+## Where the command stops: the microkernel's view of the CCB
+
+Built the image with the microkernel's own `UK_WAITLOG` instrumentation (it
+writes the live wait-site and stage markers into the control block, which the
+driver's `ctlblk` debugfs prints) and sampled it **during** the 2 s timeout:
+
+```
+  +0x27 SC_COMPLETED = 0x00000000
+  +0x30 SC_CTX       = 0x00000000      (do_ta's scratch: never written)
+  +0x31 SC_CMD       = 0x00000000
+  +0x35 WAITSITE     = 0x00000000      (no self.wait() is spinning)
+  +0x36 SC_TAFLIGHT  = 0x00000000
+  +0x3a log_stages   = 0x00000000      (do_ta / ta_finished / do_3d / render_done: none ran)
+  +0x3b log_tick     = 0x00100820      (the EDM timer tick: ADVANCING)
+```
+
+So, measured rather than assumed:
+
+* **The microkernel is alive and taking events.**  The tick counter grows, which
+  is only written in the timer branch of the event entry
+  (`UK_WAITLOG`), and `EVENT_HOST_ENABLE = SW_EVENT` with
+  `EVENT_STATUS = 0x20000000` (TIMER) is consistent with it.
+* **It never enters `kick`.**  No handler ran: `SC_CTX`/`SC_CMD` (do_ta's
+  first stores) and the stage marker are all zero, and no `self.wait()` is
+  spinning — so this is *not* a stuck poll on `0x138`, which was the leading
+  hypothesis.  The image is simply not seeing a command to dispatch.
+* The timer path ends with exactly this test — `kernel CCB write offset != read
+  offset` → `kick` — so from the microkernel's side the CCB reads **empty**.
+
+Two candidates, both testable, neither yet measured:
+
+1. **The doorbell does not reach the event program.**  The image's whole kick
+   detection is that test (`docs/UKERNEL.md`: the doorbell "sets no status
+   bit", so the command is found by WO != RO), reached on the timer tick.  If
+   `EUR_CR_EVENT_KICK` (0xac8) is not wiring through on this core, the timer
+   pass still runs and still finds WO == RO only if the *driver's* WO write
+   landed somewhere else.
+2. **The driver and the image disagree on the CCB control block.**  The driver
+   writes WO to `f->addr[PVRSGX_FW_CCBCTL]` (data heap + 0x2000) and the image
+   reads `*(ctlblk + 2)`, which `ta3dctl_fill()` sets to the same address
+   (`0x0f002000` in the dump).  Those agree, so this is now the less likely one.
+
+What to instrument next: store the microkernel's WO/RO pair into two free
+control-block words (0x3c/0x3d) at the timer test and at `kick` entry.  That
+separates "the command is not visible" from "the doorbell never ran".  It costs
+one firmware swap and an `rmmod`/`insmod` once nothing holds `card1`.
+
+## Two A/B results on the launch path
+
+### The timer event source can be enabled, and it changes the failure
+
+`EUR_CR_EVENT_HOST_ENABLE_TIMER_MASK` (b29) exists in `sgx540defs.h`, so the
+image now ORs it in at the end of `init_set` (SGX540 only; gated, SGX545 image
+still byte-identical).  It takes:
+
+```
+EVENT_HOST_ENABLE    0x0130 0x20004000     <- was 0x00004000 (SW_EVENT only)
+SC_VERSION           0x0018 0x00010000     <- init_set ran
+```
+
+and the timeout now reports `events 0xa0000000` instead of `0x20000000`, i.e.
+TIMER **plus TA_DPM_FAULT** (b31 + b29 + b28) is latched.  So the enable is
+effective and the EDM's own fault bit is now raised — but the job is still
+never consumed (`consumed 0`), and the event-program counter does not advance.
+
+### A control-block store at the top of the event entry is REJECTED
+
+To tell "never re-entered" from "re-entered but the timer branch is not
+reached", the image stored an incrementing counter as the *first* instruction
+of the event entry (after `phas`).  It did not run — it faulted:
+
+```
+powervr_sgx 56000000.gpu: [drm] *ERROR* microkernel did not start (EDM launch faulted: BIF int 0xc002 fault 0x7ac0000, event status 0x0)
+powervr_sgx 56000000.gpu: probe with driver powervr_sgx failed with error -5
+```
+
+`BIF_FAULT` `0x7ac0000` → address field `0x7ac0000`, requestor b1, `PF_N_RW`
+set: the same shape as the earlier `0xc002` launch fault, and the same one that
+`edm_init=1` fixes.  This is directly informative for the port:
+
+* **The event entry's context can execute** — `edm_init` proves that (the §9
+  launch writes the task's code base 15 with data-master 3, so EDMPROTECT admits
+  its stores and the whole init_set runs, `SC_VERSION` commits).
+* **But a store placed *before* `init_set`'s own first work is rejected.**  So
+  the admission to the control block is not "the task began"; it is something
+  `init_set` itself reaches, or the §9 launch only admits the one launch task.
+  Either way an instrumentation store at the top of the entry is not a valid
+  experiment on this core until the launch path is understood — the next
+  instrumentation must go *inside* `init_set`, after its first committed store.
+
+Both variants were reverted from the image (the plain timer-enable image is what
+is flashed).
+
+## ROOT CAUSE, from a primary source: the invalidate-done masks are the SGX545's
+
+The operator supplied a GPL-2 DDK drop, **`GFX_Linux_DDK-master`, "Android SGX
+DDK UM version **1.8**", `PVRVERSION_BUILD 869593`, TI OMAP** — the same vendor
+family as our silicon, and its `eurasia/hwdefs/` carries a **3150-line,
+SGX540-specific `sgx540defs.h`**.  Our vendored 1.17 drop's `sgx540defs.h` has
+~600 lines and only the *host-side* registers the kernel touches, which is why
+the `0x138`/`0x140`/`0x804`/`0xa08` questions were left as "inferred, not
+confirmed" in `docs/UKERNEL.md`.
+
+All four are SGX540 registers, and this drop names them:
+
+| offset | SGX540 (DDK 1.8 `sgx540defs.h`) | in our 1.17 header? |
+|---|---|---|
+| `0x0138` | **`EUR_CR_PDS_CACHE_STATUS`** | no |
+| `0x013c` | `EUR_CR_PDS_CACHE_HOST_ENABLE` | no |
+| `0x0140` | **`EUR_CR_PDS_CACHE_HOST_CLEAR`** | no |
+| `0x0804` | **`EUR_CR_CACHE_CTRL`** | no |
+| `0x0a08` | **`EUR_CR_USE_CACHE`** | no |
+
+And the field layout settles the timeout:
+
+```
+SGX540  EUR_CR_PDS_CACHE_STATUS  0x0138     SGX545  EUR_CR_PDS_CACHE_STATUS 0x0138
+  DSC_INV3   b4   0x10                        DSC1_INV3  b7  0x80
+  DSC_INV1   b2   0x04                        DSC1_INV1  b6  0x40
+  DSC_INV0   b1   0x02                        DSC1_INV0  b5  0x20
+  CSC_INV    b0   0x01                        DSC0_INV3  b4  0x10
+                                              DSC0_INV1  b3  0x08
+                                              DSC0_INV0  b2  0x04
+                                              CSC1_INV   b1  0x02
+                                              CSC0_INV   b0  0x01
+```
+
+The SGX540 has **one** invalidate group; the SGX545 has **two** (DSC0 = the EDM,
+DSC1 = the client).  The open microkernel's done masks are
+
+```python
+INV_DONE_TA = 0x27        # 0x138 bits for the TA-side invalidate
+INV_DONE_3D = 0x4B        # 0x138 bits for the 3D-side invalidate
+```
+
+`0x27` = bits 0,1,2,5 and `0x4b` = bits 0,1,3,6 — both need **bit 5 and/or bit 6
+and 7**, which exist only on the SGX545.  So on this core
+
+* the masks can never be satisfied as written, and
+* the bits the 540 does raise (`DSC_INV0` b1, `DSC_INV1` b2, `DSC_INV3` b4) are
+  *not in* `0x27`'s value at b3 (it wants `DSC0_INV1` at b3) — the two layouts
+  only coincide on b0/b1/b2.
+
+The SGX540's own group is `CSC_INV` b0, `DSC_INV0` b1, `DSC_INV1` b2,
+`DSC_INV3` b4, so the TA-side and 3D-side requests both report through
+**`DSC_INV0/1/3`** plus `CSC_INV`.  Note the `0xad0`/`0xad4`/`0xae0` request
+registers the image writes *are* in our 1.17 header (`PDS_INV0`/`PDS_INV1`/
+`PDS_INV_CSC`), so only the *completion* masks and the `0x804`/`0xa08` names were
+missing — which is exactly the shape of the bug: the image requests the right
+invalidates and then polls the wrong completion bits forever.
+
+This is a **K** fact (GPL-2 header), which is the project's own evidence class for
+DDK registers.  It supersedes `docs/UKERNEL.md`'s "inferred, not confirmed" note
+for the `0x138` decomposition on a *single-group* core, and it is the first
+concrete, sourced fix candidate for the `consumed 0` timeout.
+
+### Next
+
+1. Add `CR_PDS_CACHE_STATUS`/`_HOST_CLEAR` and the two group-agnostic masks to
+   `cores/sgx540.py` (one group), and make `ukernel.py`'s `invalidate()`/
+   `invalidate3d()` take the mask from the core config instead of the hard-coded
+   `0x27`/`0x4b`.  SGX545 keeps `0x27`/`0x4b` and stays byte-identical.
+2. Re-run the null job.  This is the first candidate whose failure mode matches
+   the measurement exactly (a spin that can never complete), so it is the one to
+   test before any further instrumentation.

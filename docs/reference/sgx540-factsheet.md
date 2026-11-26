@@ -63,6 +63,17 @@ register write.
 SGX540 and SGX543 blocks.  `sgxerrata.h` gives the SGX540 **exactly three** at
 rev 120.  The 29954–31780 group belongs to the SGX543 family.
 
+**Corrected again (session 74): "exactly three" is wrong too.**  The GPL-2 DDK
+**1.8** drop (`sgxerrata.h`, the `#if defined(SGX540)` block, `#if SGX_CORE_REV
+== 120`) defines **about fifty** BRNs for our revision — `23055 23720 25941
+26202 26352 26620 26681 26704 26998 27002 27006 27235 27251 27272 27311 27330
+27408 27534 27738 27723 27919 27984 28011 28249 28475 28922 29684 29773 29967
+30313 30427 31474 31938 32774 33181 33631 34028 34043 34351 35498` — and three
+of them (`23055`, `31474`, `33181`) are marked **"workaround in uKernel"**, i.e.
+they change what the *microkernel* must do.  The "three" came from the 1.17
+header's much smaller SGX540 block.  See
+[`sgx540-ddk18-facts.md`](sgx540-ddk18-facts.md) §1.
+
 ## Register map differences from the SGX545
 
 Offsets from the start of the GPU's register window.  Unlike the SGX530, the
@@ -152,6 +163,23 @@ This is the SGX545's fine-grained split, not the SGX530's coarse one — the
 
 So the MMU has the SGX545's page-size machinery but a **28-bit, single-context**
 view — the SGX530's address-space class, with the newer page-size bits.
+
+**There is no `BIF_BANK0` (0x0c78) and no `BIF_DIR_LIST_BASE1` (0x0c38).**
+`sgx540defs.h`'s whole `0x0C00`–`0x0CFF` block is exactly `CTRL` 0x0c00,
+`INT_STAT` 0x0c04, `FAULT` 0x0c08, `DIR_LIST_BASE0` 0x0c84, `TA_REQ_BASE`
+0x0c90, `MEM_REQ_STAT` 0x0ca8, `3D_REQ_BASE` 0x0cac, `ZLS_REQ_BASE` 0x0cb0 —
+one directory list and **no per-requestor index register at all** (K; the
+SGX530's header has the same shape).  A microkernel written for the SGX545
+routes the TA/3D requestors to list 1 by *writing* 0xc78 and *loading* 0xc38;
+on this core neither register exists, so both are unnamed-register writes on a
+gated core — the trap-369 hazard.  **Correction to the port's premise:
+routing-driven list-1 code does not need "porting", it must not run.**  List 0
+serves the EDM, TA and 3D alike; this is why the driver
+(`pvrsgx_share_fw_heaps()`) maps the kernel code, kernel data and sync heaps
+into **every** VM's directory on a single-context core — the microkernel's own
+fetches then work through whichever VM's list 0 is loaded.  So the
+single-context path is: put the client PD in **0x0c84**, and write no bank
+register at all.
 
 ## The USSE and its code base
 
