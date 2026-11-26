@@ -3760,3 +3760,141 @@ look like a leak** — check object *sizes*, not the total.  Apply it by
 `reboot -f`, not by restarting `tinydm` (trap 353).  **This supersedes the same
 section's first version**, which read the failure as 32-bit tiling and
 recommended `LINEAR` buffers that were already linear.
+
+---
+
+## 105. Rebuild hd3 at file level, carrying the ARMv7 module tree; never let the catacomb APK overwrite the UI initrc (session 71)
+
+**Decision.**  The flasher-restorable hd3 image is produced by applying the
+delta **file by file**, not by `apk --root --upgrade` of the two APKs.  The
+delta is:
+
+1. `catacomb` `1.5.0-r10003` (binary + `catacomb.desktop`; **not** the APK's
+   `/etc/catacomb/initrc`),
+2. `epitaph` `1.4.0-r10008` (binary),
+3. `/etc/inittab` + `::sysinit:/usr/sbin/taskset -p 3 1`,
+4. the PowerVR pitch fix (`/usr/local/lib/dbmfix.so`, the
+   `catacomb-dbmfix` wrapper, `catacomb.desktop` `Exec=`; report 271),
+5. **`/lib/modules/7.3.3` replaced with the live ARMv7 SMP tree** (842 `.ko`,
+   856 files, 28.1 MB; vermagic `7.3.3 SMP … ARMv7 p2v8`),
+6. **the desktop permissions set** (`rootfs/README-permissions.md`):
+   `/etc/polkit-1/rules.d/50-playbook-desktop.rules` (`root:polkitd` 0640),
+   `/etc/udev/rules.d/90-playbook-backlight.rules`, `/etc/deviceinfo`
+   (`deviceinfo_zram_swap_algo="lzo-rle"`), and `playbook` added to the
+   **`video`** group — without these the bar cannot change brightness or
+   enable Wi-Fi and the unit has no swap.
+
+The package database is spliced from the live root's own records
+(`/lib/apk/db/installed`, `/etc/apk/world`), because apk's `C:` identity hashes
+are opaque and the world pins name them.  Implemented as
+`tools/rebake_hd3.py`, called by `tools/rebake-hd3.sh`; it runs as root
+(loop-mount) or as a normal user (debugfs), and verifies every file, the initrc
+md5, the versions, the module vermagic and `modules.dep` before printing the
+image hash.
+
+**Why.**  Two defects were found by reading the image, not by trusting the
+recorded delta:
+
+* **The image's modules were ARMv6.**  `pvrsrvkm_omap4_sgx540_120.ko` had
+  vermagic `7.3.3 mod_unload modversions ARMv6 p2v8` in a flat 44-module
+  directory, while the `#109 SMP` kernel is ARMv7 and the live root carries the
+  full 842-module tree.  A flash without the modules would come up and then fail
+  every `modprobe` — the GPU, WLAN and BT included.  The session-70 delta was
+  measured from the package DB and files and missed it (trap 356).
+* **The catacomb APK's initrc is the wrong file.**  `/etc/catacomb/initrc` is
+  owned by `postmarketos-ui-catacomb`, not `catacomb`; the image's copy is the
+  bench-tuned pvr variant (md5 `00fdff84…`).  The r10003 APK carries the upstream
+  default (`f829d28d…`: squeekboard/swayidle/bash), so `apk --upgrade` would
+  file-conflict with the UI package and, if forced, replace the working initrc
+  (trap 357).  This also explains why the live root, where the file is still
+  `00fdff84…`, is not a plain `apk upgrade` of the image.
+* **The session-70 permissions set was never in the image (or the live root).**
+  `rootfs/README-permissions.md` recorded the fix for the bar's brightness and
+  Wi-Fi and for zram, but `/etc/polkit-1/rules.d` and `/etc/udev/rules.d` were
+  empty and `playbook` was not in `video`.  Measured live in session 71: after
+  installing the three files and adding the group, `echo 200 >
+  /sys/class/backlight/backlight/brightness` works as `playbook`, `nmcli radio
+  wifi off/on` succeeds, and `postmarketos-zram-swap` activates **1489 MB
+  lzo-rle**.  Note `udevadm trigger` defaults to `--action=change`, which does
+  not match the rule's `ACTION=="add"` — use `--action=add` (trap 358).
+
+**Constraint.**  The DB records must come from a root that already has the exact
+packages installed; the tool therefore requires `local/work/rebake-ref/` (pull
+it with `tools/pbssh.sh`).  The image must stay at its natural 625,999,872 B so
+the initramfs's one-shot `resize2fs` grows it to 62.5 G on first boot — do not
+pre-grow it.  `/etc/pb-grown` must be absent (it is), or the grow is skipped.
+Flashing remains the documented pre-OS `0xF7` loop at loader block `0x4915`; a
+**reset** (`reboot -f`) is enough to enter the bootrom — a physical power cycle
+is not required (see SAFETY §4).
+
+**Evidence.**  The final image
+`local/work/nura/images/blackberry-playbook-root-gpu-20261125.img`
+(sha256 `5d3eac8f…`, 625,999,872 B, `e2fsck -fn` clean, UUID unchanged, no
+`/etc/pb-grown`); the first (GPU-only) rebake is kept as
+`…-20261125-preperm.img` (sha256 `9b656d36…`); the base is `07555bde…`.
+Verified in the image: `V:1.5.0-r10003`, `V:1.4.0-r10008`, `C:`/world pins
+`Q1yOHN…`/`Q1kwXB…`, the inittab line, initrc md5 `00fdff84…`,
+`Exec=/usr/local/bin/catacomb-dbmfix`, `dbmfix.so` sha256 `cc302b42…`,
+pvrsrvkm sha256 `afdca89d…` with vermagic `7.3.3 SMP … ARMv7 p2v8`, 842
+`modules.dep` entries, the polkit rule (gid 105, 0640), the udev rule, and
+`/etc/deviceinfo`, with `video:x:27:root,playbook`.
+
+**Bench, after the flash (measured).**  The image booted, grew to 62.5 G,
+`apk list -I` showed `catacomb-1.5.0-r10003`/`epitaph-1.4.0-r10008`, the
+inittab line was present, `nproc` 2 / PID 1 mask 3, `pvrsrvkm` and `wlcore`
+loaded (ARMv7), the panel was `connected` at backlight 255 with **0 DSI errors**
+on the clean boot, and **8/8** re-rendering pvr clients were clean
+(`GL_RENDERER=PowerVR SGX 540`, every pre-swap readback correct, `swap=1
+err=0x3000`) with pinned TILER **flat at 20.66 MiB** and the largest GEM object
+**2,457,600 B**.  `BOOTCTR_FCTRY` read `0x31 → 0x30`.  (Session 71; report 272.)
+
+---
+
+## 106. The browser: build the fork's WPE 2.54.3 from the WPE tarball + six patches, and Kumo webkit-only with the servo dependency dropped (session 71)
+
+**Decision.**  The browser stack is built as two local pmaports packages:
+
+1. **`wpewebkit` 2.54.3** — the **official WPE release tarball**
+   (`wpewebkit-2.54.3.tar.xz`, 49,591,296 B) plus the fork's six commits as
+   patches (`b86110562d`, `dd88b3eb8d`, `5ef6e19e41`, `41dbc7cc99`,
+   `8e81edd149`, `e4f4ac7156`; they sit directly on the 2.54.3 release commit
+   `c01fbd90` and apply cleanly).  Build `-DPORT=WPE`,
+   `-DENABLE_WPE_PLATFORM=ON`, **`-DENABLE_WPE_LEGACY_API=OFF`** and the built-in
+   `WPE_PLATFORM_{DRM,HEADLESS,WAYLAND}` backends **OFF**, because Kumo
+   implements its own `WPEDisplay`/`WPEView`/`WPEToplevel` in Rust and passes a
+   DRM node and dmabuf feedback.  `-DENABLE_JOURNALD_LOG=OFF`;
+   `-DCMAKE_C/CXX_STANDARD_LIBRARIES=-lintl`; `USE_GBM`/`USE_LIBDRM` ON;
+   system malloc; clang/lld; no introspection/docs/webdriver/cog.
+2. **`kumo` 1.10.0** — `--no-default-features --features webkit`, with
+   `0001-drop-optional-servo.patch` (remove the servo/stylo git dependencies;
+   Cargo fetches ~3 GB otherwise) and `0002-webkit-only-cfg.patch` (Kumo 1.10.0
+   is **not** clean without servo: `ServoState` is imported unconditionally,
+   `tracing::error` is imported only with both features, and `AtomicU32` is
+   gated on servo).  Build with **`--no-cross`** (crossdirect cannot install the
+   armv7-only `wpewebkit` dependency in the native chroot); `sccache`,
+   `clang18-libclang` + `LIBCLANG_PATH=/usr/lib`, and
+   `CARGO_TARGET_DIR=/mnt/pmbootstrap/rust` (persistent).
+
+**Why.**  The fork is the only source of the touch zoom and touch context menu
+(`WPEGestureController`); upstream WPE has neither.  The GTK tarball has no WPE
+port and the fork's git tree is 6.4 GB (mostly LayoutTests), while the fork's
+commits apply cleanly to the 50 MB WPE release.  Kumo's `wpe-platform-sys`
+already binds the fork's gestures, so the static header compare is the cheap API
+gate (a host `cargo check` fetched 3.1 GB of optional servo/stylo and is not
+cheap).  Kumo's own display means the engine's Wayland/DRM/headless display
+backends are dead code; the legacy libwpe API is not needed.
+
+**Constraint.**  Both packages are on the **live root only**; the flashed hd3
+image (`5d3eac8f…`) does not contain them, so the next rebake must add
+`wpewebkit` and `kumo` (runtime only; the dev packages the engine install pulled
+are not needed on the unit).  The local pmbootstrap patch
+(`pmb/chroot/shutdown.py`, `kill_sccache`) is needed for qemu-only Rust builds;
+the `cache_rust` mount must be writable by uid 12345.  The Kumo GUI experiment
+(SGX render, RSS, touch zoom/context menu) is the next session's one experiment;
+reboot first to clear the accumulated GEM (84 objects / 166 MiB total / 25.6 MiB
+pinned after 5 h).
+
+**Evidence.**  `wpewebkit-2.54.3-r1000.apk` (34 MB, sha256 `032e5121…`),
+`kumo-1.10.0-r1000.apk` (2.6 MB, sha256 `b312ecfb…`), both installed on the unit
+(`apk list -I`, `pkg-config --modversion wpe-webkit-2.0` = 2.54.3,
+`kumo --version`); reports 273/274; traps 360–364.

@@ -3336,6 +3336,104 @@ report 121 §3/§11/§12.
       `docs/contradictions/usb-vusb-drop-idle-vs-intermittent.md` question stays
       open.)
 
+356. **The baked hd3 image carried the ARMv6 module set — a rebake must replace
+      `/lib/modules/7.3.3`, not only the userspace packages.**  Measured from
+      the image's own files: its `pvrsrvkm_omap4_sgx540_120.ko` had vermagic
+      `7.3.3 mod_unload modversions ARMv6 p2v8` and lived in a **flat**
+      `/lib/modules/7.3.3/kernel/` with 44 `.ko`.  The running `#109 SMP` kernel
+      is ARMv7 and the live root carries a **full 842-module tree** (856 files,
+      28.1 MB) under `/lib/modules/7.3.3/kernel/...` with vermagic
+      `7.3.3 SMP mod_unload modversions ARMv7 p2v8`.  The session-70 delta
+      (catacomb, epitaph, inittab, pitch fix) was measured from
+      `/lib/apk/db/installed` and files and **missed this**, so a rebake without
+      the modules would boot and then fail every `modprobe` (`pvrsrvkm`, WLAN,
+      BT, …).  `tools/rebake_hd3.py` now takes `--modules-dir` (default
+      `local/work/rebake-modules/7.3.3`), replaces the whole tree, and verifies
+      the pvrsrvkm vermagic and `modules.dep` after writing.  Pull the input with
+      `tools/pbssh.sh 'tar -C /lib/modules -cf - 7.3.3'`.  (Session 71.)
+
+357. **Do not install the catacomb APK's `/etc/catacomb/initrc` into hd3.**
+      On the unit that file is owned by **`postmarketos-ui-catacomb`**, not by
+      `catacomb`, and the image carries the bench-tuned pvr variant (md5
+      `00fdff8481e7c4dde730221ef55d53da`: wvkbd, no swayidle, tabula,
+      pb-touchwake, no `unset`).  The `catacomb-1.5.0-r10003.apk` **happens to
+      carry a different default** (md5 `f829d28d…`: squeekboard/swayidle/bash),
+      so `apk --upgrade` of that APK would both **file-conflict** with the UI
+      package and **clobber the working initrc**.  Install only the binary and
+      desktop files, leave the initrc alone, and splice the package records into
+      `/lib/apk/db/installed` + `/etc/apk/world` (which carry apk's opaque `C:`
+      identity hashes).  `tools/rebake_hd3.py` does exactly that and checks the
+      initrc md5 after writing.  (Session 71.)
+
+358. **`udevadm trigger` defaults to `--action=change`, so an `ACTION=="add"`
+      rule silently does not fire.**  The backlight rule
+      (`/etc/udev/rules.d/90-playbook-backlight.rules`) matches
+      `SUBSYSTEM=="backlight", ACTION=="add"`; after installing it,
+      `udevadm control --reload-rules && udevadm trigger --subsystem-match=backlight`
+      leaves `/sys/class/backlight/*/brightness` at `root:root 0644`.  With
+      `--action=add` the node becomes `root:video 0664` and `playbook` can write
+      it.  The rule itself is right — the trigger command was wrong (the same
+      mistake would hide any add-only rule).  The desktop permissions set is now
+      baked by `tools/rebake_hd3.py`; `playbook` must also be a member of
+      `video` (`addgroup playbook video`), or the udev group bit grants nothing.
+      (Session 71; `rootfs/README-permissions.md`.)
+
+359. **epitaph's Wi-Fi icon shows the CONNECTION state, not the radio's enabled
+      bit.**  Toggling the radio (`nmcli radio wifi off/on`, or the bar's toggle)
+      changes `WirelessEnabled` and the button's own pressed look, but leaves
+      the icon unchanged — that is the icon's model, **not** a refresh fault and
+      **not** a permission problem.  Measured on the flashed rebake: after the
+      unit associated to `TeleCentro-AW-5G` (`wlan0` connected, DHCP
+      `192.168.0.231`, gateway and `1.1.1.1` reachable, DNS resolving), **the
+      icon changed**.  When the radio is on but the icon is dark, check
+      `nmcli dev status` / `GENERAL.STATE` rather than polkit.  **An earlier
+      reading of this as a client refresh defect is withdrawn** — the icon was
+      simply showing "not connected".  (Session 71.)
+
+360. **The GTK WebKit tarball contains no WPE port.**  Patching
+      `webkitgtk-2.54.3.tar.xz` fails on `Source/WebKit/UIProcess/wpe/…`
+      (the directory does not exist).  The WPE port is a separate release
+      tarball: `https://wpewebkit.org/releases/wpewebkit-2.54.3.tar.xz`
+      (49,591,296 B, sha512 `0c5d059b…`).  The fork's six commits were made
+      directly on the 2.54.3 release commit (`c01fbd90`), so they apply cleanly
+      to that tarball.  (Session 71; reports 273/274.)
+
+361. **The WPE port's link line has no `-lintl`, and it needs
+      `-DENABLE_JOURNALD_LOG=OFF`.**  The final `libWPEWebKit` link fails with
+      `undefined symbol: libintl_bindtextdomain` /
+      `libintl_bind_textdomain_codeset` (the GTK port links libintl; WPE's CMake
+      does not).  Add `-DCMAKE_C_STANDARD_LIBRARIES=-lintl
+      -DCMAKE_CXX_STANDARD_LIBRARIES=-lintl`.  Without
+      `-DENABLE_JOURNALD_LOG=OFF` CMake stops at
+      `libsystemd or libelogind are needed`.  (Session 71; report 274.)
+
+362. **Alpine's `clang23` has `libclang-cpp`, not the C API `libclang.so`;
+      bindgen needs the latter.**  `xkbcommon-sys`'s build script panics with
+      `Unable to find libclang` even with `clang` installed.  `libclang.so` is
+      provided by `clangNN-libclang` (16/18 are in edge; 23 is not).  Add
+      `clang18-libclang` to makedepends and `LIBCLANG_PATH=/usr/lib`; bindgen
+      finds `libclang.so.18.1`.  (Session 71; report 274.)
+
+363. **pmbootstrap's `kill_sccache()` aborts the whole run under `--no-cross`.**
+      It runs `sccache --stop-server` in the **native** chroot, but qemu-only
+      builds install sccache in the armv7 buildroot, so the call exits 127 and
+      the run fails even after a successful build.  A local patch
+      (`pmb/chroot/shutdown.py`) tries the native and build chroots and never
+      makes cleanup fatal.  Related: `CARGO_TARGET_DIR=/home/pmos/cache` is
+      **inside** the zapped chroot and loses all compiled crates; use the
+      persistent `/mnt/pmbootstrap/rust` mount (`work/cache_rust`, owned by
+      uid 12345).  (Session 71; report 274.)
+
+364. **Kumo 1.10.0 does not compile with the servo feature removed.**
+      `src/config.rs` imports `crate::engine::servo::ServoState` unconditionally;
+      `src/window.rs` imports `tracing::error` only under
+      `cfg(all(feature = "servo", feature = "webkit"))`; and
+      `src/engine/mod.rs` gates `AtomicU32` on `servo` although `FaviconId` uses
+      it unconditionally.  The "both engines are properly cfg-gated" claim in
+      HANDOFF-70 §0f.2 is **wrong** for this release.  Fix with
+      `0002-webkit-only-cfg.patch` (make `AtomicU32`/`error` unconditional, gate
+      the ServoState import/call).  (Session 71; report 274.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

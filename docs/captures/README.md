@@ -213,5 +213,14 @@ they run on the unit without a compiler).  Each records the **kernel's** view
 | `gpu-pitch-fix-2026-11-24.txt` | the root cause and the fix: the logged `CREATE_DUMB 1x<bytes>` arguments, the pitch-alignment effect, and the 1.00× result after re-expressing as `width=<bytes>, height=1`; report 271 |
 | `gpu-pitch-fix-desktop-2026-11-24.txt` | the deployment: the wrapper/`.desktop` form, a clean boot with zero DSI errors, the idle 14.0 MiB tree, and 8/8 clean client runs; report 271 §5 |
 
+## hd3 rebake: the first post-flash boot (session 71)
+
+| file | what it shows |
+|---|---|
+| `rebake-2026-11-25-boot1-evidence.txt` | the first boot after flashing the rebaked hd3 image: the DSI wedge at boot+37 s (`dsi_if_enable to 0`, `NO PACKET_SENT`), the compositor alive and `dpms on` (so it is not a dead process), the healthy touch IRQ (118: 20,126 events), the GEM tree, and the clean second boot (0 DSI errors) |
+
+Report 272 §4.  The wedge is the trap-353 class, likely triggered by the
+power-button release → DPMS binding; `reboot -f` cleared it.
+
 `docs/reports/data/` is indexed by the reports that produced it; the report
 INDEX (`docs/reports/INDEX.md`) says which report is current for a topic.

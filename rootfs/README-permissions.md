@@ -1,8 +1,15 @@
 # Desktop permissions and swap for the PlayBook bench (session 70)
 
 Three small rootfs changes, each fixing a defect measured on the unit.  All live
-in `/etc` on hd3 and **must be baked into the next rebake** or a reflash loses
-them (trap-343 class).
+in `/etc` on hd3 and **are baked by `tools/rebake_hd3.py`** (session 71) — a
+reflash without them loses brightness, Wi-Fi control and swap (trap-343 class).
+
+**Measured working again in session 71** on the flashed rebake: the backlight
+node becomes `root:video 0664` (`udevadm trigger --action=add
+--subsystem-match=backlight` — the default `--action=change` does **not** match
+the `ACTION=="add"` rule), `playbook` can `echo 200 >
+/sys/class/backlight/backlight/brightness`, `nmcli radio wifi off/on` succeeds as
+`playbook`, and `postmarketos-zram-swap` activates **1489 MB lzo-rle**.
 
 | file here | install as | fixes |
 |---|---|---|
@@ -46,9 +53,13 @@ swap active**, no error.
   DRIVER_OVERRIDE=pvr`, `DBMFIX=1`, `LD_PRELOAD=/usr/local/lib/dbmfix.so`,
   `XDG_SESSION_*`), copied from `catacomb`'s `/proc/<pid>/environ`; a bare
   restart lands it on `swrast_dri` and the bar becomes unusably slow.
+* **The Wi-Fi icon is connection-state-driven, not radio-state-driven.**  The
+  bar's toggle writes the NM property and `WirelessEnabled` changes, but the
+  icon does not move until the unit **associates**; measured in session 71, it
+  updated the moment `wlan0` joined an AP.  A dark icon with the radio on means
+  "not connected", not a permission or refresh failure (trap 359).
 * **zram will not be reachable from the bar.**  The bar's Wi-Fi button writes the
-  NM property, which works; if the icon does not repaint afterwards that is an
-  `epitaph` refresh issue, not a permission one.
+  NM property, which works.
 * The bar's Wi-Fi toggle logs `Failed to populate properties cache via GetAll:
   Object does not exist at path "/"` — epitaph proxies
   `org.freedesktop.ModemManager` (**no `1`**); the bus only carries

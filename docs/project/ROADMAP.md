@@ -15,11 +15,20 @@ attribute/uniform indexes the PowerVR linker assigns differently (epitaph
 1-pixel-wide buffer**, so omapdrm's 8-byte pitch alignment inflated every
 allocation 8× (report 271, deployed as an `LD_PRELOAD` shim — idle desktop
 59.4 → 9.5 MiB pinned, every GEM object 1.00×, trap 349 gone).
-**What remains is durability, not function:** the hd3 image must be rebaked to
-carry all three (`tools/rebake-hd3.sh`, `DBMFIX_SO=…`) — it is still the
-session-59 state, so one flash reverts them.  After that: a heavy-redraw
-measurement, trap 350 (cosmetic glitches), and packaging the shim as a
-`pvr-dbmfix` APK.
+**The durability rebake is built, flashed and validated (session 71):**
+`local/work/nura/images/blackberry-playbook-root-gpu-20261125.img` (sha256
+`5d3eac8f…`) applies catacomb r10003, epitaph r10008, the inittab affinity line,
+the pitch shim, **the live ARMv7 module tree** (the base carried ARMv6 — trap
+356) and **the permissions set** (trap 358), leaving the hand-tuned
+`/etc/catacomb/initrc` alone (trap 357).  The first GPU-only rebake is
+`…-preperm.img` (`9b656d36…`).  `tools/rebake-hd3.sh`/`tools/rebake_hd3.py`
+reproduce it, as root (loop mount) or a normal user (debugfs).
+**The browser stack is built and installed on the live root (session 71):**
+WPE WebKit 2.54.3 from the fork (official WPE tarball + six patches) and Kumo
+1.10.0 (reports 273/274).  Next: the **Kumo GUI experiment on the panel** (RSS,
+first render, touch zoom, touch context menu), then include both packages in the
+next hd3 rebake.  After that: a heavy-redraw measurement, trap 350 (cosmetic
+glitches), and packaging the shim as a `pvr-dbmfix` APK.
 The SGX540 works (kernel driver + pvrports userspace; EGL/GLES 2.0 on
 `PowerVR SGX 540`), catacomb serves a **PRIME-only `wl_drm`**, and the clients
 run on the SGX.  The two presentation defects are fixed and installed on the
@@ -370,10 +379,14 @@ flasher can replace at every point:
     trap 349 was the OMAP4 TILER scan-out aperture filling (report 270), and the
     8× that filled it was a **pitch-alignment bug in the vendor allocator**
     (report 271), now fixed and deployed.  See "Current focus".  **Next:**
-    (a) **the hd3 rebake**, now the top item — it must carry catacomb r10003,
-    epitaph r10008, the inittab affinity line **and the pitch fix**
-    (`tools/rebake-hd3.sh`, `DBMFIX_SO=…`), because all of it lives only on the
-    live root and the image is still the session-59 state; (a2) a
+    (a) **the hd3 rebake — built, flashed and validated (session 71)** — it
+    carries catacomb r10003, epitaph r10008, the inittab affinity line, the pitch
+    fix, **the live ARMv7 module tree** and **the permissions set**
+    (`tools/rebake-hd3.sh`, `tools/rebake_hd3.py`; traps 356–358); (a0) **the
+    Kumo GUI experiment** — WPE WebKit 2.54.3 (fork) and Kumo 1.10.0 are built
+    and installed on the live root (reports 273/274); reboot first, then run
+    Kumo under catacomb and measure RSS/first render/touch; the next rebake must
+    include both packages; (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b)
     attach the CPU supply or confirm 1.35 V for all OPPs and settle the
@@ -381,8 +394,7 @@ flasher can replace at every point:
     affinity fix to replace the inittab line; (d) the intermittent USB teardown
     (trap 337) — capture before the drop;
     (f) re-measure the
-    memory throughput (report 263 §4b) — the old figure is single-core.  Kumo
-    needs a WPEWebKit build (report 247 §4).
+    memory throughput (report 263 §4b) — the old figure is single-core.
 
 Step 3 is reversible at any time by re-flashing the same block range — which is
 the whole reason it beats an in-place mkfs.

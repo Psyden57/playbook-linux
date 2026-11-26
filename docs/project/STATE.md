@@ -1,6 +1,87 @@
 # Current state
 
-## Current state — 2026-11-24 (session 70)
+## Current state — 2026-11-25 (session 71)
+
+**The hd3 rebake is done: the GPU result, the pitch fix, the ARMv7 modules and
+the desktop permissions are now in the flasher-restorable image, which has been
+flashed and validated.**  Report 272; DECISIONS §105; traps 356–359.  The
+recorded session-70 delta was **incomplete in three ways**, each found by
+reading the image instead of the notes:
+
+* **The image's module set was ARMv6** (flat 44-module
+  `/lib/modules/7.3.3/kernel/`, vermagic `ARMv6 p2v8`) while the kernel is
+  ARMv7 SMP; a flash without replacing it would fail every `modprobe`
+  (`pvrsrvkm`, WLAN, BT).  **Trap 356.**
+* **The catacomb APK's `/etc/catacomb/initrc` is the wrong file.**
+  `/etc/catacomb/initrc` is owned by `postmarketos-ui-catacomb`, and the APK
+  carries the upstream default (`squeekboard`/`swayidle`, md5 `f829d28d…`), not
+  the bench pvr variant (`00fdff84…`); `apk --upgrade` would file-conflict and
+  clobber it.  **Trap 357.**
+* **The session-70 permissions set was absent** from the image and the live
+  root, so the bar could not change brightness or enable Wi-Fi and there was no
+  swap.  **Trap 358** records the `udevadm trigger` `--action=add` bug.
+
+**The image:** `local/work/nura/images/blackberry-playbook-root-gpu-20261125.img`,
+**sha256 `5d3eac8f…`**, 625,999,872 B, `e2fsck -fn` clean, UUID unchanged, no
+`/etc/pb-grown`.  Base is the untouched `07555bde…`; the first (GPU-only) rebake
+is kept as `…-20261125-preperm.img` (`9b656d36…`).  Delta, all verified in the
+image: `catacomb 1.5.0-r10003` (+ DB/world pins), `epitaph 1.4.0-r10008`, the
+inittab affinity line, the pitch shim + wrapper + `Exec=`, the live **842-module
+ARMv7** tree, and the permissions (polkit rule `root:polkitd` 0640, backlight
+udev rule, `/etc/deviceinfo` `lzo-rle`, `playbook` in `video`).
+
+**How:** `tools/rebake_hd3.py` (called by `tools/rebake-hd3.sh`) applies the
+delta **file by file** — loop mount as root, `debugfs` as a normal user — and
+splices the package records from `local/work/rebake-ref/`.  It needs no host
+`apk`, and it checks the initrc md5, versions, module vermagic, `modules.dep`
+and the permissions before printing the hash.
+
+**Flashed** at block `0x4915` (`COMPLETE`, 626,065,440 B, ~4 min).  **The
+flasher then reset with `reboot -f` is enough** — a warm reset runs the
+bootrom; no physical power cycle is needed.
+
+* **First boot** grew the root to 62.5 G, then wedged the DSI at boot+37 s
+  (`Failed to set dsi_if_enable to 0`, `NO PACKET_SENT`) after the eMMC
+  `Card stuck being busy`; black panel, backlight on, compositor alive.  The
+  likely trigger is the **power-button release binding**, which toggles DPMS
+  (trap-353 class).  A `reboot -f` cleared it; **the second boot had 0 DSI
+  errors** and was responsive.
+* **Acceptance on the flashed image:** `apk list -I` shows r10003/r10008; the
+  inittab line; initrc md5 `00fdff84…`; `pvrsrvkm`/`wlcore` loaded with
+  vermagic `7.3.3 SMP … ARMv7 p2v8`; `nproc` 2 / PID 1 mask 3; the root at
+  56.5 G; the panel `connected` with **0 DSI errors**; catacomb/epitaph/tabula
+  map `pvr_dri` **and** `dbmfix.so`; the largest GEM object **2,457,600 B**;
+  **8/8** re-rendering pvr clients clean at a flat **20.66 MiB** pinned.
+  `BOOTCTR_FCTRY` `0x31 → 0x30 → 0x2f`.  **Trap 349 does not reproduce.**
+* **Permissions measured after the flash, from the image alone:** the backlight
+  node is `root:video 0664`, `playbook` writes brightness, `nmcli radio wifi
+  off/on` succeeds, and `postmarketos-zram-swap` activates **1489 MB lzo-rle**.
+  `gorm` launches and scans ≈10 APs, and the operator joined
+  `TeleCentro-AW-5G` — `wlan0` has DHCP `192.168.0.231`, the gateway and
+  `1.1.1.1` ping, and DNS resolves.  **The Wi-Fi icon is connection-state-driven,
+  not radio-state-driven** (it does not change on a bare radio toggle, and it
+  did change on association — trap 359; an earlier "refresh defect" reading is
+  withdrawn).
+* **The browser project is built (reports 273/274).**  The API gate passes
+  statically (the fork's `WPEGestureController`/`WPEView` symbols match Kumo's
+  bindings).  **WPE WebKit 2.54.3** from the fork (official WPE tarball + the six
+  commits as patches; `-DPORT=WPE`, `ENABLE_WPE_PLATFORM=ON`, legacy libwpe and
+  the built-in backends OFF because Kumo supplies its own `WPEDisplay`) is
+  `wpewebkit-2.54.3-r1000.apk` (34 MB, sha256 `032e5121…`); **Kumo 1.10.0** is
+  `kumo-1.10.0-r1000.apk` (2.6 MB, sha256 `b312ecfb…`).  Both are **installed on
+  the live root** (`kumo --version` runs); the **GUI experiment is next
+  session**.  They are **not in the flashed hd3 image** — the next rebake must
+  include them.  The build fixes are traps 360–364.
+* **Bench at the close:** region 0 trailer `1f 2d c8 d7 13 d6 47 35` = CRC
+  **`0x3547D613`** (measured from `/dev/mmcblk1`); region 1 sha256
+  **`20a5edd3…`** (64 MiB at `0x29000000`, measured); hd3 live ext4 (`/dev/loop0`
+  magic `53 ef`), 56.5 G, the flashed image `5d3eac8f…`; `BOOTCTR_FCTRY`
+  **`0x2f`**; `nproc` 2, PID 1 mask 3.  The 5 h boot had **1 transient DSI
+  error** (t=1911 s, null packets sent after 1 poll — not the `NO PACKET_SENT`
+  wedge).  GEM: **84 objects, 166 MiB total, 25.6 MiB pinned**, largest 9.7 MB
+  (mostly unpinned; reboot before the Kumo test).
+
+## Previous state — 2026-11-24 (session 70)
 
 **The GPU buffer waste is fixed and deployed, and trap 349 is closed.**  Two
 findings, in order.  (1) The "second buffer fails" symptom was **omapdrm
@@ -696,7 +777,7 @@ Do not boot `0x5E40C5C1` or `0xB9A1BC4F` (two lanes), or `0x3B04298E`
 | `BOOTCTR_FCTRY` | **`0x24`** at the session-67 wrap-up (measured on the unit).  The three mailbox validation boots read `0x2a → 0x29 → 0x28`, then the affinity half's four reboots took it to `0x24`; every read was `>= 0x1e, no write`.  (The session-64 panic loop had drained it to `0x1c`; the recovery image topped it to `0x32`.)  Block `0x3a` record@196.  **Read it on Linux with `dmesg \| grep pbrpmb`** (the top-up line carries the 4-byte LE record).  Self-replenishing: `/init` tops up at <`0x1e`, a TabletOS boot writes `0x32` (`SAFETY.md` §2, `DEVELOPMENT.md` §5) |
 | region-1 Linux root | **present** at raw `0x29000000` (region-1 +16 MiB, block `0x2915`): 64 MiB ext4, no journal, on-media sha256 **`20a5edd3…`** (re-hashed at the session-67 close; earlier readings `6f5b8ca7…`, then the staged file `49e318bf…` = `local/images/rootfs-region1-wl1283-bt.ext4`, session 52: the WLAN fixes, **`ccm`/`ctr`**, the per-unit NVS, the CAM+4-sr `wl12xx.ko` and the seven Bluetooth modules), **43 modules under `/lib/modules/7.3.3`** (the sensor/charger/audio set plus **`cfg80211`, `mac80211`, `wlcore`, `wlcore_sdio`, `wl12xx`, `libarc4`, `crc7`** and **`bluetooth`, `hci_uart`, `btbcm`, `crc-ccitt`, `ecdh_generic`, `ecc`, `kpp`**), `pbplay`, `pbmix`, **dropbear**, **`/usr/bin/iw`**, **`/usr/sbin/wpa_{supplicant,cli,passphrase}`**, and **`/lib/firmware/ti-connectivity/{wl128x-fw-4-sr.bin,wl128x-fw-5-sr.bin,wl128x-nvs.bin}`** plus the signed **`/lib/firmware/regulatory.db`/`.p7s`**; `rcS` loads the wireless stack and `bluetooth hci_uart`.  Earlier images: `…-wl1283-final.ext4` (`877c42c3…`), `…-wl1283-assoc.ext4` (`6c2cfb30…`), `a148c362…`, `7e067560…`, `88084b78…`, `a4e76b18…` and `0342ab06…`.  The modules in any of them can be checked by extracting them with `debugfs` (trap 163).  **Session 55: not booted.**  The region-0 image is the hd3-pointing `0xA8F0F30C`; it mounts hd3 (Nura) and never touches region 1.  This root remains the fallback; its `rcS`/dropbear/WLAN/BT are unchanged. |
 | TabletOS / OS | **NOT running** — the unit is on the **Nura root from hd3** (image `0x3547D613`, `#109 SMP` dual-core ARMv7, `0fca:8010`, console `playbook:~#` on the USB ACM, **sshd: dropbear on `169.254.0.1:22`**, `PB_LINK=usb tools/pbssh.sh` — **this works** (verified at the session-67 close, ping ~0.4 ms); if it times out the cause is the **host** (WireGuard VPN, trap 341; `ufw`, trap 342), not the device; the root is the hd3 ext4 mounted **read-write**, grown to **62.5 G**, with the ARMv7 module set installed).  TabletOS 2.1.0.1917 returns by flashing `local/work/ifs-shim-sealed.ifs` at block `0x825`; its door is also `169.254.0.1`, so use `PB_LINK=door` for `tools/pbssh.sh` there |
-| hd3 (MCT `0x1C`, FS at loader block `0x4915` / raw `0x49000000`) | **the media was re-created on 2026-11-18 (session 65)** by flashing the baked Nura image `local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`, 625,999,872 B) at block `0x4915` (626,065,440 B, `FLASH_OK`), because the BusyBox ext4 that had been flashed there in session 63 was **damaged by power cycles** (`EXT4-fs: This should not happen!! Data will be lost`, corrupt inode bitmap).  First boot grew it to **62.5 G** (15,273,984 blocks) and installed dropbear; the ARMv7 module set was then installed over SSH and `depmod` run.  It is a rw ext4 with `barrier=0` + write-through, so power cuts can still damage it — prefer a clean `reboot`.  The same 625,999,872-byte image is the flasher-restorable base (`--component --dest-block 0x4915`).  Its content is the session-59 state: `tabula` 1.0.2, `epitaph` 1.4.0, `tzompantli` 1.2.0, `gorm` 1.2.1, `swayidle` 1.9.1, `foot` 1.28.0, `grim` 1.5.0, `slurp` 1.5.0, `tremor` 1.1.0, `netsurf` 3.11, `xournalpp` 1.3.8, the pvrports stack (`libglvnd`, `mesa-pvr-dri-classic`, `sgx-ddk-um{,-ti443x,-openrc}`, `gcompat`, `wayland-libs-server`), `MESA_LOADER_DRIVER_OVERRIDE=pvr`, the pvrsrvkm module in `/etc/modules`, wvkbd/DejaVu/pb-touchwake, the icon-theme fix and the no-suspend `/etc/catacomb/initrc`.  **The baked image's exact GPU delta was measured in session 70** (from its own `/lib/apk/db/installed` and files): `catacomb` **`1.5.0-r10000`** (binary sha256 `0af20d3a…`) and `epitaph` **`1.4.0-r0`**, with **no inittab affinity line** — so a reflash reverts the session-69 GPU result (trap 343).  Everything else the earlier text blamed is **already correct in the image**: `/etc/catacomb/initrc` md5 `00fdff8481e7c4dde730221ef55d53da` (the pvr variant, no `unset`, identical to the live root), `/etc/profile.d/mesa.sh` exporting the pvr override, `pvrsrvkm_omap4_sgx540_120` in `/etc/modules`, and `libglvnd 1.6.0-r2` / `mesa-pvr-dri-classic 21.3.9-r1` / `sgx-ddk-um 1.17.4948957-r1`.  **The llvmpipe `swrast_dri.so`/`libLLVM-13` and the udev/polkit rules are absent on the live root too** and are not part of the working state (the desktop runs on `pvr_dri`; both rule directories are empty).  **`tools/rebake-hd3.sh` applies exactly the three real changes** (catacomb r10003, epitaph r10008, the inittab line) to a copy of this image; it has not been run (needs root).  The pre-pvr images (`1fcf0cb0…`, `1f14915f…`), the pristine `076bafcf…` and the older `f7858110…` remain on the host.  See reports 249/250, 263 §3 and 270. |
+| hd3 (MCT `0x1C`, FS at loader block `0x4915` / raw `0x49000000`) | **the media was re-created on 2026-11-18 (session 65)** by flashing the baked Nura image `local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img` (`07555bde…`, 625,999,872 B) at block `0x4915` (626,065,440 B, `FLASH_OK`), because the BusyBox ext4 that had been flashed there in session 63 was **damaged by power cycles** (`EXT4-fs: This should not happen!! Data will be lost`, corrupt inode bitmap).  First boot grew it to **62.5 G** (15,273,984 blocks) and installed dropbear; the ARMv7 module set was then installed over SSH and `depmod` run.  It is a rw ext4 with `barrier=0` + write-through, so power cuts can still damage it — prefer a clean `reboot`.  The flasher-restorable image is now the **session-71 rebake** `local/work/nura/images/blackberry-playbook-root-gpu-20261125.img` (sha256 `5d3eac8f…`, 625,999,872 B), which carries the session-69/70 GPU result, the ARMv7 modules and the permissions; the session-59 base (`07555bde…`) is untouched.  Its content is the session-59 state: `tabula` 1.0.2, `epitaph` 1.4.0, `tzompantli` 1.2.0, `gorm` 1.2.1, `swayidle` 1.9.1, `foot` 1.28.0, `grim` 1.5.0, `slurp` 1.5.0, `tremor` 1.1.0, `netsurf` 3.11, `xournalpp` 1.3.8, the pvrports stack (`libglvnd`, `mesa-pvr-dri-classic`, `sgx-ddk-um{,-ti443x,-openrc}`, `gcompat`, `wayland-libs-server`), `MESA_LOADER_DRIVER_OVERRIDE=pvr`, the pvrsrvkm module in `/etc/modules`, wvkbd/DejaVu/pb-touchwake, the icon-theme fix and the no-suspend `/etc/catacomb/initrc`.  **The session-71 rebake** (report 272, DECISIONS §105) applies catacomb `r10003`, epitaph `r10008`, the inittab affinity line, the pitch fix, **the live 842-module ARMv7 tree** (the base had ARMv6 — trap 356) and **the permissions set** (polkit, backlight udev, `/etc/deviceinfo` lzo-rle, `playbook` in `video`).  It leaves the bench pvr `/etc/catacomb/initrc` (md5 `00fdff8481e7c4dde730221ef55d53da`) alone, because the APK's copy is the upstream default (trap 357).  `tools/rebake_hd3.py` does this file by file (root loop mount or `debugfs`) and splices the package DB/world from the live root; `tools/rebake-hd3.sh` is the wrapper.  The llvmpipe `swrast_dri.so`/`libLLVM-13` are still absent and are not part of the working state (the desktop runs on `pvr_dri`).  The pre-pvr images (`1fcf0cb0…`, `1f14915f…`), the pristine `076bafcf…` and the older `f7858110…` remain on the host.  See reports 249/250, 263 §3, 270 and **272**. |
 | device-side files | **persistent on hd3 (session 58: the root is writable and grown):** the initramfs installs `/usr/sbin/dropbear`, `/etc/dropbear/*`, `/root/.ssh/authorized_keys`, `/etc/local.d/pb-ssh.start` and `/etc/local.d/pb-grow.start` on first boot, and `/etc/pb-grown` marks the grow.  `/var`, `/home` and `/tmp` are now real directories on the 56.5 G FS, so the DE state and the SSH kit survive a reboot (the state files written before the switch are on the grown FS).  `memdump3`/`memw32`/`pbi2c` are outside the tree: push them (paced) after a reflash (trap 177).  The first-Nura-boot log is `docs/captures/playbook-live-2026-11-15-hd3-nura-boot.txt`.  Session 57's touch tools (`evcap.py`, `keylog.py`, `muninraw`) lived only in `/tmp`; the measured evidence is preserved in the captures.  **Session 59 deployed:** `wvkbd-mobintl` 0.21 (`/usr/sbin/wvkbd-mobintl`), `/usr/share/fonts/dejavu/DejaVuSans{, -Bold}.ttf`, `/usr/bin/pb-touchwake`, `/usr/share/icons/default/index.theme` (`Inherits=Adwaita,hicolor`), `adwaita-icon-theme` + `glycin-svg`, a hicolor netsurf PNG, the edited `/etc/catacomb/initrc` (no swayidle, wvkbd + pb-touchwake), and `playbook` in the `input` group (gid 23).  Tools/daemon sources are tracked in `tools/bench/`; the pmaport edits are under gitignored `local/work/nura/pmaports/`. |
 
 The factory boot budget is **self-maintaining in bench use**: every successful

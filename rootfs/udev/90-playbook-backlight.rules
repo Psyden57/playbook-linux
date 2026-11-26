@@ -5,7 +5,10 @@
 # bar's slider does nothing.  This is the same fix every phone distro ships.
 #
 # Install as /etc/udev/rules.d/90-playbook-backlight.rules, then
-#   udevadm control --reload-rules && udevadm trigger --subsystem-match=backlight
+#   udevadm control --reload-rules && \
+#     udevadm trigger --action=add --subsystem-match=backlight
+# `udevadm trigger` defaults to --action=change, which does not match this
+# ACTION=="add" rule — the node silently stays root:root without --action=add.
 #
 # MEASURED (session 70) — this device's backlight is a *class device with no
 # devnode*: `udevadm info -q all -p /sys/class/backlight/backlight` reports
