@@ -383,10 +383,23 @@ flasher can replace at every point:
     carries catacomb r10003, epitaph r10008, the inittab affinity line, the pitch
     fix, **the live ARMv7 module tree** and **the permissions set**
     (`tools/rebake-hd3.sh`, `tools/rebake_hd3.py`; traps 356–358); (a0) **the
-    Kumo GUI experiment** — WPE WebKit 2.54.3 (fork) and Kumo 1.10.0 are built
-    and installed on the live root (reports 273/274); reboot first, then run
-    Kumo under catacomb and measure RSS/first render/touch; the next rebake must
-    include both packages; (a2) a
+    Kumo GUI experiment — RUN, NEGATIVE (session 72)** — WPE WebKit 2.54.3
+    (fork) and Kumo 1.10.0 are installed, and Kumo launches, draws its window
+    and loads the page with the engine on the SGX (`pvr_dri` mapped), but the
+    web content never composes: the **PowerVR GBM backend cannot export dmabufs**
+    (`gbm_bo_get_fd_for_plane` = `-1`; `gbm_bo_create` SCANOUT on the pvr node
+    fails), so WebKit's `AcceleratedSurface` cannot create the page buffer
+    (`Failed to extract DMA-buf attributes`).  This is a capability gap, not a
+    setting — `WPE_DRM_DEVICE`/`WPE_BUFFER_FORMAT` do not help, and a WebKit
+    PRIME fallback is proven impossible (`tools/bench/gpu/gbmprime.c`: the pvr
+    GBM exposes neither a fd nor a GEM handle).  Fix direction: a Mesa/GBM pvr
+    backend that exports dmabufs, or the open `powervr_sgx` (SGX540 still
+    wanted).  Report **275**, DECISIONS §107, traps 365–367; the packages must
+    still be added to the next rebake; the **open route is scoped in report 276**
+    — the SGX540 port needs the 28-bit / single-context / no-`USE_CODE_BASE`
+    work plus OMAP4 glue, not just a table entry; start with the fact sheet and
+    a "New SGX core" issue;
+    (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b)
     attach the CPU supply or confirm 1.35 V for all OPPs and settle the

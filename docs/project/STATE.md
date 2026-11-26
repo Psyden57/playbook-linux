@@ -1,6 +1,59 @@
 # Current state
 
-## Current state — 2026-11-25 (session 71)
+## Current state — 2026-11-26 (session 72)
+
+**The Kumo/WPE WebKit experiment ran and is a proven negative: the engine is on
+the SGX, but the PowerVR GBM backend cannot export dmabufs, so the page never
+composes.**  Report **275**; DECISIONS §107; traps 365–367.
+
+* **Kumo launches and loads the page** — its window and URL bar draw, the page
+  is fetched (host server logged `GET /` + favicon), and **both `kumo` and
+  `WPEWebProcess` map `pvr_dri` + `libGLESv2_PVR_MESA`** (the engine *is* on the
+  SGX).  So the packages, `/usr/libexec/wpe-webkit-2.0/` helpers, the
+  WPEPlatform ABI and display/view creation are all fine; the failure is **not**
+  the handoff's missing-helper / `swrast` / display-abort branches.
+* **The page area is gray.**  WebKit's
+  `AcceleratedSurface::RenderTargetEGLImage::create()` makes a GBM buffer and
+  cannot extract its dmabuf attributes (`Failed to extract DMA-buf attributes
+  from GBM buffer of size 1024x515`) → no page surface.  **Proven directly**
+  with `local/work/gbmplane.py`: on `/dev/dri/renderD129` (pvr)
+  `gbm_bo_create(AR24, …, GBM_BO_USE_RENDERING)` succeeds
+  (`plane_count=1`) but **`gbm_bo_get_fd_for_plane(bo,0)` and `gbm_bo_get_fd(bo)`
+  are both `-1`**; on `/dev/dri/card1` `gbm_bo_create` fails outright
+  (`PVRDRIPlaneCreate: Cannot create display buffer without a display device`).
+  The omapdrm nodes export fine.  The desktop is unaffected because libdbm/pvr
+  clients export **PRIME handles** (`drmPrimeHandleToFD`), not the GBM plane API.
+* **No `WPE_*` environment variable fixes it.**  `WPE_DRM_DEVICE=/dev/dri/renderD129`
+  gave garbage pvr handles (`6255103 >= 768`, `0xFFFFFFFF`) and wedged;
+  `WPE_BUFFER_FORMAT=AR24:0:rendering` + `WPE_DRM_DEVICE=/dev/dri/card1` removed
+  the pvr *render* errors (GEM stayed 10 MB) but the export still calls
+  `gbm_bo_get_fd_for_plane()` — still gray, plus `GLib-GObject-CRITICAL`.
+* **Software is blocked twice**: Kumo panics without a DRM node path
+  (`main.rs:385`, only the pvr driver yields one), and `swrast` cannot bind over
+  this GBM (`gbm: did not find extension DRI_DRI2`).  A per-process `LD_PRELOAD`
+  shim (`local/work/softshim.c`) confirmed the helper path but not a render.
+* **Operational hazards learned**: stopping a running Kumo/WPE wedges the pvr
+  driver (`FreeResourceByPtr`) and freezes the panel with **0 DSI errors**
+  (running it also drives GEM to 109–113 MiB of the 128 MiB TILER); a boot can
+  then show the DSI `NO_PACKET_SENT` wedge after the power-button/DPMS toggle.
+  **Use `reboot -f`, never kill Kumo**, and expect a second reboot to clear the
+  DSI.  All wedges cleared cleanly.
+* **Fix direction (not a session task)**: the closed DDK gives the pvr GBM buffer
+  **no GEM handle**, so a Mesa-only or WebKit-only fix cannot work
+  (`tools/bench/gpu/gbmprime.c`, `gbmprime2.c`, `ioctllog.c`).  The durable route
+  is the open **`powervr_sgx` SGX540 port**, scoped in **report 276** — our SGX540
+  is **USSE1, 4-pipe, multi-kick, but 28-bit / single-context / no
+  `USE_CODE_BASE`**, so it needs the 28-bit + single-context + code-base work and
+  OMAP4 glue, not just a table entry (multi-session; start with the fact sheet and
+  a "New SGX core" issue).  Keep the closed stack meanwhile.  DECISIONS §107/§108.
+* **Bench at the close**: region 0 trailer `1f 2d c8 d7 13 d6 47 35` =
+  **`0x3547D613`** (**no media write**); `BOOTCTR_FCTRY` **`0x28`** (`0x2f` at
+  the start, the experiment's reboots spent the rest, each `≥ 0x1e, no write`);
+  `nproc` 2, PID 1 mask `3`; panel `connected`, backlight 255, **0 DSI errors**;
+  Wi-Fi down (the 5 GHz SSID was not in the scan).  Desktop on the SGX
+  (`pvr_dri`), GEM fresh.
+
+## Previous state — 2026-11-25 (session 71)
 
 **The hd3 rebake is done: the GPU result, the pitch fix, the ARMv7 modules and
 the desktop permissions are now in the flasher-restorable image, which has been

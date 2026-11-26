@@ -3898,3 +3898,105 @@ pinned after 5 h).
 `kumo-1.10.0-r1000.apk` (2.6 MB, sha256 `b312ecfb…`), both installed on the unit
 (`apk list -I`, `pkg-config --modversion wpe-webkit-2.0` = 2.54.3,
 `kumo --version`); reports 273/274; traps 360–364.
+
+## 107. Kumo/WPE WebKit is blocked by the pvr GBM's missing dmabuf export; fix the GBM/PRIME gap, not a setting (session 72)
+
+**Decision.**  Treat "Kumo renders on this stack" as **blocked at the GBM
+capability level, not by configuration**.  The engine runs and is on the SGX
+(`kumo` and `WPEWebProcess` map `pvr_dri`), but WPE WebKit 2.54's coordinated GBM
+accelerated surface requires a GBM buffer whose dmabuf planes can be exported,
+and the PowerVR GBM backend here cannot export them.  Pursue, in order:
+
+1. **Route the pvr GBM image allocation through the exportable dumb/PRIME path**
+   (as libdbm does for the compositor's own buffers) — a substantial pvr
+   classic-driver change, not a one-liner.  The bounded test
+   (`tools/bench/gpu/gbmprime2.c` + `ioctllog.c`) shows the allocated GBM buffer
+   is a real DRI image (no `CREATE_DUMB`) but the DDK returns **no GEM handle**
+   (`gbm_bo_get_handle_for_plane = 0xFFFFFFFF`), so the standard
+   `PRIME_HANDLE_TO_FD` fails and `gbm_bo_get_fd = -1`; a Mesa patch
+   "implementing the fd export" has nothing to export, and a WebKit-side
+   fallback is **impossible**.
+2. **`The1TrueJoe/powervr_sgx`** (the fully open stack, Mesa 26.2.5) as the
+   durable fix — but **SGX540 is still "wanted", not supported** (SGX545 works,
+   SGX530 in bring-up), so it is a porting project, not a session.
+
+Until one lands: do **not** keep the unit on Kumo (it drives GEM toward the TILER
+budget and stopping it wedges the pvr driver — trap 367); the desktop stays on
+the pvr clients (libdbm/PRIME), which are unaffected.
+
+**Why.**  Proven with `local/work/gbmplane.py` (session 72, report 275 §2): on
+`/dev/dri/renderD129` (pvr) `gbm_bo_create(AR24, …, GBM_BO_USE_RENDERING)` gives
+`plane_count=1` but `gbm_bo_get_fd_for_plane(bo,0)` and `gbm_bo_get_fd(bo)` are
+both `-1`; on `/dev/dri/card1` `gbm_bo_create` fails outright
+(`PVRDRIPlaneCreate: Cannot create display buffer without a display device`).
+The omapdrm nodes export normally.  WebKit's `fromGBMBufferObject()` returns
+`nullopt` on a negative plane fd, so `AcceleratedSurface` logs `Failed to extract
+DMA-buf attributes` and never creates the page surface → a gray page.  The pvr
+clients (`epitaph`, `tabula`, `catacomb`) display because libdbm allocates DRM
+dumb buffers and exports PRIME handles (`drmPrimeHandleToFD`), never the GBM
+plane API.  `WPE_DRM_DEVICE` and `WPE_BUFFER_FORMAT` were both tried and do not
+help: the first moves the node (the pvr node gives garbage handles, 6255103 ≥
+768 / 0xFFFFFFFF); the second forces a linear `AR24` buffer and removes the pvr
+*render* errors but the export still calls the plane API.  A software render is
+blocked separately: Kumo panics without a DRM node path (`main.rs:385`, trap
+365) and swrast cannot bind over this GBM (`DRI_DRI2` missing).  And a WebKit
+PRIME fallback cannot help: `tools/bench/gpu/gbmprime.c` shows
+`gbm_bo_get_handle_for_plane(0) = 0xFFFFFFFF` and `drmPrimeHandleToFD = -1` on the
+pvr GBM (only the omapdrm nodes export).  The bounded follow-up
+(`gbmprime2.c` + `ioctllog.c`) shows the allocated GBM buffer is a real DRI image
+(no `CREATE_DUMB`) but the DDK gives it **no GEM handle**, so `PRIME_HANDLE_TO_FD`
+fails — the DDK, not Mesa, is the wall.
+
+**Constraint.**  The recommendation is a code change (a GBM/Mesa pvr backend or
+the open stack), not a runtime knob — record this so no session
+re-derives `WPE_*` attempts.  `powervr_sgx`'s SGX540 support status must be
+re-checked before starting a port (it moves; check the repo's "What works"
+table).  The two packages remain on the live root only; the next hd3 rebake must
+add them, but Kumo will stay gray until the GBM/PRIME gap is closed.
+
+**Evidence.**  Report 275 (§1 the runs, §2 the probe, §3 the alternatives);
+`tools/bench/gpu/gbmplane.py`, `tools/bench/gpu/gbmprime.c` and
+`tools/bench/gpu/softshim.c`; traps 365–367; report 268
+(the GPU survey) and 269 §4d (dmabuf feedback needs a current Mesa); the engine
+sources `AcceleratedSurface.cpp:306`, `DMABufBuffer.cpp:78`,
+`WPEToplevel.cpp:622` (`WPE_BUFFER_FORMAT`), `WPEDisplay.cpp:690`
+(`WPE_DRM_DEVICE`).
+
+## 108. The long-term graphics route is the open `powervr_sgx` SGX540 port; keep the closed stack meanwhile (session 72)
+
+**Decision.**  Treat the fully open `powervr_sgx` stack (DRM driver + open
+microkernel + Mesa gallium, Mesa 26.x) with an **SGX540 port** as the durable
+graphics route, and keep the closed pvr DDK 1.17 stack in service meanwhile (the
+desktop and apps work; only WebKit is blocked).  Start with the two zero-risk
+steps: (1) write `docs/porting/cores/sgx540.md` in the upstream project's format
+from our vendored GPL DDK headers and mainline OMAP4 sources, and (2) open a
+"New SGX core" issue with our hardware and what we can already run.  Do **not**
+switch the stack now.
+
+**Why.**  The closed DDK's GBM cannot export the buffers WebKit needs (report
+275); a Mesa-only or WebKit-only fix cannot invent the GEM handle the DDK does
+not provide (report 275 §2.2).  `powervr_sgx` already runs a 32-bit SGX545 with
+EGL/GBM/GLX/DRI3 on Mesa 26.2.5, i.e. a real Mesa GBM that exports dmabufs and a
+dmabuf-feedback Wayland path — the structural fix.  Our SGX540 is **USSE**, the
+same ISA family as the SGX545, so it is "data, not code" per the project's own
+guide — but the vendored DDK shows it is **28-bit, single-memory-context, no
+`USE_CODE_BASE`**, so it fails the open driver's core check and needs the
+28-bit/single-context/code-base work the SGX530 bring-up needs, plus OMAP4
+platform glue.  Switching today would lose hardware 3D (SGX540 is "Wanted", not
+supported; `Garnet` is tooling; `pvrports`/`phoc` are the same blobs; `zsavajji`
+is SGX530).  [report 276]
+
+**Constraint.**  Multi-session: the biggest unknown is the DPM/TA/ISP/TSP/PBE/PDS
+state (not in the GPL headers), and the 28-bit heap and code-base windows are
+driver code, not a table row.  Hardware time costs `BOOTCTR_FCTRY` per boot and a
+wedged GPU may need a cold boot; boot test kernels from RAM (our chainloader
+already does).  **Cleanroom**: no proprietary source/binary/disassembly in the
+open tree — our DDK headers are GPL (usable), the closed userspace/blobs and the
+QNX vendor material are black-box evidence only.  Keep the closed stack until the
+open one draws a frame and passes dEQP-GLES2.
+
+**Evidence.**  Report 276 (the scoping, with the `sgx540defs.h`/`sgxfeaturedefs.h`
+facts and the upstream guide); the vendored DDK
+`kernel/vendor/pvrsgx-1.17.4948957-101c687a.tar.xz`; upstream
+`docs/porting/{README,kernel}.md` and `cores/{sgx530,clovertrail}.md` and
+`CONTRIBUTING.md`; report 275; DECISIONS §107.

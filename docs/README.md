@@ -97,6 +97,7 @@ are never committed.
 |---|---|
 | `reference/startup-playbook/` | the 1917 `proc/boot/startup-playbook` board bring-up: the board/silicon identity, the 75-record GPIO table, the WLAN/BT pin selection, the SCRM `AUXCLK1` programming, the WDT2 policy and the MMIO map |
 | `reference/qnx-hwio/` | the reference's hardware-interface tables as CSV: `gpio-table-winchester.csv` and `pad-table-winchester.csv` (the GPIO/pad muxing the vendor OS applies) |
+| `reference/sgx540-factsheet.md` | the SGX540 (OMAP4) register/feature/MMU facts from the vendored GPL DDK 1.17 and mainline OMAP4 sources, tagged in the upstream `powervr_sgx` fact-sheet format — the groundwork for an open SGX540 port (report 276, DECISIONS §108) |
 
 ## `reports/` — the analysis this is built on
 

@@ -1,331 +1,265 @@
-# Handoff — session 71 (absolute) → session 72
+# Handoff — session 72 (absolute) → session 73
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§6).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — this handoff is for **absolute 72 = Linux-era 66**, written at the
-session-71 close.  See `docs/sessions/NUMBERING.md`.
+`N+6` — this handoff is for **absolute 73 = Linux-era 67**, written at the
+session-72 close.  See `docs/sessions/NUMBERING.md`.
 
-> **SESSION 71 RESULT: the hd3 rebake is flashed and validated, and WPE WebKit
-> 2.54.3 + Kumo 1.10.0 are built and installed.**  The GPU result is now
-> durable; the browser stack exists on the unit.  [reports 272, 273, 274;
-> DECISIONS §105/§106; traps 356–364]
->
-> **The one experiment for session 72 is the Kumo GUI on the panel** — the
-> engine and Kumo are installed but have never drawn a page.  §0a is exact.
+> **SESSION 72 RESULT: the Kumo/WPE WebKit experiment ran and is a proven
+> negative, root-caused to the closed GPU driver — not Kumo, not WebKit.**  The
+> engine runs on the SGX (`kumo` and `WPEWebProcess` map `pvr_dri`) but the web
+> content never composes, because the PowerVR GBM backend cannot export a dmabuf
+> for the buffers it allocates.  Reports **275** (the experiment + the probes) and
+> **276** (the open-stack scope); DECISIONS **§107/§108**; traps **365–367**.
+> The browser is **blocked on the DDK**, and the durable route is the open
+> `powervr_sgx` SGX540 port (report 276, and the drafted fact sheet in
+> `docs/reference/sgx540-factsheet.md`).
 
 ## 0. The job, and where it stands
 
 **Goal.**  A clean, upstream **Linux 7.3.3** on a **BlackBerry PlayBook**
 (OMAP4430 ES2.2 "winchester", secure device), booting our chainloader image in
 media region 0 with an initramfs that hands PID 1 to a real root on **hd3**, with
-a GPU-accelerated desktop (compositor **and** clients), and now a modern browser.
+a GPU-accelerated desktop (compositor **and** clients), and a modern browser.
 
-**Done.**  The SoC, display, hd3/Nura root, dual-core ARMv7 at 1008 MHz, SGX540
-with the desktop and its clients, the pitch fix, **the rebaked/flashed hd3 image**,
-and **WPE WebKit 2.54.3 (fork) + Kumo 1.10.0 built and installed** on the live
-root.  **Next:** run Kumo on the panel.
+**Done.**  Everything through session 71: the SoC, display, hd3/Nura root,
+dual-core 1008 MHz, SGX540 with the desktop and its clients, the pitch fix, the
+rebaked/flashed hd3 image, and WPE WebKit 2.54.3 (fork) + Kumo 1.10.0 built and
+installed on the live root.
 
-## 0a. SESSION 72's ONE EXPERIMENT — Kumo on the panel
+**Session 72** ran the browser experiment (§0a): **Kumo launches, loads a page and
+the engine renders on the SGX, but the page never presents** — the closed pvr GBM
+cannot export the dmabuf WebKit's `AcceleratedSurface` needs.  Proven with two
+probes (`tools/bench/gpu/gbmplane.py`, `gbmprime.c`, `gbmprime2.c` + `ioctllog.c`)
+and documented.  No media write; the unit is left clean on the desktop.
 
-Everything is installed: `wpewebkit-2.54.3-r1000` and `kumo-1.10.0-r1000` are
-on the live root.  The unknown is whether the engine's EGL/GLES2 **renders on
-the SGX** through Kumo's own WPEPlatform display, and whether it is usable.
+## 0a. Session 72's result in brief (do not re-derive)
 
-**First, reboot (`reboot -f`).**  The desktop has been up 5 h and the GEM tree
-has grown to 84 objects / 166 MiB total / **25.6 MiB pinned** (the fresh boot was
-8 objects / 14.7 MiB); a clean boot isolates the measurement.  Also note the
-single **transient DSI error at t=1911 s** on that boot (it recovered — null
-packets sent after 1 poll — and is **not** the `NO PACKET_SENT` wedge).
+* Kumo starts, draws its window/URL bar, and **fetches the page**; `kumo` **and**
+  `WPEWebProcess` map `pvr_dri` + `libGLESv2_PVR_MESA` — the engine is on the
+  SGX.  The failure is **not** a missing helper, `swrast`, or a display/view
+  abort.  [report 275 §1]
+* WebKit's `AcceleratedSurface::RenderTargetEGLImage::create()` makes a GBM
+  buffer and `DMABufBufferAttributes::fromGBMBufferObject()` cannot get its
+  dmabuf attributes: `gbm_bo_get_fd_for_plane` = **-1** → `Failed to extract
+  DMA-buf attributes` → the page stays gray.  [report 275 §2]
+* **Why:** the pvr GBM buffer is a real DRI image (no `CREATE_DUMB`) but the DDK
+  gives it **no GEM handle** (`gbm_bo_get_handle_for_plane = 0xFFFFFFFF`), so
+  `PRIME_HANDLE_TO_FD` fails.  The **DDK, not Mesa, is the wall** — a Mesa-only
+  or WebKit-only fix cannot invent the handle.  [report 275 §2.2]
+* `WPE_DRM_DEVICE`/`WPE_BUFFER_FORMAT` do **not** help.  Software is blocked
+  twice: Kumo panics without a DRM node path (`main.rs:385`), and swrast cannot
+  bind over this GBM (`DRI_DRI2` missing).  [traps 365/366]
+* **Do not leave Kumo running or kill it**: stopping it wedges the pvr driver
+  (`FreeResourceByPtr`) and freezes the panel with **0 DSI errors**; it also
+  drives GEM toward the 128 MiB TILER.  Use `reboot -f`; a DSI `NO_PACKET_SENT`
+  wedge can follow a GPU wedge plus the power button and needs a **second**
+  reboot.  [trap 367]
+* The desktop is unaffected (libdbm/pvr clients export PRIME handles, not GBM).
 
-**Touch after a cold boot:** the Munin controller can be down until
-**GPIO1_14/GPIO4_8 are pulsed** (the driver does not drive them; STATE, touch
-row).  A warm `reboot -f` keeps it up.  Before judging the touch tests, check
-`grep -E '^ *118:' /proc/interrupts` (it should be counting) and, if it is down,
-pulse the pads.
+## 0b. The two tracks for session 73 (operator's choice)
 
-**Then launch Kumo the way the session will.**  The compositor and its clients
-run as `playbook`; a launched client must get the session environment, not a
-bare `su`:
+**Track A — the durable graphics route: the open `powervr_sgx` SGX540 port.**
+This is the structural fix: a real Mesa 26.x GBM that exports dmabufs and the
+dmabuf-feedback Wayland path (which also removes the `wl_drm` requirement and the
+closed DDK).  **Yes — start from the existing upstream repo**
+(`github.com/The1TrueJoe/powervr_sgx`), which already supports the **SGX545**
+across one kernel driver, one Mesa driver and one open microkernel; an SGX540 is
+added **to that tree** (branch `dev`), not as a fork.  It is "data, not code" per
+the project's porting guide, **with** the non-per-core work our core needs:
 
-```sh
-su playbook -c '
-  export XDG_RUNTIME_DIR=/run/user/10000
-  export WAYLAND_DISPLAY=wayland-1
-  export MESA_LOADER_DRIVER_OVERRIDE=pvr
-  export DBMFIX=1
-  export LD_PRELOAD=/usr/local/lib/dbmfix.so
-  export XDG_SESSION_TYPE=wayland
-  nohup kumo https://example.com >/tmp/kumo.log 2>&1 </dev/null &
-'
-```
+* Our SGX540 is **USSE1, 4 pipes, multi-event-kick**, but **28-bit, single
+  memory context, no `USE_CODE_BASE`** in the DDK's feature block — it fails the
+  open driver's core check (≥32 bits, `MULTIPLE_MEM_CONTEXTS`, ≥2 dir lists), so
+  it needs the **SGX530-class** 28-bit heap, single-context BIF and code-base
+  work, plus OMAP4 platform glue.  [report 276]
+* **First steps (zero risk):** read `CORE_ID`/`CORE_REVISION` (0x0020/0x0024,
+  expect `0x00010200` from "Rev 120") on the unit; finalise
+  `docs/reference/sgx540-factsheet.md` into the upstream
+  `docs/porting/cores/sgx540.md`; open a "New SGX core" issue with the hardware
+  and what we can run.  Then the platform driver, the 28-bit/code-base code, the
+  microkernel, and Mesa, in the guide's order.
+* Cleanroom: no proprietary source/binary/disassembly in the open tree; our DDK
+  headers are GPL (usable), the closed userspace/blobs and QNX material are
+  black-box evidence only.  [report 276 §5]
 
-If the engine's media session complains about the session bus, add
-`DBUS_SESSION_BUS_ADDRESS` copied from catacomb's
-`/proc/$(pgrep -x catacomb)/environ` (the rest of the `XDG_SESSION_*` env can
-come from there too, as `rootfs/README-permissions.md` describes).
-
-Then read, in this order:
-
-1. `/tmp/kumo.log` — did it create the display/view, and what is the first
-   error?  `WAYLAND_DEBUG=1` only if needed.
-2. `ps` for `kumo` plus the WebKit helpers
-   (`/usr/libexec/wpe-webkit-2.0/{WPEWebProcess,WPENetworkProcess,WPEGPUProcess}`).
-3. `grep -E 'pvr_dri|swrast|libWPEWebKit' /proc/<pid>/maps` for **each** of
-   those processes.  The compositor/clients on the SGX map `pvr_dri`; a WebKit
-   process on `swrast` is the failure to explain.
-4. `/sys/kernel/debug/dri/omapdrm.0/gem` (pinned sum, object sizes) and
-   `/proc/<pid>/status` `VmRSS`.
-5. `dmesg` unfiltered (PVR errors, OOM).
-6. **Ask the operator what is on the panel** (do not screenshot).
-
-**What each result means.**
-
-| result | meaning | next action |
-|---|---|---|
-| Kumo draws a page, `pvr_dri` mapped in its WebKit GPU process, panel correct, RSS/first-render measured | **the browser works on the SGX** | record RSS + first render; then touch zoom and the touch context menu; then the daily-browser question |
-| Kumo starts but the view is black / a WebKit process maps `swrast` | the engine's EGL is not on the pvr node; the pvr driver may be loaded on the **omapdrm** node Kumo passes | read `MESA-LOADER`/`PVR_K` logs; check which DRM node Kumo hands WebKit (`drm_device(feedback.main_device())` in `src/engine/webkit/platform.rs`); the likely fix is to give the engine the pvr render node while presenting through the compositor's dmabuf feedback |
-| Kumo aborts at display/view creation | Kumo's Rust `WPEDisplay`/`WPEView` is not accepted by the engine, or the platform ABI differs | `WAYLAND_DEBUG=1`, the engine version, and Kumo's `DisplayImpl`/`ViewImpl`; the static API gate passed, so this would be runtime/ABI detail |
-| a helper process is missing or cannot exec | the engine's `libexec` path/permissions | `ls -l /usr/libexec/wpe-webkit-2.0/`; the path is compiled into the library |
-| renderer is `softpipe`/very slow, no pvr | Mesa's driver selection again | the `MESA_LOADER_DRIVER_OVERRIDE`/DRM-node check; the engine's GLES2 path |
-
-**Pass criterion:** Kumo renders a real page on the SGX — `pvr_dri` mapped,
-`GL_RENDERER = PowerVR SGX 540` in the WebKit process — with a measured RSS and
-first-render time, and touch scrolling, zoom and the context menu working.
-
-**Escape hatch:** Kumo also has a **Servo** backend
-(`--no-default-features --features servo`, upstream Kumo; our package drops the
-servo dependency) — a pinned Rust crate, no engine build, but a less complete
-engine.  Skip **cog** entirely (it needs the same missing engine and is only a
-smaller client).  [report 273 §4]
-
-## 0b. The owed rebake — now includes the browser packages
-
-The flashed image is `local/work/nura/images/blackberry-playbook-root-gpu-20261125.img`
-(sha256 `5d3eac8f…`): catacomb r10003, epitaph r10008, the inittab affinity
-line, the pitch shim, the live **842-module ARMv7** tree, and the permissions
-set.  **It does not contain `wpewebkit` or `kumo`.**  The next rebake must add
-the two runtime packages (not the dev packages the engine install pulled on the
-unit).  `tools/rebake_hd3.py` (called by `tools/rebake-hd3.sh`) applies a
-file-level delta; add them as another delta (extract the two APKs, splice the DB
-records, or extend the tool).  The base `07555bde…` is untouched; the first
-GPU-only rebake is `…-preperm.img` (`9b656d36…`).
+**Track B — the queue (smaller, durable items).**
+1. **The next hd3 rebake must add `wpewebkit` + `kumo`** (they are on the live
+   root only, not in the flashed image) — and the `pvr-dbmfix` shim if not yet an
+   APK.  Kumo will stay gray until the DDK/GBM gap is closed, but the packages
+   belong in the image.
+2. **`pvr-dbmfix` APK** — package the pitch shim (today `/usr/local` files).
+3. **Power-button DPMS binding** — the initrc binds the release to a DPMS toggle,
+   the likely black-panel/DSI-wedge trigger; neutralise it in the next image.
+4. **The GEM growth** — the idle desktop reaches ~25.6 MiB pinned / 166 MiB total
+   over hours; the 9.7 MB objects are unexplained (a per-object walk, clients
+   stopped).
+5. **trap 350** (cosmetic glitches) and a **heavy-redraw/frame-latency**
+   measurement (now unblocked — the TILER pressure is gone).
+6. The **CPU** items: 1.35 V-for-all-OPPs vs a real supply, the kernel-side PID-1
+   affinity fix, the memory-throughput re-measure.
+7. The **USB teardown** (trap 337) capture.
 
 ## 0c. The media, and the way back
 
 * **region 0 = `0x3547D613`** — `boot/chainloader/kernel.img` (10,448,868 B,
-  sha256 `6ecd068d…`), kernel `7.3.3 #109 SMP`, `-march=armv7-a`, fast
-  chainloader, loud DTB, stock MUSB mailbox + comparator fix, `panic=0`.
-  **Measured this session** from `/dev/mmcblk1` at `0x8100000 + 10 448 868 − 8`:
-  `1f 2d c8 d7 13 d6 47 35`.  Not written this session.
-* **region 1 = `20a5edd3…`** (64 MiB at raw `0x29000000`, measured this session
-  with `dd bs=1M skip=656 count=64 | sha256sum`).  The BusyBox fallback root,
-  not booted.
-* **hd3 = the session-71 rebaked image** (`5d3eac8f…`, 625,999,872 B), flashed
-  at loader block `0x4915`, grown to 62.5 G; live root `/dev/loop0` ext4
-  (superblock magic `53 ef`).  The live root now also carries the engine/Kumo
-  packages and the dev packages the engine install pulled.
+  sha256 `6ecd068d…`), kernel `7.3.3 #109 SMP`, ARMv7, dual-core 1008 MHz, no
+  `maxcpus`, stock MUSB mailbox + comparator fix, `panic=0`.  Media trailer
+  `1f 2d c8 d7 13 d6 47 35` — **not written in session 72**.
+* **region 1 = `20a5edd3…`** (64 MiB at raw `0x29000000`) — the BusyBox fallback
+  root, not booted.
+* **hd3 = the session-71 rebaked image** `5d3eac8f…` (625,999,872 B), flashed at
+  loader block `0x4915`, grown to 62.5 G; live root `/dev/loop0` ext4.  It
+  carries catacomb r10003, epitaph r10008, the pitch shim, the 842-module ARMv7
+  tree and the permissions; **it does not carry `wpewebkit`/`kumo`**.
 * **To boot the ORACLE:** flash `local/work/ifs-shim-sealed.ifs` at block
-  `0x825`, then reboot; qconn `169.254.0.1:9090`, `PB_LINK=door tools/pbssh.sh`.
+  `0x825`; qconn `169.254.0.1:9090`, `PB_LINK=door tools/pbssh.sh`.
 * **To stock TabletOS:** the 1917 IFS at `0x825` **and**
-  `local/work/rcfs-1917.rcfs` at `0x8D5`, plus the vendor UFS at `0x4915` if
-  hd3 is repurposed.  No restore is required at this wrap-up.
+  `local/work/rcfs-1917.rcfs` at `0x8D5`, plus the vendor UFS at `0x4915` if hd3
+  is repurposed.  No restore is required at this wrap-up.
 * **Flash loop:** `python3 tools/bbusb.py flash --component <img>
   --dest-block 0x4915 --from-bootrom --password 0000 --apply`; **start the
-  flasher, then reset with `reboot -f`** (a warm reset enters the bootrom; no
-  physical power cycle).  Region 0 at `0x825`; both regions in one bootrom
-  session only when both changed.
+  flasher, then reset with `reboot -f`** (a warm reset enters the bootrom).  A
+  region-0 flash is block `0x825`; both regions in one bootrom session only when
+  both changed.
 
-## 0d. The queue behind the Kumo experiment
-
-1. **The GEM growth** — 84 objects / 166 MiB total / 25.6 MiB pinned after 5 h;
-   six 9,707,520 B objects (the pinned sum is 25.6 MiB, so at least four are
-   unpinned; `1024×2370×4` is arithmetic on the size, not a measured geometry).
-   Source unknown; walk the objects with the clients stopped and compare a fresh
-   boot.  Reboot before the Kumo test.
-2. **The power-button DPMS binding** — the initrc binds the release to a DPMS
-   toggle, and a DPMS off wedges the DSI (the first post-flash boot's black
-   panel; trap-353 class).  Decide whether to neutralize it in the next image.
-3. **trap 350** (cosmetic glitches) and a **heavy-redraw/frame-latency**
-   measurement — both now unblocked (the TILER pressure is gone).
-4. **Package the pitch fix** as `pvr-dbmfix` (today `/usr/local` files).
-5. The **CPU** items (STATE "What is next", DECISIONS §99, report 266): the
-   1.35 V-for-all-OPPs vs a real supply binding decision, the kernel-side PID-1
-   affinity fix, and the memory-throughput re-measure (the old figure is
-   single-core).
-6. The **USB teardown** (trap 337) — capture before the drop with
-   `local/work/kmsgcap.py` (or `cat /dev/kmsg`); the ACM shell `playbook:~#`
-   (`tools/pbraw.py`) is the fallback.  [report 263 §4]
-
-## 0e. What is proven about the build (do not re-derive)
-
-* **The API gate is a static header compare**, not a host `cargo check` (which
-  fetched 3.1 GB of optional servo/stylo).  The fork's
-  `WPEGestureController.h`/`WPEView.h` at `e4f4ac71` declare exactly the symbols
-  `wpe-platform-sys` binds.
-* **The engine source is the official WPE 2.54.3 tarball + the fork's six
-  commits as patches**, all applying cleanly.  The GTK tarball has no WPE port.
-* **Build fixes that are permanent:** `samurai`/`lld`/`llvm`;
-  `-DENABLE_JOURNALD_LOG=OFF`; **`-lintl` in `CMAKE_C/CXX_STANDARD_LIBRARIES`**;
-  `clang18-libclang` + `LIBCLANG_PATH=/usr/lib` for bindgen; `--no-cross` for
-  Kumo (crossdirect cannot install the armv7 `wpewebkit` dep natively);
-  `sccache` in makedepends plus the **local pmbootstrap patch**
-  (`pmb/chroot/shutdown.py`, `kill_sccache`); `CARGO_TARGET_DIR` on the
-  persistent `/mnt/pmbootstrap/rust` (the `cache_rust` mount must be owned by
-  12345); Kumo `0001-drop-optional-servo` and `0002-webkit-only-cfg` (Kumo
-  1.10.0 is **not** clean without servo).
-* **Packages:** `wpewebkit-2.54.3-r1000.apk` (sha256 `032e5121…`),
-  `kumo-1.10.0-r1000.apk` (sha256 `b312ecfb…`), in
-  `local/work/nura/work/packages/edge/armv7/`.  `pkg-config --modversion
-  wpe-webkit-2.0` = 2.54.3; `kumo --version` = 1.10.0.
-
-## 1. Bench state at the session-71 close (all re-measured)
+## 1. Bench state at the session-72 close (re-measured)
 
 | item | value |
 |---|---|
 | OS | **Linux 7.3.3 `#109 SMP`**, ARMv7, dual-core 1008 MHz — not TabletOS |
-| region 0 | CRC **`0x3547D613`** (media trailer `1f 2d c8 d7 13 d6 47 35`, measured) |
-| region 1 | sha256 **`20a5edd3…`** (measured) |
+| region 0 | CRC **`0x3547D613`** (media trailer `1f 2d c8 d7 13 d6 47 35`, read) |
+| region 1 | sha256 **`20a5edd3…`** (recorded; not re-hashed) |
 | hd3 | the session-71 rebaked image **`5d3eac8f…`**, flashed at `0x4915`, grown to 62.5 G; live root `/dev/loop0` ext4 |
-| `BOOTCTR_FCTRY` | **`0x2f`** (`dmesg \| grep pbrpmb`; `/init` tops up below `0x1e`) |
+| `BOOTCTR_FCTRY` | **`0x28`** (`dmesg \| grep pbrpmb`; `/init` tops up below `0x1e`) |
 | CPU | `nproc` 2, `taskset -p 1` → **3** |
-| desktop | catacomb r10003 + epitaph r10008, all clients on **`pvr_dri`**, pitch shim loaded |
-| panel | `connected`, backlight 255; **1 transient DSI error** in the 5 h boot (recovered); fresh boot 0 |
-| GEM | 84 objects, 166 MiB total, **25.6 MiB pinned**, largest 9.7 MB |
-| browser | `wpewebkit 2.54.3-r1000`, `kumo 1.10.0-r1000` installed (`kumo --version`) |
-| WLAN | `wlan0 connected`, 192.168.0.231, gateway/1.1.1.1/DNS work |
-| battery | Full, 100 % |
-| SSH | `PB_LINK=usb tools/pbssh.sh` works; if it times out check the cable, the host VPN (trap 341), `ufw` (trap 342), then trap 337 |
+| desktop | catacomb r10003 + epitaph r10008, clients on **`pvr_dri`**, pitch shim loaded |
+| panel | `connected`, backlight 255, **0 DSI errors** on the final boot |
+| GEM | fresh (`3` objects early, ~9.9 MB settled) |
+| browser | `wpewebkit 2.54.3-r1000` + `kumo 1.10.0-r1000` installed on the **live root**; **Kumo cannot present** (report 275) |
+| WLAN | **down** at the close (the 5 GHz SSID was not in the scan; `gorm` is the path) |
+| SSH | `PB_LINK=usb tools/pbssh.sh` works; if it times out check the cable, the host VPN (trap 341) and ufw (trap 342) |
 
 ## 2. Working rules (unchanged)
 
 * Read `docs/project/SAFETY.md` before any write.  One variable per boot.  An
   agent never writes RPMB; NVRAM read-only; never program WDT2 from the
   chainloader (trap 322).
-* Kernel printk goes to the panel; `console=ttyGS0` is inert.  Use `reboot -f`
-  (plain reboot is slow).  **Ask the operator what is on the panel** for a
-  visual check; do not screenshot.
-* **Do not restart `tinydm` to switch compositors** — it wedges the DSI (trap
-  353).  A DPMS off can also wedge it (see the power-button binding above).
-* The eMMC can log `Card stuck being busy` during write bursts, and a power cut
-  can damage the rw ext4 (trap 336): prefer a clean `reboot`, and **do not call
-  `sync`** (the eMMC FLUSH hangs the card, trap 300).  `/tmp` is on the ext4,
-  not tmpfs (trap 354).
-* **Revert experiments and prove the revert.**  Use the reference before the
-  bench (DECISIONS §61).  Look up every external fact.  Time-box subagents
-  (trap 109).
-* Write the durable fact into the repository in the same turn.  Never present a
-  guess as a fact.
+* Kernel printk goes to the panel; `console=ttyGS0` is inert.  Use `reboot -f`.
+  **Ask the operator what is on the panel**; do not screenshot.
+* **Do not restart `tinydm`** to switch compositors (trap 353), and **do not
+  leave Kumo running or kill it** (trap 367) — reboot.
+* The eMMC can log `Card stuck being busy`; a power cut can damage the rw ext4
+  (trap 336).  **Do not call `sync`** (the FLUSH hangs the card, trap 300).
+  `/tmp` is on the ext4, not tmpfs (trap 354).
+* **Revert experiments and prove the revert.**  Look up every external fact.
+  Time-box subagents (trap 109).  Write the durable fact into the repository in
+  the same turn.
 
 ## 3. Useful local extracts
 
-* `local/work/nura/pmaports/main/wpewebkit/` — engine APKBUILD + six patches.
-* `local/work/nura/pmaports/main/kumo/` — Kumo APKBUILD + two patches.
-* `local/work/nura/run-build-wpewebkit.sh`, `run-build-kumo.sh` (root).
-* `local/work/nura/work/packages/edge/armv7/` — the two APKs.
+* `docs/reference/sgx540-factsheet.md` — the SGX540 facts (K from our DDK 1.17,
+  L from mainline OMAP4) for the open port; report 276 is the scope.
+* `tools/bench/gpu/` — `gbmplane.py`, `gbmprime.c`, `gbmprime2.c`, `ioctllog.c`
+  (the session-72 probes) and `dbmfix.c` (the pitch shim).
+* `local/work/mesa-pvr-src/` — the amber Mesa 21.3.9 source (the pvr DRI/GBM);
+  `local/work/pvrports/` — the pvrports pmaports; `local/work/pvrdri/` — the
+  pulled `pvr_dri.so`/`libEGL_amber`/`swrast_dri`.
+* `local/work/nura/pmaports/main/wpewebkit/`, `.../kumo/` — the two browser
+  packages' APKBUILDs + patches; `local/work/nura/work/packages/edge/armv7/` —
+  the APKs (`wpewebkit-2.54.3-r1000.apk`, `kumo-1.10.0-r1000.apk`).
 * `local/work/nura/images/blackberry-playbook-root-gpu-20261125.img` — the
-  flashed hd3 image (`5d3eac8f…`); `…-preperm.img`; base `07555bde…`.
-* `tools/rebake_hd3.py`, `tools/rebake-hd3.sh` — the rebake.
-* `local/work/src/kumo/` — Kumo 1.10.0 checkout (the source of the API
-  symbols); `local/work/src/wpe-src/` — the WPE tarball and patches.
-* `local/kernel-tree/` — the 7.3.3 build tree (gitignored; it carries the
-  session-62/63/64 diagnostics); `local/pristine/linux-7.3.3` for a clean
-  diff/export.  The exact kernel build/flash recipe is
-  `docs/project/DEVELOPMENT.md` §2 (this handoff keeps only the flash loop).
-* `tools/bench/egl/` + `local/work/egltest-client/` — the prebuilt armv7 GPU
-  probes (`pb-egltest`, `pb-gbmsample`, …).
-* `local/work/kmsgcap.py` — the ACM capture for the USB teardown;
-  `tools/pbssh.sh` and `tools/pbraw.py` — the console paths.
-* WLAN manual bring-up (if NetworkManager does not auto-connect): report 236 /
-  DECISIONS §70; the BT controller is parked in STATE "What is next" 1a.
-* Reports **274** (current for the build), 273 (API gate/APKBUILD), **272**
-  (rebake), 271 (pitch fix), 270 (trap 349).
+  flashed hd3 image (`5d3eac8f…`); `tools/rebake_hd3.py` / `rebake-hd3.sh`.
+* `local/kernel-tree/` — the 7.3.3 build tree; `local/pristine/linux-7.3.3` for a
+  clean diff.  Kernel build/flash: `docs/project/DEVELOPMENT.md` §2.
+* `kernel/vendor/pvrsgx-1.17.4948957-101c687a.tar.xz` — the vendored SGX540 DDK
+  (GPL-2 headers: `sgx540defs.h`, `sgxfeaturedefs.h`, `sgxerrata.h`, `sgxmmu.h`).
+* `local/work/ifs-shim-sealed.ifs` — the way back to TabletOS (block `0x825`);
+  `local/work/rcfs-1917.rcfs` (0x8D5); `local/work/ufs-1917-devuser.ufs` (0x4915).
+* `tools/pbssh.sh`, `tools/pbraw.py`, `local/work/kmsgcap.py` — the console/SSH
+  and capture paths.
+* Reports **276** (open-stack scope), **275** (the Kumo runtime negative), 274
+  (browser build), 272 (rebake), 271 (pitch fix), 270 (trap 349).
 
-## 4. The one experiment, in one line
+## 4. The one thing to start with (track A)
 
-**Reboot; launch Kumo as `playbook` under catacomb with the session env; ask the
-operator whether a page is on the panel; measure RSS and first render; check
-`pvr_dri` in the WebKit GPU process; then the touch zoom and context menu.**
+**Read `CORE_ID`/`CORE_REVISION` (0x0020/0x0024) on the unit** while the vendor
+DDK clocks the GPU (it already does: `pvrsrvkm 56000000.gpu`), confirm the
+expected `0x00010200`, and turn `docs/reference/sgx540-factsheet.md` into the
+upstream `docs/porting/cores/sgx540.md` with the first **C** facts.  That is the
+zero-risk first step of the only durable route to a browser on this device; the
+closed stack stays in service meanwhile.
 
-## 5. What could not be verified this session
+## 5. What could not be verified
 
-* Kumo has never drawn a page; its RSS, first render and touch behaviour are
-  unmeasured.  The engine's data path on the SGX (the DRM node Kumo passes vs
-  the pvr render node) is the likely first failure.
-* The GEM growth and its six 9.7 MB objects are unexplained (at least four are
-  unpinned, since the pinned sum is 25.6 MiB).
-* The single transient DSI event at t=1911 s was not seen by the operator and
-  did not cost the panel; it is not a full wedge.
-* The `wpewebkit`/`kumo` packages are not in the flashed image.
+* Whether the SGX540 GBM buffer can be exported at all (the DDK gives it no GEM
+  handle; a display-node/master path was untestable — `card1` is already
+  DRM-master, `drmSetMaster` → `EBUSY`).
+* The SGX540 `CORE_REVISION` and every §Gaps item in the fact sheet (no GPU
+  register read yet).
+* `USE_CODE_BASE` on the SGX540 (the DDK header defines it; the upstream guide
+  says 540 has none — a hardware read settles it).
+* Kumo's RSS/first-render/touch behaviour (it never presents).
 
 ## 6. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 72 (absolute; Linux-era 66)
+PlayBook (OMAP4430 "winchester") — session 73 (absolute; Linux-era 67)
 
 Workspace: this repository — a git checkout.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 334-364, especially
-356-364) and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 91-106,
-docs/reports/INDEX.md, reports 274 (current), 273, 272, 271, 270, 269, 268,
-267, 266, 265, 264, 263, 257, and docs/sessions/session-71.md and session-70.md.
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 356-367, especially 365-367)
+and §3, DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 91-108,
+docs/reports/INDEX.md, reports 276 (current for the graphics route), 275 (current
+for the Kumo runtime result), 274, 273, 272, 271, 270, 269, 268, 267, 266, 265,
+264, 263, 257, docs/reference/sgx540-factsheet.md, and docs/sessions/session-72.md
+and session-71.md.
 
 WHERE IT STANDS: Linux 7.3.3 #109 SMP ARMv7, dual-core 1008 MHz; region 0
 0x3547D613, region 1 20a5edd3, hd3 = the session-71 rebaked image 5d3eac8f
-flashed at 0x4915 and grown to 62.5 G; BOOTCTR_FCTRY 0x2f.  THE GPU WORK IS
-DONE (reports 269-271) AND THE hd3 REBAKE IS FLASHED AND VALIDATED (report 272):
-catacomb r10003, epitaph r10008, the inittab affinity line, the pitch shim, the
-842-module ARMv7 tree, and the permissions set; 8/8 pvr clients clean, 0 DSI
-errors on the clean boot, brightness/Wi-Fi/zram working.
+flashed at 0x4915 and grown to 62.5 G; BOOTCTR_FCTRY 0x28.  THE BROWSER IS
+BLOCKED ON THE CLOSED GPU DRIVER (session 72): Kumo launches, loads a page, and
+kumo + WPEWebProcess map pvr_dri (the engine is on the SGX), but the page never
+composes because WebKit's AcceleratedSurface needs a GBM dmabuf and the pvr GBM
+gives the buffer no GEM handle (gbm_bo_get_fd_for_plane -1; PRIME_HANDLE_TO_FD
+-1).  wpewebkit 2.54.3 + kumo 1.10.0 are installed on the live root but NOT in
+the flashed image.  Do NOT leave Kumo running or kill it (it wedges the pvr and
+freezes the panel with 0 DSI errors) — use reboot -f; a DSI NO_PACKET_SENT wedge
+can follow and needs a second reboot.
 
-THE BROWSER STACK IS BUILT AND INSTALLED (reports 273/274): WPE WebKit 2.54.3
-from github.com/chrisduerr/WebKit @ e4f4ac71 (official WPE tarball + six
-patches, -DPORT=WPE, ENABLE_WPE_PLATFORM=ON, legacy libwpe and the built-in
-backends OFF because Kumo implements its own WPEDisplay) as
-wpewebkit-2.54.3-r1000.apk (032e5121...), and Kumo 1.10.0 as
-kumo-1.10.0-r1000.apk (b312ecfb...); both installed on the live root and
-kumo --version runs.
-
-THE ONE EXPERIMENT (session 72): KUMO ON THE PANEL.  Reboot first (the 5 h GEM
-is 84 objects / 166 MiB total / 25.6 MiB pinned).  Launch Kumo as playbook under
-catacomb with XDG_RUNTIME_DIR=/run/user/10000 WAYLAND_DISPLAY=wayland-1
-MESA_LOADER_DRIVER_OVERRIDE=pvr DBMFIX=1 LD_PRELOAD=/usr/local/lib/dbmfix.so,
-nohup kumo https://example.com; read /tmp/kumo.log, the WebKit helper processes
-(/usr/libexec/wpe-webkit-2.0/), their pvr_dri/swrast maps, /proc/<pid>/status
-VmRSS, the omapdrm gem tree and unfiltered dmesg; ASK THE OPERATOR what is on the
-panel.  Pass: a real page on the SGX (pvr_dri mapped, GL_RENDERER=PowerVR SGX
-540), measured RSS and first render, and touch scrolling/zoom/context menu.
-Touch after a cold boot may need the GPIO1_14/GPIO4_8 pulse; check irq 118
-before judging it.
-
-IF IT FAILS: the likely first failure is the DRM node Kumo passes to WebKit
-(the compositor's dmabuf feedback main device is omapdrm renderD128, while the
-pvr driver needs renderD129); read MESA-LOADER/PVR_K, and consider giving the
-engine the pvr render node while presenting through the compositor's feedback.
-A display/view creation abort would be the WPEPlatform ABI; a missing helper is
-the libexec path.
-
-AFTER THE EXPERIMENT: the next hd3 rebake must add wpewebkit + kumo (runtime
-only; they are not in the flashed image).  Then the GEM growth, the power-button
-DPMS binding, trap 350 and a heavy-redraw measurement, the pvr-dbmfix APK, the
-CPU items, and the USB teardown.
+THE NEXT WORK — two tracks, operator's choice.
+TRACK A (durable, recommended): the open powervr_sgx SGX540 port.  START FROM THE
+EXISTING UPSTREAM REPO (github.com/The1TrueJoe/powervr_sgx), which already
+supports the SGX545 across one kernel driver + one Mesa driver + one open
+microkernel; add SGX540 to that tree (branch dev), not a fork.  Our SGX540 is
+USSE1 / 4 pipes / multi-event-kick but 28-bit / single-memory-context / no
+USE_CODE_BASE (per the vendored GPL DDK), so it needs the SGX530-class
+28-bit/single-context/code-base work plus OMAP4 platform glue (report 276).  First
+zero-risk step: read CORE_ID/CORE_REVISION (0x0020/0x0024, expect 0x00010200) on
+the unit with the vendor DDK clocking the GPU; finalise
+docs/reference/sgx540-factsheet.md into upstream docs/porting/cores/sgx540.md;
+open a "New SGX core" issue.  Cleanroom: no proprietary source/binaries in the
+open tree.
+TRACK B (queue): the next hd3 rebake must add wpewebkit + kumo (+ pvr-dbmfix);
+package pvr-dbmfix; neutralise the power-button DPMS binding; the GEM-growth walk;
+trap 350 + a heavy-redraw measurement; the CPU items; the USB teardown.
 
 BENCH: region 0 trailer 1f 2d c8 d7 13 d6 47 35 -> 0x3547D613; region 1
-20a5edd3...; hd3 live /dev/loop0 ext4 (53 ef), 56.5 G; BOOTCTR 0x2f; nproc 2,
-PID 1 mask 3; panel connected, backlight 255, 1 transient DSI error in the 5 h
-boot; WLAN wlan0 connected 192.168.0.231; battery Full.  SSH:
-PB_LINK=usb tools/pbssh.sh works; if it times out check the cable, the host VPN
-(trap 341) and ufw (trap 342) first.  Kernel printk goes to the panel; use
-reboot -f; ask the operator for visual checks; do not screenshot; do not restart
-tinydm (trap 353).  An agent never writes RPMB; NVRAM read-only.  Revert
-experiments and prove the revert; use the reference before the bench; look up
-every external fact; the eMMC can log Card stuck being busy and do not call sync
-(traps 336/300); /tmp is on the ext4 (trap 354).
+20a5edd3...; hd3 live /dev/loop0 ext4 (53 ef), 56.5 G; BOOTCTR 0x28; nproc 2,
+PID 1 mask 3; panel connected, backlight 255, 0 DSI errors; WLAN down (5 GHz SSID
+not in scan; gorm is the path).  SSH: PB_LINK=usb tools/pbssh.sh works; if it
+times out check the cable, the host VPN (trap 341) and ufw (trap 342) first.
+Kernel printk goes to the panel; use reboot -f; ask the operator for visual
+checks; do not screenshot; do not restart tinydm (trap 353) and do not kill Kumo
+(trap 367).  An agent never writes RPMB; NVRAM read-only.  Revert experiments and
+prove the revert; look up every external fact; the eMMC can log Card stuck being
+busy and do not call sync (traps 336/300); /tmp is on the ext4 (trap 354).
 
 SAFETY: read SAFETY.md first.  One variable per boot.  Flash region 0 only when
 only it changed; both regions in one bootrom session only when both changed.
-Start the flasher, then reset with reboot -f; the bootrom holds ~20 s.  The
-hard hazards (BOOTCTR_FCTRY 0 / >0x32 / failed write / flat pack) remain.
+Start the flasher, then reset with reboot -f; the bootrom holds ~20 s.  The hard
+hazards (BOOTCTR_FCTRY 0 / >0x32 / failed write / flat pack) remain.
 
 UPDATE THE DOCS as you go and commit: STATE.md, HANDOFF.md, ROADMAP.md,
 KNOWN-ISSUES.md, DECISIONS.md and the session note.  WRAP-UP: only the operator

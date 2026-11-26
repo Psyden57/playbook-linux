@@ -3431,8 +3431,62 @@ report 121 §3/§11/§12.
       `src/engine/mod.rs` gates `AtomicU32` on `servo` although `FaviconId` uses
       it unconditionally.  The "both engines are properly cfg-gated" claim in
       HANDOFF-70 §0f.2 is **wrong** for this release.  Fix with
-      `0002-webkit-only-cfg.patch` (make `AtomicU32`/`error` unconditional, gate
-      the ServoState import/call).  (Session 71; report 274.)
+       `0002-webkit-only-cfg.patch` (make `AtomicU32`/`error` unconditional, gate
+       the ServoState import/call).  (Session 71; report 274.)
+
+365. **Kumo requires a DRM node path from its EGL display, so software GL panics
+       before WebKit starts.**  `Kumo` does
+       `egl_display.device().drm_device_node_path().expect("DRM node has no path")`
+       (`src/main.rs:385`, glutin).  On this stack only the **pvr** driver yields
+       a node path: with no `MESA_LOADER_DRIVER_OVERRIDE`, Mesa resolves the DRM
+       name `omapdrm` and there is no `omapdrm_dri.so`, so EGL init fails and the
+       device has no path; with `LIBGL_ALWAYS_SOFTWARE=1` or
+       `MESA_LOADER_DRIVER_OVERRIDE=swrast` the software EGL device has no DRM
+       node.  In both cases Kumo panics and WebKit never starts.  **A software
+       proof needs a Kumo change (tolerate a missing/dummy node) and a working
+       software GBM — which this Mesa lacks (`gbm: did not find extension
+       DRI_DRI2` → `failed to load driver: swrast`).**  (Session 72, report 275.)
+
+366. **The PowerVR GBM backend cannot export dmabufs, so WPE WebKit's accelerated
+       surface cannot present — this is the wall for Kumo.**  Proven with
+       `local/work/gbmplane.py` (ctypes, calls the same functions as
+       `DMABufBufferAttributes::fromGBMBufferObject()`,
+       `Source/WebCore/platform/graphics/DMABufBuffer.cpp:78`):
+       on `/dev/dri/renderD129` `gbm_bo_create(AR24, …, GBM_BO_USE_RENDERING)`
+       succeeds with `plane_count=1` but **`gbm_bo_get_fd_for_plane(bo,0)` and
+       `gbm_bo_get_fd(bo)` both return `-1`**; on `/dev/dri/card1`
+       `gbm_bo_create()` itself fails (`PVRDRIPlaneCreate: Cannot create display
+       buffer without a display device`).  The omapdrm nodes export fine
+       (`fd_for_plane0 = 6/7`).  WebKit 2.54's `AcceleratedSurface::create()`
+       (`Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp:306`)
+       requires a non-negative plane fd, so it logs `Failed to extract DMA-buf
+       attributes from GBM buffer of size WxH` and the page stays **gray** —
+       even though `kumo` and `WPEWebProcess` map `pvr_dri` (the engine *is* on
+       the SGX).  **No `WPE_*` env fixes it:** `WPE_DRM_DEVICE` only moves the
+       node (the pvr node gives garbage handles), and `WPE_BUFFER_FORMAT`
+       (e.g. `AR24:0:rendering`) forces a linear buffer and removes the pvr
+       *render* errors but `fromGBMBufferObject()` still calls the plane API.
+       The rest of the desktop works because libdbm exports via PRIME
+       (`drmPrimeHandleToFD`), not GBM.  **A WebKit-side PRIME fallback is
+       impossible**: `tools/bench/gpu/gbmprime.c` shows
+       `gbm_bo_get_handle_for_plane(0) = 0xFFFFFFFF` and `drmPrimeHandleToFD =
+       -1` on the pvr GBM (only the omapdrm nodes export).  So the fix is a
+       Mesa/GBM pvr backend that exports dmabufs, or the open `powervr_sgx` stack
+       (SGX540 still wanted).  (Session 72,
+       report 275 §2.)
+
+367. **Stopping a running Kumo/WPE process wedges the pvr driver and freezes the
+       panel (with 0 DSI errors); a reboot clears it, and running Kumo can drive
+       GEM toward the TILER budget.**  After killing Kumo mid-render, dmesg
+       showed `PVR_K:(Error): FreeResourceByPtr: ERROR calling FreeResource
+       function`; the compositor and touch stayed alive (`S`, `wchan
+       LinuxEventObjectWait`, IRQ 118 still counting, panel `connected`,
+       backlight 255) but the image froze and new clients never appeared.  The
+       format-forced run also pushed GEM to **109–113 MiB** of the 128 MiB TILER
+       aperture.  Use a `reboot -f`, not a kill, to stop Kumo; a DSI
+       `NO PACKET_SENT` wedge can follow a GPU wedge plus a power-button press
+       and is cleared by a **second** `reboot -f` (trap-353 class).  (Session 72,
+       report 275 §4.)
 
 ## 3. Corrections to older reports
 
