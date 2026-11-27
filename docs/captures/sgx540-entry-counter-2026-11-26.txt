@@ -1,0 +1,806 @@
+The event entry is fetched EXACTLY ONCE — measured, boot 1 of session 76
+======================================================================
+Firmware `entry1` (wrapped md5 0dc7796d…), built from the current ukernel tree
+with UK_TICKLOG=1 UK_KICKLOG=1 UK_CCBLOG=1 **UK_ENTRYLOG=1**.  Unit rebooted,
+`dmesg`: `open microkernel entry1, interface 1.0, features 0x8`, `microkernel
+started`, both DRM nodes present.
+
+THE QUESTION THIS SETTLED
+--------------------------
+Two candidates were indistinguishable from the tick counter alone:
+  1. the core never re-dispatches the event program, or
+  2. the program is re-dispatched but exits immediately.
+A counter that increments **before the init test on every fetch** separates them:
+(1) leaves it at 1, (2) makes it climb while the tick counter stays 1.
+
+THE INSTRUMENT
+--------------
+`UK_ENTRYLOG=1` (ukernel.py, `ENTRY_LOG`), a new unconditional counter at the top
+of the `event` entry, right after `a.patch(17, "ctlblk")`:
+
+    ld.a.d r4, r17, #28 [moe]      ; ctlblk word 0x1c
+    wdf
+    inc32 r4                        ; 32-bit increment
+    st.a.d r17, #28, r4 [moe]
+    idf / wdf
+
+Plus a dispatch-pass snapshot of `EUR_CR_EVENT_STATUS` at ctlblk word 0x39.
+
+Placement is the subtle part and it is why this works: `r17` (the ctlblk base)
+is valid from the patch at the entry top, so a ctlblk-relative store is safe
+there; only stores through the derived `sa` attributes faulted at the entry top
+(session 74).  Session 74's word audit named **0x07 genuinely free**.
+
+**A mistake made and corrected while writing it** — twice, both worth recording:
+  * The first version used `st_sa(SA_SELF, 0x3b*4, 4)` and the assembler rejected
+    it: `immediate #236 doesn't fit its field`.  A store's offset field is narrow
+    (see `program()`'s rebasing note).  Cf. trap 386's warning in the other
+    direction — check the encoding, not only the word's ownership.
+  * The second version wrote the constant as `0x07 * 4` believing `ld.a.d` adds
+    `off * size`.  **It does not.**  `sgx-asm` takes a WORD index for `ld/st`,
+    so the counter landed at word 0x1c, not word 7.  The `imae r5,r5,#1,r17`
+    rebase in `st_sa` is what made the confusion invisible.  Measured, word 28
+    (`0x1c`) held the counter — which is how the error was caught, not by reading
+    the source.
+    **This cost a second time in the same session:** the `relaunch` debugfs node
+    opened with `READ_ONCE(ctl[0x07])` and reported "entry counter 0", which I
+    nearly read as "the launch did not run" — the same unit error, in the
+    *reader* this time.  It now reads word 0x1c too.  The lesson: the constant is
+    a word index produced by a byte-shaped expression (`0x07 * 4` evaluates to
+    0x1c and is then used as a word index), so **do not trust the numeral** —
+    parse the dump by index and cite the measured word.
+
+Verified before deploying, all four gates green:
+  * `test_emu.py`: 8/8 OK on both cores;
+  * `golden/check.py`: SGX545 stays byte-identical `83b5b0a7…`;
+  * the default SGX540 build (flag unset) is unchanged — the instrument is gated,
+    so the SGX545 golden gate cannot drift;
+  * `mkukfw.py --check` accepts the wrapped file and rejects the raw one.
+
+THE MEASUREMENT
+---------------
+`cat /sys/kernel/debug/dri/56000000.gpu/ctlblk`, parsed by word index:
+
+  uptime 44 s:   word 0x1c (entry) = 1   word 0x2c/0x2d (tick) = 1   word 0x39 = 0
+  uptime 140 s:  word 0x1c (entry) = 1   word 0x2c/0x2d (tick) = 1   word 0x39 = 0
+  kick entries (0x3d) = 0, empty-CCB exits (0x3e) = 0 at both samples.
+
+**96 seconds idle — about 96 000 timer periods — and the entry counter did not
+move.**  So the event program is fetched **once, at init, and never again**.
+
+Therefore **candidate 2 is dead**: the entry is not being re-entered and
+exiting.  It is not being fetched at all.
+
+The dispatch-pass STATUS snapshot is `0` and it is decisive on its own: that
+store sits on the dispatch path, *after* the `ui32InitStatus` test, and a boot's
+first pass takes the `init` branch before reaching it.  So the store has never
+executed once — there has never been a dispatch pass.
+
+WHAT THIS RULES OUT
+-------------------
+It closes the whole "the handler misbehaves" axis.  The previous sessions'
+questions — does the timer path work, does `kick` run, is the CCB read — were all
+downstream of a link that never closes.  `kick` counters 0 and `EVENT_STATUS` b29
+latched are now *consequences*, not independent findings: nothing fetches the
+program, so nothing can consume the bit.
+
+It also means the 1 kHz timer, `EVENT_PDS_ENABLE` carrying TIMER (`0x2204b00f`,
+b29 set) and `PDS_INFO` decoding correctly (`DM_EVENT`, attribute size 9) are
+all necessary but not sufficient: a configured source that fires is not the same
+as a *dispatch*.
+
+WHERE THE CHAIN BREAKS (the state of the static reading)
+-------------------------------------------------------
+The vendor's equivalent chain, for comparison:
+  * their `EUR_CR_EVENT_OTHER_PDS_EXEC` is derived from
+    **`psMicrokernelPDSInitPrimary1MemInfo`** (sgxinit.c:3638) — the *init*
+    program's PDS memory — and their PDS program at that address is the 220-word
+    **dispatcher** (`eventhandler_pds.h`), which on every fetch reads ir0/ir1,
+    publishes `INPUT_IR0/IR1_PA_DEST`, and re-enters the USE handler through
+    `movs doutu, INPUT_GENERIC_DOUTU0/1/2`.
+  * ours points at a **4-word launch stub** (`pvrsgx_pds_entry`,
+    pvrsgx_pds.c:99-105) whose only job is one `MOVS→DOUTU` into the USSE entry,
+    and it is emitted *by* the init program rather than being a resident
+    dispatcher.
+So the two designs differ in where re-dispatch comes from, and the measurement
+says ours has none.  **Not yet established:** whether the core declines to fetch
+the PDS program at all, or fetches the stub and the stub's single DOUTU cannot
+re-enter.  Distinguishing those needs a target change in the stub (point its
+DOUTU at a differently-instrumented label), which is the next experiment.
+
+A VOID COMPARISON, WITHDRAWN IN PLACE
+--------------------------------------
+I counted `emitpds` in our image versus the vendor's with `sgx-disasm` and got
+0 and 0, and briefly read "the vendor image has none either" as meaningful.
+It is not: **this repo's assembler does not implement the mnemonic at all**
+(`sgx-asm`: `unknown mnemonic 'emitpds.tasks.taske'`; it only has a plain
+`emit`, which rejects `emit.tasks.taske`).  Both counts are 0 because neither
+image can express it, so the comparison carries no information.  A tool's
+silence is not evidence about the object — the same lesson as trap 397.
+
+CAVEAT THAT MATTERS FOR ATTRIBUTION
+-----------------------------------
+`tick2` (`7b44b33a…`, the previous deployed image) **cannot be reproduced from
+the current source**, and neither can session 75's `kick1`/`tick1`: the ukernel
+tree carries this port's uncommitted work (378 lines in `cores/sgx540.py`, 251
+in `ukernel.py`, including the entire `SINGLE_CONTEXT` path that pristine HEAD
+`95f78ca` does not have — `git show HEAD:ukernel/ukernel.py | grep -c
+SINGLE_CONTEXT` = 0).  `build.py` also now derives `UK_FEATURES` from
+`ukernel.SINGLE_CONTEXT` instead of defaulting to 2.
+
+So `entry1` differs from `tick2` by more than the counter.  The *conclusion*
+above is unaffected — the entry counter is new and unambiguous, and it did not
+move — but a strictly single-variable comparison needs the drift resolved first.
+
+REVERT
+------
+`tick2` preserved on the unit as `sgx540_ukernel.bin.tick2` (`7b44b33a…`);
+`entry1` raw and wrapped are beside it.  Restoring is a `cp` + `reboot -f`.
+
+NEXT EXPERIMENT, MEASURED BUT NOT YET UNDERSTOOD: the launch stub's words
+--------------------------------------------------------------------------
+The vendor ships the equivalent of our launch stub as generated source too:
+`eurasiacon/binary2_540_omap4430_android_debug/target/intermediates/
+sgxinit_primary1_pds/sgxinit_primary1_pds.h`
+
+    #define PDS_UKERNEL_INIT_PRIM1_DATA_SEGMENT_SIZE (32UL)
+    static const IMG_UINT32 g_pui32PDSUKERNEL_INIT_PRIM1[11] = {
+    0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x170004E0, 0x07030305, 0xAF000000,
+    };
+    SetINPUT_DOUTU0 -> [0]   SetINPUT_DOUTU1 -> [1]   SetINPUT_DOUTU2 -> [4]
+
+and `services4/srvinit/devices/sgx/sgxinit_primary.pds.asm` is its source:
+`movs doutu, INPUT_DOUTU0, INPUT_DOUTU1, INPUT_DOUTU2; halt;` — two words of
+data, one MOVS, one HALT, structurally the same shape as ours.
+
+The live comparison (`pds` debugfs node, this boot):
+
+    our PDS0 stub        vendor init prim1
+    [0] 0x0020000f       [8]  0x170004E0
+    [1] 0x04000000       [9]  0x07030305      <- MOVS
+    [2] 0x00000001       [10] 0xAF000000      <- HALT
+    [3] 0x00000000
+    [4] 0x07000305       <- MOVS
+    [5] 0xaf000000       <- HALT
+
+(Fixed up for the offset: the vendor's data occupies [0]..[7] and its code
+starts at [8]; ours has a 4-word segment so its code starts at [4].  Our MOVS
+`0x07000305` is byte-identical to the vendor's `0x07030305` in every field
+except bits 13-17, where ours is 0 and theirs is 0x303 — i.e. the DOUTU word
+SELECTORS differ.  That is the only textual difference between the two stubs.)
+
+**This is a HYPOTHESIS, not a finding.**  Our computed `pvrsgx_pds_movs()` for
+sources `(DS0[0], DS0[1], DS1[0], DS0[0])` evaluates to exactly `0x07000305`,
+which matches the deployed image, so the drift is not in the assembler path.
+What differs is which data words the MOVS selects and what our DOUTU words
+carry: ours deposits `DS0[0]=0x0020000f`, `DS0[1]=0x04000000`,
+`DS1[0]=0x00000001`, while the vendor's `0x170004E0` has the DOUTU0 exec-address
+shape (`SetUSEExecutionAddress` in hwdefs/usecodegen.h: base register in bits
+20-23, address in bits 4-19) and its `0x00000000` data words are zero.
+
+**Not claimed:** what the selector bits mean, whether `0x170004E0` should be our
+value, or that this is why nothing re-dispatches.  I tried to decode it by hand
+twice this session and got it wrong twice — once treating `0x03000305` as our
+emission when the constant is `PDS_CC_ALWAYS = 7`, and once reading the wrong
+array index.  The honest state: two stubs of the same shape whose words differ,
+and the difference is confined to the MOVS selectors and the data values.
+
+**The experiment for the next boot:** make the stub's data words match the
+vendor's shape — `SetUSEExecutionAddress(kernel_code.base, ukernel + e,
+kernel_code.base, SGX_KERNEL_USE_CODE_BASE_INDEX)` in word 0, zero data, and the
+selectors the vendor uses — then read the entry counter.  If it climbs, the stub
+was the reason the program never re-enters.  If it stays 1, the core is not
+fetching the PDS program at all and the fault is host-side, in how the launch is
+set up.
+
+THE KICK TEST: the core accepts kicks and STILL never re-fetches the program
+---------------------------------------------------------------------------
+Same boot, same firmware (`entry1`), no rebuild.  The uAPI suite submits host
+kicks; a kick writes `EUR_CR_EVENT_KICK` (the doorbell), which is a *different*
+trigger from the timer, so this separates "only the timer fails to trigger" from
+"nothing triggers".
+
+    before:  resets 8   issued 8    entry counter (ctlblk 0x07) = 1
+    after :  resets 16  issued 16   entry counter (ctlblk 0x07) = 1
+    (`/tmp/powervr_sgx_test` -> "25/50 passed", the 8 resets are the trap-388
+    timeout signature, as always here.)
+
+**Eight host kicks provably reached the core — the reset and issue counters
+moved — and the event program was fetched ZERO additional times.**  The counter
+is new and unambiguous, and it did not move by one.
+
+So it is not the trigger type.  Not the timer, not the doorbell: **nothing
+re-fetches the PDS event program after the launch.**  `EVENT_PDS_ENABLE` has
+every source we care about (TIMER `0x2204b00f`), `EVENT_PDS_EXEC` resolves
+exactly onto the PDS0 stub, and the kick path demonstrably runs.  The remaining
+hypotheses are now down to two, and they are both about the *launch*, not the
+triggers:
+  (a) the launch stub never establishes a resident, re-fetchable PDS program —
+      it issues one `MOVS→DOUTU` and `HALT`s, so once init has run there is
+      nothing left for the core to fetch; or
+  (b) the core fetches it but its single DOUTU cannot re-enter (which the entry
+      counter just disproved, since a fetch would increment it).
+(b) is dead by this measurement.  That leaves (a): **the stub is a one-shot
+launch, not a resident dispatcher**, which is exactly the structural difference
+from the vendor's 220-word `eventhandler.pds.asm` that re-enters through
+`movs doutu, INPUT_GENERIC_DOUTU0/1/2` on every fetch.
+
+This also re-explains the launch: `EVENT_PDS_EXEC` is derived from the *init*
+program's PDS memory and emitted BY the init program (sgxinit.c:3638), so the
+program at that address is expected to persist and be re-fetched.  Ours does not
+persist past its own HALT.
+
+NEXT: make the PDS program resident — either replace the stub with a real
+dispatcher in our own design, or have the entry re-issue `emitpds` (the vendor's
+`EmitLoopBack`, sgx_utils.asm:2206) so a fetch is always pending.  The second is
+the smaller change and is now the recommendation.
+
+WHY "RE-ISSUE emitpds" WAS WRONG, AND WHAT THE VENDOR'S LAUNCH ACTUALLY IS
+--------------------------------------------------------------------------
+I recorded above that the small fix would be "have the entry re-issue `emitpds`
+(the vendor's EmitLoopBack)".  **That is not buildable and I withdraw it.**
+
+  * The instruction table is `mesa/src/sgx/isa/sgx.xml` (4287 lines) and it
+    defines exactly one emit form, `emit` (TGT over `#emit-tgt` = .t0-.t3).
+    `grep -c emitpds` over the whole vendored Mesa SGX ISA source is **0**.
+  * `sgx-asm` rejects `emitpds` AND rejects `emit.t2 … [f12 f13 imm=…]` — the
+    form `sgx-disasm` prints for the vendor's own bytes does not round-trip
+    through the assembler this port builds with.
+  So our toolchain cannot emit whatever `EmitLoopBack` uses, and a firmware
+  change cannot express it today.  That is a toolchain limitation to know about,
+  not a work item to start blind.
+
+**The vendor's launch as a whole** (sgxinit.c `ScriptWriteSGXReg` set): it writes
+`EUR_CR_DMS_CTRL`, `EUR_CR_PDS`, `EUR_CR_PDS_DMS_CTRL2`, `EUR_CR_USE_G0/G1`,
+`EUR_CR_USE_CTRL`, `EUR_CR_USE_CODE_BASE(i)`, `EUR_CR_PDS_EXEC_BASE`,
+`EUR_CR_USE_MOE`, `EUR_CR_EVENT_KICKER`, the three `EVENT_OTHER_PDS_*`,
+`EVENT_PDS_ENABLE`, then `EUR_CR_DMS_AGE = ENABLE | MAX_DMS_AGE`.
+
+**`EUR_CR_DMS_CTRL` we never write at all** (grep: no `dms_ctrl` in the driver).
+The vendor's value is derived at sgxinit.c:4492:
+
+    ui32DefaultDMSCtrl = ui32MaxEDMTasks   << MAX_NUM_EDM_TASKS_SHIFT    (16)
+                       | ui32MaxVertexTasks << MAX_NUM_VERTEX_TASKS_SHIFT (10)
+                       | ui32MaxPixelTasks  << MAX_NUM_PIXEL_TASKS_SHIFT  (5)
+
+with rev-120 counts 63 / 32 / 32 (`FIX_HW_BRN_23632`: "At least 33 EDM tasks is
+needed"), i.e. **0x003f8400**.  It is the DMS's EDM/vertex/pixel task-count
+control — plausibly load-bearing for whether the EDM can be scheduled at all —
+and it is not in our `status` dump, so its live value is unknown here.
+
+**Two more facts recorded because they will save time later:**
+  * the vendor's own code derives `EVENT_OTHER_PDS_EXEC` from **two different
+    allocations** depending on the path: sgxinit.c:2814 (inside `LoaduKernel`)
+    uses `psMicrokernelPDSEventMemInfo` — the 220-word **event dispatcher** —
+    while sgxinit.c:3634 (inside `SetupuKernel`) uses
+    `psMicrokernelPDSInitPrimary1MemInfo` — the **init prim1** stub — and each
+    also picks its own `DATA_SEGMENT_SIZE` (144 vs 32).  They disagree inside
+    the vendor's own tree; we point at the event program's memory, which matches
+    the first.  So the address is probably not the fault.
+  * `ccb_issued` is advanced **host-side** in `pvrsgx_ccb.c:93`, before anything
+    reaches the microkernel.  My earlier sentence "the kicks provably reached the
+    core (issued 8 -> 16)" therefore over-claims; `resets` is the honest part.
+
+NEXT (one boot, one variable): dump `EUR_CR_DMS_CTRL` and program the vendor's
+0x003f8400 if it differs.  Our driver has never written it.
+
+DMS_CTRL WAS A REAL DEFECT AND IS NOW FIXED — AND IT IS NOT THE DISPATCH BLOCKER
+--------------------------------------------------------------------------------
+One boot, one variable.  `/sys/kernel/debug/dri/56000000.gpu/status`:
+
+    before:  DMS_CTRL 0x0a74 0x00208200   (the reset default; the driver never wrote it)
+    after :  DMS_CTRL 0x0a74 0x003f8200   (the vendor's launch value)
+
+Decoded with the SGX540's own masks (b16-21 EDM, b10-15 vertex, b4-9 pixel):
+**EDM 32 -> 63, vertex 32, pixel 32.**  This is `FIX_HW_BRN_23632`, which IS in
+the rev-120 errata and whose vendor comment is "At least 33 EDM tasks is needed
+to fix BRN23632".  The driver had never written `EUR_CR_DMS_CTRL` at all, so the
+core was configured with the reset default.  That is a real, source-backed defect
+and it is fixed (`pvrsgx_fw.c`, per-core via `.dms_ctrl`, 0 on the SGX545/530 so
+their behaviour is unchanged).
+
+**It did not change the symptom.**  The entry counter stayed **1** across two
+samples 25 s apart, the tick counter 1, the dispatch-pass STATUS snapshot 0.  So
+the EDM task count is not what gates the fetch.  Recorded so no one re-runs this.
+
+WHAT THAT LEAVES, AND WHY I AM NOT GUESSING FURTHER TONIGHT
+-----------------------------------------------------------
+Confirmed good by measurement or by the vendor's own derivation and now written:
+`EVENT_PDS_ENABLE` (TIMER set), `EVENT_PDS_EXEC` (resolves onto our PDS0 stub),
+`EVENT_PDS_DATA`, `EVENT_PDS_INFO`, `EUR_CR_PDS`, `CLKGATECTL` (BRN-30852),
+`EVENT_HOST_ENABLE` (SW_EVENT only), the OCP wrapper gate, the DMS task counts.
+
+Written but not confirmed by *our* source: `EUR_CR_DMS_AGE`, `EUR_CR_PDS_DMS_CTRL2`,
+`EUR_CR_USE_MOE`, `EUR_CR_USE_CTRL`, `EUR_CR_USE_SPRV`, `USE_SECURITY` -- the
+vendor writes all of these at launch, and whether this driver does is unchecked.
+`EUR_CR_DMS_AGE` in particular is written by the vendor as
+`DMS_AGE_ENABLE | PVRSRV_SGX_MAX_DMS_AGE` and **`PVRSRV_SGX_MAX_DMS_AGE` is not
+defined anywhere in the DDK 1.8 drop** (grepped every header), so that value
+cannot be derived from this source and needs the 1.17 header or a capture.
+
+Also unexamined, and the honest leader now: the vendor emits the PDS task with
+`emitpds.tasks.taske` from the **USSE** side, and this toolchain cannot encode
+that mnemonic at all (sgx.xml has only `emit`).  If the PDS program is fetched
+only while a PDS task is *pending*, and nothing in our design ever emits one,
+then no amount of host register configuration can produce a fetch.  That is a
+one-question test against a working system: does the core show any PDS task
+pending / does `EUR_CR_DMS` status move, on the reference OS.
+
+**Recommendation for the next session:** stop tuning host registers.  The
+measurements say the host side is now configured as well as the vendor's public
+source allows, and the program is still never fetched.  The remaining unknown is
+the *task emission* mechanism, which is USSE-side and which our assembler cannot
+yet express.  Either extend the toolchain to `emitpds` (the ISA XML describes
+`emit` with a TGT field, so the encoding exists -- the mnemonic does not), or
+capture `EUR_CR_DMS`/loopback behaviour from the reference OS.
+
+CORRECTION: the PDS-task emit IS expressible — my "cannot encode it" was wrong
+----------------------------------------------------------------------------
+I wrote above that this toolchain cannot emit `emitpds.tasks.taske`.  **Wrong,
+and the error is mine, not the tool's.**  `sgx-asm` reads its input on **stdin
+with `-b`**, exactly as `ukernel/build.py` invokes it; I was passing a file
+argument, which makes it exit 1 regardless of the instruction.
+
+    $ echo 'emit.t2 r0, r2, r4 [f12 f13 imm=3138]' | sgx-asm -b -c sgx540
+    00800104 fb20b188            rc=0
+
+and `sgx-disasm` reads those exact bytes back as
+`emit.t2 r0, r2, r4 [f12 f13 imm=3138]` — the same text.  Compare the vendor's
+own instruction at the same kind of site in `ukernel.bin`: sgx-disasm prints
+`emit.t2 r0, r2, r4 [f12 f13 imm=3138]`.  **Byte-identical.**  So the encoding
+has always been available to us; `.t2` is the PDS target (`#emit-tgt` = .t0-.t3
+in `sgx.xml`) and the 14-bit immediate `EIMM` is the task payload the vendor
+builds as `EURASIA_PDSSB3_USEDATAMASTER_EVENT | PDSSEQDEPENDENCY |
+(1 << USEINSTANCECOUNT_SHIFT)`.
+
+**What is actually missing is the emission, not the assembler**: our USSE entry
+never issues an `emit.t*`, so no PDS task is ever made pending for the core to
+fetch.  That is now the concrete next experiment, and it is a firmware-side
+change we can make.
+
+Third time this session that I read a tool's silence as evidence about the
+object (cf. the `emitpds` 0-vs-0 count and trap 397).  The general lesson, worth
+more than this bug: **a non-zero exit or a zero count from a tool is evidence
+about the invocation first, the object second.**  Check the invocation once,
+explicitly, before writing a conclusion.
+
+WHAT "byte-identical" BUYS
+--------------------------
+Because the assembler reproduces the vendor's instruction exactly, the
+vendor's 220-word dispatcher is no longer a black box: `eventhandler_pds.asm`
+(source) + `eventhandler_pds.h` (compiled words + patch indices) + a working
+assembler means the PDS-side dispatch program can be written in our own design
+with the vendor's semantics as the reference, and checked word-for-word against
+theirs where we choose to mirror it.
+
+THE NEXT EXPERIMENT, SPELLED OUT (so it is a copy-paste job)
+-------------------------------------------------------------
+Vendor site: `sgx_utils.asm:2206`, inside `EmitLoopBack` — the only PDS-task
+emit in the whole drop:
+
+    emitpds.tasks.taske #0, r20, r18, r16, #(EURASIA_PDSSB3_USEDATAMASTER_EVENT |
+                                              EURASIA_PDSSB3_PDSSEQDEPENDENCY |
+                                              (1 << EURASIA_PDSSB3_USEINSTANCECOUNT_SHIFT));
+
+with, from the resolved preproc for THIS part
+(`…/intermediates/ukernel/sgx_utils.asm.preproc`), the **non-MULTITHREADED**
+branch taken:
+
+    #((3) | (0x00000800U) | (1 << (6)))      =  0x843
+
+  * `EURASIA_PDSSB3_USEDATAMASTER_EVENT` = 3 (unshifted; shift 0, sgxdefs.h:7308)
+  * `EURASIA_PDSSB3_PDSSEQDEPENDENCY`    = 0x800 (sgxdefs.h:7322)
+  * `EURASIA_PDSSB3_USEINSTANCECOUNT_SHIFT` = 6 (sgxdefs.h:7318)
+  * operands: `r20` = the PDS const size (`ELB_PDSConstSize`, patched from
+    `#EURASIA_PDS_DOUTA1_AO_SHIFT` data), `r18` = the PDS device address
+    (`ELB_PDSDevAddr`), `r16` = the loopback flag word.
+    Both `r20`/`r18` are `limm` placeholders the *host* patches
+    (`PDSUKERNEL_LBSetINPUT_*`, sgxinit.c:2629) — so the host must fill them,
+    which is a second thing our loader does not do.
+
+Our assembler's accepted syntax for it, verified:
+
+    emit.t2 r20, r18, r16 [imm=0x843]
+
+(3 sources + the 14-bit `EIMM`; the vendor's leading `#0` operand does not
+appear in the form our assembler accepts, so **the mapping between the vendor's
+five operands and our three needs one experiment to pin down** — compare
+`sgx-disasm` output at `ukernel.bin` offset `0x43d0+` (`UKERNEL_EMITLOOPBACK`).)
+
+**Experiment:** add that emit to our event entry's timer path, rebuild, and read
+the entry counter.  Climbs -> the PDS fetch needs a pending task and this is the
+mechanism.  Stays 1 -> the emit is not the trigger, and the next question is
+whether the core ever fetches a PDS program at all, which needs an oracle
+capture (`EUR_CR_DMS` state on the reference OS).
+
+THE PDS-TASK EMIT EXPERIMENT: BUILT, RAN, AND IT CANNOT WORK AS PLACED
+-----------------------------------------------------------------------
+Built `UK_EMITPDS=1` (firmware `emit1`, wrapped md5 `b91e25b4…`) with the
+vendor's exact emit on the timer path:
+
+    emit.t2 r20, r18, r16 [f12 f13 imm=2115]     ; 2115 = 0x843, verified
+
+plus loader patches for its operands (`pds_size` -> 6, `pds_addr` -> 7, in the
+`ukfw_patch_value` enum *before* `UKFW_PDTABLE`).  Deployed, the driver reports
+`open microkernel emit1, interface 1.0, features 0x8`, microkernel started.
+
+**Result: the entry counter still reads 1, and the register dump shows exactly
+why this build cannot answer the question.**  `EVENT_PDS_EXEC 0x00803a70`,
+`DMS_CTRL 0x003f8200`, `DMS_AGE 0`, and word 0x1c (entry) 1 / 0x2c (tick) 1.
+
+**The error is mine, in the placement:** the emit is inside the event entry's
+*timer path*, and the timer path is only reached by an event that already fetched
+the entry.  So the emit can only run *after* a fetch — it is downstream of the
+very thing it was meant to cause.  It is circular, and no configuration of it can
+produce the first fetch.
+
+**What that tells us anyway, and it is useful:** with `edm_init=1` the *host*
+writes `ui32InitStatus = INIT_COMPLETE` (`pvrsgx_fw.c:775`), so on any later
+fetch the entry must take the non-init branch — the branch that increments the
+counter a second time and reaches the timer path.  The counter is **1**.  So
+there has been exactly one fetch and it took the init branch.  Confirmed.
+
+**The corrected question, which is sharper than the one I started with:**
+*does a PDS program keep running of its own accord once launched, or does it run
+once and stop until re-emitted?*  Everything hinges on that, and it is not
+answerable from the GPL source (which is why I keep landing on it).
+  * If PDS programs re-run continuously, ours would re-enter the entry every pass
+    and the counter would climb — it does not.  So either they do not re-run, or
+    they re-run and stop somewhere the counter cannot see.
+  * If they run once, then the re-trigger must come from the **last thing the
+    program does** — ours `HALT`s — which is exactly what the vendor's
+    `EventHandler` does *not* do at the end of a kick: it re-enters via
+    `movs doutu, …` and only a bare DOUTU+HALT stub is a one-shot.
+
+**The next experiment must therefore satisfy: at the last instruction of the
+program, install the mechanism that re-fetches it** — i.e. the emit cannot live
+in the entry, it must be the tail of the PDS program itself (a PDS-level
+`emitpds`), or the host must re-launch.  The latter is testable immediately and
+cheaply: after boot, re-arm the launch from the host side and see whether the
+entry counter increments.  If it does, the whole question becomes "who re-arms
+it" and the answer is a host-side or PDS-side periodic re-launch, not a USSE
+entry-path change.
+
+A NOTE ON WHAT WAS ALREADY RIGHT
+---------------------------------
+Two facts this build did add, both measured: the driver accepts a 4-patch image
+and applies all of them (`EB 0x1d0 -> 6`, `0x1d8 -> 7` in range and accepted
+after the enum fix), and the emit encodes as the vendor's own instruction.  Also
+a real driver bug found and fixed on the way: `ukfw_parse()` range-checks a patch
+value against `> UKFW_PDTABLE`, so **any new patch value must be inserted BEFORE
+`UKFW_PDTABLE` in the enum** — appending it makes the image load fail with
+"bad entry or patch table" and the GPU never binds (`/dev/dri` shows card0 only).
+
+THE RE-ARM TEST: re-issuing the launch kick does NOT re-fetch — measured
+-----------------------------------------------------------------------
+New `relaunch` debugfs node (pvrsgx_debugfs.c): it reads the entry counter,
+writes the launch's own kick register exactly as `pvrsgx_fw_start()` does
+(`cr->event_kick2`, or `SGX_CR_EVENT_KICK` when the core has no KICK2), waits
+50 ms and reads the counter again.
+
+    entry counter before     0x00000001
+    EVENT_PDS_EXEC           0x00803a70
+    entry counter after      0x00000001   (unchanged)
+    BIF_INT_STAT             0x00008000   (FLUSH_COMPLETE, no fault)
+    EVENT_STATUS             0x20000000
+
+**Re-arming the launch from the host does not re-fetch the event program.**  So
+`EVENT_KICK2` is a *launch-only* trigger: it starts the EDM once and cannot
+re-run it.  That is consistent with the vendor deriving the launch address from
+the init program's memory (`sgxinit.c:3638`) — the kick starts the init program,
+and the event program is entered as a consequence of that launch, not by the
+kick.
+
+Combined with the emit1 result, the picture is now:
+  * the entry is fetched once, at launch (`EVENT_KICK2`), and the init branch
+    runs — the counter proves exactly one fetch;
+  * host kicks (`EVENT_KICK`, eight of them, `resets 8 -> 16`) do NOT re-fetch;
+  * re-issuing `EVENT_KICK2` does NOT re-fetch;
+  * a timer tick cannot even reach the emit, because the emit lives inside the
+    entry (the emit1 experiment's design error, recorded above).
+
+**So there are now exactly two live possibilities, and both are PDS-side:**
+  (a) a PDS program runs **once** and must be re-emitted by a PDS-level
+      `emitpds` — which our program never issues and cannot issue from where
+      `UK_EMITPDS` placed it; or
+  (b) a PDS program **re-runs continuously**, in which case ours does re-run and
+      stops before the counter — i.e. the second fetch hops to code that is not
+      the entry (a wrong `EVENT_PDS_EXEC` target, or the stub's DOUTU landing
+      somewhere else).
+(b) is testable without a working emit: make the entry's **very first**
+instruction the counter store (before `phas`, before the ctlblk patch) and see
+whether it climbs.  If it does, the program does re-run and the fault is where
+it re-enters; if it still reads 1, (a) holds and the answer is a PDS-level emit.
+
+**Second occurrence of the unit trap, and it nearly cost a wrong conclusion:**
+the `relaunch` node first opened with `READ_ONCE(ctl[0x07])` and printed
+"entry counter 0" — which reads as "the launch never ran".  The counter is at
+word **0x1c**.  Same error as the firmware constant (`0x07 * 4` used as a word
+index).  Fixed by reading 0x1c, verified against the parsed ctlblk dump, and the
+node now agrees with the instrument.
+
+DECISIVE: the counter on the program's FIRST instruction still reads 1
+----------------------------------------------------------------------
+`UK_ENTRYFIRST=1` (firmware `first2`, wrapped md5 `c3abcebe…`) moves the counter
+to the first thing the program does — after the ctlblk patch and before the
+`phas`, before the init dispatch, before anything that can fail:
+
+    limm r17, #<ctlblk>          ; the loader's patch
+    ld.a.d r4, r17, #28          ; <- the counter, first real instruction
+    ...inc32 / st.a.d / idf / wdf...
+    phas.i #0, #0 [wait=7]
+    ...
+
+Measured after the reboot, twice, 22 s apart at uptime 72 s:
+
+    word 0x1c (entry) = 1    word 0x2c/0x2d (tick) = 1    word 0x39 = 0
+
+**It still reads 1.**  So the PDS event program is fetched exactly once, at
+launch, and never again — and now that is not an inference from where a store
+sits, it is a count taken on the first instruction the program executes.
+Candidate (b) from the previous section — "the program re-runs and stops
+somewhere the counter cannot see" — is **dead**: there is no second fetch dying
+anywhere, there is no second fetch at all.
+
+**Therefore a PDS program runs ONCE and must be re-emitted**, and the emit cannot
+live inside the event entry: the entry is only reached *by* the fetch the emit is
+supposed to cause (the `emit1` build's design error).  The re-emit has to come
+from one of exactly two places:
+  * the USSE side, at the end of the task that the PDS program DOUTUs into —
+    which is where the vendor puts it (`EmitLoopBack`, and its `EventHandler`
+    re-enters through `movs doutu, …` rather than ending on a bare HALT); or
+  * a PDS-level loop in the program itself, i.e. the program must DOUTU back into
+    itself or into a dispatcher instead of `halt`ing.
+
+Our PDS0 stub is `data, data, data, MOVS→DOUTU, HALT` — a one-shot by
+construction.  The vendor's is the 220-word dispatcher, which is a one-shot too
+on any single entry but is re-entered by the emit.  **So the fix is not in the
+stub's contents; it is that nothing re-emits.**
+
+WHAT THE WHOLE SESSION'S GPU WORK NOW SAYS, IN ORDER
+----------------------------------------------------
+1. The SGX interrupt reaches the CPU (OCP wrapper gate opened; storm was our own
+   EVENT_HOST_ENABLE TIMER bit).
+2. The event entry is fetched exactly once — now proven from the first
+   instruction, through 96 s idle, eight host kicks, and a host re-arm of the
+   launch kick.
+3. Eight host kicks reach the core (`resets 8 -> 16`) and do not re-fetch.
+4. Re-issuing the launch kick does not re-fetch (`relaunch` node).
+5. The DMS task count was wrong (32 vs the vendor's 63, BRN-23632) and is fixed;
+   it was not the blocker.
+6. Every host-side register the vendor's public source programs is now either
+   confirmed correct by measurement or written per its derivation.
+
+**The single remaining question is "who re-emits", and it is answerable from
+outside the GPL source only by watching the reference OS, or from inside it by
+making our USSE task end with an emit instead of a HALT.**  The second is a real
+piece of microkernel work — and it is now precisely specified, which it was not
+when this session started.
+
+
+##############################################################################
+## MAJOR CORRECTION, and it invalidates the entry counts above: the counter was
+## sitting on a control-block word the microkernel itself writes.
+##############################################################################
+
+`CLEANUP_DEFER_CT = 0x1c` (cores/sgx540.py:65) and **init_set clears it**
+(ukernel.py, "cleanup defer counter clear"), as does the cleanup path twice
+more.  My counter constant was written `0x07 * 4` and used as a **word index**,
+so it landed on word **0x1c** -- i.e. on CLEANUP_DEFER_CT.  Every "entry counter
+= 1" reading in this capture is therefore **meaningless**: it was reading a word
+the microkernel zeroes during the same init pass that incremented it.
+
+How it was caught: the re-emit build booted with the counter at **0** and the
+tick counter at 0, which is impossible for a program that runs (SC_VERSION
+`0x10000` proves init ran).  A systematic scan of every ctlblk constant the core
+defines that is reached through `r17` then settled it.
+
+**A word is free only if no store anywhere touches it** -- trap 386's rule, in its
+exact form.  The session-74 audit named 0x07 free, and 0x07 *is* free; the bug
+was that my numeral did not mean 0x07.
+
+### The corrected measurement (firmware `fix1`, counter on word 0x07)
+
+    entry(0x07) = 2      tick(0x2c) = 1      SC_VERSION(0x18) = 0x10000
+
+Stable across two samples 20 s apart.  **The event program is fetched TWICE, not
+once**, and the tick counter is 1 -- exactly "one init pass plus one dispatch
+pass".  So the EDM *does* re-fetch the program after launch, and the timer path
+*is* reached once.  The previous conclusion in this file ("fetched exactly once,
+never again, by any route") is **withdrawn**; so is the inference drawn from it.
+
+This also means `kick`/empty-CCB counters (0x3d/0x3e) and the STATUS snapshot
+(0x39) were all read from the same dump, and were 0 because the dispatch pass
+that ran was the timer's, not a kick's -- consistent, but they proved less than
+they appeared to.
+
+### What is still true from above
+
+The *hardware* observations are unaffected: eight host kicks move `resets`
+8 -> 16; re-issuing `EVENT_KICK2` from the host does not increase the count;
+`EUR_CR_DMS_CTRL` was unprogrammed and is now the vendor's `0x003f8200`;
+`BIF_INT_STAT` reads `FLUSH_COMPLETE` with no fault throughout.
+
+### The re-emit experiment (`rearm5`)
+
+The task-end one-shot emit is now correct in shape and the EDM **starts cleanly**
+with it (`EDM init: event status 0x20000000, BIF int 0x8000`, `microkernel
+started`, no fault) -- after two placement bugs were fixed the hard way:
+
+  * uk_rearm first fired the emit **inside the init task** (init_set ends with
+    `a.end()`), and the launch faulted: `microkernel did not start (EDM launch
+    faulted: BIF int 0xe000 fault 0xfef4000)`, probe `-5`, no `card1`.  That is
+    the same class as the session-74 "store at the entry top faults": the EDM
+    must not be re-emitted while it is still starting.
+  * a `self.no_rearm` suppression was then tried and did not work as intended
+    (traced: the *second* `end()` call saw the flag, not the first), so it was
+    dropped in favour of the one-shot budget alone -- which is the correct guard
+    anyway: the first task end to see 1 consumes it and emits, the rest see 0.
+
+Measured with it: `entry = 1, tick = 0, rearm_flag(0x3f) = 0` -- the flag was
+consumed, yet the count went **down** from the baseline's 2, which is not yet
+explained and must be resolved before this means anything.  Two candidate
+readings, both unverified: the one-shot was consumed by *init's* end (so the emit
+happened at the wrong task again), or word 0x3f is not as free as the scan says.
+
+**Do not continue the re-emit work from this file's earlier conclusions.**  The
+next session should start by re-measuring the baseline (`fix1`) and watching
+`entry` and `tick` together across a longer window, now that the instrument
+points at a word nothing else writes.
+
+THE RE-EMIT, ROUND THREE: gate fixed, flag armed, never consumed
+----------------------------------------------------------------
+Three bugs of mine, in sequence, each caught by measurement:
+
+1. **The emit's operands were never patched.**  `end()` described `r20`/`r18` as
+   loader-patched limms but the patch calls lived in the *timer path* version, so
+   the `rearm5` image shipped with the `0xdbeef` sentinels.  Manifest proof:
+   `rearm5` = {ctlblk, pdtable}; the `emit1` build = {ctlblk, pdtable, pds_size,
+   pds_addr}.  Patches are now emitted from the same place as the emit.
+2. **The one-shot was consumed by `init_set`'s own `a.end()`** — the first end to
+   run — so the emit fired while the EDM was still starting.  The direct evidence
+   is the earlier `rearm2` boot: *"microkernel did not start (EDM launch faulted:
+   BIF int 0xe000 fault 0xfef4000, event status 0x20000000)"*, probe `-5`, no
+   `card1`.
+3. **The init gate itself had the unit bug, for the third time.**  I wrote
+   `SA_HOSTCTL * 4`, but `SA_HOSTCTL` is a WORD index (1) like every other use in
+   the file -- so the gate tested word 4, an unrelated word.  Fixed to `#1`.
+
+With all three fixed (`rearm8`, wrapped md5 `8be79f47…`) the build boots
+normally and the state is clean:
+
+    EDM init: event status 0x20000000, BIF int 0x8000       (no fault)
+    entry(0x07) = 2    tick(0x2c) = 1    SC_VERSION = 0x10000
+    REARM flag(0x3f) = **1**      kick(0x3d) = 0   empty(0x3e) = 0
+    resets 0, uptime 94 s, unchanged over two samples
+
+**The flag stays armed: no task end runs after init on an idle boot.**  The
+baseline behaviour is intact (entry 2 / tick 1, identical to `fix1` without the
+re-emit), and the gate provably excludes init's end.  So the emit is correctly
+placed and correctly gated -- but it cannot fire until something dispatches a
+task whose end is reachable.
+
+**That is the honest end state of the re-emit attempt this session.**  It is now
+a matter of finding which task end runs in a live system (i.e. submit kicks and
+watch the flag), not of fixing placement.  Concretely, the next boot should:
+submit one host kick, then read `REARM flag` -- if it goes 1 -> 0 and `entry`
+rises above 2, the emit works and the re-fetch question is answered.
+
+THREE OCCURRENCES OF ONE UNIT BUG, AND THE RULE THAT CATCHES IT
+--------------------------------------------------------------
+`0x07 * 4` used as a word index (→ word 0x1c); `SA_HOSTCTL * 4` (→ word 4);
+both because `ld.a.d`/`st.a.d` immediates and the `sa` word selector are WORD
+indices, while several nearby expressions are byte offsets.  The rule to apply
+before writing any of these: **read an existing, working use of the same
+constant in the same file and copy its form exactly** -- every other `SA_HOSTCTL`
+use says `#{SA_HOSTCTL}`, unscaled, which is what made the odd one out findable.
+
+DEFINITIVE: eight host kicks leave the armed flag untouched -- no task end runs
+-----------------------------------------------------------------------------
+`rearm8` deployed, then eight host kicks submitted through the uAPI suite
+(`resets` moved, so the kicks reached the core):
+
+    before kicks:  entry=2  tick=1  REARM flag=1  kick=0  empty=0
+    after kicks :  entry=2  tick=1  REARM flag=1  kick=0  empty=0
+
+**Nothing changed.**  Not the entry count, not the tick, and the flag is still
+armed -- so **no `a.end()` executed at all** during eight kicks.  The emit is
+correctly placed and correctly gated, but it has no opportunity to fire in this
+configuration, and the re-emit therefore cannot be tested this way.
+
+What this does tell us, and it is the useful part:
+  * the entry is fetched **2** times and the tick counter is **1**, on an idle
+    boot *and* after kicks -- so the one dispatch pass is the **timer's**, and
+    the host-kick path never reaches a task end (it resets the core instead,
+    which is the long-standing trap-388 behaviour, not new);
+  * `init_set`'s end is the only task end that ever runs, and the init gate
+    correctly excludes it -- which is why the flag survives.
+
+**So "make the USSE task end with an emit" cannot be validated by submitting
+kicks.**  The emit needs a task that actually completes.  The order of work for
+the next session is therefore:
+  1. get *one* job to complete (the original goal), because a completed job is
+     the first thing that reaches a task end after init;
+  2. then the armed flag will be consumed and the re-emit measurable.
+
+Put differently: the re-emit is not the next step, it is the step *after* the
+first completing job.  This session established that the entry is fetched twice
+and the timer path runs once, which is a better place than it started from --
+but it did not produce a dispatch, and the re-emit experiment cannot conclude
+until one exists.
+
+EVIDENCE INVENTORY (what may and may not be cited from this session)
+-------------------------------------------------------------------
+SOUND, measured with a valid instrument or independent of it:
+  * irq 147 / OCP wrapper gate, and the EVENT_HOST_ENABLE storm (session 76 §1).
+  * `DMS_CTRL` was never written: 0x00208200 -> 0x003f8200, the vendor's value.
+  * entry fetched **2** times, tick **1**, stable across 94 s and across kicks
+    (counter on word 0x07, the correct word).
+  * eight host kicks move `resets` and change nothing else.
+  * `BIF_INT_STAT` = FLUSH_COMPLETE, `BIF_FAULT 0` throughout.
+  * llvmpipe: GL_RENDERER, 4.3 ms vs 48.0 ms.
+  * the panel blank is catacomb's double-tap sleep gesture (kprobe-measured).
+WITHDRAWN, measured on the wrong control-block word (0x1c = CLEANUP_DEFER_CT):
+  * "the entry is fetched exactly once and never again";
+  * "the counter on the program's first instruction still reads 1";
+  * the inference that the PDS program must therefore be re-emitted *because*
+    it never re-runs -- it does re-run; the re-emit question is now open on
+    different grounds (the dispatch pass runs once and never repeats).
+
+ANSWERED: one PDS-task emit from the USSE task end does NOT re-fetch the program
+--------------------------------------------------------------------------------
+`rearm9` (wrapped md5 `e3717aad…`) — the emit on the **timer task's end**
+(`tmr_tick_end`), which is the one dispatch pass that actually runs, with
+`init_set`'s site excluded by a per-call-site flag rather than the runtime
+`ui32InitStatus` test (that test was my own bug: the host writes
+`INIT_COMPLETE` ~20 ms *after* the kick, so a runtime gate on it can wrongly
+exclude the only pass there is).
+
+    boot:        EDM init ... BIF int 0x8000   (no fault, card1 present)
+    measurement: entry(0x07)=2  tick(0x2c)=1  SC_VERSION=0x10000
+                 REARM flag(0x3f) = 0        <- **the emit FIRED**
+    stable at 85 s: entry=2 tick=1 flag=0 kick=0 empty=0
+
+**The flag is consumed — the emit executed — and the entry count did not move.**
+So a single `emit.t2 r20, r18, r16 [f12 f13 imm=2115]` issued from the USSE
+task's end does **not** cause the PDS event program to be fetched again.
+
+That closes the hypothesis this session opened ("who re-emits? try the USSE task
+end"), and it closes it negatively.
+
+**Control, stated precisely, because a sloppy one is worse than none:** the
+comparison is `fix1` -- the *same instrument* (counter on 0x07) **without**
+`UK_REARM`, which read `entry=2 tick=1` with no flag word involved.  `rearm9` is
+identical but for the emit, and reads `entry=2 tick=1` with flag 1 -> 0.  I first
+cited `rearm8` here as the control; it is **not** one -- `rearm8` had a different
+gate (the broken runtime `ui32InitStatus` test) and an armed-but-unfired flag, so
+it differs from `rearm9` in more than the emit.  Use `fix1`.
+
+PATIENCE ON THE ONE-SHOT
+-------------------------
+`rearm9`'s one-shot was consumed by the *first* task end, at boot.  So the emit
+happened once, early, and every later pass had no emit.  Two refinements follow
+directly if this line is ever continued:
+  * repeat the emit every pass (drop the one-shot) and watch `entry` across
+    many passes -- safe now in the sense that one emit measurably does not
+    storm, but the core's tolerance is unmeasured;
+  * or keep the one-shot and arm it late, so it fires on a pass *after* the
+    timer's first, which is what a completing job would produce.
+Neither is worth a boot until a job completes, because the state an idle boot
+reaches is `entry=2, tick=1` and nothing else moves.
+
+WHAT THIS SESSION'S MICROKERNEL WORK ADDED, NET
+-----------------------------------------------
+* The entry is fetched **twice** and the timer path runs **once** (corrected
+  instrument; the earlier "once, never again" was a bad control-block word).
+* `init_set`'s task end must not emit: doing so faults the launch outright
+  (`BIF int 0xe000 fault 0xfef4000`, probe `-5`, no `card1`).
+* The USSE-side emit is correctly encodable (byte-identical to the vendor's),
+  correctly gated, and provably fires on the timer task's end -- and produces no
+  re-fetch.
+* Three unit bugs of one kind (`*4` on a word index) were found and fixed; the
+  rule to avoid them is written above.
+The microkernel is not worse off for any of this, and `tick2` (the durable
+image) is untouched on the unit beside every variant.

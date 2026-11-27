@@ -488,9 +488,13 @@ flasher can replace at every point:
     Then one interaction to make the EDM dispatch at all, and the aim after that
     is a frame.
     (a3) **The vendor's SGX540 microkernel is in the DDK 1.8 drop as source AND
-    as a prebuilt binary — decide: adapter for it, or keep retargeting our
-    reassembly (session 76).**  `services4/srvinit/devices/sgx/
-    eventhandler.pds.asm` is the program `EVENT_PDS_EXEC` points at, and it is a
+    as a prebuilt binary — it is REFERENCE, we still write our own (operator,
+    session 76).**  Operator direction: the open driver compiles its own
+    microkernel, because ours can be cleaner and the vendor's 2014 blob predates
+    what modern Mesa needs; reading their source is explicitly fine.  So the
+    vendor image is evidence, not a deployment target.  `services4/srvinit/
+    devices/sgx/eventhandler.pds.asm` is the program `EVENT_PDS_EXEC` points at,
+    and it is a
     **PDS dispatcher**: `movs douta, ir0, INPUT_IR0_PA_DEST`, branch on the bits,
     `movs doutu` into the USSE EventHandler.  Its event bit map is **not**
     `EUR_CR_EVENT_STATUS`: `EURASIA_PDS_IR0_EDM_EVENT_TIMER` is **bit 1**
@@ -505,11 +509,27 @@ flasher can replace at every point:
     (22 192 B `cfc577aa…` / 19 984 B `ff69e400…`), with `ukernel_labels.h`'s
     per-command entry table (`EVENTHANDLER 0x50`, `TIMER 0x2AD0`,
     `GETMISCINFO 0xEE0`) and 2D/3D/SPM/TA splits; it disassembles as SGX540 code
-    with `local/work/sgxasm/sgx-disasm -c sgx540`.  It predates this port's
-    `ukfw_header`, so it needs an adapter — but the adapter is bounded (entry
-    table, PDS programs, patch sites all known) and **it is the binary that
-    actually dispatched on this silicon**.  Extract:
-    `docs/captures/sgx540-vendor-ukernel-source-2026-11-26.txt`; trap 399.
+    with `local/work/sgxasm/sgx-disasm -c sgx540`.  It is **not** to be deployed
+    — but it is the cross-check our own image is measured against (and it
+    already cleared one suspicion: rev 120 defines no `FIX_HW_BRN_29104`, so the
+    vendor also ends a task with a bare `mov.end` and no `phas`, as ours does).
+    Extract: `docs/captures/sgx540-vendor-ukernel-source-2026-11-26.txt`;
+    trap 399; DECISIONS §115.
+    (a4) **Does the kick path reach the microkernel at all?  This now blocks
+    everything upstream of it (session 76).**  With the interrupt reaching the
+    CPU, the PDS launch defects fixed and `DMS_CTRL` corrected, the corrected
+    entry counter reads `entry = 2, tick = 1`, unchanged over 94 s and across
+    eight host kicks — and a PDS-task emit, correctly placed on `tmr_tick_end`
+    and provably firing (the one-shot flag goes 1 → 0), produces **no** re-fetch
+    (traps 402/404).  `REARM flag` is still 1 after eight kicks, so **no task end
+    runs at all** in that configuration: `init_set`'s is the only one, and an
+    idle boot apparently never reaches a second.  The next unit is therefore not
+    the re-emit but whether a job reaches the microkernel: re-instrument the
+    `kick` entry on a control-block word **verified** free (trap 403 — 0x07 is,
+    0x1c is `CLEANUP_DEFER_CT`), read `ctlblk` before and after a submit, and
+    follow HANDOFF §0b's four outcomes.  **Owes also, and blocked on this:**
+    getting one job to complete, which is session 76's original goal and the
+    precondition for measuring any re-emit at all.
     (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b) attach the CPU supply or confirm 1.35 V for all OPPs and settle the

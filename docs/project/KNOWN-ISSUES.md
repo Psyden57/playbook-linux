@@ -795,7 +795,7 @@ report 121 §3/§11/§12.
       register, and it is not a `cyttsp` part.**  At I²C2 `0x65` with **1-byte
       register addressing**, `reg0` is a command and `reg1` is status/data.
       A cold boot reads `reg1` = `0x09` (bit3 = bootloader, bit0 = just-reset)
-      and registers `0x00`–`0x07` = `00 09 b0 05 09 00 b7 2f`; this is the
+      and registers `0x00`–`0x1c` = `00 09 b0 05 09 00 b7 2f`; this is the
       bootloader, not a fault.  The vendor boot is `reg0 = 0x81`, sleep 10 ms,
       **read 21 bytes at `reg1`** (status, bootloader ID `0xB0` = Pegasus, ver,
       app start `0x900`, app checksum `0xB72F`, app version `0x020A`, silicon
@@ -3801,7 +3801,7 @@ report 121 §3/§11/§12.
          meaningless — it reported "no wait spinning" for a build where that could
          not be known.  Before instrumenting the control block, diff the candidate
          words against **every** definition in `ukernel/cores/<core>.py` *and* the
-         image's optional diagnostic flags; `0x39`/`0x3a`/`0x3b`/`0x07` were the
+         image's optional diagnostic flags; `0x39`/`0x3a`/`0x3b`/`0x1c` were the
          genuinely free ones.  The same class of mistake as trap 368 (an off-by-one
          reader) and as report 271's "log the arguments, not the result".
          (Session 74.)
@@ -4017,14 +4017,135 @@ report 121 §3/§11/§12.
           microkernel**, `binary2_540_omap4430_android_{debug,release}/…
           /ukernel/ukernel.bin` (22 192 B `cfc577aa…` / 19 984 B `ff69e400…`),
           plus `ukernel_labels.h`'s per-command entry table and the 2D/3D/SPM/TA
-          splits; it decodes as SGX540 code with this repo's disassembler.  It
-          is not a drop-in (it predates this port's `ukfw_header`), so the next
-          session's first decision is *adapter for the vendor image vs keep
-          retargeting our reassembly* — do not keep re-deriving what the vendor
-          shipped.  **Do not "fix" `event_pds_data0` to the vendor's 9 on this
-          basis**: 144 B is the dispatcher's segment, ours is a 4-word stub whose
-          16 B is genuinely 1 (session 76 retracted exactly that in place).
+          splits; it decodes as SGX540 code with this repo's disassembler.  **It
+          is REFERENCE evidence, NOT a deployment target** — operator direction,
+          session 76: the open driver compiles its own microkernel, because ours
+          can be cleaner and the vendor's 2014 blob predates what modern Mesa
+          needs; reading their source is explicitly fine.  Use it as the
+          cross-check for our own image, never as a replacement for it.  (It
+          already cleared one suspicion: rev 120 defines no
+          `FIX_HW_BRN_29104`, so the vendor also ends a task with a bare
+          `mov.end` and no `phas`, exactly as our `a.end()` does — not a
+          difference, do not "fix" it.)  **Do not "fix" `event_pds_data0` to the
+          vendor's 9 on this basis** either: 144 B is the dispatcher's segment,
+          ours is a 4-word stub whose 16 B is genuinely 1 (session 76 retracted
+          exactly that in place).
           (Session 76; capture `sgx540-vendor-ukernel-source-2026-11-26.txt`.)
+
+400. **RETRACTED — "the SGX540 event entry is fetched EXACTLY ONCE".  The counter
+          was reading a control-block word the microkernel itself clears.**  This
+          trap first recorded an unconditional entry counter (before the
+          `ui32InitStatus` test) reading **1** at uptime 44 s and again at 140 s,
+          concluded "the program is not re-fetched at all", and closed the whole
+          handler-side axis on it.  **All of that is withdrawn.**  The cause is
+          trap 403: the counter constant was written `0x07 * 4` and consumed as a
+          **word index**, so it sat on word **0x1c = `CLEANUP_DEFER_CT`**, which
+          `init_set` clears and the cleanup path writes twice more.  Caught when
+          the `rearm2` build booted with the counter at **0** while
+          `SC_VERSION = 0x10000` proved init had run — impossible for a program
+          that executes.  **With the counter on word 0x07 (firmware `fix1`,
+          `f468a71d…`) the event program is fetched TWICE:** `entry = 2`,
+          `tick (0x2c) = 1`, `SC_VERSION = 0x10000`, stable over 94 s and
+          **unchanged across eight host kicks**.  So there is one init pass and
+          one dispatch pass, and the dispatch pass is the timer's.  **Do not
+          re-derive "how many times is it fetched" from this trap's original
+          text — and treat session 75's "entered once" as likewise unproven, since
+          it sampled the same class of word.**  What *does* survive here:
+          an entry-top store is safe **when it is ctlblk-relative** (`r17` is
+          valid from `a.patch(17,"ctlblk")`); only stores through the derived
+          `sa` attributes faulted there (session 74); and a store's offset field
+          is narrow (the assembler rejects large ones — word 0x3f needs the
+          `limm`+`imae` rebase `program()` uses).  (Session 76; capture
+          `sgx540-entry-counter-2026-11-26.txt`.)
+
+401. **`EUR_CR_DMS_CTRL` was never written: the EDM ran on its reset default of
+          32 tasks where the vendor sets 63 for BRN-23632.**  Measured with a new
+          `status` line: live `0x00208200` (EDM 32 / vertex 32 / pixel 32) before,
+          `0x003f8200` after the fix — i.e. **EDM 63**, the vendor's launch value
+          from `sgxinit.c:4492`.  Decode with the SGX540's masks: b16-21 EDM,
+          b10-15 vertex, b4-9 pixel (`sgx540defs.h:2209-2216`; **pixel is shift
+          4, not 5** — I mis-read it once).  `FIX_HW_BRN_23632` **is** in the
+          rev-120 errata and the vendor's comment is *"At least 33 EDM tasks is
+          needed to fix BRN23632"*.  Fixed per-core in `pvrsgx_fw.c` (`.dms_ctrl`,
+          0 on the SGX545/530 so their behaviour is unchanged).  **This is a real
+          defect and it did NOT change the symptom** — the entry counter stayed 1
+          — so do not re-run it expecting a dispatch.  Related, unmeasured: the
+          vendor also writes `EUR_CR_DMS_AGE = ENABLE | PVRSRV_SGX_MAX_DMS_AGE`,
+          and **`PVRSRV_SGX_MAX_DMS_AGE` is not defined anywhere in the DDK 1.8
+          drop**, so that value cannot be derived from it.  (Session 76; capture
+          `sgx540-entry-counter-2026-11-26.txt`.)
+
+402. **The host side is configured as well as the vendor's public source can say —
+          and a PDS-task emit from the USSE task end does NOT re-fetch either.**
+          Confirmed good by measurement or derivation: `EVENT_PDS_ENABLE` (TIMER
+          set), `EVENT_PDS_EXEC` (resolves onto the PDS0 stub), `EVENT_PDS_DATA`,
+          `EVENT_PDS_INFO`, `EUR_CR_PDS`, `CLKGATECTL` (BRN-30852),
+          `EVENT_HOST_ENABLE`, the OCP wrapper gate, and the DMS task counts.
+          (The counts this trap first quoted were taken on the bad word — see
+          trap 400; the real figure is `entry = 2, tick = 1`.)  So: **do not keep
+          tuning host registers.**
+          **The emit is encodable — that was established here and stands:**
+          `sgx-asm` takes input on **stdin with `-b`** (exactly as
+          `ukernel/build.py` calls it), and
+
+              echo 'emit.t2 r0, r2, r4 [f12 f13 imm=3138]' | sgx-asm -b -c sgx540
+              -> 00800104 fb20b188   rc=0
+
+          is **byte-identical to the vendor's own instruction** and round-trips.
+          (The earlier claim that "this toolchain cannot encode that mnemonic" was
+          my own invocation error, withdrawn in place.)
+          **Then it was tried, and it does not work:** `UK_REARM` puts that exact
+          instruction — with its resolved payload `imm=0x843` and its two
+          loader-patched operands — on `tmr_tick_end`, the one dispatch pass that
+          runs, excluding `init_set` by a per-call-site flag.  Measured: **the
+          one-shot flag goes 1 → 0, so the emit executed, and `entry`/`tick` do
+          not move** (control `fix1`, same instrument without the emit, reads
+          identically).  Also measured on the way: **emitting from `init_set`'s
+          task end faults the launch outright** — `BIF int 0xe000 fault 0xfef4000`,
+          probe `-5`, no `card1` — so the EDM must not be re-emitted while it is
+          starting.  **Next is trap 404.**  (Session 76; capture
+          `sgx540-entry-counter-2026-11-26.txt`.)
+
+403. **A control-block word is only "free" if no store anywhere touches it — and
+          this cost the session three conclusions and two boots.**  The entry
+          counter was placed on word **0x1c** because its constant read
+          `0x07 * 4` and `ld.a.d`/`st.a.d` take a **WORD index**: 0x1c is
+          `CLEANUP_DEFER_CT` (`cores/sgx540.py:65`), which `init_set` clears and
+          the cleanup path writes twice more, so the count was read out of a cell
+          the microkernel zeroes in the same pass.  The same unit error appeared
+          three times in the session: this one, a `relaunch` debugfs node opening
+          with `READ_ONCE(ctl[0x07])` (which read 0 and nearly concluded "the
+          launch never ran"), and an init gate written `SA_HOSTCTL * 4` (word 4,
+          an unrelated word).  **Do this before writing any control-block store:**
+          (1) list every constant in `ukernel/cores/<core>.py` that is reached
+          through `r17`, and every `st.a.d/ld.a.d rN, r17, #…` in `ukernel.py`,
+          and pick a word on neither; (2) **read an existing, working use of the
+          same constant in the same file and copy its form exactly** — every other
+          `SA_HOSTCTL` use says `#{SA_HOSTCTL}`, unscaled, which is what makes the
+          odd one out findable; (3) verify by parsing the `ctlblk` dump **by word
+          index**, not by trusting the numeral.  Measured free on this core:
+          **0x07** (used by `UK_ENTRYLOG`) and 0x3f.  Not free: 0x1c.  A store
+          whose offset is past ~0x1f also needs the `limm`+`imae` rebase that
+          `program()` documents.  (Session 76; capture
+          `sgx540-entry-counter-2026-11-26.txt`.)
+
+404. **The whole re-emit line is BLOCKED on something simpler: an idle boot never
+          reaches a second task end, so there is nothing to re-emit and nothing to
+          measure.**  With the emit correctly placed on `tmr_tick_end`, correctly
+          gated, and provably firing (trap 402), `REARM flag` still reads **1**
+          after **eight host kicks** — the one-shot was never consumed, so **no
+          `a.end()` executed at all** during them.  `init_set`'s end is the only
+          task end that ever runs, and it is (correctly) excluded.  A first
+          attempt gated the emit on a runtime `ui32InitStatus` test, which is also
+          wrong: the host writes `INIT_COMPLETE` ~20 ms *after* the kick
+          (`pvrsgx_fw.c:775`), so a runtime gate can exclude the only pass there
+          is.  **So the next question is not "who re-emits" but "does the kick path
+          reach the microkernel at all".**  The `kick`/empty-CCB counters
+          (0x3d/0x3e) read 0 in every build, including ones where the path
+          reportedly ran, so they cannot be trusted as they stand — re-instrument
+          the `kick` entry on a word verified per trap 403, and read `ctlblk`
+          before and after a job.  Interpretation is in HANDOFF §0b.  (Session
+          76; capture `sgx540-entry-counter-2026-11-26.txt`.)
 
 ## 3. Corrections to older reports
 
@@ -4186,7 +4307,7 @@ Trap 115; the inline correction is in report 109 §8.1.
 
 **3.21 Report 180 §4's `CLK32KG` register labels are swapped.**  The report claims
 "every regulator `CFG_STATE` is identical (`…=0x05`); only group/transition
-differ (`CFG_GRP` `0x07` vs `0x01`, `CFG_TRANS` `0x55` vs `0x05`)".  The
+differ (`CFG_GRP` `0x1c` vs `0x01`, `CFG_TRANS` `0x55` vs `0x05`)".  The
 `0x05`-in-both register is `CFG_TRANS` (TWL `0x8D`), not `CFG_STATE`; the
 `0x55`-vs-`0x05` register is `CFG_STATE` (`0x8E`), not `CFG_TRANS`.  Corrected
 statement: `CFG_GRP` (`0x8C`) differs; `CFG_TRANS` (`0x8D`) is identical;

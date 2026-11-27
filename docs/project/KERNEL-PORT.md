@@ -1,5 +1,11 @@
 # Kernel base — 7.3.3 (port complete; the SGX driver vendored)
 
+> **Session 76: the kernel base and patch are UNCHANGED** — no kernel-source
+> edit, no re-export, no region-0 flash.  That session's work was entirely in the
+> **vendored open SGX driver** (`pvrsgx_*`, a module, in the gitignored
+> `local/work/powervr_sgx` and `local/kernel-tree-sgx`) and in the microkernel.
+> The patch below is the session-67 export and is still current.
+
 The port is **done**: `local/kernel-tree` is upstream **Linux 7.3.3**, the unit
 boots it to the hd3 Nura root (now read-write and grown; report 249) and to the
 region-1 BusyBox userland.

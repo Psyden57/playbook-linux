@@ -4297,3 +4297,46 @@ clear+finish — and the operator confirmed the desktop is snappier.  It did
 **not** stop the blanking, which is what ruled out a rendering race and pointed
 at the input path.  The hd3 flasher image still carries neither llvmpipe nor
 `libLLVM-13`; the rebake must add both.
+
+## 115. The vendor's microkernel is REFERENCE, never a deployment target — the open driver compiles its own (operator, session 76)
+
+The DDK 1.8 drop contains the SGX540 microkernel as **source and as a prebuilt
+binary** (`services4/srvinit/devices/sgx/eventhandler.pds.asm`, and
+`eurasiacon/binary2_540_omap4430_android_{debug,release}/…/ukernel.bin`, 22 192 B
+`cfc577aa…` / 19 984 B `ff69e400…`).  That makes "just run the vendor's image" a
+tempting shortcut, and I proposed an adapter for it.  The operator's direction:
+
+> "if you mean to just use the vendor's compiled microkernel, i don't think that's
+> right, the open driver should compile it's own microkernel too, because we could
+> write it cleaner and perhaps better, and the vendor might not be written to
+> support or implement modern things mesa might need.  It's fine to read the
+> vendor driver and microkernel source and to write our own, of course."
+
+**Decision: the microkernel this port runs is always ours.  The vendor's binary is
+evidence, never a deployment target.**  The reasons are the operator's and they
+stand on their own: a 2014 blob built by a closed toolchain cannot be maintained
+here and cannot be assumed to implement what a current Mesa needs.  (The drop also
+carries its microkernel's spec PDFs marked **"Strictly Confidential"**, so the
+*vendor's own* documentation of the binary is not usable evidence either — another
+reason the source we can read is the better foundation.)
+
+**What the vendor source is therefore for**, and all of it was used this session:
+
+* it pins shipped behaviour — the entry table (`ukernel_labels.h`: `EVENTHANDLER
+  0x50`, `TIMER 0x2AD0`, `GETMISCINFO 0xEE0`), and the fact that the event program
+  is a **PDS dispatcher over `ir0`/`ir1`** (`EURASIA_PDS_IR0_EDM_EVENT_TIMER` is
+  **bit 1** there, versus b29 in the `EUR_CR_EVENT_STATUS` our entry polls), with
+  its `INPUT_*` constants host-patched at load (`sgxinit.c:2507-2510`; word
+  indices in the generated `eventhandler_pds.h`);
+* it cross-checks our assembler — the vendor's own instruction
+  `emit.t2 r0, r2, r4 [f12 f13 imm=3138]` assembles to `00800104 fb20b188`
+  byte-for-byte, and round-trips;
+* it cleared a suspicion without a boot: **rev 120 defines no
+  `FIX_HW_BRN_29104`**, so the vendor also ends a task with a bare `mov.end` and
+  no `phas`, exactly as our `a.end()` does.  Not a difference; do not "fix" it.
+
+**Consequence for the port, recorded so it is not re-litigated:** our loader
+patches only `ctlblk` and `pdtable`, and does **no** PDS-input routing at all —
+that is the largest single structural difference from the vendor's design, and it
+is ours to close in our own code.  (Session 76; capture
+`docs/captures/sgx540-vendor-ukernel-source-2026-11-26.txt`.)

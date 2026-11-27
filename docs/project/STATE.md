@@ -73,6 +73,151 @@ the event program.  That is the same class as session 74's "a store at the top
 of the event entry faults" — the microkernel task's *admission*, not the host's
 setup.
 
+**Measured this session: the event entry is fetched EXACTLY ONCE, and never
+again.**  A new unconditional counter at the top of the `event` entry
+(`UK_ENTRYLOG=1`, ctlblk word 0x1c, incremented before the `ui32InitStatus`
+test) read **1** at uptime 44 s and **1** again at 140 s — 96 s idle, ~96 000
+timer periods, no movement — while the tick counter stayed 1 and the
+dispatch-pass `EVENT_STATUS` snapshot (word 0x39) stayed **0**.  That second
+figure is decisive on its own: the snapshot store sits *after* the init test, so
+it has never executed — there has never been a dispatch pass.  **So the program
+is not being re-fetched at all**; the "re-dispatched but exits immediately"
+candidate is dead, and `kick` counters 0 / `EVENT_STATUS` b29 latched are now
+consequences rather than independent findings.  Static reading of the vendor for
+contrast: their `EVENT_PDS_EXEC` is derived from the *init* program's PDS memory
+(sgxinit.c:3638) and holds the 220-word **dispatcher** that re-enters via
+`movs doutu, INPUT_GENERIC_DOUTU0/1/2`, whereas ours is a 4-word launch stub
+emitted by the init program with a single `MOVS→DOUTU`.  Next experiment:
+re-point that one DOUTU at a separately instrumented label to tell "the core
+never fetches the PDS program" from "the stub's DOUTU cannot re-enter".
+[capture `docs/captures/sgx540-entry-counter-2026-11-26.txt`]
+
+**WITHDRAWN — see the correction below: the entry counter was on
+`CLEANUP_DEFER_CT` (word 0x1c), which `init_set` clears, so every count in this
+paragraph is meaningless.**  Kept only so the next session can see what was
+believed and why.
+
+**DECISIVE (as it seemed): the counter, moved to the program's VERY FIRST
+instruction, still reads 1.**  `UK_ENTRYFIRST=1` places it after the ctlblk patch and *before* the
+`phas`, the init dispatch and anything that can fail; after a reboot it read **1**
+twice, 22 s apart.  So this is no longer an inference from where a store sits —
+it is a count on the first instruction the program executes.  **The PDS event
+program runs exactly once and does not re-run on its own**, and "it re-runs but
+dies somewhere the counter cannot see" is dead.  Therefore a PDS program must be
+**re-emitted**, and the emit cannot live inside the entry (the entry is only
+reached *by* the fetch the emit would cause — the `emit1` build's own design
+error, recorded).  The re-emit must come from the USSE task the PDS program
+DOUTUs into (where the vendor puts it: `EmitLoopBack`, and its `EventHandler`
+re-enters via `movs doutu, …` instead of ending on a bare HALT), or from a
+PDS-level loop.  Our PDS0 stub is `data,data,data,MOVS→DOUTU,HALT` — a one-shot
+by construction; **the fix is not in the stub's contents, it is that nothing
+re-emits.**
+
+**THE CORRECTION, and the corrected measurement.**  The counter constant was
+written `0x07 * 4` and used as a **word index**, so it landed on word **0x1c** —
+`CLEANUP_DEFER_CT`, which `init_set` clears and the cleanup path writes twice
+more.  Caught by the re-emit build booting with the counter at **0** while
+`SC_VERSION = 0x10000` proved init had run.  A scan of every ctlblk constant the
+core reaches through `r17` then confirmed it: **0x07 is genuinely free, 0x1c is
+not**.  With the counter on 0x07 (firmware `fix1`):
+
+    entry(0x07) = **2**    tick(0x2c) = **1**    SC_VERSION = 0x10000
+
+stable over 20 s, and unchanged across eight host kicks.  **So the event program IS fetched twice — one init pass and
+one dispatch pass — and the timer path IS reached once.**  "Fetched exactly once,
+never again, by any route" is **withdrawn**, along with the inference built on
+it.  The hardware observations stand: eight host kicks move `resets` 8 → 16; a
+host re-issue of `EVENT_KICK2` does not raise the count; `DMS_CTRL` was
+unprogrammed and now matches the vendor.
+
+**ANSWERED, negatively: one PDS-task emit from the USSE task end does NOT
+re-fetch the event program.**  `rearm9` puts the vendor's emit on
+`tmr_tick_end` — the one dispatch pass that actually runs — and excludes
+`init_set`'s site with a per-call-site flag rather than a runtime test (a
+runtime `ui32InitStatus` gate was my own bug: the host writes `INIT_COMPLETE`
+~20 ms *after* the kick, so it can wrongly exclude the only pass there is).
+Measured: the flag goes **1 → 0**, so **the emit executed**, and
+`entry=2 tick=1` is unchanged, stable at 85 s.  Control: `fix1`, the same
+instrument without `UK_REARM`, also reads `entry=2 tick=1` — same count, emit
+the only difference.  So the emit is correctly encodable (byte-identical to the
+vendor's), correctly gated, provably fires on the timer task's end, and produces
+no re-fetch.  Confirmed on the way: **`init_set`'s task end must not emit** — it
+faults the launch (`BIF int 0xe000 fault 0xfef4000`, probe -5, no `card1`).
+
+**The re-emit: placed and gated correctly, and it cannot fire (superseded).**
+With the three bugs fixed (operand patches were missing from the `end()` version;
+the one-shot was consumed by `init_set`'s own end, which faults the launch —
+`BIF int 0xe000 fault 0xfef4000`; and the init gate had the same word/byte unit
+bug a third time, `SA_HOSTCTL * 4` reading word 4), the build boots cleanly and:
+`entry=2 tick=1 SC_VERSION=0x10000 REARM flag(0x3f)=1 kick=0 empty=0`.  After
+**eight host kicks** (`resets` moved, so they reached the core) *nothing* changed
+and the flag stayed armed — **so no task end runs at all** in this configuration.
+The one dispatch pass is the **timer's**, and `init_set`'s end is the only task
+end that ever executes (correctly excluded by the gate).  **Therefore the
+re-emit cannot be validated by submitting kicks, and it is not the next step: it
+is the step after the first completing job.**  Get one job to complete, then the
+armed flag is consumed and the re-emit becomes measurable.
+
+**The re-emit work is at a clean, honest half-way point (superseded above).**  The task-end one-shot
+emit now has the right shape and the EDM **starts cleanly** with it (`EDM init:
+… BIF int 0x8000`, `microkernel started`, no fault), after two placement bugs
+were fixed the hard way — firing inside the init task faulted the launch
+(`BIF int 0xe000 fault 0xfef4000`, no `card1`), and a `self.no_rearm` suppression
+did not apply where intended.  Measured with it: `entry = 1, tick = 0,
+rearm_flag(0x3f) = 0` — the flag was consumed but the count went *down* from the
+baseline's 2, which is **not yet explained**.  Resolve that before building
+anything on it.
+
+**And nothing re-fetches it, by any route — measured, three ways (also on the
+bad word; treat the counts as withdrawn, the `resets` movement and the host
+re-arm result as sound).**  A host kick
+does not (`resets 8 → 16`, entry still 1), re-issuing the *launch* kick from the
+host does not (new `relaunch` debugfs node: 1 before, 1 after, `BIF_INT_STAT`
+`FLUSH_COMPLETE`, no fault), and a timer tick cannot even reach a PDS emit placed
+inside the entry (`emit1` build — the entry is only reached by the fetch that the
+emit was meant to cause, a design error recorded in the capture).  So
+`EVENT_KICK2` is a **launch-only** trigger.  **Two possibilities remain, both
+PDS-side:** either a PDS program runs once and must be re-emitted by a PDS-level
+`emitpds`, or it re-runs and our second fetch lands somewhere that is not the
+entry.  Testable without a working emit: move the entry counter to the program's
+**very first instruction** — if it climbs, the program does re-run and the fault
+is where it re-enters.
+
+**And a host kick does not re-fetch it either — measured, same boot.**  The uAPI
+suite's eight submits moved the driver's counters (`resets 8 → 16`,
+`issued 8 → 16`) so the kicks **provably reached the core**, and the entry
+counter stayed **1**.  A kick uses the doorbell (`EUR_CR_EVENT_KICK`), a
+different trigger from the timer, so this closes the trigger axis entirely:
+**nothing re-fetches the PDS event program after the launch.**  That leaves one
+explanation standing — the launch stub is a **one-shot**, not a resident
+dispatcher: it issues a single `MOVS→DOUTU` and `HALT`s, so once init has run
+there is nothing at that address for the core to fetch again.  (The vendor's
+equivalent is the 220-word `eventhandler.pds.asm`, which re-enters through
+`movs doutu, INPUT_GENERIC_DOUTU0/1/2` on every fetch.)  **Next:** make the PDS
+program resident — i.e. a real dispatcher of our own design.  **Not** "re-issue
+`emitpds` from the entry": that was my first idea.  The encoding *is* available
+(see below) — what I have not established is whether one emit is enough or the
+program must also be made resident.
+
+**`EUR_CR_DMS_CTRL` was never written — a real defect, now fixed, and not the
+blocker.**  Added to the `status` dump: it read `0x00208200` (EDM 32 / vertex 32
+/ pixel 32, the reset default) where the vendor writes `0x003f8200` — **EDM 63**,
+because `FIX_HW_BRN_23632` is in the rev-120 errata and needs "at least 33 EDM
+tasks".  Fixed per-core; it now reads the vendor's value.  **The entry counter
+stayed 1**, so the EDM task count does not gate the fetch either.  And that is
+now the summary of the host side: with `EVENT_PDS_ENABLE`, `EVENT_PDS_EXEC`,
+`DATA`, `INFO`, `EUR_CR_PDS`, `CLKGATECTL`, `EVENT_HOST_ENABLE`, the OCP gate and
+the DMS counts all confirmed good, the program is still never fetched.  **The
+remaining gap is USSE-side task emission** — the vendor emits the PDS task with
+`emitpds.tasks.taske` from the USE side, and our design never emits one.  So: do
+not keep tuning host registers.  **The encoding IS available** — `sgx-asm`
+accepts `emit.t2 r0, r2, r4 [f12 f13 imm=3138]` on stdin with `-b` (as
+`ukernel/build.py` calls it) and produces `00800104 fb20b188`, byte-identical to
+the vendor's own instruction; my earlier "the toolchain cannot encode it" was my
+own wrong invocation, corrected in trap 402.  Next is emitting the PDS task from
+our USSE entry.  [trap 401/402; capture
+`sgx540-entry-counter-2026-11-26.txt`]
+
 **What the vendor source says the missing piece is — and a prebuilt image that
 has it.**  The DDK 1.8 drop ships the SGX540 microkernel as **source and as a
 finished binary**, and `services4/srvinit/devices/sgx/eventhandler.pds.asm` is
@@ -88,10 +233,14 @@ bit 29, which is what this port's hand-written entry polls; the vendor's USSE
 `ctlblk` and `pdtable`**, doing no input routing at all.  The prebuilt vendor
 image is `binary2_540_omap4430_android_{debug,release}/…/ukernel.bin` (22 192 B
 `cfc577aa…` / 19 984 B `ff69e400…`) with `ukernel_labels.h`'s per-command entry
-table (`EVENTHANDLER 0x50`, `TIMER 0x2AD0`, `GETMISCINFO 0xEE0`).  It is not a
-drop-in — it predates this port's `ukfw_header` — so the next session's first
-decision is **adapter for the vendor image, or keep retargeting our
-reassembly**.  Extract: `docs/captures/sgx540-vendor-ukernel-source-2026-11-26.txt`;
+table (`EVENTHANDLER 0x50`, `TIMER 0x2AD0`, `GETMISCINFO 0xEE0`).  **It is
+reference evidence, not a deployment target** (operator direction, session 76:
+the open driver compiles its own microkernel — ours can be cleaner, and the
+vendor's 2014 blob predates what modern Mesa needs; reading their source is
+explicitly fine).  So the work remains ours: what the source adds is the *shape*
+of the missing piece — the vendor's event path is a **PDS dispatcher over
+`ir0`/`ir1`**, not a poll of `EUR_CR_EVENT_STATUS`.
+Extract: `docs/captures/sgx540-vendor-ukernel-source-2026-11-26.txt`;
 fact sheet "Events and kicks"; session note addendum 2.
 
 **A misreading I caught before writing it down.**  `submit-null-job-many`
@@ -114,6 +263,43 @@ rising once per job, irq 147 delivering when the core raises it.  **Every
 change this session was a module or firmware FILE on hd3**, reverted by copying
 the `.before-*` copies back.
 
+**Bench at the close (session 76) — read on the unit at the wrap-up, not carried
+from an earlier note.**  Region 0 **`0x02C1DDC2`** (media trailer
+`1f 2d c8 d7 c2 dd c1 02` at raw `0x8100000 + 10450520 − 8`; **no flash**), the
+file `boot/chainloader/kernel.img` 10 450 520 B, sha256 `70474c01…`.  Region 1
+**`20a5edd3…`** (64 MiB at raw `0x29000000`, unchanged).  hd3 = the session-71
+rebake `5d3eac8f…`, live as `/dev/loop0 on / type ext4 (rw,relatime,nobarrier)`,
+56.5 G, 733.6 M used.  **The unit is on Linux, not TabletOS** — no restore is
+required.  Kernel `7.3.3`, `Nura edge`.  `BOOTCTR_FCTRY` **`0x25`**
+(`dmesg | grep pbrpmb`: `0x25 >= threshold 0x1e, no write` — healthy; the Linux
+`/init` tops it up below `0x1e`).  SSH: dropbear running, `usb0`
+**`169.254.0.1/16` UP**, `PB_LINK=usb tools/pbssh.sh` works.  **`wlan0` is DOWN**
+(the GPU resets knocked it over — see the caution in the session note).  Battery
+Full.  Panel `bl_power` 0, connector `On`, **0 DSI errors**.
+`card1`/`renderD129` = `powervr_sgx` (`open microkernel fix1`, `EDM init: event
+status 0x20000000, BIF int 0x8000`, `microkernel started`, `BIF_FAULT 0`, no
+"did not start"); `card0`/`renderD128` = `omapdrm`.
+
+**Device-side files left deployed** (all on hd3, all reversible by `cp`):
+`/lib/firmware/powervr_sgx/sgx540_ukernel.bin` = **`f468a71d…`** (`fix1`, the
+*corrected* entry instrument, deliberately not the experimental re-emit), with
+`…bin.tick2` = `7b44b33a…` (the durable instrumented image),
+`…bin.before-hostirq` = `12f12abb…` (`invfix`, the pre-session durable) and the
+session's variants `.emit1w`, `.entry1{,w,bak}`, `.first2w`, `.fix1w`,
+`.rearm{1,2,5,6,8,9}w`, `.hostirq`, `.kick1`, `.tick1`, `.before-kick1`,
+`.session73-raw`.
+`/lib/modules/7.3.3/kernel/drivers/gpu/drm/powervr_sgx.ko` = **`bb7a0c68…`** (the
+session's fixes + the `pds`/`timer_edge`/`relaunch` nodes + the DMS/OCP dump
+lines), with `.dumpregs-before-ocp` = `9a0ebbe3…` and the intermediates `.ocp`,
+`.ocp2`, `.pdsnode`, `.pdsfit`, `.edge`, `.brn30852`, `.pdsstat`, `.pdsdata`,
+`.before-dms`, `.dms`, `.dms2`, `.emit`, `.relaunch`, `.rel2`.
+`/etc/catacomb/initrc` = **`56888215…`** (the gesture guard;
+`initrc.pre-gesture0` is the previous).  Desktop llvmpipe:
+`/usr/lib/xorg/modules/dri/swrast_dri.so` and `kms_swrast_dri.so` both
+**`1db573b1…`**, `/usr/lib/libLLVM-13.so` **`d1b49590…`**; the softpipe backups
+`.amber` are both `d8d69228…`.  `/tmp` also carries the session's one-off scripts
+and `powervr_sgx_test` (on the ext4, so they survive a reboot — trap 354).
+
 **Measured on the unit (sessions 74-76).**  `powervr_sgx` binds `56000000.gpu`
 and reports `open microkernel <build>, interface 1.0, features 0x8`, `EDM init`,
 `microkernel started`; its debugfs agrees — `firmware running: 1`,
@@ -122,198 +308,17 @@ and reports `open microkernel <build>, interface 1.0, features 0x8`, `EDM init`,
 `powervr_sgx`; `card0`/`renderD128` stay `omapdrm`.  **Starting it needs
 `edm_init=1`** (the driver's §9 single-context launch, a boot default on hd3).
 
-## Previous state — 2026-11-26 (session 75)
-
-**The event program was entered once and never again; the timer fired but
-nothing consumed it; and the `1/1 passed` was the driver's own 2 s timeout.**
-Superseded by session 76, which found *why* nothing consumed it (the interrupt
-never reached the CPU: the OCP wrapper's gate) and fixed four defects around it.
-The session-75 body below is kept because its measurements still stand.
-
-**Measured, one firmware swap and one reboot.**  The session-74 kernel-CCB trace
-could not tell "the event never reached `kick`" from "`kick` ran and found the
-CCB empty", because every word it wrote read 0; so this session counted
-**entries** — control-block words **0x3d** (`kick` entries) and **0x3e**
-(empty-CCB exits), free words read through the existing `ctlblk` debugfs node
-(no `/dev/mem`, trap 384).  Over a whole 2 s job window, sampling every 150 ms,
-**all eight words 0x38-0x3f stayed 0**.  The kernel ring held the command the
-whole time (`ccb wo 1 ro 0`) while the microkernel's own read of the same ring
-was `0/0` (`UK_CCBLOG`), and **six back-to-back jobs cost six GPU resets**.  So
-the doorbell never opened and `kick` never ran.
-[report 278; `docs/captures/sgx540-ukernel-kick-counter-2026-11-26.txt`]
-
-**The `1/1 passed` was never a completion.**  The two passing runs took
-**2016806** and **2020499** µs against `job_timeout_ms = 2000`: the test's
-syncobj is bound to **`drm_sched`'s** `s_fence->finished`, which
-`pvrsgx_timedout_job()` finishes via `drm_sched_start(sched, 0)` with `errno = 0`
-and no error bit, and `drm_syncobj_array_wait_timeout()` returns 0 as soon as
-the fence is signalled without ever inspecting the error — so the 2 s expiry
-prints `ok`.  The context is then marked `GUILTY`, which is why the next run on
-it reads `0/1`.  **Do not read the uAPI suite's pass column as evidence about
-the microkernel in this configuration** (trap 388).
-
-**Two session-74 figures corrected.**  `consumed 2..5` measured nothing:
-`pvrsgx_fw_start()` calls `pvrsgx_ccb_reset()`, which sets
-`ccb_reset_seq := ccb_issued`, so an idle ring reports `consumed == issued` (the
-idle boot read `issued 1 consumed 1`) — read `wo`/`ro`, not `consumed` (trap
-389).  And the boot ran build **`ccb2`**, not `invfix`: the file on hd3 had been
-swapped after that boot's module load, and the firmware is read only at module
-load, so `dmesg | grep 'open microkernel'` is the only truth about what ran
-(trap 390).
-
-**The EDM timer fires, and nothing consumes it.**  A **dynamic** tick counter
-(`UK_TICKLOG`, a 32-bit value split across free control-block words 0x2c/0x2d)
-read **0 after twelve seconds idle** (trap 394 explains why the static `ctlblk`
-word could never have shown this).  But the register itself is alive:
-`EUR_CR_EVENT_TIMER` (0x0acc) reads **`0x010228fe`** with `ENABLE` b24 set, and
-five samples 2 s apart all sit inside `0..0x04B000` — the counter runs and
-reloads at ~1 kHz.  `EVENT_STATUS` b29 (TIMER) is **latched and never
-acknowledged**, and IRQ 147 has never asserted.  So the event is being raised and
-the event program is not being entered.  (The earlier "the period is 1000× too
-long" reading was **wrong** — it compared a count against a rate; trap 395 is
-retracted.)  [report 278 §8; captures
-`sgx540-tick-counter-2026-11-26.txt`, `sgx540-dispatch-regs-2026-11-26.txt`]
-
-**The one field that differed is now explained, and it kills a session-74
-"correction".**  A per-bit write/read-back sweep (a debugfs node that writes
-0x0a58) shows **every bit of `0x2204f00f` sticks except 14**, which returns 0
-even when written alone — so `EUR_CR_EVENT_PDS_ENABLE_SW_EVENT_MASK` is **not
-implemented in that register** on this silicon (it *is* in `EVENT_HOST_ENABLE`,
-0x130 = `0x20004000`).  Therefore session 74's `SGX540_CR_EVENT_PDS_ENABLE_ALL
-0x2204f00f` was a **no-op**: the driver's value behaves identically to the
-SGX545's `0x2204b00f`.  The other three session-74 corrections stand.  [trap 397;
-capture `sgx540-pds-enable-sweep-2026-11-26.txt`]
-
-**So the dispatch picture is now: a PDS source (TIMER) enabled and firing, an
-event (`EVENT_STATUS` b29) latched and never cleared, a host IRQ that has never
-fired, and an event program never entered.**  The unexamined step between "a
-source fires" and "the program is entered" is the PDS exec address itself —
-`EVENT_PDS_EXEC` = `0x00804090`, which reads back as written but has never been
-shown to point at code this core executes.
-
-**Also settled: the init task really does run.**  Three independent proofs, none
-of them the driver's own log line (with `edm_init=1` the *host* writes
-`ui32InitStatus`, trap 396): `SC_VERSION` (control block 0x18) = `0x00010000`, a
-microkernel-only store; `EVENT_HOST_ENABLE` b29 set (`0x20004000`), ORed in by
-`init_set` after the timer write; and `BIF_FAULT 0` throughout.
-
-**The next unit of work: the PDS exec address.**  Every register on the dispatch
-side now reads back as written, and the one that did not stick is explained
-(bit 14 is absent; trap 397).  What has never been examined is whether
-`EVENT_PDS_EXEC` (`0x00804090`) — 22-bit field (b4-25, 64 MiB), `(addr − PDS_EXEC_BASE) >> 4` —
-points at code this core will execute: `check_event_pds()` only compares it with
-our own derivation.  Then the doorbell: `ccb_write()` writes
-`EUR_CR_EVENT_KICK` (0xac8, `NOW` b0) and
-`EVENT_KICKER` (0xac4, a **28-bit** address field at shift 4).  Both now read
-back as written; `EVENT_KICK` (0xac8) is self-clearing, so a read of it proves
-nothing.  The doorbell does **not** depend on the timer, so it is worth reading
-in the same boot (a `GETMISCINFO` submit needs no client PD and no timer).
-**Two cheaper explanations were checked statically and both are clean**, so do
-not re-run them: the init kick using `EVENT_KICK2` while jobs use `EVENT_KICK`
-is the vendor's own `MULTI_EVENT_KICK` shape (trap 392; the earlier "sufficient
-cause" reading is withdrawn), and the event program's address matches
-`srvinit`'s and sits 8 MiB inside `OTHER_PDS_EXEC`'s 22-bit field (trap 393).
-All of it is read **from inside the driver** (trap 384), and the timer,
-`EVENT_KICKER`, `EVENT_PDS_EXEC/DATA/INFO` already read back correctly — so it is
-`EVENT_PDS_ENABLE`'s missing bit and the doorbell that remain.
-
-**Measured on the unit (sessions 74-75).**  `powervr_sgx` binds `56000000.gpu`
-and reports
-`open microkernel invfix, interface 1.0, features 0x8`, `EDM init: event status
-0xa0000000, BIF int 0x8000` (the trailing `timer` word is a free-running counter
-and differs per boot), **`microkernel started`**; its
-debugfs agrees — `firmware running: 1`, `hostctl init 0x1`, `uk-lockups 0`,
-`BIF_INT_STAT 0x00008000` (`FLUSH_COMPLETE`, **no fault**), `BIF_FAULT 0`.
-`card1`/`renderD129` = `powervr_sgx`; `card0`/`renderD128` stay `omapdrm`.
-[report 277; `docs/captures/sgx540-ukernel-start-2026-11-26.txt`]
-
-**Starting it needs `edm_init=1`.**  Without it the probe fails 20 ms after
-`open microkernel …` (`BIF int 0xc002, fault 0x8779000`, `error -110`); with
-`modprobe powervr_sgx edm_init=1` it completes.  That is the driver's documented
-§9 single-context launch, now the boot default on hd3
-(`/etc/modprobe.d/powervr-sgx-opts.conf`).
-
-**Four SGX545 assumptions in the image were corrected** (session 74), each gated
-on the per-core `SINGLE_CONTEXT` flag, with the SGX545 serial image kept
-**byte-identical** (`83b5b0a7…`).  They are what made the driver accept and start
-the image; **none of them made the EDM dispatch** (session 75):
-
-| the image assumed | the SGX540 has |
-|---|---|
-| client PD in `BIF_DIR_LIST_BASE1` (0xc38), routed via `BIF_BANK0` (0xc78) | neither register exists; one list, `DIR_LIST_BASE0` 0xc84 |
-| a HW context's `page_dir` word is a directory address | a **slot** into the driver's PD table at `kernel_code.base + 0xf000` |
-| `features = SECURE`, no pdtable patch | `SINGLE_CONTEXT` set, `SECURE` clear, pdtable patch |
-| `0x138` masks `0x27`/`0x4b` (SGX545's two groups) | **one** group, bits 0-4 → mask `0x1F` (the decisive fix) |
-
-**Blockers in play, in order:**
-
-1. **The EDM never dispatches after the init task, and the doorbell is why.**
-   Measured in session 75, not inferred: `kick`-entry and empty-CCB counters both
-   0 through a whole job window, `ccb wo 1 ro 0` on the kernel side against
-   `0/0` on the microkernel side, six jobs → six resets.  The next step is
-   `EUR_CR_EVENT_KICK` (0xac8) / `EVENT_KICKER` (0xac4, 28-bit) /
-   `EVENT_PDS_ENABLE` (0x2204f00f) read back **from inside the driver**.  This
-   gates everything; every register table below is downstream of it.
-2. **`0xb14` is `EUR_CR_USE1_SERV_PIXEL`** — a USSE pixel service queue
-   (COUNT/EMPTY), not the EDM task-progress register the image treats as its
-   keep-alive.  Unfixed.  [DDK 1.8 `sgx540defs.h`]
-3. **`sgx540_init_regs`** — not derivable statically; needs a capture from a
-   working microkernel boot.
-4. **The microkernel register tables** (0x618, 0x62c, 0x694, TA/3D kick …) are
-   carried over from the SGX545 as **hypothesis**.
-5. **`USE_CODE_BASE` presence on rev 120** — the *unit* is now settled as a K
-   fact (shift 8, DM at 24); only "do the registers exist" is open, and it wants
-   a write/read-back **inside the driver**.
-6. **The DPM/TA/ISP/TSP/PBE/PDS state map** (fact sheet Gap 10).
-7. Unchanged from earlier: the **hd3 rebake** must add `wpewebkit` + `kumo`;
-   `pvr-dbmfix` needs packaging; the GEM-growth walk; the CPU supply/OPP items;
-   the intermittent USB teardown (trap 337); the memory-throughput re-measure;
-   and why the first modeset after a boot fails on some boots (trap 377).
-
-**New bench constraint: `/dev/mem` no longer reaches the GPU.**  All windows
-return `Errno 13` in the open-driver configuration while `CONFIG_STRICT_DEVMEM`
-is off and `IO_STRICT_DEVMEM` is absent from the config; `/proc/iomem` shows
-`56000000-56003fff : 56000000.gpu powervr_sgx`.  **The userspace register read
-that opened this port is unavailable while the open driver owns the GPU** —
-further register evidence must come from inside the driver.  [trap 384]
-
-**A new K source, and a boundary.**  The operator supplied a GPL-2 DDK drop
-("Android SGX DDK UM version 1.8", `PVRVERSION_BUILD 869593`, TI OMAP,
-`/home/psyden/Pdrive/GFX_Linux_DDK-master`, *outside* the repo) whose
-`eurasia/hwdefs/sgx540defs.h` is the **540-specific 3150-line header** our
-vendored 1.17 drop lacks, plus the user-mode `srvinit` and the full errata
-table.  It is **K** evidence and is summarised in
-`docs/reference/sgx540-ddk18-facts.md`.  The same drop's microkernel
-specification PDFs are marked **"Strictly Confidential"** and are therefore
-**not** usable evidence.
-
-**Bench at the close (session 75)**: Linux `7.3.3 #5 SMP` ARMv7 on hd3, region 0
-**`0x02C1DDC2`** (`boot/chainloader/kernel.img`, 10,450,520 B, sha256
-`70474c01…`; media trailer `1f2dc8d7 c2ddc102`; carries the corrected
-microkernel, `image_crc32 0xc1eebfaf`), region 1 `20a5edd3…`;
-`BOOTCTR_FCTRY` **`0x2f`**; root `/dev/loop0` ext4 rw 56.5 G; `nproc` 2, PID 1
-affinity `0,1`; battery Full 4.130 V; panel 0 DSI errors; `wlan0`
-`192.168.0.231/24` (a `10.195.132.240` lease seen mid-session was transient),
-`usb0` `169.254.0.1/16`; SSH `PB_LINK=usb tools/pbssh.sh` works.  Desktop on `swrast`
-(the closed DDK blocked by the operator's standing direction — this work is the
-open driver).  **No flash this session**: the experiment was a firmware *file*
-swap on hd3, reverted to `invfix` (md5 `12f12abb…`, proven with `md5sum`), with
-the tested build kept beside it as `sgx540_ukernel.bin.kick1` (md5
-`229b838c…`) and the previous as `.before-kick1`.  hd3's `powervr_sgx.ko` is
-still the session-74 rebuilt module `2e138afc…`; `.bak` and the reverted
-BRN-31620 build are beside it.  **`tools/pbscp.sh` cannot push to this root**
-(no `scp`, no `sftp-server`) — use `cat FILE | tools/pbssh.sh 'cat > /path'`
-(trap 391).
-
 ## Previous state — 2026-11-26 (session 74)
 
 **The open SGX540 microkernel started and a NULL job printed `1/1 passed`; a
-running EDM was the open question.**  Superseded by session 75, which measured
-that the event program is entered once and never again and that the `1/1 passed`
-was the driver's own 2 s timeout.  Full snapshot:
+running EDM was the open question.**  Superseded by session 75, which showed that
+the `1/1 passed` was the driver's own 2 s timeout, and then by session 76, which
+found that the interrupt had never reached the CPU and **corrected session 75's
+"entered once and never again"** — the corrected counter reads two fetches.  Full
+snapshots:
 [`docs/history/STATE-HISTORY.md`](../history/STATE-HISTORY.md)
-(`## Previous state — 2026-11-26 (session 74)`); its report is 277, with two
-figures withdrawn by 278.
+(`## Previous state — 2026-11-26 (session 74)` and `… (session 75)`); its report
+is 277, with two figures withdrawn by 278 and one more by 279.
 
 ## Previous state — 2026-11-26 (session 73)
 

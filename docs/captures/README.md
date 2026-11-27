@@ -280,3 +280,15 @@ for sessions 74-75, and reports 277/278 are the reports.
 
 `docs/reports/data/` is indexed by the reports that produced it; the report
 INDEX (`docs/reports/INDEX.md`) says which report is current for a topic.
+
+Session **76** added two, and the first is the one to read before quoting
+anything the earlier captures say about *entry counts*:
+
+| file | what it shows |
+|---|---|
+| `sgx540-vendor-ukernel-source-2026-11-26.txt` | **the vendor's microkernel as source**: the DDK 1.8 drop's `services4/srvinit/devices/sgx/eventhandler.pds.asm` — the program `EVENT_PDS_EXEC` points at, a **PDS dispatcher** that does `movs douta, ir0, INPUT_IR0_PA_DEST`, branches on the bits and `halt`s after `movs doutu, INPUT_GENERIC_DOUTU0/1/2` — plus the real entry table (`ukernel_labels.h`), the compiled 220-word program and its **host-patch word indices** (`eventhandler_pds.h`), and the same drop's **prebuilt SGX540 image**.  Key finding: `EURASIA_PDS_IR0_EDM_EVENT_TIMER` is **bit 1** there, versus b29 in the `EUR_CR_EVENT_STATUS` this port polls.  Also four retractions and the operator's ruling that the vendor image is reference, never a deployment target (DECISIONS §115) |
+| `sgx540-entry-counter-2026-11-26.txt` | **the entry instrument, and the correction that matters**: the `UK_ENTRYLOG` counter, its placement and the two bugs in building it, then the measurement — and then the discovery that the counter had been sitting on control-block word **0x1c = `CLEANUP_DEFER_CT`**, which `init_set` clears, so **every "fetched exactly once" reading in sessions 75 and 76 is withdrawn**; on word 0x07 the program is fetched **twice** (`entry = 2`, `tick = 1`).  Records the `UK_REARM` re-emit rounds and that a correctly-placed, provably-firing PDS-task emit produces **no re-fetch**, the `init_set`-emit launch fault, an **evidence inventory** saying which of the session's numbers may be cited, and three instances of one unit bug (`* 4` on a word index) |
+
+Read `sgx540-entry-counter-2026-11-26.txt`'s evidence inventory **before**
+citing any dispatch number from sessions 74–76: the register readings in the
+earlier captures stand, but their *entry counts* do not.

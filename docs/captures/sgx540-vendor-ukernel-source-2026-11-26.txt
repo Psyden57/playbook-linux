@@ -226,26 +226,43 @@ release, not just source:
 plus the per-program splits (2D / 3D / SPM / TA) and every `.asm.preproc`.
 Their entry tables are `ukernel_labels.h` above.
 
-**This is the "reuse the target's proven code path" option, and it is new.**
-Every microkernel this port has run is its own reassembly of a 1.17-era SGX545
-image retargeted to the SGX540 (`local/work/powervr_sgx/ukernel/`, cores/
-{sgx540,sgx545}.py).  This is the vendor's own SGX540 build, the one that ran
-under the reference OS on this silicon.
+**This is REFERENCE MATERIAL, not a target to vendor — operator direction,
+session 76.**  "The open driver should compile its own microkernel too, because
+we could write it cleaner and perhaps better, and the vendor might not be
+written to support or implement modern things Mesa might need.  It's fine to read
+the vendor driver and microkernel source and to write our own, of course."
+So: the prebuilt image is evidence about *behaviour* (what the silicon was
+driven with, what entry offsets and PDS programs the vendor shipped, what the
+divergence between our design and theirs is).  It is **not** a candidate to
+deploy.  Every microkernel this port runs stays ours, in
+`local/work/powervr_sgx/ukernel/`, retargeted per core.
 
-It is not a drop-in: our `ukfw_parse`/`fw_build_open` expect this port's file
-header (magic, entry-pair table, patch table — `struct ukfw_header`,
-pvrsgx_fw.c:272+), and the vendor `.bin` predates it.  Adopting it means writing
-an adapter: the vendor's entry offsets are known (ukernel_labels.h), its PDS
-programs and their constants are known (eventhandler_pds.h), and the host patch
-sites are known (sgxinit.c).  That is a real but bounded piece of work, and it
-replaces speculative reassembly with vendor code on the exact part.
-
-**Open question for the operator / next session:** continue retargeting our
-reassembly, or build the adapter and run the vendor image?  The second is much
-more likely to dispatch, because it is the binary that did.
+What the vendor image is therefore good for:
+  * it proves the chip's entry table and PDS programs as shipped
+    (ukernel_labels.h, eventhandler_pds.h), which is what our image must be
+    judged against;
+  * it is the disassembly cross-check for our assembler (it decodes cleanly
+    with `sgx-disasm -c sgx540`);
+  * it shows our prologue/exit shapes match theirs where it matters — e.g.
+    **rev 120 does not define `FIX_HW_BRN_29104`** (hwdefs/sgxerrata.h), so the
+    vendor *also* ends a task with a bare `mov.end r0, r0` and no `phas`, which
+    is exactly what our `a.end()` does (`nop [end]` → `0xf8040140`).  That was
+    checked and is NOT a difference; do not "fix" it.
 
 TWO MORE THINGS THE DROP SETTLES
 ---------------------------------
+0. **CORRECTION to the paragraph above (same session, in place).**  I wrote that
+   `sgxinit.c:2821` is "the vendor's own derivation" of `EUR_CR_EVENT_OTHER_PDS_
+   DATA` and then reasoned from it.  It is not that register.  That
+   `PatchLIMM(... GetuKernelProgramIUKP2_PDSDATAOffset() ...)` patches a *limm*
+   **inside the USSE init program** (`IUKP2` = init ukernel program 2) so that
+   the program's own register store carries the value; the real
+   `ScriptWriteSGXReg(psScript, EUR_CR_EVENT_OTHER_PDS_DATA, …)` is a different
+   site (sgxinit.c:4204) fed by a different structure.  The `144 >> 4 = 9`
+   arithmetic is right for the value *inside that limm*, but the chain to the
+   register was not demonstrated, and the "must be 9, not 1" framing was wrong
+   twice over — see the retraction below, which stands.
+
 1. **`ui32EventOtherPDSInfo` is derived, not guessed** (sgxinit.c:3640):
    `DM_EVENT | PNS_MASK | USE_PIPELINE_0 | SD_MASK` (when not multithreaded)
    `| ALIGN(ui32USENumAttrs * 4, ATTRIBUTE_SIZE_ALIGN) << ATTRIBUTE_SIZE_SHIFT`.
