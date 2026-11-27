@@ -4641,3 +4641,32 @@ sgx_render_flip_test.c` (`srft_WriteMTEStateToVDM:2488`,
 `eurasiacon/opengles2/validate.c:387-388,3062-3067`; the tools
 `/tmp/powervr_sgx_frame.loc` `68bc15af…`, `.relpds` `ebf463f3…`, `.vend`
 `a0d48593…`.
+
+**Added at the session-82 close (after the operator resumed it) — the client is
+PROVEN, the wall is the SGX540 µkernel, and two config bugs were fixed.**
+
+* **The client stream is proven against the DDK's own 540 capture.**
+  `docs/STATE.md` §2 (24 on-disk captures) gives the clear's record as
+  `43040e00 0e022403` — info word `0e022403`, byte-identical to ours — with the
+  program `tst;bra;doutd ds0[0..1]; tst;bra;doutd ds0[2..3]; doutu ds0[4..5]`,
+  exactly our `state_block()`; our `emit.t1` (`a0200600 fb2f4000`) equals the
+  vendor's `BuildEMITMTE`, and `f3_20` IS `EMIT_FREEP`.  The kernel builds the
+  same TA command (`pvrsgx_render.c`), and the upstream frame tool renders on
+  CE5310.  So the stream, the command and every client-side encoding are
+  correct.
+* **Therefore the wall is the µkernel's dispatch of the VDM state-copy USSE
+  task, not the client.**  Excluded by measurement: the state-copy `DOUTD`, the
+  USE pipe (0/1/all), the residual record fields, and the per-pipe service
+  counters (which do not track VDM TA tasks).
+* **Two config bugs fixed to the vendor's value, neither moving the stall**
+  (traps 428): `EUR_CR_USE_CTRL` (0x0a00) was unset on the 540 (must be
+  `0x7c000`, `srvinit.c:4124`); `DMS_CTRL`'s EDM count was 63 (trap 401 wrongly
+  assumed rev 120 has BRN-23632 — `sgxerrata.h` puts it only in the SGX530/
+  SGX531 blocks) and is 32 (`0x00208200`).
+* **The next experiment is µkernel-side:** `FIX_HW_BRN_33181`
+  (`IDLETA`/`RESUME_TA`, idle the TA USE core), a firmware trace of the `do_ta`
+  `cmd+0x14`/`a74` path (trap 429), and the frame tool's two-kick layout.  The
+  KEEP rule stands: match the DDK capture/encoder before probing the µkernel.
+
+**Evidence.**  Traps 426/428/429; report 283 §7/§8; the capture's "SESSION 82
+CONTINUATION"; driver modules `6ca3b4bf…` (USE_CTRL) and `92e14ad4…` (EDM 32).

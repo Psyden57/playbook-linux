@@ -684,20 +684,26 @@ flasher can replace at every point:
     **clearing `MTE_EMIT` b17 wakes the TE (`CLKGATESTATUS 0x001800f8`), while
     clearing `SD` or setting `USEPIPE_ALL` does not** (reproduced twice each).
     So the VDM waits for the MTE state emit from the state-copy task and it
-    never arrives (trap 426).  The vendor's exact 540 state-emit USE program
-    form (`usegen.c:592-700`: no `phas`/prologue/VCB, `EMITMTE` flags `END`,
-    `src1 = numWrites`) **still stalls**, so the emit *instruction* is not the
-    wall — the task never reaches it.  **Next (two experiments):** (1) a
-    **GPU-side marker** — a fixed-constant store at the top of the state-emit
-    task (and right after the PDS `DOUTD`), read from the PDS-vertex ring after
-    a render — to say whether the task runs; (2) adopt the vendor's compiled
-    **`pds_mte_state_copy`** (23 words, 64-byte segment, loop at `17000CE0`,
-    `DOUTD` `src2` row 0x18 = `07030203`) with our DMA source and USE address
-    — the one program-content difference never submitted.  Do **not** re-run the
-    excluded record-field variants (traps 416/425); the DMM/IRQ-147 races are
-    intermittent (traps 423/424).  Capture `sgx540-first-render-2026-11-27.txt`,
-    "SESSION 82"; tools `.loc` `68bc15af…`, `.relpds` `ebf463f3…`, `.vend`
-    `a0d48593…`.
+    never arrives (trap 426).  **The client stream is now PROVEN against the
+    DDK's own 540 capture** (`43040e00 0e022403`, byte-identical; our `emit.t1`
+    equals the vendor's `BuildEMITMTE`, `f3_20` = `EMIT_FREEP`; the kernel builds
+    the same TA command; the upstream tool renders on CE5310) — so the wall is
+    **µkernel-side**, the dispatch of the VDM state-copy USSE task.  Two config
+    bugs were fixed to the vendor's value and **neither moves it**: `USE_CTRL`
+    (0x0a00 = `0x7c000`, was unset) and `DMS_CTRL` EDM 63→32 (`0x00208200`;
+    BRN-23632 is SGX530-only, trap 401 corrected — trap 428).  Excluded this
+    round: the state-copy `DOUTD`, the USE pipe (0/1/all), the service counters
+    (not VDM-task observables).  **Next (µkernel-side):** (1) the unused rev-120
+    `FIX_HW_BRN_33181` (`IDLETA`/`RESUME_TA`, idle the TA USE core,
+    `usedefs.h:687`); (2) a firmware trace of the `do_ta` `cmd+0x14`/`a74` path
+    (trap 429 — `DMS_CTRL` never gets the TA field); (3) the frame tool's
+    two-kick layout (kick 0 carries a terminate the CE5310 form does not).  Do
+    **not** re-run the excluded record-field variants (traps 416/425), the PDS
+    address (trap 427), the state-copy `DOUTD`/pipe/`USE_CTRL`/EDM-32 (all
+    measured, none moves it); the DMM/IRQ-147 races are intermittent (traps
+    423/424).  Capture `sgx540-first-render-2026-11-27.txt`, "SESSION 82" +
+    "SESSION 82 CONTINUATION"; tools `.loc` `68bc15af…`, `.doutd` `d285cd17…`,
+    `.pipe` `c7ef9997…`; modules `6ca3b4bf…`/`92e14ad4…`.
     (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b) attach the CPU supply or confirm 1.35 V for all OPPs and settle the

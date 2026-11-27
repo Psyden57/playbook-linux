@@ -2,11 +2,12 @@
 
 ## Current state — 2026-11-27 (session 82)
 
-**THE WALL IS THE MTE STATE EMIT: `MTE_EMIT` (b17) is the field the VDM waits on,
-and the state-copy task never delivers the emit.**  Session 82 ran HANDOFF-82 §0b
-(the word-level diff of our 28-word VDM stream against the DDK's own reference
-frame builder, `eurasia/unittests/sgx_render_flip_test/sgx_render_flip_test.c`),
-two measurement boots, six renders, no media writes.  Report 283.
+**THE WALL IS THE MTE STATE EMIT — AND THE CLIENT STREAM IS NOW PROVEN, so the
+wall is the SGX540 µKERNEL's dispatch of the VDM state-copy USSE task.**
+`MTE_EMIT` (b17) is the field the VDM waits on and the task never delivers the
+emit.  Session 82 ran HANDOFF-82 §0b (the word-level diff of our 28-word VDM
+stream against the DDK's own reference frame builder), multiple boots and
+renders, no media writes.  Report 283.
 
 * **The diff found one structural difference not previously varied: the VDM
   stream's PDS addresses are `PDSExecBase`-relative, and ours were absolute.**
@@ -26,36 +27,51 @@ two measurement boots, six renders, no media writes.  Report 283.
 * **`MTE_EMIT` (b17) is the wall.**  The primary MTE state record (SD b25 |
   MTE_EMIT b17 | USEPIPE_1 | PARTITIONS) stalls; the vertex-secondary record
   (SECONDARY b8 | USEPIPE_ALL, no MTE_EMIT) does not (it survives session 81's
-  NO_STATE, where the TE wakes).  One-variable variants, one boot, read
-  mid-hang: baseline `0x001800f0` (TE asleep); **`MTE_EMIT` cleared
-  `0x001800f8` (TE AWAKE)**; `SD` cleared `0x001800f0`; `USEPIPE_ALL`
+  NO_STATE, where the TE wakes).  One-variable variants, read mid-hang:
+  baseline `0x001800f0` (TE asleep); **`MTE_EMIT` cleared `0x001800f8` (TE
+  AWAKE)**; `SD` cleared `0x001800f0`; `USEPIPE_ALL` `0x001800f0`; `USEPIPE`=0
   `0x001800f0`.  Reproduced twice each.  ⇒ the VDM waits for the MTE state emit
   from the state-copy task and it never arrives.  [trap 426]
-* **The vendor's exact 540 state-emit USE program form does NOT fix it.**
-  `USEGenWriteStateEmitProgram` (`usegen.c:592-700`) on a 540 is `mov o,pa` +
-  one `EMITMTE` (flags `END`, target `emit.t1`, `mteCtrl` 0,
-  `src1 = numWrites`, no `phas`/prologue/VCB); a tool built with exactly that
-  still stalls.  So the emit instruction is not the wall — the task never
-  reaches it.  **Next: the task's launch** — the PDS state-copy program's
-  `DOUTD` (state DMA) or `DOUTU` (start), and the vendor's compiled
-  `pds_mte_state_copy` (23 words, 64-byte segment, a loop at `17000CE0`, `DOUTD`
-  `src2` row 0x18 = `07030203`) that has never been submitted.
+* **The client stream is PROVEN against the DDK's own 540 capture.**  The
+  clear's record is `43040e00 0e022403` — info word `0e022403`, identical to
+  ours — with the program `tst;bra;doutd ds0[0..1]; tst;bra;doutd ds0[2..3];
+  doutu ds0[4..5]`, exactly our `state_block()`; our `emit.t1` (`a0200600
+  fb2f4000`) equals the vendor's `BuildEMITMTE`, and `f3_20` IS `EMIT_FREEP`;
+  the kernel builds the same TA command (`pvrsgx_render.c`); the upstream tool
+  renders on CE5310.  So the stream/command/encodings are correct.  [traps
+  426/427; capture "SESSION 82 CONTINUATION"]
+* **Two real SGX540 config bugs fixed to the vendor's value — neither moves the
+  stall** (trap 428): `EUR_CR_USE_CTRL` (0x0a00) was unset (must be `0x7c000`,
+  `srvinit.c:4124`; now live `0x0007c000`); `DMS_CTRL`'s EDM count was 63 (trap
+  401 wrongly assumed rev 120 has BRN-23632 — `sgxerrata.h` puts it only in the
+  SGX530/SGX531 blocks) and is now 32 (`0x00208200`).  Excluded this round: the
+  state-copy `DOUTD`, the USE pipe (0/1/all), the service counters (not VDM-task
+  observables).
+* **Next (µkernel-side):** the unused rev-120 `FIX_HW_BRN_33181`
+  (`IDLETA`/`RESUME_TA`, idle the TA USE core, `usedefs.h:687`); a firmware
+  trace of the `do_ta` `cmd+0x14`/`a74` path (trap 429 — `DMS_CTRL` never gets
+  the TA field); the frame tool's two-kick layout (kick 0 carries a terminate).
 * **Trap 423 is intermittent as recorded**: the first measurement boot drove
-  `irq 147` to 100001 and the kernel disabled it; the wrap-up boot ran 6 renders
-  (8 resets) with `irq 147: 0` throughout.  Trap 424 (DMM wedge) not observed.
+  `irq 147` to 100001 and the kernel disabled it; later boots ran renders with
+  `irq 147: 0`.  Trap 424 (DMM wedge) not observed this session.
 
 **Bench at the session-82 close (read on the unit).**  Region 0 `0x02C1DDC2`
 (no flash; magic `0xD7C82D1F`, sha256 `70474c01…`, 10 450 520 B, verified from
-the tracked file); region 1 `20a5edd3…`; hd3 the session-71 rebake,
-`/dev/loop0` ext4 rw 56.5 G.  **`BOOTCTR_FCTRY 0x2e`** (`≥ 0x1e, no write`).
-Live firmware **`kick18ccb`** (`d4087521…`), module **`4a928e15…`**; `resets 8`,
-`BIF_FAULT 0`; the null family intact (`submit-null-job` 7.5 ms, `1/1`).
-`wlan0` UP (`192.168.0.232/24`), `usb0` up, SSH works; battery `Full` 4.149 V;
+the tracked file); region 1 live `20a5edd3a791a37ef5e6ab9a50d1c83f8967d8257ed76c9fe23a318d4b887422`;
+hd3 the session-71 rebake, `/dev/loop0` ext4 rw 56.5 G (957.6 M used).
+**`BOOTCTR_FCTRY 0x2a`** (`≥ 0x1e, no write`).  Live firmware **`kick18ccb`**
+(`d4087521…`, rebuilt byte-identical from source), module **`92e14ad4…`** (the
+EDM-32 build: USE_CTRL + service counters + status; backups `.pre-edm32`
+`6ca3b4bf…`, `.pre-usectrl` `f54af284…`, `.pre-serv` `4a928e15…` = the
+session-81 module); `resets 1`, `BIF_FAULT 0`.  **`wlan0` DOWN** (the GPU resets
+took it down), `usb0` `169.254.0.1/16` up and SSH works; battery `Full` 4.149 V;
 panel `bl_power 0`, dpms On; desktop **llvmpipe** (DECISIONS §119).  Tools on
-the ext4: `/tmp/powervr_sgx_frame.loc` `68bc15af…` (production default + the
-`SGXGEN_STATE_NO_MTEEMIT/NO_SD/PIPE_ALL` and `SGXGEN_REL_PDS` knobs), `.relpds`
-`ebf463f3…`, `.vend` `a0d48593…`; the pre-session tools untouched.  **The clone's
-`tools/gen/usse_progs.h` is regenerated plain (production).**
+the ext4: `/tmp/powervr_sgx_frame` `1177fafd…` (baseline), `.loc` `68bc15af…`
+(production default + the `SGXGEN_*` knobs), `.relpds` `ebf463f3…`, `.vend`
+`a0d48593…` (the wrong form — do not cite), `.doutd` `d285cd17…`, `.pipe`
+`c7ef9997…`, `.v540` `ef49eb03…`.  **The clone's `tools/gen/usse_progs.h` is
+regenerated plain (production); the driver source changes are uncommitted and
+not in a patch (DECISIONS §110).**
 
 ## Previous state — 2026-11-27 (session 81)
 

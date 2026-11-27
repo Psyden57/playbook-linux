@@ -4799,26 +4799,59 @@ report 121 §3/§11/§12.
 
         Reproduced twice each (`0x001800f0` baseline, `0x001800f8` with b17
         cleared); `b3` set is the same signature as removing the state loads
-        entirely (trap 425).  **The vendor's exact 540 state-emit USE program
-        form does NOT help** — `USEGenWriteStateEmitProgram`
-        (`usegen.c:592-700`) on a 540 is `mov o,pa` + one `EMITMTE`
-        (flags `EURASIA_USE1_END`, target `emit.t1`, `mteCtrl` 0,
-        `src1 = ui32NumWrites`, no `phas`/prologue/VCB — `UNLIMITED_PHASES` and
-        `VCB` are both clear), and a tool built with exactly that still stalls
-        (`0x001800f0`, TE asleep, `0/1`).  So the emit *instruction* is not the
-        wall; the task never reaches it.  The remaining suspects are the PDS
-        state-copy program's **launch** of the task — its `DOUTD` (state DMA) or
-        `DOUTU` (start) — and the vendor's compiled `pds_mte_state_copy`
-        (`…/intermediates/pds_mte_state_copy/…h`, 23 words, 64-byte segment, a
-        loop at `17000CE0`, `DOUTD` `src2` row 0x18 = `07030203`) is a
-        never-submitted program-content difference (ours is a flat
-        `TST;BRA;DOUTD ×2;DOUTU` with `src2` 0).  **Do not re-run the record
-        field variants** (USEPIPE/PARTITIONS/DEP/SEG4/attr, traps 425/416); the
-        next tests are a GPU-side marker in the state-emit task and the vendor's
-        compiled state-copy program.  (Session 82; report 283; capture
-        `sgx540-first-render-2026-11-27.txt`, "SESSION 82".)
+        entirely (trap 425).  **The client stream is now proven against the DDK:**
+        `docs/STATE.md` §2 (24 captures) gives the clear's record as
+        `43040e00 0e022403` — info word `0e022403`, byte-identical to ours — and
+        its program `tst;bra;doutd ds0[0..1]; tst;bra;doutd ds0[2..3]; doutu
+        ds0[4..5]`, exactly our `state_block()`; our `emit.t1` (`a0200600
+        fb2f4000`) equals the vendor's `BuildEMITMTE`, and `f3_20` IS
+        `EMIT_FREEP`.  **Correction:** the earlier "vendor state-emit form"
+        (`MKUSSE_VENDOR_STATE`) dropped `f3_20`/FREEP, so it was *not* a fair
+        test — the emit encoding was already right.  **Excluded by measurement
+        this round:** the state-copy `DOUTD` (`SGXGEN_STATE_NO_DOUTD` still
+        stalls), the USE pipe (`USEPIPE` 0/1/all all stall), and the per-pipe
+        service counters (empty even under `NO_STATE`, so they do not track VDM
+        TA tasks — not evidence either way).  **So the wall is µkernel-side: the
+        state-copy USSE task never emits.**  Remaining suspects: `FIX_HW_BRN_33181`
+        (`IDLETA`/`RESUME_TA`, idle the TA USE core, `usedefs.h:687`), the `do_ta`
+        `cmd+0x14`/`a74` path (trap 429), and the frame tool's two-kick layout.
+        **Do not re-run the record-field variants** (traps 425/416) or the PDS
+        address (trap 427).  (Session 82; report 283 §7; capture
+        `sgx540-first-render-2026-11-27.txt`, "SESSION 82 CONTINUATION".)
 
-427. **The VDM stream's PDS addresses are `PDSExecBase`-relative on the SGX540,
+428. **Two real SGX540 init/config bugs, both fixed to the vendor's value, and
+        neither moves the render stall.**  (a) **`EUR_CR_USE_CTRL` (0x0a00) was
+        never written on the 540** — `srvinit` writes it on *every* core as
+        `(31<<INSTLIMIT)|REGBOUND = 0x7c000` (`sgxinit.c:4124`); the SGX545 init
+        had `{0xa00,0x7c000}`, the SGX540's did not.  Added; live `0x0007c000`.
+        (b) **`DMS_CTRL`'s EDM task count was 63 and must be 32.**  `sgxerrata.h`
+        defines `FIX_HW_BRN_23632` **only** in the SGX530 (revs 110-125) and
+        SGX531 blocks — **not** the SGX540 — so the "at least 33 EDM tasks" bump
+        never applies and `0x00208200` (32/32/32) is correct (`ddk18-facts.md`
+        §3).  Trap 401 had assumed rev 120 has BRN-23632; wrong.  Corrected in
+        `pvrsgx_fw.c`; live `0x00208200`.  Each was one module build + reboot;
+        the stall signature stayed `CLKGATESTATUS 0x001800f0`, TE asleep, `0/1`.
+        Also: the SGX545's other init regs (`0x818/0x810/0x814/0x4e8/0x800/0xaac/
+        0xa78/0xa7c/0xa80`) are **not named in the 540 header** — do not copy
+        them; only `USE_CTRL` was a real omission.  (Session 82; modules
+        `6ca3b4bf…` and `92e14ad4…`.)
+
+429. **`do_ta`'s `cmd+0x14 → 0xa74` read-modify-write does not land the TA field
+        in `DMS_CTRL` — mechanism open.**  The µkernel RMWs `0xa74` b27-31 with
+        `cmd+0x14` (`ta_ctl[0] = TA_CTL = 0x50000000`, which the kernel builds at
+        `pvrsgx_render.c:880/642`; the RMW is at `do_ta`, disasm line 973 of the
+        deployed image: `ld.a.d r9,r17,#49; ld.a.d r5,r9,#5; ldr r6,#669; limm
+        r7,#0x07ffffff; and; or; str #669`).  Measured: `DMS_CTRL` reads
+        `0x00208200` idle **and** mid-hang (0.4 s / 1.2 s) — no `0x50000000`.
+        On the 540 `0xa74` is `DMS_CTRL` (not a 545 TA-flag register), so not
+        OR-ing it is arguably correct, but *why* the RMW leaves it unchanged (the
+        `cmd+0x14` read returns 0? the write is masked?) is unresolved.  Note
+        `cmd+0x04` reads correctly through the same `SC_CMD` pointer (the
+        session-81 `UK_CCBTRACE` read `0x71`), which makes a plain bad pointer
+        unlikely.  Settle with a firmware trace of `cmd+0x14` and the post-store
+        `0xa74`.  (Session 82; capture, "SESSION 82 CONTINUATION".)
+
+## 3. Corrections to older reports
         and ours were absolute — a real divergence, measured NOT the wall.**  On
         a core without `SGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE` (this one) the
         state-record and index-list base-address fields hold
@@ -5195,6 +5228,21 @@ to `{0}`, so every userspace process — including the benchmark and the UI —
 ran on CPU 0 only, while `online` read `0-1` (report 266 §1, trap 340).  The
 throughput and latency numbers must be re-measured on two real cores before they
 are used; they are not evidence against dual-core scaling.
+
+**3.36 Trap 401's "rev 120 defines `FIX_HW_BRN_23632`, so `DMS_CTRL` EDM = 63" is
+wrong; EDM counts 32.**  Trap 401 (session 76) raised `EUR_CR_DMS_CTRL`'s EDM
+task count from 32 to 63 on the claim that rev 120 has BRN-23632 ("at least 33 EDM
+tasks").  The GPL-2 DDK 1.8 `sgxerrata.h` defines `FIX_HW_BRN_23632` **only** in
+the SGX530 (revs 110, 111, 1111, 120, 121, 125) and SGX531 (revs 113, 121) blocks
+— **not** the SGX540 — so the bump never applies to our core.  `srvinit`'s own
+derivation for the 540 is 32 EDM / 32 vertex / 32 pixel = **`0x00208200`**
+(`docs/reference/sgx540-ddk18-facts.md` §3 already said so).  The driver's
+`pvrsgx_fw.c` `dms_ctrl` was corrected `(63u<<16)` → `(32u<<16)` (session 82,
+module `92e14ad4…`), and `DMS_CTRL` now reads `0x00208200` live.  **It did not
+move the render stall** (trap 426), so trap 401's "this is a real defect and it
+did NOT change the symptom" stands except for the value.  Related: `EUR_CR_USE_CTRL`
+(0x0a00) was also missing on the 540 and is now `0x7c000` (trap 428).  (Session 82;
+`sgxerrata.h` SGX530/SGX531 blocks; capture "SESSION 82 CONTINUATION".)
 
 ## 4. Documentation and tree defects (not behavioural bugs)
 

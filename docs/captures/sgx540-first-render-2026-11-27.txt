@@ -957,3 +957,80 @@ CORRECTION (session 81): `USEPIPE = (USEPIPE_1 + pipe) << 13` is a double shift.
 reference (:2521) and the client (validate.c:3067) write `(USEPIPE_1 + pipe)` =
 0x2000|pipe.  Our production `counter + 0x2000` already matched; the session-81
 STATE_540 variant's `(1+pipe)<<13` was the deviation (differs only for pipe>0).
+
+
+SESSION 82 CONTINUATION — the client is proven, the wall is the SGX540 µkernel
+=============================================================================
+After the operator resumed the session (the stream-diff half was written up
+early), the work turned to proving where the wall is NOT, then two real driver
+fixes.  None moves the stall; the client is now proven against the DDK.
+
+THE DDK'S OWN 540 CAPTURE MATCHES OUR RECORD BYTE-FOR-BYTE
+-----------------------------------------------------------
+docs/STATE.md section 2 (from 24 on-disk DDK captures) gives the clear's TA
+state program as `43040e00 0e022403` — info word 0e022403, identical to ours —
+and its program as `tst;bra;doutd ds0[0..1]; tst;bra;doutd ds0[2..3];
+doutu ds0[4..5]`, exactly our state_block().  The triangle's block is DMAed as
+25 dwords and forwards 18 (pa0-pa17), also ours.  The state-emit USSE programs
+are "just emit instructions" (mov o,pa then emit).
+
+OUR ENCODINGS MATCH THE VENDOR'S OWN ENCODERS (offline)
+-------------------------------------------------------
+  emit.t1 o0,#12,#0 [end f3_20]   ->   a0200600 fb2f4000
+  vendor BuildEMITMTE (540: src0 OUTPUT, src1/2 IMMEDIATE, target MTE,
+  mteCtrl 0, flags END, bFreep TRUE)  -> a0200600 fb2f4000   (identical)
+f3_20 IS EMIT_FREEP (bit 21, EURASIA_USE0_EMIT_FREEP 0x00200000) — the vendor
+sets it.  The earlier MKUSSE_VENDOR_STATE form DROPPED f3_20, so that experiment
+removed a vendor bit and was not a fair test; the emit encoding was already
+correct.  DOUTU0 word 0x0001060a decodes per SetUSEExecutionAddress (CBASE 10,
+COFF 0, EXE 0x10600 -> off 0x8300, inside the 512 KiB window).
+
+THE UPSTREAM'S OWN µKERNEL ALSO STALLED ON A TA
+-----------------------------------------------
+docs/log/entries/2026-11-03-0700-ce5300-ab-ddk-renders-ours-stalls.md (DDK
+renders the triangle, ours lockup_TA) was fixed in
+2026-11-03-0925-ukernel-first-triangle-renders.md (dir-list routing + 0xa74).
+The CE5310 first frame (2026-11-03-0210) is the same powervr_sgx_frame tool.
+
+EXCLUDED THIS ROUND (each a one-variable run, read mid-hang)
+------------------------------------------------------------
+  state-copy DOUTD dropped (SGXGEN_STATE_NO_DOUTD):  CLKGATESTATUS 0x001800f0
+  USEPIPE 0 / USEPIPE_ALL (7<<13):                    0x001800f0
+  service counters USE0/1_SERV_VERTEX/PIXEL: EMPTY through the hang, but ALSO
+      empty under NO_STATE (where the TE wakes) -> not a valid observable
+  (baseline 0x001800f0 TE asleep; NO_MTEEMIT 0x001800f8 TE awake, twice each)
+
+TWO REAL DRIVER BUGS FIXED (each to the vendor's value) — NEITHER MOVES IT
+--------------------------------------------------------------------------
+  EUR_CR_USE_CTRL (0x0a00): was UNSET on the 540.  srvinit writes it on EVERY
+    core (sgxinit.c:4124): (31<<INSTLIMIT)|0 = 0x7c000.  Added -> live 0x7c000.
+    Render still 0x001800f0.   [module 6ca3b4bf]
+  DMS_CTRL EDM count: was 63 (trap 401).  sgxerrata.h defines FIX_HW_BRN_23632
+    ONLY in the SGX530 (revs 110-125) and SGX531 blocks, NOT the SGX540 -> the
+    bump never applies; 0x00208200 (32/32/32) is correct (ddk18-facts §3).
+    Corrected -> live 0x00208200.  Render still 0x001800f0.   [module 92e14ad4]
+
+OPEN ANOMALY — 0xa74 (DMS_CTRL) TA field never lands
+----------------------------------------------------
+do_ta read-modify-writes cmd+0x14 (ta_ctl[0] = TA_CTL = 0x50000000, which the
+kernel builds at pvrsgx_render.c:880/642) into 0xa74 b27-31, but DMS_CTRL reads
+0x00208200 idle AND mid-hang (0.4 s / 1.2 s).  On the 540 0xa74 is DMS_CTRL, not
+a 545 TA-flag register, so not OR-ing it is arguably right — but WHY the RMW
+leaves it unchanged is unresolved (the cmd+0x14 read may be 0; the write may be
+masked).  The RMW IS in the deployed image: a from-source rebuild reproduced
+kick18ccb (d4087521) byte-identically, and `k18.bin` disassembly shows it at
+do_ta (ld.a.d r9,r17,#49; ld.a.d r5,r9,#5; ldr r6,#669; limm r7,#0x07ffffff;
+and; or; str #669).
+
+BENCH AT THE FINAL CLOSE
+------------------------
+region 0 0x02C1DDC2 (no flash), region 1 20a5edd3…, hd3 /dev/loop0 ext4 rw
+56.5 G (957.6 M used); BOOTCTR_FCTRY 0x2a (>= 0x1e, no write); firmware
+kick18ccb (d4087521…), module 92e14ad4…; resets 1, BIF_FAULT 0; wlan0 DOWN,
+usb0 up, battery Full 4.149 V.  Module backups .pre-edm32 6ca3b4bf, .pre-usectrl
+f54af284, .pre-serv 4a928e15.
+
+Tools: .loc 68bc15af, .relpds ebf463f3, .vend a0d48593 (wrong form), .doutd
+d285cd17, .pipe c7ef9997, .v540 ef49eb03, powervr_sgx_test 16545fd5.  Driver
+source changes (pvrsgx_core.c, pvrsgx_fw.c, pvrsgx_dump.c) are in the clone,
+uncommitted, NOT in a patch (DECISIONS §110).
