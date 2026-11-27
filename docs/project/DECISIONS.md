@@ -4414,3 +4414,30 @@ SGX545-only register tail) are trap 415.
 (boots 1-7); traps 413-415; `pvrsgx_cmd_defs.c` (the sgx540 entry);
 `ukernel/cores/sgx540.py` (the fixed constants); the vendor write-set diff
 method (§0b of HANDOFF-80).
+
+**Added at the session-80 close, from the same day's evidence — two rules, each
+earned by an experiment.**
+
+1. **A per-core field in the vendor's source is not the fix until the failure
+   moves.**  The whole spec of this item is "settle every per-core constant
+   against a primary source", and session 80 did that for three more fields of
+   the VDM control stream (the index-list header's `IDXPRES45` b24, the state
+   record's `PARTITIONS`, and the draw's word 5 — `sgxdefs.h:1124-1155` plus
+   every `#if defined(SGX545)` in `eurasiacon/opengles2/`).  All three are
+   genuinely wrong in our generator, and emitting the SGX540 values changed
+   **nothing**: identical timeout, identical mid-hang state, twice, with the
+   word-level diff stated in advance (4 of 28 words; then 2 of 28).  So a
+   citation establishes *what is right*, never *what is blocking* — the second
+   still needs the render.  Keep the measurement in the capture and the
+   citation at the code site rather than deploying an untested "fix".
+2. **A `git checkout` of an uncommitted work tree loses more than the change
+   you meant to revert.**  Session 79's VDM-stream dump lived in the same file
+   and was never committed; reverting the session-80 encoding experiment took
+   it too.  It was restored verbatim from the capture and re-proved by dumping
+   the stream again (the 28 words match), but the rule is the project's own:
+   **commit the instrument before you experiment on the file that holds it.**
+
+**Evidence for both.**  `docs/captures/sgx540-first-render-2026-11-27.txt`,
+"SESSION 80 CONTINUATION" (the two experiments' word diffs and the identical
+timeout lines; the commit note for the restored dump); traps 416/417;
+`docs/sessions/session-80.md`.

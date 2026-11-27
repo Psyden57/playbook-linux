@@ -580,6 +580,27 @@ flasher can replace at every point:
     **Next: check the VDM control-stream record formats and the client
     state-load PDS/USE programs against the 540's encodings** (the 0xb14
     method on the stream); then the TA_TE tail hygiene.
+    (a4c) **THE STREAM'S RECORD LAYOUT IS WALKED AND EXCLUDED (session 80).**
+    The vendor's own *client-side* builder (GPL-2 DDK 1.8,
+    `eurasiacon/opengles2/{validate,clear,scissor,accum}.c` and
+    `sgxdefs.h:1124-1155`) splits every record on `#if defined(SGX545)`, and
+    our generator emitted the 545 value for **three** fields: the index-list
+    header's b24 `IDXPRES45`, the state record's `PARTITIONS` nibble (1 on the
+    540, 2 on the 545 — `validate.c` *and* `srvinit`), and the draw's word 5
+    (the same four numbers at different bit positions).  Emitted for real
+    renders — first two together (4 of 28 words), then word 5 alone (2 of 28,
+    `0x05800102`, the 540 packing byte-for-byte) — the timeout signature was
+    **identical both times**, so the record layout is a real divergence to fix
+    for correctness and **not** the wall.  The **`TA_TE` tail is pruned**
+    (firmware `kick16tail` `744b072d…`): re-derived the vendor 540 release
+    binary's write set (92 `str #imm` over 41 offsets; none of the SGX545-only
+    tail in it, 0x230/0x234 written as `MTE_OTPM_CSM_FLUSH/LOAD_BASE`
+    addresses), 28 → 16 entries, SGX545 golden byte-identical, 8/8 offline
+    tests, one boot with the mid-hang state field-for-field session 79's.
+    **Next: the state-load PDS/USE programs** (now dumpable — the five STATE
+    records name five real programs, `vdm_state[0/8/10/18/23]`) against the
+    540's USSE/PDS encoding, or the VDM↔USE handshake.  Traps 416/417;
+    capture `sgx540-first-render-2026-11-27.txt`.
     (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b) attach the CPU supply or confirm 1.35 V for all OPPs and settle the

@@ -1,6 +1,56 @@
 # Current state
 
-## Current state — 2026-11-27 (session 79)
+## Current state — 2026-11-27 (session 80)
+
+**THE VDM CONTROL STREAM'S RECORD LAYOUT IS WALKED AND EXCLUDED — it is the
+third field on the render path to fall to measurement, and the stall did not
+move.**  Session 79 read the client's stream as "well-formed but
+545-derived"; this session found the vendor's own *client-side* builder in the
+GPL-2 DDK 1.8 drop and it splits every record on `#if defined(SGX545)`:
+ours emitted the SGX545 values for **three** fields — the index-list header's
+b24 `IDXPRES45` (clear here, set by every non-545 builder), the state record's
+`PARTITIONS` nibble (2 here, 1 on the 540 — in `validate.c` *and* `srvinit`),
+and the draw's word 5 (the same four numbers at different bit positions,
+`sgxdefs.h:1124-1155`).  Emitted for real render jobs — the first two together
+(4 of the stream's 28 words), then word 5 alone (2 of 28, `0x05800102`, the
+540 packing byte-for-byte) — **the timeout signature was identical each time**
+(`EVENT_STATUS2 TRIG_TA`, no `TA_FINISHED`, `DPM_PAGE_STATUS 0`).  Both
+reverted; the stream is byte-identical to session 79's again.  So the record
+layout is a real divergence to fix for correctness and **not** the wall.
+
+**Also done: the `TA_TE` tail is pruned** (firmware `kick16tail` `744b072d…`).
+I re-derived the vendor 540 release binary's write set rather than trusting the
+note — 92 `str #imm` sites over 41 offsets, none of the SGX545-only tail
+(0x2a8, 0x2b0-0x2d4, 0x324, 0x364-0x374, 0x520, 0x74c) among them, and
+0x230/0x234 written as `MTE_OTPM_CSM_FLUSH/LOAD_BASE` addresses, not the 545's
+`rt_flags`.  `TA_TE` 28 → 16 entries, SGX545 golden byte-identical, 8/8 offline
+tests.  One boot: null family intact, and the render's timeout **and** its whole
+mid-hang TA/VDM/DPM state are field-for-field session 79's.
+
+**Next: the client state-load PDS/USE programs** (now dumpable — the five STATE
+records name five real programs in the PDS-vertex ring,
+`vdm_state[0/8/10/18/23]`), checked against the 540's USSE/PDS encoding; or the
+VDM↔USE handshake.  Everything else on the stream axis is now excluded by
+measurement.  Traps **416/417**; the capture's "SESSION 80 CONTINUATION"
+section is the record.
+
+**Bench**: region 0 `0x02C1DDC2` (no flash), region 1 `20a5edd3…`, hd3 the
+session-71 rebake.  Live firmware **`kick16tail`** (`744b072d…`); preserved
+beside it `.kick15pds` (`24322c2a…`), the earlier variants and **`.working` =
+kick10 `3fbbd11b…`** as the revert.  Module `1a2949ab…` unchanged
+(`.pre-render` = `.working` = `10c6f435…`).  `/tmp/powervr_sgx_frame`
+`1177fafd…` (session 79's dump restored + the state-program extension), with
+`.old79` and `.s80base` kept.  `BOOTCTR_FCTRY 0x20` on the deploy boot;
+**`wlan0` DOWN** at the close (the render attempts' GPU resets take it down, and
+it will not re-associate — `wlan0: regulatory prevented using AP config,
+downgraded`, whose documented fix `iw reg set` is unavailable because **`iw` is
+not installed on the Nura root**); usb0 up and SSH unaffected; desktop
+llvmpipe, untouched.
+**Trap 390 note:** the `open microkernel kick16tail` line had wrapped out of
+dmesg by the close, so the live firmware is identified by
+`md5sum /lib/firmware/powervr_sgx/sgx540_ukernel.bin` = `744b072d…`.
+
+## Previous state — 2026-11-27 (session 79)
 
 **THE FIRST RENDER JOB WAS SUBMITTED, CONSUMED BY THE MICROKERNEL, AND ITS
 PRECISE FAILURE POINT IS MEASURED: the TA task is kicked and STARTS

@@ -272,3 +272,112 @@ module `1a2949ab…` (`.pre-render` = `.working` = `10c6f435`, `.predumpregs`
 preserved).  `/tmp/powervr_sgx_frame` `efaefc61…` (with the VDM-stream dump).
 Region 0 `0x02C1DDC2` untouched all session; `BOOTCTR` self-maintaining;
 `wlan0` re-associated between the GPU-reset boots; usb0 up.
+
+
+SESSION 80 CONTINUATION — the stream's record encodings, walked and excluded
+===========================================================================
+Session 80 ran HANDOFF-80 §0b steps 1-4.  Two boots (one firmware deploy
+`kick16tail`, one client-only pass), no media writes.
+
+STEP 1 — the state-load programs are now dumpable, and they are real programs
+----------------------------------------------------------------------------
+`dump_prog()` in `tools/gen/sgxgen.c` searched only the two pixel rings;
+extended to `pds_pix`/`pds_vtx`/`usse_pix` and wired `dump_progs()` to visit
+every STATE record's PDS address (`0x40000000 | addr>>4`, rows from the info
+word).  Dumped on the unit — the five STATE records name five real PDS
+programs in the PDS-vertex ring:
+
+    vdm_state[0]  @ 0x0e801200  0e8011a0 02c0000b ... 87000000 90000006 07000203
+    vdm_state[8]  @ 0x0e801340  0e8012c0 02000018 ... (then 0e8013a0 3c008081 3b808081)
+    vdm_state[10] @ 0x0e801400  0e8013a0 02400009 ... 07030223 07040345 af000000
+    vdm_state[18] @ 0x0e801100  0001020a ... 07000345 af000000
+    vdm_state[23] @ 0x0e801100  (the terminate's, same stub as [18])
+
+STEP 2 — the record encodings ARE per-core in the vendor's source, and ours
+are the 545's; changing them changes nothing
+-------------------------------------------------------------------------------
+The GPL-2 DDK 1.8 drop builds the same records client-side with explicit
+`#if defined(SGX545)` splits.  Three divergences, all measured:
+
+  * index-list header b24 `IDXPRES45`: the vendor's 540 builder SETS it
+    (`opengles2/clear.c:462-469`, `scissor.c:369-376`, `accum.c:554-561`,
+    `validate.c:3987-3994` — every one `#if !defined(SGX545)`), and the
+    vendor's own µkernel reads it to walk a record
+    (`ta.asm`: `SplitControlStream`, `SCS_SkipPRES45`).  We emitted it clear.
+    (The render fetch itself is the VDM hardware's, not the µkernel's — the
+    release image contains no `0x80c00003`-class constant at all — so
+    `SplitControlStream` is evidence that the field is load-bearing, not
+    evidence about our stall.)
+  * state record PARTITIONS b11-9: vendor 540 = **1**, 545 = 2
+    (`validate.c:474-480`, and `sgxinit.c:1263-1266, 1452-1455, 1608,
+    3281-3284`).  Ours carried the 545's 2 (`0x2020400`).
+  * draw word 5: the four numbers are packed at DIFFERENT bit positions per
+    core (`sgxdefs.h:1124-1155`): 540 = VERTEXSIZE b25-31 / VTXADVANCE b23-24 /
+    USEATTRIBUTESIZE b8-14 / DATASIZE b0-6; ours used the 545's
+    b24-31 / b22-23 / b7-21 / b0-6.
+
+FIRST CLIENT-ONLY EXPERIMENT (no reboot): the first two, together.
+    word  1: 0e022403 -> 0e022203   (PARTITIONS 2 -> 1, state[0])
+    word  9: 0e022405 -> 0e022205   (PARTITIONS 2 -> 1, state[8])
+    word  2: 80c00003 -> 81c00003   (b24 set, index[0])
+    word 12: 80c00003 -> 81c00003   (b24 set, index[1])
+  4 of 28 words.  Null family intact (579 µs; 600 jobs/55 ms; resets 5).
+  ONE RENDER: **identical timeout** —
+    job timed out (ccb 614, consumed 613, done word 0x0 for 0x1,
+                   events 0x00000000/0x00000010); resetting
+  `EVENT_STATUS2 0x10`, `EVENT_STATUS 0`, `DPM_PAGE_STATUS 0`.
+
+SECOND CLIENT-ONLY EXPERIMENT: word 5 alone, at the 540's positions.
+    word  7: 02c00082 -> 05800102   (the clear's draw)
+    word 17: 01c00082 -> 03800102   (the triangle's draw)
+  2 of 28 words, and `0x05800102` is byte-for-byte what the vendor's
+  `clear.c:488-494` computes independently for its 3-vertex clear.
+  ONE RENDER: **identical timeout again**, same signature.
+
+Both reverted; the stream is byte-identical to session 79's
+(`40e80120 0e022403 80c00003 …`) and that is the proof the reverts are complete.
+Conclusion: the VDM control stream's *record field layout* is not the wall.
+
+STEP 4 — the TA_TE tail pruned (firmware `kick16tail` `744b072d…`)
+------------------------------------------------------------------
+Measured the vendor 540 release binary myself rather than trusting the note:
+92 `str #imm` sites over 41 distinct offsets, and NONE of 0x2a8, 0x2b0, 0x2b4,
+0x2d0, 0x2d4, 0x324, 0x364, 0x368, 0x370, 0x374, 0x520, 0x74c is among them
+(nor named by sgx540defs.h).  0x230/0x234 ARE written — as
+`EUR_CR_MTE_OTPM_CSM_FLUSH_BASE`/`_LOAD_BASE` addresses, not as the 545's
+`rt_flags` word.  `TA_TE` pruned from 28 entries to 16 accordingly
+(`ukernel/cores/sgx540.py`); the SGX545 golden stayed byte-identical
+(`83b5b0a7…`) and all 8 offline emulator tests pass.  ONE BOOT:
+  * null family intact, `resets 0` before the render;
+  * ONE RENDER: **identical timeout**, and the mid-hang TA/VDM/DPM state is
+    field-for-field session 79's (TE_MTILE1/2 `0x01004004`/`0x02008008`,
+    TE_SCREEN `0x0000f007`, VDM_CTRL_STREAM_BASE `0x00042000`, MTE_CTRL `0xa2`,
+    DPM_PDS_PAGE_THRESHOLD `0xf00`, free list `0x10210000`/alloc `0x10200000`,
+    **DPM_PAGE_STATUS 0**).
+  So the tail was a real defect, correctly pruned, and not the stall.
+
+WHERE THIS LEAVES §0b
+----------------------
+The outcome table's third branch, twice, with a controlled variable in each
+case.  Excluded now by MEASUREMENT (not argument): the kick path, the TA
+register block, the invalidate/load protocol, the stream's record field layout
+(three fields), and the TA_TE tail.  What has never been checked on the 540 is
+the **content of the client state-load PDS/USE programs** those records name
+(now dumped, above) against the 540's USSE/PDS encoding — or the VDM↔USE
+state-load handshake itself.
+
+BENCH AT THE CLOSE (session 80)
+-------------------------------
+Live firmware `kick16tail` (`744b072d…`, the pruned TA_TE);
+`.kick15pds` `24322c2a…` and `.working` = kick10 `3fbbd11b…` both preserved as
+the revert.  Module unchanged `1a2949ab…`.  `/tmp/powervr_sgx_frame`
+`1177fafd…` (session 79's dump restored + the state-program extension); the
+pre-experiment tools kept as `.old79` `efaefc61…` and `.s80base` `83c8aef1…`.
+`BOOTCTR_FCTRY 0x20` read on the deploy boot; region 0 `0x02C1DDC2` untouched.
+`wlan0` went DOWN under the render attempts' GPU resets and would not
+re-associate (`wlan0: regulatory prevented using AP config, downgraded` — the
+5 GHz/world-domain case whose documented fix `iw reg set` is unavailable, since
+**`iw` is not installed on the Nura root**); usb0 up and SSH unaffected.  By
+the close the `open microkernel kick16tail` line had wrapped out of dmesg
+(trap 390), so the live firmware is identified by the file hash
+`744b072d…`.

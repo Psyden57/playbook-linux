@@ -4362,6 +4362,52 @@ report 121 §3/§11/§12.
         TE_TPC, 0x2b0/0x2b4/0x2d0/0x2d4 GSG*, 0x324, 0x364/0x368/0x370/0x374
         the VDM PDS-program pointers, 0x520, 0x74c).  (Session 79; capture
         `sgx540-first-render-2026-11-27.txt`, boots 6-7.)
+        **Both closed in session 80** — see trap 416.
+
+416. **The VDM control stream's record encodings ARE per-core in the vendor's
+        own source, and our client emits the SGX545 ones — but changing them
+        did not move the stall, so the stream's field layout is not the wall.**
+        Three divergences, each found in the GPL-2 DDK 1.8 drop and each with an
+        explicit `#if defined(SGX545)` in the vendor's *client-side* builder:
+
+        | what | vendor's SGX540 value | what we emitted |
+        |---|---|---|
+        | index-list header b24 (`EURASIA_VDM_IDXPRES45`) | **set** (`opengles2/clear.c:462-469`, `scissor.c:369-376`, `accum.c:554-561`, `validate.c:3987-3994`: all `#if !defined(SGX545)`) | clear |
+        | state record PARTITIONS (b11-9) | **1** (`validate.c:474-480`; `sgxinit.c:1263-1266`, `1452-1455`, `1608`, `3281-3284`) | 2 (the 545's) |
+        | draw word 5 field positions (`sgxdefs.h:1124-1155`) | VERTEXSIZE b25-31, VTXADVANCE b23-24, USEATTRIBUTESIZE b8-14, DATASIZE b0-6 | the 545's b24-31/b22-23/b7-21/b0-6 |
+
+        **Measured, and all three are non-fixes.**  The first two together
+        (exactly 4 of the stream's 28 words) and the third alone (exactly 2 of
+        28, `0x02c00082 → 0x05800102` — the 540 packing, byte-for-byte the value
+        `clear.c:488-494` computes) were each emitted for real render jobs: the
+        timeout signature is unchanged every time — `EVENT_STATUS2 TRIG_TA`,
+        `EVENT_STATUS = 0` (no `TA_FINISHED`), `DPM_PAGE_STATUS 0`, an
+        identical `job timed out (… events 0x00000000/0x00000010)` line.  So
+        the record field layout is **not** where the VDM stalls; it is a real
+        divergence to fix for correctness, not the blocker.  Not deployed — the
+        tool carries the measurement and the citation at each site instead.
+        **Consequence for the search:** with the kick path, the TA register
+        block, the invalidate/load protocol AND the stream's record layout all
+        excluded by measurement, the remaining 0xb14-class suspect is the
+        **client state-load PDS/USE programs** those STATE records point at
+        (dumped in session 80 — `vdm_state[0..]` are real PDS programs in the
+        PDS-vertex ring), or the VDM↔USE handshake itself.  (Session 80;
+        capture `sgx540-first-render-2026-11-27.txt` continuation.)
+
+417. **"`EVENT_STATUS2` reads `0x10` at the timeout" does not by itself prove
+        the TA started — check who *sets* the bit before reading it as a
+        trigger.**  `0x10` is `EUR_CR_EVENT_STATUS2_TRIG_TA` (sgx540defs.h), and
+        session 79 concluded from its latch that "the TA task was kicked and
+        started".  But the same register has a `HOST_ENABLE2` twin whose
+        `TRIG_TA` bit is bit 4 as well, and the µkernel writes `HOST_CLEAR2`;
+        a bit can be stale from the launch rather than set by this kick.  The
+        independent corroboration for session 79's reading is that it is *not*
+        a `TRIG_3D` bit and that the launch's own path demonstrably dispatches
+        — but the cheap control is `EVENT_STATUS2` **before** the kick, which
+        session 79 did not take.  Record the register state before a kick as
+        well as at the timeout.  (Session 80; the same latch reproduces on both
+        firmware builds and with every stream variant, so its constancy is
+        itself weak evidence that it is not this kick's.)
 
 ## 3. Corrections to older reports
 
