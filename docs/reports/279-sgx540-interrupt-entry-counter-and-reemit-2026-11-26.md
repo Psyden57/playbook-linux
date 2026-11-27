@@ -164,4 +164,35 @@ Worked at the operator's direction part way through the session.
   source, entry table, PDS patch indices, four retractions.
 * Live reads on the unit: `status` (registers incl. `DMS_CTRL`, `DMS_AGE`, the
   OCP pair), `ctlblk` (words 0x07 / 0x2c / 0x18 / 0x3f), `pds`, `relaunch`.
-* Traps 398–404.
+* Traps 398–404, plus 405 from the wrap-up re-read.
+
+## 8. The wrap-up re-read, and what it caught
+
+The session's documents were re-read end to end against the code, on the
+operator's instruction.  It caught two things the session had recorded as done
+when they were not:
+
+* **The `relaunch` node was still on word 0x1c.**  The session found the reader
+  bug, wrote the fix into the *comment*, and left the index alone — so the note
+  and the capture documented a fix that had not been made, and the node printed
+  `0` where the real entry count is `2`.  Now `ctl[0x07]`, deployed
+  (`94eaea61…`) and read back on the unit: `entry counter before/after
+  0x00000002`, unchanged — **re-arming does not re-fetch**, now on a valid
+  instrument.  Trap 403.
+* **`build.py` mis-consumed its core token whenever `SGX_CORE` was set**
+  (upstream `95f78ca` — not ours, but it has been poisoning HANDOFF §3's gate
+  command): the image went to `./sgx545` and the JSON manifest was written
+  **over** `sgx545_ukernel.bin`.  The failure surfaces as `undecodable
+  726f6322 20200a7b` — ASCII `"cor"` / `" {\n"` — i.e. it looks like a firmware
+  bug.  Fixed, with the conflicting-env case made a hard error; `test_emu.py`
+  now honours `SGX_CORE`.  Trap 405.
+
+Two prose defects too: the "four more real defects" count (section 2 above lists
+**five**), and `docs/captures/README.md`'s trap range and session span, which
+the session-76 additions had silently outdated.
+
+**Re-verified after the fixes:** `tools/docs_audit.py` clean;
+`tools/tests/test_offline.py` no failures; `test_emu.py` 8/8 OK on **both**
+cores via `SGX_CORE`; the SGX545 golden gate byte-identical (`83b5b0a7…`); and
+the §3 recipe still reproduces the deployed firmware **exactly** —
+`f468a71d…`, the same md5 as `fix1` on the unit.

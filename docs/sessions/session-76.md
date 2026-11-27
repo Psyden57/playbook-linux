@@ -6,8 +6,9 @@
 
 Date: 2026-11-26.  Unit at the end: **Linux `7.3.3`** on hd3 (root
 `/dev/loop0` ext4 rw), region 0 **`0x02C1DDC2`**, region 1 **`20a5edd3…`**,
-`BOOTCTR_FCTRY` **`0x25`** (`>= 0x1e`, no write), `card1`/`renderD129` =
-`powervr_sgx`, panel `bl_power 0` / connector `On` / **0 DSI errors**,
+`BOOTCTR_FCTRY` **`0x25`** at the close (`>= 0x1e`, no write; `0x23` after the
+wrap-up re-read's two reboots, by arithmetic — not re-read), `card1`/`renderD129` =
+`powervr_sgx`, panel `bl_power 0` / `card0-LVDS-1` connected / **0 DSI errors**,
 `wlan0` **down**.  Full bench record: STATE.md, "Bench at the close (session 76)".
 
 ## Goal of this session
@@ -140,9 +141,11 @@ microkernel itself writes, and three separate "decisive" conclusions came off it
   Everything inferred from "once, never again" is withdrawn — including the
   reasoning that the program "must be re-emitted because it never re-runs".
 * **Third instance of one unit bug in this session, in a *reader*:** the
-  `relaunch` debugfs node opened with `READ_ONCE(ctl[0x07])` and printed "entry
-  counter 0", which I nearly read as "the launch never ran".  It now reads the
-  measured word.  **The rule that catches all three:** read an existing, working
+  `relaunch` debugfs node read `ctl[0x1c]` and printed "entry counter 0", which I
+  nearly read as "the launch never ran".  **My first "fix" changed only the
+  comment, not the index** — caught in the wrap-up re-read, and now reading
+  `ctl[0x07]`, verified on the unit: it prints **`0x00000002`**, the real entry
+  count.  **The rule that catches all three:** read an existing, working
   use of the same constant in the same file and copy its form exactly, and never
   trust a numeral whose expression is byte-shaped but whose consumer is
   word-indexed.
@@ -257,12 +260,22 @@ microkernel itself writes, and three separate "decisive" conclusions came off it
   `first2`, `fix1` (`f468a71d…`, **deployed at the close**), `emit1`,
   `rearm1/2/5/6/8/9` (`e3717aad…`).
 * **Module builds**: `37a329a6…` (the session's fixes), then `c01f6490`,
-  `e9575b9c`, `4c697fb5`, `41ae69d9`, `cd91ed5a`, **`bb7a0c68…` (deployed at
-  the close** — fixes + `pds`/`timer_edge`/`relaunch` + the DMS/OCP dump lines).
+  `e9575b9c`, `4c697fb5`, `41ae69d9`, `cd91ed5a`, `bb7a0c68…` (deployed at
+  the close — fixes + `pds`/`timer_edge`/`relaunch` + the DMS/OCP dump lines),
+  **`94eaea61…` (deployed at the wrap-up re-read**, which caught that the
+  `relaunch` node's first "fix" had changed its comment but not its index).
 * **Desktop**: llvmpipe + `libLLVM-13` installed (md5s in STATE); the catacomb
   gesture guard in `/etc/catacomb/initrc`.
 * **No kernel patch change, no region-0 flash, no region-1 or hd3 image write.**
   Every device-side change was a **file** on hd3.
+
+## Caution for the next session
+
+Each GPU reset takes the WLAN down with it (`wlcore: Hardware recovery in
+progress`, `ieee80211 phy0: Hardware restart was requested`) — measured three
+times in a row.  Run the uAPI suite in small pieces rather than as a whole, and
+expect `wlan0` to need bringing back up afterwards.  WiFi was **down** at this
+session's close for that reason, not by choice.
 
 ## Note on reverting
 
@@ -272,9 +285,9 @@ microkernel itself writes, and three separate "decisive" conclusions came off it
   `sgx540_ukernel.bin.tick2` (`7b44b33a…`); the pre-session durable as
   `.before-hostirq` (`12f12abb…`, `invfix`); every variant tried this session as
   `.emit1w` / `.entry1*` / `.first2w` / `.fix1w` / `.rearm*w`.
-* `powervr_sgx.ko` = **`bb7a0c68…`**; the pre-session module is
-  `.dumpregs-before-ocp` (`9a0ebbe3…`), the intermediate experiments `.ocp` …
-  `.rel2`.
+* `powervr_sgx.ko` = **`94eaea61…`** (`bb7a0c68…` at the close); the pre-session
+  module is `.dumpregs-before-ocp` (`9a0ebbe3…`), the intermediate experiments
+  `.ocp` … `.rel2`.
 * Region 0 untouched at `0x02C1DDC2`.  **Both device files are instrumented test
   builds; the durable pair is one `cp` away.**  No restore is required — the unit
   is on Linux by the operator's direction.
@@ -288,7 +301,7 @@ mistakes stays visible.**  The sections above are current.  Where an addendum
 says "fetched exactly once", it is wrong — see "Dead ends".  Full detail is in
 the two captures.
 
-## Addendum 2 — the vendor microkernel source, and a complete prebuilt image
+## Addendum 1 — the vendor microkernel source, and a complete prebuilt image
 
 The DDK 1.8 drop contains the SGX540 microkernel as source **and** as a finished
 binary.  This material is also in STATE and in the capture; kept here for the
@@ -321,7 +334,7 @@ chronology.
   75's bit 14 does not stick; and `ui32EventOtherPDSInfo` is derived at
   `sgxinit.c:3640` from four flag bits not compared against our `0x00013d01`.
 
-## Addendum 3 — the entry counter: **withdrawn conclusion, sound instrument**
+## Addendum 2 — the entry counter: **withdrawn conclusion, sound instrument**
 
 Operator: "run the instrumented boot."  Capture:
 `sgx540-entry-counter-2026-11-26.txt`.
@@ -344,15 +357,7 @@ on word 0x1c (`CLEANUP_DEFER_CT`), which `init_set` clears.  With it on word
 Two instrument errors were caught along the way and are in "Dead ends": the
 narrow store offset field, and `0x07 * 4` used as a word index.
 
-## Caution for the next session
-
-Each GPU reset takes the WLAN down with it (`wlcore: Hardware recovery in
-progress`, `ieee80211 phy0: Hardware restart was requested`) — measured three
-times in a row.  Run the uAPI suite in small pieces rather than as a whole, and
-expect `wlan0` to need bringing back up afterwards.  WiFi was **down** at this
-session's close for that reason, not by choice.
-
-## Addendum — llvmpipe restored, and the panel-blank root cause
+## Addendum 3 — llvmpipe restored, and the panel-blank root cause
 
 Condensed above in "Confirmed"; full detail (md5s, sizes, the kprobe trace, the
 catacomb source lines) is in STATE and trap 398.  The one thing not stated above:

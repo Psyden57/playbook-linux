@@ -3,18 +3,26 @@
 ## Current state — 2026-11-26 (session 76)
 
 **The SGX's interrupt now reaches the CPU for the first time in the port's
-history — and four real defects were found and fixed — but the EDM still
-dispatches only once, so no job completes from the microkernel.**  Nothing is
-published upstream (DECISIONS §110).
+history, and five more real defects were found and fixed with it — but no job
+completes from the microkernel yet.**  Nothing is published upstream
+(DECISIONS §110).
 
-**And the vendor's own SGX540 microkernel — source *and* a prebuilt binary for
-this exact part — has been found in the DDK 1.8 drop.**  It shows that the event
-program is a **PDS dispatcher over `ir0`/`ir1`** (a different bit map from the
-`EUR_CR_EVENT_STATUS` this port polls) whose constants the host patches at load
-— which our loader never does.  That is the leading explanation for the stall
-and, more importantly, it makes *running the vendor image* a real option for the
-first time.  See the paragraph below and
-`docs/captures/sgx540-vendor-ukernel-source-2026-11-26.txt`.
+**And the session's own central figure was wrong: the entry counter it built was
+reading a control-block word the microkernel itself clears.**  So the earlier
+"the event program is entered once and never again" — session 75's result and
+this session's first three conclusions — is **withdrawn**.  With a sound counter
+the event program is fetched **twice** (`entry = 2`, `tick = 1`): one init pass
+and one dispatch pass, and the dispatch pass is the timer's.  A PDS-task emit
+from the USSE task end then measurably **executes and produces no re-fetch**
+(traps 400/402/404).
+
+**The vendor's own SGX540 microkernel — source *and* a prebuilt binary for this
+exact part — was also found in the DDK 1.8 drop.**  Its event program is a **PDS
+dispatcher over `ir0`/`ir1`** (a different bit map from the
+`EUR_CR_EVENT_STATUS` this port polls) whose constants the host patches at load —
+which our loader never does.  It is **reference material only**: the operator's
+direction is that the open driver compiles its own microkernel (DECISIONS §115).
+See `docs/captures/sgx540-vendor-ukernel-source-2026-11-26.txt`.
 
 **The big one: the interrupt was never wired to the CPU.**  The SGX core's
 request does not go to the GIC directly on OMAP4 — it enters the `ti,sysc`
@@ -97,21 +105,20 @@ never fetches the PDS program" from "the stub's DOUTU cannot re-enter".
 paragraph is meaningless.**  Kept only so the next session can see what was
 believed and why.
 
-**DECISIVE (as it seemed): the counter, moved to the program's VERY FIRST
-instruction, still reads 1.**  `UK_ENTRYFIRST=1` places it after the ctlblk patch and *before* the
+**DECISIVE (as it seemed) — WITHDRAWN, the count was read off the wrong word:
+"The counter, moved to the program's VERY FIRST instruction, still reads 1."**
+`UK_ENTRYFIRST=1` places it after the ctlblk patch and *before* the
 `phas`, the init dispatch and anything that can fail; after a reboot it read **1**
 twice, 22 s apart.  So this is no longer an inference from where a store sits —
-it is a count on the first instruction the program executes.  **The PDS event
-program runs exactly once and does not re-run on its own**, and "it re-runs but
-dies somewhere the counter cannot see" is dead.  Therefore a PDS program must be
-**re-emitted**, and the emit cannot live inside the entry (the entry is only
-reached *by* the fetch the emit would cause — the `emit1` build's own design
-error, recorded).  The re-emit must come from the USSE task the PDS program
-DOUTUs into (where the vendor puts it: `EmitLoopBack`, and its `EventHandler`
-re-enters via `movs doutu, …` instead of ending on a bare HALT), or from a
-PDS-level loop.  Our PDS0 stub is `data,data,data,MOVS→DOUTU,HALT` — a one-shot
-by construction; **the fix is not in the stub's contents, it is that nothing
-re-emits.**
+it is a count on the first instruction the program executes.  **It is
+nevertheless void**: the counter was on word 0x1c, so the argument that followed
+from it ("the program runs exactly once and does not re-run on its own", and
+therefore "a PDS program must be re-emitted") is **withdrawn** — see the
+correction below, and `entry = 2` on word 0x07.  Kept because the *shape* of the
+mistake is instructive.  The re-emit hypothesis it produced was then tested
+properly and answered negatively anyway (trap 402).  (`a.end()`'s `nop [end]`
+is a real one-shot termination by construction — the open question is not the
+stub's contents but whether anything re-emits it.)
 
 **THE CORRECTION, and the corrected measurement.**  The counter constant was
 written `0x07 * 4` and used as a **word index**, so it landed on word **0x1c** —
@@ -164,9 +171,13 @@ emit now has the right shape and the EDM **starts cleanly** with it (`EDM init:
 were fixed the hard way — firing inside the init task faulted the launch
 (`BIF int 0xe000 fault 0xfef4000`, no `card1`), and a `self.no_rearm` suppression
 did not apply where intended.  Measured with it: `entry = 1, tick = 0,
-rearm_flag(0x3f) = 0` — the flag was consumed but the count went *down* from the
-baseline's 2, which is **not yet explained**.  Resolve that before building
-anything on it.
+rearm_flag(0x3f) = 0` — read then as "the flag was consumed but the count went
+*down* from the baseline's 2".  **Do not carry this forward:** `entry = 1` is
+impossible for the corrected instrument (the word reads 2), and the "flag
+consumed" reading is contradicted by the later, cleaner measurement on `fix1` —
+**eight host kicks leave `rearm_flag` at 1**, i.e. no task end consumed it
+(trap 404).  The honest state is: this build's numbers are unexplained and not
+trustworthy.
 
 **And nothing re-fetches it, by any route — measured, three ways (also on the
 bad word; treat the counts as withdrawn, the `resets` movement and the host
@@ -183,28 +194,35 @@ entry.  Testable without a working emit: move the entry counter to the program's
 **very first instruction** — if it climbs, the program does re-run and the fault
 is where it re-enters.
 
-**And a host kick does not re-fetch it either — measured, same boot.**  The uAPI
-suite's eight submits moved the driver's counters (`resets 8 → 16`,
-`issued 8 → 16`) so the kicks **provably reached the core**, and the entry
-counter stayed **1**.  A kick uses the doorbell (`EUR_CR_EVENT_KICK`), a
-different trigger from the timer, so this closes the trigger axis entirely:
-**nothing re-fetches the PDS event program after the launch.**  That leaves one
-explanation standing — the launch stub is a **one-shot**, not a resident
-dispatcher: it issues a single `MOVS→DOUTU` and `HALT`s, so once init has run
-there is nothing at that address for the core to fetch again.  (The vendor's
-equivalent is the 220-word `eventhandler.pds.asm`, which re-enters through
-`movs doutu, INPUT_GENERIC_DOUTU0/1/2` on every fetch.)  **Next:** make the PDS
-program resident — i.e. a real dispatcher of our own design.  **Not** "re-issue
-`emitpds` from the entry": that was my first idea.  The encoding *is* available
-(see below) — what I have not established is whether one emit is enough or the
-program must also be made resident.
+**And a host kick does not re-fetch it either — measured, same boot — but the
+evidence was overstated.**  As written: "the uAPI suite's eight submits moved
+the driver's counters (`resets 8 → 16`, `issued 8 → 16`) so the kicks
+**provably reached the core**, and the entry counter stayed 1."  **The middle
+clause is withdrawn:** `issued` advances on `pvrsgx_ccb_send()`
+(`pvrsgx_ccb.c:93`), host-side, before the doorbell, and `resets` is the
+driver's own timer — neither proves the core received a kick.  (The `entry = 1`
+is also the superseded reading; the same word reads 2.)  What actually stands:
+the count does not move across those kicks, and a host **re-arm** does not move
+it either (re-read at the wrap-up on the corrected node).  So **nothing tested
+so far re-fetches the PDS event program after the launch** — but whether a kick
+reaches the core is precisely what HANDOFF §0b says is still unknown.
+
+*That was written as* "one explanation standing — the launch stub is a one-shot,
+so once init has run there is nothing at that address for the core to fetch
+again", with the next step "make the PDS program resident".  **Both are now
+withdrawn:** the count is 2, not 1, so the program *is* fetched more than once
+with no help from us, and a correctly-placed, provably-firing PDS-task emit
+produced no additional fetch (trap 402).  So "make it resident" is not
+established as the gap; the gap is that nothing yet shows a **kick** reaching
+the core at all (HANDOFF §0b).
 
 **`EUR_CR_DMS_CTRL` was never written — a real defect, now fixed, and not the
 blocker.**  Added to the `status` dump: it read `0x00208200` (EDM 32 / vertex 32
 / pixel 32, the reset default) where the vendor writes `0x003f8200` — **EDM 63**,
 because `FIX_HW_BRN_23632` is in the rev-120 errata and needs "at least 33 EDM
-tasks".  Fixed per-core; it now reads the vendor's value.  **The entry counter
-stayed 1**, so the EDM task count does not gate the fetch either.  And that is
+tasks".  Fixed per-core; it now reads the vendor's value.  **The entry counter did
+not move** (read then as 1, the superseded figure), so the EDM task count does
+not gate the fetch either.  And that is
 now the summary of the host side: with `EVENT_PDS_ENABLE`, `EVENT_PDS_EXEC`,
 `DATA`, `INFO`, `EUR_CR_PDS`, `CLKGATECTL`, `EVENT_HOST_ENABLE`, the OCP gate and
 the DMS counts all confirmed good, the program is still never fetched.  **The
@@ -251,12 +269,16 @@ accounted host-side (the driver's noop counter advances on `pvrsgx_ccb_send`,
 before anything reaches the microkernel).  **Do not read that test as a GPU
 result** — the same trap-388 family as `1/1 passed`.
 
-**Suite position:** **25/50** subtests (was 0/1 before the interrupt gate), with
-`submit-null-job-timeline` and `submit-all-or-nothing` now passing and
-`submit-null-job` passing exactly **once per context** then failing — a real
-dispatch that happens once, matching the tick counter reading 1.
+**Suite position, as recorded at the time: 25/50** subtests (was 0/1 before the
+interrupt gate), with `submit-null-job-timeline` and `submit-all-or-nothing`
+passing and `submit-null-job` passing **once per context** then failing —
+*read then as* "a real dispatch that happens once, matching the tick counter
+reading 1".  **Both halves of that are now withdrawn:** the tick was a
+`CLEANUP_DEFER_CT` artefact, and the real count is 2.  Re-measure the suite,
+do not cite 25/50.
 
-**Bench at the close:** region 0 `0x02C1DDC2` (no flash), firmware
+**Bench at the close — SESSION 75, superseded by the session-76 block below;**
+region 0 `0x02C1DDC2` (no flash), firmware
 `sgx540_ukernel.bin` = **`tick2`** build (md5 `7b44b33a…`), module
 `37a329a6…` (all five fixes + the `pds` and `timer_edge` nodes), `resets`
 rising once per job, irq 147 delivering when the core raises it.  **Every
@@ -269,13 +291,17 @@ from an earlier note.**  Region 0 **`0x02C1DDC2`** (media trailer
 file `boot/chainloader/kernel.img` 10 450 520 B, sha256 `70474c01…`.  Region 1
 **`20a5edd3…`** (64 MiB at raw `0x29000000`, unchanged).  hd3 = the session-71
 rebake `5d3eac8f…`, live as `/dev/loop0 on / type ext4 (rw,relatime,nobarrier)`,
-56.5 G, 733.6 M used.  **The unit is on Linux, not TabletOS** — no restore is
-required.  Kernel `7.3.3`, `Nura edge`.  `BOOTCTR_FCTRY` **`0x25`**
+56.5 G, 733.6 M used at the close (**889.6 M** at the wrap-up re-read).
+**The unit is on Linux, not TabletOS** — no restore is required.  Kernel
+`7.3.3`, `Nura edge`.  `BOOTCTR_FCTRY` **`0x25`** at the close
 (`dmesg | grep pbrpmb`: `0x25 >= threshold 0x1e, no write` — healthy; the Linux
-`/init` tops it up below `0x1e`).  SSH: dropbear running, `usb0`
-**`169.254.0.1/16` UP**, `PB_LINK=usb tools/pbssh.sh` works.  **`wlan0` is DOWN**
+`/init` tops it up below `0x1e`).  **Two more `reboot -f` followed in the
+wrap-up re-read** (a module change), so it is `0x23` by arithmetic and
+**unverified** — that boot's `topup` line had wrapped out of `dmesg`.
+SSH: dropbear running, `usb0` **`169.254.0.1/16` UP**, `PB_LINK=usb
+tools/pbssh.sh` works.  **`wlan0` is DOWN**
 (the GPU resets knocked it over — see the caution in the session note).  Battery
-Full.  Panel `bl_power` 0, connector `On`, **0 DSI errors**.
+Full.  Panel `bl_power` 0, `card0-LVDS-1` connected, **0 DSI errors**.
 `card1`/`renderD129` = `powervr_sgx` (`open microkernel fix1`, `EDM init: event
 status 0x20000000, BIF int 0x8000`, `microkernel started`, `BIF_FAULT 0`, no
 "did not start"); `card0`/`renderD128` = `omapdrm`.
@@ -288,9 +314,11 @@ status 0x20000000, BIF int 0x8000`, `microkernel started`, `BIF_FAULT 0`, no
 session's variants `.emit1w`, `.entry1{,w,bak}`, `.first2w`, `.fix1w`,
 `.rearm{1,2,5,6,8,9}w`, `.hostirq`, `.kick1`, `.tick1`, `.before-kick1`,
 `.session73-raw`.
-`/lib/modules/7.3.3/kernel/drivers/gpu/drm/powervr_sgx.ko` = **`bb7a0c68…`** (the
+`/lib/modules/7.3.3/kernel/drivers/gpu/drm/powervr_sgx.ko` = **`94eaea61…`** (the
 session's fixes + the `pds`/`timer_edge`/`relaunch` nodes + the DMS/OCP dump
-lines), with `.dumpregs-before-ocp` = `9a0ebbe3…` and the intermediates `.ocp`,
+lines; `94eaea61` is the **wrap-up re-read** build — the `relaunch` node's
+`ctl[0x1c]` → `ctl[0x07]` index fix, deployed and verified on the unit), with
+`.dumpregs-before-ocp` = `9a0ebbe3…` and the intermediates `.ocp`,
 `.ocp2`, `.pdsnode`, `.pdsfit`, `.edge`, `.brn30852`, `.pdsstat`, `.pdsdata`,
 `.before-dms`, `.dms`, `.dms2`, `.emit`, `.relaunch`, `.rel2`.
 `/etc/catacomb/initrc` = **`56888215…`** (the gesture guard;

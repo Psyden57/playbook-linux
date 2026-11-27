@@ -6,14 +6,14 @@ Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolut
 session-76 close.  See `docs/sessions/NUMBERING.md`.
 
 > **SESSION 76 RESULT, and it is a correction: the SGX's interrupt now reaches
-> the CPU (it never had), four more real defects fell with it, and the entry
+> the CPU (it never had), five more real defects fell with it, and the entry
 > counter this session built turned out to be reading a control-block word the
 > microkernel itself clears — so session 75's "entered once and never again" and
 > this session's own three "fetched exactly once" conclusions are all withdrawn.
 > With a sound counter the event program is fetched TWICE: one init pass and one
 > dispatch pass, and the dispatch pass is the timer's.  A PDS-task emit from the
 > USSE task end then measurably EXECUTES and produces NO re-fetch.**  Report
-> **279**; traps **398–404**; DECISIONS **§114/§115**; captures
+> **279**; traps **398–405**; DECISIONS **§114/§115**; captures
 > `docs/captures/sgx540-{vendor-ukernel-source,entry-counter}-2026-11-26.txt`.
 
 ## 0. The job, and where it stands
@@ -64,6 +64,13 @@ the browser (report 275).  This is that port.
   `microkernel did not start (EDM launch faulted: BIF int 0xe000 fault
   0xfef4000)`, probe `-5`, no `card1`.  The EDM must not be re-emitted while it
   is starting.
+* **Re-arming the launch from the host does NOT re-fetch** — measured at the
+  wrap-up on the *corrected* instrument (`relaunch` node reading word 0x07):
+  `entry` 2 → 2 across an `EVENT_KICK2` write, `BIF_INT_STAT` `0x8000`
+  (`FLUSH_COMPLETE`, no fault).  So `EVENT_KICK2` is a **launch-only** trigger
+  and cannot be what re-runs the program.  That is why §0b asks about the
+  *kick* path instead: a re-arm is a doorbell write, and it demonstrably does
+  not fetch.
 * **The vendor's DDK 1.8 drop (`/home/psyden/Pdrive/GFX_Linux_DDK-master`,
   outside the repo) contains the SGX540 microkernel as source AND as a prebuilt
   binary.**  Its event program is a **PDS dispatcher** over `ir0`/`ir1` — and
@@ -100,7 +107,14 @@ else.
 `0x3d`/`0x3e` read 0 in every build, including ones where the path reportedly
 ran, so they cannot be trusted as they stand.  Re-instrument the `kick` entry
 with a counter on a control-block word **proven free**, exactly as `UK_ENTRYLOG`
-now is on 0x07:
+now is on 0x07.
+
+Note what is already excluded, so this boot is not spent re-showing it: a
+**re-arm** (`EVENT_KICK2`) is measured *not* to re-fetch (§0a), so the doorbell
+that starts the EDM is not the re-fetch route either.  What is untested is
+whether a **job** reaches the core at all.
+
+Then:
 
 1. **Verify the candidate word mechanically, first.**  Of every constant in
    `local/work/powervr_sgx/ukernel/cores/sgx540.py` that is reached through `r17`,
@@ -167,15 +181,15 @@ on the `ir0`/`ir1` rewrite (a design change that should follow a measurement).
 | OS | **Linux `7.3.3`**, `Nura edge` — not TabletOS.  **No restore required** |
 | region 0 | **`0x02C1DDC2`** — no flash this session.  File `boot/chainloader/kernel.img`, 10 450 520 B, sha256 `70474c01…` |
 | region 1 | sha256 **`20a5edd3…`** (unchanged) |
-| hd3 | the session-71 rebake **`5d3eac8f…`** at `0x4915`, grown to 62.5 G; `/dev/loop0` ext4 rw, 56.5 G, 733.6 M used |
-| `BOOTCTR_FCTRY` | **`0x25`** (`>= threshold 0x1e, no write`).  `/init` refills below `0x1e` |
+| hd3 | the session-71 rebake **`5d3eac8f…`** at `0x4915`, grown to 62.5 G; `/dev/loop0` ext4 rw, 56.5 G, **889.6 M used** at the wrap-up read (733.6 M at the close — the re-read added module builds and firmware variants) |
+| `BOOTCTR_FCTRY` | **`0x25` at the session close** (`>= threshold 0x1e, no write`).  `/init` refills below `0x1e`.  **Two further `reboot -f` happened during the wrap-up re-read** (the `relaunch` fix needed a module change), and each costs one unit, so it is now **`0x23`** by arithmetic — and **not re-read**: the boot's `pbrpmb: topup` line had already wrapped out of `dmesg` (`dmesg \| grep -ci pbrpmb` = 0).  Read it on the next boot and quote the byte string |
 | CPU | `nproc` 2; PID 1 affinity **`0,1`** |
 | battery | Full, 100 % |
-| GPU | `card1`/`renderD129` = **`powervr_sgx`**, `open microkernel fix1`, `EDM init: event status 0x20000000, BIF int 0x8000`, `microkernel started`, `BIF_FAULT 0`; `card0`/`renderD128` = `omapdrm`; irq 147 delivers |
+| GPU | `card1`/`renderD129` = **`powervr_sgx`**, `open microkernel fix1`, `EDM init: event status 0x20000000, BIF int 0x8000`, `microkernel started`, `BIF_FAULT 0`; `card0`/`renderD128` = `omapdrm`.  **irq 147 is wired and enabled but has delivered ZERO this boot** — `/proc/interrupts` `147: 0 0`, `status` `irqs: 0`, while `ocp irq: enable_set_2 0x00000001`.  The `0 → 100000` figure in §0a was the *storm build*; it is not this boot's state, and the zero is consistent with the EDM never dispatching (§0b) |
 | firmware | `/lib/firmware/powervr_sgx/sgx540_ukernel.bin` = **`f468a71d…`** (`fix1` — the *corrected* entry instrument, deliberately not the experimental re-emit).  Durable instrumented image beside it `.tick2` `7b44b33a…`; pre-session durable `.before-hostirq` `12f12abb…` (`invfix`); this session's variants `.emit1w`, `.entry1{,w,bak}`, `.first2w`, `.fix1w`, `.rearm{1,2,5,6,8,9}w` |
-| module | `powervr_sgx.ko` = **`bb7a0c68…`** (the session's fixes + the `pds`/`timer_edge`/`relaunch` nodes + the DMS/OCP dump lines).  Pre-session: `.dumpregs-before-ocp` `9a0ebbe3…` |
+| module | `powervr_sgx.ko` = **`94eaea61…`** (the session's fixes + the `pds`/`timer_edge`/`relaunch` nodes + the DMS/OCP dump lines; `94eaea61` = the wrap-up build with the `relaunch` node's `ctl[0x1c]` → `ctl[0x07]` index fix, deployed and verified on the unit).  Pre-session: `.dumpregs-before-ocp` `9a0ebbe3…`; deployed at the session close: `bb7a0c68…` |
 | desktop | **llvmpipe** for compositor *and* clients (`swrast_dri.so` and `kms_swrast_dri.so` both `1db573b1…`, `libLLVM-13.so` `d1b49590…`; softpipe backups `.amber` `d8d69228…`).  4.3 ms/frame vs softpipe 48.0 ms |
-| panel | `bl_power` 0, connector `On`, **0 DSI errors**.  Gesture handle 0 height in `/etc/catacomb/initrc` (`56888215…`) — a **temporary guard**, DECISIONS §114 |
+| panel | **LVDS, not DSI** — the only connector is `card0-LVDS-1` = **`connected`** (there is no `DSI-1` node on this unit, so "DSI errors" means the driver's own counter, not a connector).  `bl_power` **0**, brightness 255/255, **0 DSI errors**.  Gesture handle 0 height in `/etc/catacomb/initrc` (`56888215…`) — a **temporary guard**, DECISIONS §114 |
 | WLAN | **`wlan0` DOWN** — the GPU resets knocked it over.  `usb0` `169.254.0.1/16` UP |
 | SSH | `PB_LINK=usb tools/pbssh.sh` works; if it times out check the cable, the host VPN (trap 341) and ufw (trap 342) |
 | device-side files | the firmware/module variants above, `/etc/catacomb/initrc`, `/tmp/powervr_sgx_test` (**`/tmp` is on the ext4**, trap 354 — it survives a reboot) and this session's one-off scripts |
@@ -302,7 +316,7 @@ PlayBook (OMAP4430 "winchester") — session 77 (absolute; Linux-era 71)
 Workspace: this repository — a git checkout.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 398-404) and §3,
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 398-405) and §3,
 DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 113-115, docs/reports/INDEX.md,
 report 279 (this session's predecessor), 278, 277, 276, 275,
 docs/reference/sgx540-factsheet.md AND docs/reference/sgx540-ddk18-facts.md,
@@ -312,7 +326,8 @@ docs/sessions/session-76.md and session-75.md.
 
 WHERE IT STANDS: Linux 7.3.3 on hd3 (Nura).  region 0 0x02C1DDC2 (keep the image
 FILE — it is not byte-reproducible), region 1 20a5edd3..., hd3 = 5d3eac8f grown
-to 62.5 G; BOOTCTR_FCTRY 0x25; card1/renderD129 = powervr_sgx with the
+to 62.5 G; BOOTCTR_FCTRY 0x25 at the session close (0x23 after the wrap-up
+re-read's two reboots, arithmetic not read); card1/renderD129 = powervr_sgx with the
 microkernel RUNNING (open microkernel fix1, EDM init event status 0x20000000,
 BIF int 0x8000), card0/renderD128 = omapdrm; desktop on llvmpipe (4.3 ms/frame,
 was 48.0 on softpipe); wlan0 DOWN; usb0 up; 0 DSI errors.
@@ -321,7 +336,7 @@ SESSION 76 CORRECTED THE CENTRAL FIGURE.  The SGX interrupt had never reached th
 CPU -- on OMAP4 it enters the ti,sysc wrapper's IRQSTATUS_2 (0xfe38) and is
 forwarded only while IRQENABLE_SET_2 (0xfe44) bit 0 is set; our driver mapped
 0x4000 of 64 KiB and never touched it.  Opened, irq 147 ran 0 -> 100000.  Then
-four more real defects fell: the launch program's 12-word segment in a 0x18-byte
+five more real defects fell: the launch program's 12-word segment in a 0x18-byte
 slot, EVENT_PDS_DATA 3, EUR_CR_PDS never written, FIX_HW_BRN_30852, and
 EUR_CR_DMS_CTRL (0x0a74) never written at all (0x00208200 -> the vendor's
 0x003f8200, EDM 63 for BRN-23632 -- a real defect that did NOT change the
@@ -364,7 +379,8 @@ polls -- and its INPUT_* constants are host-patched at load
 REFERENCE ONLY: the operator's direction is that the open driver compiles its own
 microkernel.  Its spec PDFs are "Strictly Confidential" and unusable.
 
-TRAPS THAT COST TIME THIS SESSION (all new, traps 398-404): a "free" control-block
+TRAPS THAT COST TIME THIS SESSION (all new, traps 398-405, and 405 is the
+wrap-up re-read's): a "free" control-block
 word is only free if no store anywhere touches it (0x07 is, 0x1c is NOT); ld.a.d
 st.a.d immediates and the sa word selector are WORD indices while nearby
 expressions are byte offsets -- three bugs were `* 4` on a word index; a tool's
@@ -386,12 +402,13 @@ unbind pvrsrvkm live (trap 383); grim captures the compositor's buffers, not the
 panel.
 
 BENCH: region 0 0x02C1DDC2; region 1 20a5edd3...; hd3 live /dev/loop0 ext4 rw,
-56.5 G; BOOTCTR 0x25; nproc 2, PID 1 affinity 0,1; battery Full; panel bl_power
+56.5 G; BOOTCTR 0x25 (0x23 expected after the wrap-up reboots); nproc 2, PID 1
+affinity 0,1; battery Full; panel bl_power
 0, 0 DSI errors; wlan0 DOWN, usb0 169.254.0.1/16 (PB_LINK=usb tools/pbssh.sh
 works; if it times out check the cable, the host VPN (trap 341) and ufw (trap
 342) first).  Firmware on hd3: sgx540_ukernel.bin = f468a71d... (fix1, the
 corrected instrument) with .tick2 7b44b33a..., .before-hostirq 12f12abb... and
-this session's variants beside it; module powervr_sgx.ko = bb7a0c68... with
+this session's variants beside it; module powervr_sgx.ko = 94eaea61... with
 .dumpregs-before-ocp 9a0ebbe3....  Desktop llvmpipe (swrast_dri.so and
 kms_swrast_dri.so 1db573b1..., libLLVM-13.so d1b49590...) -- the hd3 flasher
 image still lacks it, so a reflash loses it.  The uAPI test binary is at

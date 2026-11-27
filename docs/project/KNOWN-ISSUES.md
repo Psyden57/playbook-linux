@@ -1411,6 +1411,16 @@ report 121 §3/§11/§12.
       fine for rewriting prose that was not read in full.  (Session 45,
       operator.)
 
+      **The operator had to re-state this in session 76**, which is the point:
+      the assistant spent the whole wrap-up re-read rewriting these docs with
+      `python3 - <<'PY'` heredocs.  The output happened to be sound (verified by
+      diff, duplicate-paragraph and table-row scans), but **three lines were
+      left unwrapped** and had to be fixed by hand afterwards, which is the
+      mild version of the failure this rule exists to prevent.  If a script ever
+      *is* used on a doc, it owes the full check: `git diff -U0` for mangled
+      hunks, a duplicate-paragraph scan, a table-row count, and a line-length
+      pass.  Do not treat "it worked this time" as a licence.
+
 201. **The ABE serial port is a firmware data path, not a clock source.**
       The HAL Addendum (SWPU245F) and the shipped HAL are explicit:
       `abe_connect_serial_port` writes the AE's software port table and an ATC
@@ -3992,7 +4002,13 @@ report 121 §3/§11/§12.
           at the gesture.  The operator also saw it from the top bar; the
           `on_double_tap` y-guard should reject above-handle taps, so re-check
           the top bar after this fix rather than assuming a second vector.
-          (Session 76.)
+          **This guard is TEMPORARY, not the fix** (DECISIONS §114): it deletes
+          a real UI affordance to dodge the defect.  The fix is one guarded line
+          in catacomb — `input.rs` wakes on *every* double-tap, so it should be
+          `Some(TouchAction::DoubleTap) if !self.display_on =>` — and then the
+          handle height can come back.  Still unexplained: 20 IPC
+          `dpms on/off` cycles did **not** wedge, while the in-gesture ON→OFF
+          pair does.  (Session 76.)
 
 399. **The SGX540 microkernel is in the DDK 1.8 drop as SOURCE and as a PREBUILT
           BINARY — and the vendor's event path is a PDS dispatcher over
@@ -4113,9 +4129,11 @@ report 121 §3/§11/§12.
           `CLEANUP_DEFER_CT` (`cores/sgx540.py:65`), which `init_set` clears and
           the cleanup path writes twice more, so the count was read out of a cell
           the microkernel zeroes in the same pass.  The same unit error appeared
-          three times in the session: this one, a `relaunch` debugfs node opening
-          with `READ_ONCE(ctl[0x07])` (which read 0 and nearly concluded "the
-          launch never ran"), and an init gate written `SA_HOSTCTL * 4` (word 4,
+          three times in the session: this one, a `relaunch` debugfs node reading
+          `ctl[0x1c]` (which read 0 and nearly concluded "the launch never ran"
+          — **and whose first repair changed the comment, not the index**, so it
+          was briefly documented as fixed when it was not; it reads `ctl[0x07]`
+          now and prints 2), and an init gate written `SA_HOSTCTL * 4` (word 4,
           an unrelated word).  **Do this before writing any control-block store:**
           (1) list every constant in `ukernel/cores/<core>.py` that is reached
           through `r17`, and every `st.a.d/ld.a.d rN, r17, #…` in `ukernel.py`,
@@ -4146,6 +4164,30 @@ report 121 §3/§11/§12.
           the `kick` entry on a word verified per trap 403, and read `ctlblk`
           before and after a job.  Interpretation is in HANDOFF §0b.  (Session
           76; capture `sgx540-entry-counter-2026-11-26.txt`.)
+
+405. **`build.py`'s core token is consumed only when `SGX_CORE` is UNSET, so
+          the documented gate command silently overwrites the image with a
+          manifest.**  `_select_core()` returned early if `SGX_CORE` was in the
+          environment, before deleting the leading bare token from `sys.argv`.
+          The token therefore stayed as `argv[1]`, `resolve()` read *it* as the
+          **output** path and the real `.bin` as the **manifest** path: the image
+          was written to `./sgx545` and the JSON manifest **over**
+          `sgx545_ukernel.bin`.  Then `test_emu.py`'s `load()` read the JSON as
+          code and died with `undecodable 726f6322 20200a7b` — ASCII `"cor"` /
+          `" {\n"`.  So `SGX_CORE=sgx540 SGX_ASM=… python3 ukernel/test_emu.py`
+          (HANDOFF §3, the command run every session) **corrupts the sgx545
+          reference image and reports a failure that looks like a firmware
+          bug.**  Fixed in two steps, because the first fix was wrong too: the
+          token is now always consumed, and a conflicting `SGX_CORE` is a hard
+          error (`build.py: SGX_CORE='sgx540' contradicts the 'sgx545' token`)
+          — `setdefault` let the ambient env silently beat the explicit token,
+          so `SGX_CORE=sgx540` built the *sgx540* config into
+          `sgx545_ukernel.bin`.  `test_emu.py` now honours `SGX_CORE` when no
+          positional core is given, so the documented command tests the core it
+          names.  Detect the corruption with `head -c 4
+          ukernel/<core>_ukernel.bin` — it must be `00000000`, never
+          `7b0a2020`.  The images are `*.bin` and gitignored, so nothing in git
+          was ever wrong; the *workdir* was.  (Session 76 wrap-up re-read.)
 
 ## 3. Corrections to older reports
 

@@ -43,12 +43,15 @@ there; only stores through the derived `sa` attributes faulted at the entry top
     (`0x1c`) held the counter — which is how the error was caught, not by reading
     the source.
     **This cost a second time in the same session:** the `relaunch` debugfs node
-    opened with `READ_ONCE(ctl[0x07])` and reported "entry counter 0", which I
-    nearly read as "the launch did not run" — the same unit error, in the
-    *reader* this time.  It now reads word 0x1c too.  The lesson: the constant is
-    a word index produced by a byte-shaped expression (`0x07 * 4` evaluates to
-    0x1c and is then used as a word index), so **do not trust the numeral** —
-    parse the dump by index and cite the measured word.
+    read `READ_ONCE(ctl[0x1c])` — the bad word again — and reported "entry
+    counter 0", which I nearly read as "the launch did not run".  **And it cost
+    a third time in the wrap-up re-read:** my first repair changed the node's
+    comment but not its index, so a sentence here briefly documented a fix that
+    had not been made.  It reads `ctl[0x07]` now and prints **2**, matching the
+    firmware.  The lesson: the constant is a word index produced by a byte-shaped
+    expression (`0x07 * 4` evaluates to 0x1c and is then used as a word index),
+    so **do not trust the numeral** — parse the dump by index, cite the measured
+    word, and **re-read the code you just "fixed"**.
 
 Verified before deploying, all four gates green:
   * `test_emu.py`: 8/8 OK on both cores;
@@ -207,9 +210,24 @@ trigger from the timer, so this separates "only the timer fails to trigger" from
     (`/tmp/powervr_sgx_test` -> "25/50 passed", the 8 resets are the trap-388
     timeout signature, as always here.)
 
-**Eight host kicks provably reached the core — the reset and issue counters
-moved — and the event program was fetched ZERO additional times.**  The counter
-is new and unambiguous, and it did not move by one.
+**Two CORRECTIONS to this block, both found in the wrap-up re-read — read it
+with them, never without:**
+
+1. **"Eight host kicks provably reached the core" is FALSE.**  `resets` and
+   `issued` are the **host's** accounting: `issued` advances on
+   `pvrsgx_ccb_send()` before anything reaches the microkernel
+   (`pvrsgx_ccb.c:93`), and a `resets` increment is the driver's own timer
+   firing.  Nothing here shows the core received a kick.  Treat `issued` as a
+   *submission* count only.
+2. **`entry counter = 1` is impossible for this instrument.**  The same
+   `(ctlblk 0x07)` word reads **2** with the same firmware (`fix1`) — the
+   corrected figure in this file's own "THE CORRECTION" section.  So this pair
+   was either taken with an interim build or transcribed wrong; either way do
+   not cite the `1`.
+
+What still stands: the event program was fetched **zero additional times**
+during these kicks, and a host re-arm was later shown not to re-fetch either
+(`relaunch`, corrected node).
 
 So it is not the trigger type.  Not the timer, not the doorbell: **nothing
 re-fetches the PDS event program after the launch.**  `EVENT_PDS_ENABLE` has
@@ -480,11 +498,18 @@ writes the launch's own kick register exactly as `pvrsgx_fw_start()` does
 (`cr->event_kick2`, or `SGX_CR_EVENT_KICK` when the core has no KICK2), waits
 50 ms and reads the counter again.
 
-    entry counter before     0x00000001
-    EVENT_PDS_EXEC           0x00803a70
-    entry counter after      0x00000001   (unchanged)
+    entry counter before     0x00000002      <- the CORRECTED instrument...
+    EVENT_PDS_EXEC           0x00803970
+    entry counter after      0x00000002   (unchanged)
     BIF_INT_STAT             0x00008000   (FLUSH_COMPLETE, no fault)
     EVENT_STATUS             0x20000000
+
+**CORRECTION (wrap-up re-read):** the run above was first taken with the node
+reading `ctl[0x1c]`, i.e. CLEANUP_DEFER_CT, and printed `0x00000001` before and
+after — a number that meant nothing.  My "fix" at the time changed the node's
+*comment* but not its index.  The figures above are the re-run on the corrected
+node (`94eaea61…` module), which prints the real count (**2**, matching
+`fix1`'s `entry = 0x07`); the node still reads only word 0x07.
 
 **Re-arming the launch from the host does not re-fetch the event program.**  So
 `EVENT_KICK2` is a *launch-only* trigger: it starts the EDM once and cannot
@@ -618,10 +643,16 @@ they appeared to.
 
 ### What is still true from above
 
-The *hardware* observations are unaffected: eight host kicks move `resets`
-8 -> 16; re-issuing `EVENT_KICK2` from the host does not increase the count;
-`EUR_CR_DMS_CTRL` was unprogrammed and is now the vendor's `0x003f8200`;
-`BIF_INT_STAT` reads `FLUSH_COMPLETE` with no fault throughout.
+The *hardware* observations are unaffected: re-issuing `EVENT_KICK2` from the
+host does not increase the count; `EUR_CR_DMS_CTRL` was unprogrammed and is now
+the vendor's `0x003f8200`; `BIF_INT_STAT` reads `FLUSH_COMPLETE` with no fault
+throughout.
+
+**One claim here was wrong when written: "eight host kicks move `resets` 8 ->
+16".**  That does **not** show the core received them — `resets` and `issued`
+are both host-side accounting (`pvrsgx_ccb.c:93` increments `ccb_issued` before
+the doorbell write).  Whether a kick reaches the core is exactly what is still
+unknown; see HANDOFF §0b.
 
 ### The re-emit experiment (`rearm5`)
 

@@ -275,8 +275,8 @@ open:
 | `sgx540-tick-counter-2026-11-26.txt` | **the measurement**: `UK_TICKLOG`'s dynamic counter (0x2c/0x2d), its emulator negative control (0 → 3 on three timer events, a doorbell is not a tick), and **0 after 12 s idle** on the unit with the GPU IRQ never fired — the EDM timer does not run at all |
 
 `docs/reference/sgx540-ddk18-facts.md` carries the **K** facts from the
-operator-supplied GPL-2 DDK 1.8 drop; traps 384-397 are the operational record
-for sessions 74-75, and reports 277/278 are the reports.
+operator-supplied GPL-2 DDK 1.8 drop; traps 384-404 are the operational record
+for sessions 74-76, and reports 277-279 are the reports.
 
 `docs/reports/data/` is indexed by the reports that produced it; the report
 INDEX (`docs/reports/INDEX.md`) says which report is current for a topic.
