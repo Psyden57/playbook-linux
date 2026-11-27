@@ -609,6 +609,68 @@ flasher can replace at every point:
     records name five real programs, `vdm_state[0/8/10/18/23]`) against the
     540's USSE/PDS encoding, or the VDM↔USE handshake.  Traps 416/417;
     capture `sgx540-first-render-2026-11-27.txt`.
+    (a4d) **`LASTKICK` is EXCLUDED by measurement (session 81)** — and it is
+    downstream of the stall, so a `ta_finished` branch cannot fix it.  Build 1
+    (`kick17ccbtrace`, `79bffc34…`) was **invalid**: `UK_WAITLOG` and
+    `UK_CCBTRACE` both write ctlblk word 0x38, so the read was
+    `EVENT_STATUS2`'s constant `0x10` (trap 422).  Build 2 (`kick18ccb`,
+    `d4087521…`, `UK_CCBTRACE` alone): idle `0x38 = 0`; the default two-kick
+    render leaves `0x38 = 0x00000071` (`BASE 0x60 | FIRST 1 | INVAL_USE 0x10`)
+    — **kick 1 carries no LASTKICK**; a one-kick render gives `0x00000073`
+    (`+LAST 2`), with `cmd+0x58` ready = 1.  So the µkernel reads the flags
+    word correctly and **sees LASTKICK when a kick carries it**; with
+    `nkicks = 2`, LASTKICK is on **kick 2**, which the µkernel never services
+    because kick 1's TA never finishes.  The handoff's "kick 1 carries LAST"
+    is corrected.  Also measured, new: **a render submission storms IRQ 147
+    to 100 001 and the kernel disables it** (trap 423; the OCP wrapper latches
+    with `EVENT_STATUS = 0`, and the handler has no OMAP-wrapper clear) —
+    reboot before any measurement that needs SGX interrupts.
+    **`IDXFIFO` pinned ON is ALSO a non-fixer (session 81).**  Module
+    `4a928e15…` adds a default-off `idx_clk_on` that forces the 540's
+    `CLKGATECTL` IDXFIFO field ON — the vendor's own `DisableClockGating` shape
+    (`sgxinit.c:4778-4784`, ON 1 / AUTO 2).  With it on, `CLKGATECTL =
+    0x000966aa` and idle `CLKGATESTATUS = 0x001800a0` (b19 set), but the render's
+    hang is field-for-field unchanged (`CLKGATESTATUS 0x001800f0`, `TE_SCREEN
+    0xf007`, `VDM_STREAM 0x42000`, `DPM_PAGE_STATUS 0`, `0/1 frames right`).
+    Reverted and proven: `idx_clk_on=N`, `CLKGATECTL 0x000a66aa`, idle
+    `CLKGATESTATUS 0x001000a0`.
+    **And a render submission wedges the DMM/TILER, which breaks the
+    compositor's scanout** — `dmm 4e000000.dmm: timed out waiting for done` →
+    IRQ 147 storm → `omapdrm: could not pin: -110` → 13× `Failed to setup
+    plane plane-0`, so the panel alternates between frames and black (trap 424).
+    **Plan a reboot after any render experiment**, and do not read a
+    post-render desktop as a witness.
+    **The launch-stub comparison is DONE (static, session 81) and yields no
+    one-variable test.**  The vendor's launch is two USE programs (Primary1 =
+    one `emitpds.tasks.taske`; Primary2 = `IUKP2_PDSExec/Data`,
+    `InitConfigRegisters`, `ui32InitStatus`, timer) versus our driver-side init
+    + one `kick` — the known structural difference (DECISIONS §115).  The
+    per-kick path matches (`KickTA` copies the 17 `sTARegs` words into
+    `TE_AA…BIF_TA_REQ_BASE` then pulses `VDM_START`); `TE_TPC`/GSG/
+    `MTE_MULTISAMPLECTL` are 545-or-feature gated and absent from the 540
+    binary's write set.  `USEPIPE = 7` is `USEPIPE_ALL`; the b26 MADD wait+ack
+    is implemented; the pixel event-PDS pair is 0 only because `do_3d` has not
+    run (spec §6.2.3/§6.2.4).
+    **THE VDM-STREAM BISECTION IS DONE (session 81) AND LOCALIZES THE STALL TO
+    THE STATE_LOAD RECORDS.**  With env-gated generator knobs in one tool
+    build: removing the PRIMs changes nothing; removing the STATE_LOADs lets
+    the **TE clock wake** (`CLKGATESTATUS 0x001800f8`, b3) — the PRIMs reach
+    the TE.  So b19 (`IDXFIFO`) latches with no PRIM at all and is not the
+    draw's index fetch, and the baseline VDM stops in the state loads before
+    the draw.  Three real 540 divergences in our record were corrected in
+    variants — `USEPIPE = (1+pipe)<<13` (ours added the counter to the word and
+    corrupted the attribute size), `PARTITIONS = 1` (b9, ours 2 at b10), and
+    `PDSDMADEPENDENCY` (b21) — **none moves the stall**; a HALT-only state
+    program also stalls, and the **data-segment size is excluded** too
+    (`STATE_SEG4`, a padded 4-row/64-byte segment, alone and combined).  The
+    USE-side variables are excluded against the DDK's own generator:
+    `EMITMTE src1 = n` (ours passed 0) and dropping the 545-only
+    `emit.t3`/`op0xd6` pair both stall identically.  **Next: stop varying
+    fields — diff the whole 28-word stream against the DDK's own reference
+    frame builder**, `eurasia/unittests/sgx_render_flip_test/
+    sgx_render_flip_test.c`, which builds a complete known-good stream with the
+    same codegen on this DDK.  Traps 419/420/422/423/424/**425**;
+    capture `sgx540-first-render-2026-11-27.txt`, "SESSION 81".
     (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b) attach the CPU supply or confirm 1.35 V for all OPPs and settle the

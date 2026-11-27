@@ -4518,3 +4518,84 @@ is what makes `map_files`/`maps` alone misleading.
 
 **Evidence.**  `docs/sessions/session-80.md` (dead ends); the live
 `pb-gbmsample` output; `tools/bench/egl/`.
+
+## 120. `LASTKICK` is excluded — a flag is only a suspect on the kick that carries it; and one control-block word, one instrument (session 81)
+
+**Decision.**  Retire `SGXMKIF_TAFLAGS_LASTKICK` as the render stall's cause and
+**do not** add last-kick work to `ta_finished` as a fix attempt.  The next
+discriminators are the `IDXFIFO` clock gate, the launch stub, and kick 1's TA
+execution itself.  Separately: an instrument may not share a control-block word
+with another instrument — check every `UK_*` block, not only the live-state
+constants, before enabling one.
+
+**Why.**  HANDOFF-81 §0b's step 1 was a measurement, and it answered the
+question in the opposite direction to the hypothesis.  With `UK_CCBTRACE=1`
+(and no `UK_WAITLOG`) the µkernel recorded the command's `ta_flags` word at
+ctlblk 0x38: the default `-k 2` render gives **`0x71`** (`FLAGS_BASE 0x60 |
+FIRSTKICK 1 | INVAL_USE 0x10`) and a `-k 1` render **`0x73`** (adds
+`LASTKICK 2`), with `cmd+0x58` ready = 1.  So delivery is clean and the
+µkernel sees LASTKICK when a kick carries it.  But `last = (k == nkicks - 1)`
+puts LASTKICK on **kick 2**, and the µkernel never services kick 2 because kick
+1's TA never finishes (`do_ta` count stays 1).  **The flag is downstream of the
+stall**: a `ta_finished` branch cannot run for a TA that never finishes, which
+is why the "missing branch" shape (a plausible structural suspect) predicts the
+symptom but cannot explain it.  The handoff's premise that the default two-kick
+render puts LAST on kick 1 was an arithmetic slip.
+
+The instrument rule is the trap-403 lesson applied one level out: the build the
+handoff documented set `UK_WAITLOG` (0x38 = `EVENT_STATUS2`, every timer tick)
+and `UK_CCBTRACE` (0x38 = `cmd+0x04`, once per `do_ta`) at the same time, so the
+first boot's read was the trap-417 constant `0x10` and looked like a result.
+`UK_TICKLOG` also writes 0x37 (`0x22222222`) and `UK_TMRLOG` 0x38.  The
+production of a value is not evidence until the word has exactly one writer.
+
+**Constraint.**  The clean build is `kick18ccb` (`d4087521…`,
+`UK_CCBTRACE` without `UK_WAITLOG`); its SGX545 golden is byte-identical
+(`83b5b0a7…`) and the offline tests pass.  The earlier invalid build is kept as
+`.kick17ccbtrace` (`79bffc34…`) and must not be cited.  The µkernel we run is
+still ours (DECISIONS §115); nothing here changes that.  A render submission
+also storms IRQ 147 to the kernel's 100 000 limit and gets the SGX interrupt
+disabled for the rest of that boot (trap 423), so reboot before any measurement
+that depends on SGX interrupts — a timeout in a post-storm boot is not pure GPU
+evidence.
+
+**Evidence.**  `docs/captures/sgx540-first-render-2026-11-27.txt`, "SESSION 81"
+(the two builds, the word dumps, the `-k 1` control); traps 419, 420, 422, 423;
+`drm/powervr_sgx/pvrsgx_render.c:806,874-876`; `ukernel/ukernel.py:53,1612-1618`.
+
+## 121. The render stall is in the STATE_LOAD records; bisect the stream with env-gated knobs, and batch variants per boot (session 81)
+
+**Decision.**  Keep the generator's environment-gated stream knobs
+(`SGXGEN_NO_STATE`, `SGXGEN_NO_PRIM`, `SGXGEN_NO_CLEAR`, `SGXGEN_NO_DRAW`,
+`SGXGEN_STATE_STUB`, `SGXGEN_STATE_540`, `SGXGEN_STATE_DEP`) as the tool for
+this class of question, and — because a render submission can wedge the DMM and
+the panel (trap 424; intermittent) — submit several variants **per boot** and
+read the GPU's own
+state mid-hang (`CLKGATESTATUS`, `TE_SCREEN`, `EVENT_STATUS`, `BIF_FAULT`,
+`DPM_PAGE_STATUS`) instead of treating the panel or the driver's verdict as the
+instrument.  The next unit of work is the state-copy **program and segment**,
+not the record's field layout.
+
+**Why.**  One boot's bisection settled what four sessions of argument had not:
+removing the PRIM records changes nothing, while removing the STATE_LOAD
+records lets the **TE clock wake** (`CLKGATESTATUS` `0x001800f8`, b3).  So the
+VDM stops inside the state loads, before the draw, and the b19 `IDXFIFO` latch
+is not the draw's index fetch (it latches with no PRIM in the stream).  The
+field-level suspects were then tested in the same boot and all excluded: the
+vendor's own 540 builder (`validate.c:3055-3072`) says `USEPIPE =
+(USEPIPE_1+pipe)<<13` with the pipe rotating 0..3 and `PARTITIONS = 1` (b9),
+and its copy task sets `PDSDMADEPENDENCY` (b21); our record differs in all
+three, and correcting them one at a time and together still stalls identically.
+A HALT-only state program also stalls, which points at the record waiting for
+the copy task to *complete*.
+
+**Constraint.**  The knobs default off, so the production stream is unchanged;
+the SGX545 golden and the offline microkernel tests are untouched by a
+client-tool change.  The panel/desktop is not a witness after a render (trap
+424); a reboot restores it.  Nothing goes upstream (DECISIONS §110).
+
+**Evidence.**  Trap 425; `docs/captures/sgx540-first-render-2026-11-27.txt`,
+"VDM-STREAM BISECTION"; the vendor's
+`opengles2/validate.c:3033-3090` (state record) and
+`…/pds_mte_state_copy/pds_mte_state_copy.h` (the 23-word program and
+`PDS_MTESTATECOPY_DATA_SEGMENT_SIZE = 64`).

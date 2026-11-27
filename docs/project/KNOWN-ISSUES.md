@@ -4518,6 +4518,22 @@ report 121 §3/§11/§12.
         window, so t=1 is up to 0.3 s late).  (Session 80; capture
         `sgx540-first-render-2026-11-27.txt`.)
 
+        **SESSION 81 MEASURED IT — the gate is not the cause.**  Module
+        `4a928e15…` adds a default-off module parameter that forces the
+        `CLKGATECTL` IDXFIFO field (b16-17) ON — the vendor's own
+        `DisableClockGating` shape (`sgxinit.c:4778-4784` forces every unit ON
+        when that registry value is set; the header's encoding is ON 1 / AUTO
+        2).  With `idx_clk_on=1` the write is visible at idle —
+        `CLKGATECTL = 0x000966aa` (IDXFIFO field 1), `CLKGATESTATUS =
+        0x001800a0` (b19 set while idle, where the baseline reads
+        `0x001000a0`) — but one render gives **exactly the same hang**:
+        `CLKGATESTATUS = 0x001800f0`, `TE_SCREEN 0x0000f007`,
+        `VDM_CTRL_STREAM_BASE 0x00042000`, `MTE_CTRL 0xa2`, `TE_STATE 0`,
+        `DPM_PAGE_STATUS 0`, `0/1 frames right`, the same timeout line.  So the
+        index FIFO is already clocked through the whole hang and forcing its
+        gate on changes nothing; the observable (b19 latched) is real, the gate
+        is not the wall.  (Session 81.)
+
 420. **Our µkernel never tests `SGXMKIF_TAFLAGS_LASTKICK` — and the vendor's own
         spec says the scene becomes renderable only on that flag.**  This is the
         best structural suspect left on the render path and it was found by
@@ -4558,7 +4574,9 @@ report 121 §3/§11/§12.
           `first = (k == 0)`, `last = (k == rj->nkicks - 1)`, and `:874-876`
           writes `PVRSGX_TA_FLAGS_BASE | (first ? PVRSGX_TA_FIRST_KICK : 0) |
           (last ? PVRSGX_TA_LAST_KICK : 0)`.  The frame tool submits 2 kicks
-          (`ta_kicks`), so kick 1 carries LASTKICK.
+          (`ta_kicks`), so **kick 2** carries LASTKICK (`last = k ==
+          nkicks - 1` with `k = 0, 1`) — the session-80 wording "kick 1
+          carries LAST" was wrong; session 81 measured `0x71` on kick 1.
 
         **Unmeasured caveat, and the first step:** "the kernel sets it" is not
         "the µkernel sees it".  Build with `UK_CCBTRACE=1` (the existing
@@ -4567,6 +4585,33 @@ report 121 §3/§11/§12.
         This project has had three instruments lie about exactly this kind of
         gap (traps 403/406/410).  (Session 80; DECISIONS §118; the scratch
         analysis is folded into `docs/sessions/session-80.md`.)
+
+        **SESSION 81 MEASURED IT — the µkernel DOES see the flags, and
+        LASTKICK is NOT the wall.**  Firmware `kick18ccb` (`d4087521…`) carried
+        `UK_CCBTRACE=1` **without** `UK_WAITLOG` (trap 422 — the two instruments
+        collide on 0x38), and `do_ta` recorded `cmd+0x04`:
+
+        | render | `0x35` do_ta | `0x38` cmd+0x04 | `0x39` cmd+0x58 ready |
+        |---|---|---|---|
+        | idle | 0 | `0x00000000` | 0 |
+        | `-k 2`, mid-hang | 1 | **`0x00000071`** | 1 |
+        | `-k 1`, mid-hang | 1 | **`0x00000073`** | 1 |
+
+        `0x71` = `FLAGS_BASE (0x60) | FIRST_KICK (1) | INVAL_USE (0x10)`;
+        `0x73` adds `LAST_KICK (2)`.  `cmd+0x58` ready = 1 proves the µkernel
+        read the command **after** the host wrote it, so delivery is clean.
+
+        So **the µkernel sees LASTKICK when a kick carries it**, but with the
+        frame tool's default `-k 2` kick 0 is FIRST-only (`0x71`): `last =
+        (k == nkicks - 1)` puts LASTKICK on **kick 2**, which the µkernel never
+        services because kick 1's TA never finishes (`do_ta` count stays 1).
+        **LASTKICK is downstream of the stall, not its cause** — a last-kick
+        branch in `ta_finished` can never run for a TA that never finishes.
+        This also corrects HANDOFF-81 §0b's premise that "kick 1 carries LAST".
+        Do not add the `ta_finished` branch as a fix attempt; the stall is
+        inside kick 1's TA execution (trap 419's IDXFIFO and the launch stub
+        remain the discriminators).  (Session 81; capture
+        `sgx540-first-render-2026-11-27.txt`, "SESSION 81".)
 
 421. **The vendor `ukernel.bin`'s `limm` sites are NOT interchangeable with
         ours — the magic matches, the guard does not.**  Easy to misread, and
@@ -4591,6 +4636,149 @@ report 121 §3/§11/§12.
         (54 per-command labels vs our `entry[5]`), the vendor image is a driver
         port.  Do not re-derive this.  (Session 80;
         `drm/powervr_sgx/pvrsgx_fw.c:170-182`.)
+
+422. **A control-block word shared by TWO instruments is not free — enabling
+        `UK_CCBTRACE` on top of the usual flags silently invalidates the
+        measurement.**  Trap 403's check was applied to live state but not to
+        the other `UK_*` instruments, and the two overlap in three words:
+
+        | word | `UK_CCBTRACE` (once per `do_ta`) | `UK_WAITLOG` (per timer tick, last wins) |
+        |---|---|---|
+        | 0x35 | `do_ta` count | live wait-site id (0 outside a wait) |
+        | 0x37 | client RO (bytes) | `EVENT_STATUS` |
+        | 0x38 | **`cmd+0x04` (ta_flags)** | **`EVENT_STATUS2`** |
+        | 0x39 | `cmd+0x58` (ready) | `CLKGATESTATUS` |
+        | 0x3b | — | tick counter |
+
+        `UK_TICKLOG` additionally writes the marker `0x22222222` to 0x37 at
+        its tick site, and `UK_TMRLOG` writes 0x38 as a tick counter.  So the
+        documented "usual flags + `UK_CCBTRACE=1`" (`kick17ccbtrace`,
+        `79bffc34…`) read **`0x00000010`** at 0x38 — exactly `EVENT_STATUS2`'s
+        constant (trap 417) — and that is not the TA flags at all.  One boot was
+        spent before the collision was found by reading the WAIT_LOG block.
+        **Rule: before enabling an instrument, grep every `if <FLAG>:` block in
+        `ukernel.py` for the word it claims, not just `cores/<core>.py` and the
+        live-state constants; the build is valid only when the word has one
+        writer.**  The corrected build (`kick18ccb`, `d4087521…`) is
+        `UK_CCBTRACE` **without** `UK_WAITLOG` and gives a clean 0x38.
+        (Session 81; capture `sgx540-first-render-2026-11-27.txt`.)
+
+423. **A render submission storms IRQ 147 to the kernel's 100 000 limit and the
+        kernel disables the SGX interrupt; the handler cannot clear the OMAP
+        wrapper latch.**  In the `kick18ccb` boot the first render's parameter
+        buffer is allocated at t=37.44 s and at t=37.71 s dmesg prints
+        `irq 147: nobody cared (try booting with the "irqpoll" option)` followed
+        by `Disabling IRQ #147`; `/proc/interrupts` reads **100001** for the
+        line.  At the same time the driver's `status` shows the OCP wrapper
+        `status_2 = 0x00000001`, `enable_set_2 = 1`, while
+        `EVENT_STATUS = 0` and `EVENT_HOST_ENABLE = 0x4000` (SW_EVENT only), so
+        this is **not** the trap-396 TIMER-in-`EVENT_HOST_ENABLE` shape — the
+        core/wrapper is asserting with no event the handler recognises, and
+        `pvrsgx_irq()`'s only wrapper touch is the Intel VDC latch
+        (`vdc_ack`, a no-op on OMAP where `sdev->vdc == NULL`).  Consequences:
+        (a) after the first render in a boot, SGX completion interrupts are
+        **dead**, so a later "job timed out" in that boot is not pure GPU
+        evidence — reboot before a measurement that needs interrupts;
+        (b) the null family still passed *before* the storm (`600 jobs/91 ms`),
+        so this is specific to a render submission (or to the PB/normal render
+        path); (c) the earlier claim that the desktop's black frames were the
+        GPU's is not supported — catacomb holds only `card0` (omapdrm,
+        llvmpipe).
+
+        **INTERMITTENT: measured on two boots, absent on a third.**  The
+        `kick18ccb` and IDXFIFO-override boots each reached `100001` and
+        `Disabling IRQ #147` within ~2.6 s of the first render's
+        `parameter buffer: 0x1022 pages`; but the session-81 bisection boot ran
+        **8 GPU resets with `irq 147: 0`** and no storm, with the same desktop
+        running.  So it is a race (the bad boots also had an eMMC write stall
+        and a `wlcore` recovery nearby, but so did the good one).  Do not
+        assume it: when it does happen, a post-storm timeout is not pure GPU
+        evidence.  (Session 81.)
+
+424. **A render submission CAN wedge the DMM/TILER and take the compositor's
+        scanout with it — the panel alternates between frames and black.**
+        Intermittent: measured on two boots, **absent on a third** (the
+        session-81 bisection boot: 8 GPU resets, 0 `dmm`/pin/plane errors and
+        `irq 147: 0`, panel stable).  It is downstream of a render, not of the
+        desktop.  Measured window (session 81, IDXFIFO boot; `boot+37 s`, where
+        the render's first job is):
+
+        ```
+        [36.37] Buffer I/O error on dev mmcblk1 … lost async page write
+        [37.03] powervr_sgx: parameter buffer: 0x1022 pages      <- render
+        [37.25] dmm 4e000000.dmm: timed out waiting for done      <- TILER
+        [37.30] irq 147: nobody cared … Disabling IRQ #147
+        [37.30] omapdrm omapdrm.0: could not pin: -110
+        [37.47] omapdrm omapdrm.0: Failed to setup plane plane-0
+        … 13 of them through t=78 s
+        ```
+
+        `omap_dmm_tiler.c:438` waits on the PAT engine's completion (its IRQ
+        131 had fired 33 times before this); the completion never comes, so
+        `omap_gem` pinning returns `-ETIMEDOUT` and every subsequent atomic
+        commit fails its plane.  catacomb keeps drawing on llvmpipe but its
+        flips no longer reach the scanout, which is exactly "frames and black
+        fighting".  Consequences **when it happens**: the desktop is not a
+        witness and the panel may stay broken until a reboot.  It is not
+        automatic — one boot in three ran many renders cleanly — so a panel
+        check cannot be used to infer that a render ran, and a healthy panel is
+        no evidence the GPU is fine.  Not the IDXFIFO override (the IRQ storm
+        reproduces with it off; the DMM line was captured on the override
+        boot).  A reboot clears it.  (Session 81; capture
+        `sgx540-first-render-2026-11-27.txt`.)
+
+425. **The VDM stalls inside the STATE_LOAD records — the draw/index path is
+        not the wall, and `IDXFIFO`'s latch is not the index fetch.**  Session
+        81 bisected the stream with environment-gated generator knobs in one
+        frame-tool build (`SGXGEN_NO_STATE`, `SGXGEN_NO_PRIM`, `SGXGEN_NO_CLEAR`,
+        `SGXGEN_NO_DRAW`, plus `SGXGEN_STATE_STUB`/`_540`/`_DEP`), sampling
+        `CLKGATESTATUS`, `TE_SCREEN`, `EVENT_STATUS`, `BIF_FAULT` and
+        `DPM_PAGE_STATUS` mid-hang:
+
+        | stream | `CLKGATESTATUS` | TE | `DPM_PAGE_STATUS` |
+        |---|---|---|---|
+        | baseline | `0x001800f0` | asleep | 0 |
+        | `NO_PRIM` (state only) | `0x001800f0` | asleep | 0 |
+        | `NO_CLEAR` / `NO_DRAW` | `0x001800f0` | asleep | 0 |
+        | **`NO_STATE` (PRIMs only)** | **`0x001800f8`** | **AWAKE (b3)** | 0 |
+        | `STATE_STUB` (HALT program) | `0x001800f0` | asleep | 0 |
+        | `STATE_540` / `STATE_DEP` / both | `0x001800f0` | asleep | 0 |
+
+        * **Removing the PRIMs changes nothing; removing the STATE_LOADs wakes
+          the TE.**  So the VDM stops in the state-load records, before the
+          draw, and b19 (`IDXFIFO`, trap 419) latches even with **no PRIM in
+          the stream** — it is not the draw's index fetch.
+        * **Three real per-core divergences in our state record, none the
+          wall.**  The vendor's own 540 builder (`validate.c:3055-3072`) writes
+          `USEPIPE = (USEPIPE_1 + pipe) << 13` with the pipe rotating 0..3,
+          `PARTITIONS = 1 (b9)`, `SD` b25, `MTE_EMIT` b17, attribute size at
+          b0-7.  Ours writes `0x2000 + counter` (never rotates the pipe and
+          corrupts the attribute-size field), `PARTITIONS = 2 (b10)`, and its
+          copy task word omits `PDSDMADEPENDENCY` (b21, `sgxdefs.h:4045`).
+          Corrected in the `_540`/`_DEP` variants (one at a time and together)
+          — **all still stall identically**.  (`SGX_USE_MINTEMPREGS` is 0 in
+          this DDK, so the second task word is already right; the data-segment
+          size is excluded too — `STATE_SEG4`, a padded 4-row/64-byte segment,
+          alone and combined, also stalls.)
+        * **What is left:** the record's **program code**.  Our
+          `state_block()` PDS program (`tst; bra; doutd; tst; bra; doutd;
+          doutu; halt`, two DOUTDs from DS0 indices 0 and 2) versus the vendor's
+          23-word `pds_mte_state_copy` ([64-byte data segment][code
+          `07030203 87040000 90000004 07070203 17000CE0 070B0305 af000000`],
+          `PDS_MTESTATECOPY_DATA_SEGMENT_SIZE = 64`).  A HALT-only program also
+          stalls, consistent with the record waiting for the copy task to
+          *complete*; the next test is the vendor's own copy program with our
+          DMA source and USE address patched in.  Two USE-program variables
+          were then excluded against the DDK's own `USEGenWriteStateEmitProgram`
+          (`codegen/usegen/usegen.c:592`): passing `ui32EmitSrc1 = n` to the
+          EMITMTE (ours passed `#0`), and dropping the `emit.t3`/`op0xd6` pair
+          (`SGX_FEATURE_VCB` is a 545 feature) — **both stall identically**.
+          **Next: diff our 28-word stream against the DDK's own reference
+          frame builder**, `eurasia/unittests/sgx_render_flip_test/
+          sgx_render_flip_test.c`, which builds a complete known-good stream
+          with the same codegen; stop varying fields one at a time.  (Session
+          81; capture `sgx540-first-render-2026-11-27.txt`,
+          "VDM-STREAM BISECTION".)
 
 ## 3. Corrections to older reports
 

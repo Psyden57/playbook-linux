@@ -1,6 +1,105 @@
 # Current state
 
-## Current state — 2026-11-27 (session 80)
+## Current state — 2026-11-27 (session 81)
+
+**THE ONE EXPERIMENT IS ANSWERED: the µkernel DOES see the TA flags, and
+`SGXMKIF_TAFLAGS_LASTKICK` is NOT the wall — it sits downstream of the stall.**
+Session 81 ran HANDOFF-81 §0b step 1 (`UK_CCBTRACE=1`, ctlblk word 0x38 at
+`do_ta`) over two boots and three render submissions, no media writes.
+
+* **Build 1 (`kick17ccbtrace`, `79bffc34…`) was INVALID** — the handoff's
+  "usual flags + `UK_CCBTRACE`" includes `UK_WAITLOG`, which writes
+  `0x38 = EVENT_STATUS2` on every timer tick and overwrote the CCBTRACE store;
+  the read value was the trap-417 constant `0x10`.  New **trap 422** (a word is
+  not free while another instrument writes it).
+* **Build 2 (`kick18ccb`, `d4087521…`, `UK_CCBTRACE` without `UK_WAITLOG`)**
+  gives a clean measurement: idle `0x38 = 0`; the default **`-k 2`** render
+  leaves `do_ta` count 1 and `0x38 =` **`0x00000071`** = `FLAGS_BASE 0x60 |
+  FIRST 1 | INVAL_USE 0x10` — **no LASTKICK**; a **`-k 1`** render gives
+  **`0x00000073`** (adds `LAST 2`).  `0x39 = 1` (`cmd+0x58` ready) proves the
+  µkernel read the command after the host wrote it, so **delivery is clean and
+  the µkernel sees LASTKICK when a kick carries it**.
+* **Why that excludes it:** with `nkicks = 2`, `last = (k == nkicks-1)` puts
+  LASTKICK on **kick 2**, which the µkernel never services because kick 1's TA
+  never finishes.  A last-kick branch in `ta_finished` can never run for a TA
+  that never finishes.  **Do not add that branch as a fix attempt.**  This also
+  corrects HANDOFF-81 §0b's premise that "kick 1 carries LAST".  The stall is
+  still inside kick 1's TA execution (TE never starts, `DPM_PAGE_STATUS` 0).
+
+**New: a render submission can storm IRQ 147 and the kernel then disables it
+(trap 423) — intermittent.**  Measured on two boots (clock override off and
+on): the first render's PB is allocated at `t≈37.0 s` and within ~2.6 s dmesg
+prints `irq 147: nobody cared` → `Disabling IRQ #147` (count **100001**).  The
+OCP wrapper reads `status_2 = 1` with `EVENT_STATUS = 0` and
+`EVENT_HOST_ENABLE = 0x4000`, so it is **not** the trap-396 TIMER shape; the
+handler has no OMAP-wrapper clear (its `vdc_ack` is the Intel VDC latch, a
+no-op here).  **Not on every render:** the bisection boot ran 13 resets with
+`irq 147: 0` and no storm, so a post-storm timeout is not pure GPU evidence
+only *when it happens*.  The null family still passed before it
+(`600 jobs/91 ms`).
+
+**New: the same render can wedge the DMM/TILER and take the compositor's
+scanout with it (trap 424) — the operator's "frames and black fighting".**
+It is **intermittent** (absent on the bisection boot, which ran 13 resets with
+no `dmm`/pin/plane errors and `irq 147: 0`).  When it happens the window is
+`dmm 4e000000.dmm: timed out waiting for done` (37.25 s) → `Disabling IRQ
+#147` → `omapdrm: could not pin: -110` → **13× `Failed to setup plane
+plane-0`** through t=78 s.  `omap_dmm_tiler.c:438` waits on the PAT engine's
+completion and never gets it, so every atomic commit fails; catacomb keeps
+drawing on llvmpipe but its flips stop reaching the scanout.  **A reboot
+clears it.**  So a healthy panel is no evidence about the GPU either; use the
+GPU's registers, not the desktop.
+
+**IDXFIFO pinned ON — also excluded (trap 419).**  Module `4a928e15…` adds a
+default-off parameter (`idx_clk_on`) that forces the 540's `CLKGATECTL`
+IDXFIFO field ON, the vendor's own `DisableClockGating` shape
+(`sgxinit.c:4778-4784`, ON 1 / AUTO 2).  With it on, `CLKGATECTL = 0x000966aa`
+and idle `CLKGATESTATUS = 0x001800a0` (b19 set), but a render gives **the same
+hang**: `CLKGATESTATUS 0x001800f0`, `TE_SCREEN 0xf007`, `VDM_STREAM 0x42000`,
+`MTE_CTRL 0xa2`, `DPM_PAGE_STATUS 0`, `0/1 frames right`.  Reverted and proven:
+with `idx_clk_on=N`, `CLKGATECTL` is back to `0x000a66aa` and idle
+`CLKGATESTATUS 0x001000a0`.
+
+**The launch-stub comparison is closed (static) and the VDM-stream bisection
+localizes the stall to the STATE_LOAD records (trap 425).**  The vendor's
+launch (two USE programs; Primary1 one `emitpds.tasks.taske`, Primary2
+`IUKP2_PDSExec/Data` + `InitConfigRegisters` + timer) versus our driver-init +
+one `kick` is the known structural difference (DECISIONS §115); `KickTA`'s
+per-kick path matches ours.  The bisection (one frame-tool build, env-gated
+omits) gives: **removing the PRIMs changes nothing; removing the STATE_LOADs
+lets the TE clock wake** (`CLKGATESTATUS 0x001800f8`, b3) — so `IDXFIFO`'s
+latch is not the draw and the VDM stops in the state loads.  Three real 540
+record divergences (`USEPIPE = (1+pipe)<<13`, `PARTITIONS = 1` at b9,
+`PDSDMADEPENDENCY` b21) were corrected in variants and **none moves it**; a
+HALT-only program also stalls; the data-segment size (4 rows/64 bytes) and the
+USE-side variables — `EMITMTE src1 = n` (ours passed 0) and the 545-only
+`emit.t3`/`op0xd6` pair — are excluded too.  **Next: diff the whole 28-word
+stream against the DDK's own reference frame builder**
+(`eurasia/unittests/sgx_render_flip_test/sgx_render_flip_test.c`), which builds
+a complete known-good stream with the same codegen, instead of varying fields.
+
+**Bench at the session-81 close (read on the unit).**  Region 0 `0x02C1DDC2`
+(no flash; magic `0xD7C82D1F`, sha256 `70474c01…`, 10 450 520 B, re-verified
+from the tracked file); region 1 **re-hashed live** =
+`20a5edd3a791a37ef5e6ab9a50d1c83f8967d8257ed76c9fe23a318d4b887422`; hd3 the
+session-71 rebake, `/dev/loop0` ext4 rw 56.5 G (941.7 M used).
+**`BOOTCTR_FCTRY` read `0x1d` on the first deploy boot and the top-up fired
+(`0x1d -> 0x32`, `PASS`, RPMB counter 12659); the wrap-up boot reads `0x30`,
+`no write`** — self-maintaining (read at `dmesg | grep pbrpmb`).  Live
+firmware **`kick18ccb`** (`d4087521…`, the clean CCBTRACE build); preserved
+`.kick17ccbtrace` (`79bffc34…`), `.kick16tail` (`744b072d…`) and `.working` =
+kick10 (`3fbbd11b…`).  Live module **`4a928e15…`** (the gated `idx_clk_on`,
+**default off and the option reverted**); preserved `.pre-idxfifo` =
+`1a2949ab…`, and `.pre-render` = `.working` = `10c6f435…`.  `wlan0` up with a
+lease; `usb0` up; desktop **llvmpipe** (measured: catacomb holds only
+`card0`/omapdrm and maps `kms_swrast_dri.so` + `libLLVM-13`).  **Operator
+symptom, now explained:** the panel alternated between the desktop and black on
+two boots where a render was submitted — the render's DMM/TILER wedge (trap
+424), reproduced live and cleared by the reboot; **it did not recur on the
+bisection boot**, so it is intermittent.  The panel is `dpms On`,
+`bl_power 0`.
+
+## Previous state — 2026-11-27 (session 80)
 
 **THE VDM CONTROL STREAM'S RECORD LAYOUT IS WALKED AND EXCLUDED — it is the
 third field on the render path to fall to measurement, and the stall did not

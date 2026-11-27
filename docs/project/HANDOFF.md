@@ -1,36 +1,35 @@
-# Handoff — session 80 (absolute) → session 81
+# Handoff — session 81 (absolute) → session 82
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§6).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — this handoff is for **absolute 81 = Linux-era 75**, written at the
-session-80 close.  See `docs/sessions/NUMBERING.md`.
+`N+6` — this handoff is for **absolute 82 = Linux-era 76**, written at the
+session-81 close.  See `docs/sessions/NUMBERING.md`.
 
-> **SESSION 80 RESULT: the VDM control stream's RECORD LAYOUT is walked and
-> excluded — the stall did not move.**  The vendor's own *client-side* builder
-> (GPL-2 DDK 1.8) splits every record on `#if defined(SGX545)`, and our
-> generator emitted the SGX545 value for **three** fields: the index-list
-> header's b24 `IDXPRES45`, the state record's `PARTITIONS` nibble, and the
-> draw's word 5 (`sgxdefs.h:1124-1155`).  Emitted for real renders — first two
-> together (4 of the stream's 28 words), then word 5 alone (2 of 28,
-> `0x05800102`, the 540 packing byte-for-byte) — **identical timeout signature
-> both times**.  Both reverted; the stream is byte-identical to session 79's.
-> Also: the **`TA_TE` tail is pruned** (firmware `kick16tail` `744b072d…`;
-> vendor write set re-derived, 92 `str #imm`/41 offsets, SGX545 golden
-> byte-identical, 8/8 offline tests) — one boot, null family intact, and the
-> render's mid-hang TA/VDM/DPM state is field-for-field session 79's.  Traps
-> **416/417**; the capture's "SESSION 80 CONTINUATION" is the record.
+> **SESSION 81 RESULT: `LASTKICK` and `IDXFIFO` are excluded, and the VDM stall
+> is localized to the STATE_LOAD records.**  The `UK_CCBTRACE` measurement shows
+> the µkernel reads `ta_flags` and **sees LASTKICK when a kick carries it**
+> (`0x73` with `-k 1`), but the default two-kick render puts LASTKICK on **kick
+> 2**, which is never serviced because kick 1's TA never finishes — so the
+> missing `ta_finished` branch is downstream and cannot be the fix.  Forcing
+> `IDXFIFO`'s clock gate ON moves nothing.  A one-boot stream bisection then
+> shows: **removing the PRIM records changes nothing; removing the STATE_LOAD
+> records wakes the TE** (`CLKGATESTATUS 0x001800f8`, b3), so the VDM stops in
+> the state loads, before the draw.  Three real 540 record divergences, the
+> data-segment size, and two USE-program variables were corrected in variants —
+> **none moves the stall**.  New traps 422–425; `docs/sessions/session-81.md`.
+
+> **SESSION 80 RESULT (context): the VDM control stream's RECORD LAYOUT is
+> walked and excluded** — three per-core fields, emitted for real renders,
+> identical timeout.  Also the `TA_TE` tail is pruned (`kick16tail`).  Traps
+> 416/417.
 
 > **SESSION 79 RESULT (context): the first render job went through the open
-> microkernel end to end, and its failure point is measured.**  The render job
-> type is wired; five µkernel fixes (traps 413/414); on `kick15pds` no wait
-> spins, the µkernel consumes the kick and kicks the TA — `EVENT_STATUS2
-> TRIG_TA` latches at the timeout and never finishes; VDM/MTE/UCACHEL2/USE0
-> clocked awake, TE never starts, DPM allocates zero pages, no BIF fault.
-> Report 282; DECISIONS §117.
+> microkernel end to end, and its failure point is measured** — five µkernel
+> fixes (traps 413/414); on `kick15pds` no wait spins, the TA is kicked, the TE
+> never starts, DPM allocates zero pages, no BIF fault.  Report 282.
 
 > **SESSION 78 RESULT (context): the dispatch pipeline is ALIVE** — the
-> USE_PIPELINE_0 fix (one bit in `EVENT_PDS_INFO`), the null family passing
-> on real timings, zero resets.  Report 281; traps 406-412; DECISIONS §116.
+> USE_PIPELINE_0 fix, the null family passing, zero resets.  Report 281.
 
 ## 0. The job, and where it stands
 
@@ -41,126 +40,116 @@ with a GPU-accelerated desktop (compositor **and** clients), and a modern
 browser.  The long-term graphics route is the open `powervr_sgx` stack
 (DECISIONS §107/§108) — this is that port, driving toward a rendered frame.
 
-## 0a. What sessions 77-79 established (do not re-derive)
+## 0a. What sessions 78–81 established (do not re-derive)
 
-* **The dispatch pipeline is alive and jobs complete** (session 78,
-  report 281): `EVENT_PDS_INFO` 0x0a70 = `0x00013c01` (`USE_PIPELINE_0` — the
-  vendor's derivation; TOGGLE was the whole dispatch blocker).  Live
-  read-back confirmed at the session-79 start.  Keep it.
-* **The µkernel's host-kick path is exhausted as a suspect** (session 79):
-  the render kick is consumed, both context-CCB TA commands' worth of
-  protocol run, every cache-invalidate and DPM/OTPM load completes with the
-  vendor's own shapes, and the per-scene TA register block matches the
-  vendor's `SGXMKIF_TAREGISTERS` field-for-field (verified mid-hang: the
-  registers carry correct values — TE_SCREEN/MTILE exact for 256x256, the
-  thresholds right, the free list loaded).  **Do not re-audit the TA
-  register tables** — the mid-hang dump is in the capture.
-* **Four µkernel bugs of the 0xb14 class were fixed** (traps 413/414): the
-  0x138 invalidate-done masks (per-request **0x03/0x05** — each done bit
-  belongs to one request register: b1=0xad0, b2=0xad4, b4=0xadc, b0=0xae0);
-  the OTPM OP write (**1 = CSM_INV** — the 540's `MTE_OTPM_OP` 0x24c has no
-  bit 3); the STATUS2 b12 wait (545-only, compiled out); the DPM PDS-page
-  threshold (**0x614**, not the 545's 0x668); and no free-list mode selector
-  (0x664 = the 545's `DPM_CONTEXT_PB_BASE`; the vendor's 540 loads write no
-  mode register).
-* **The vendor 540 binary's write-set diff is the sharpest tool so far.**
-  Disassemble `binary2_540_omap4430_android_release/…/ukernel.bin` with
-  `sgx-disasm -c sgx540` and decode every `str #imm` site (93 of them) —
-  it settles "what register / what mask / what value" for this silicon
-  without a boot.  Re-run it before deploying any register change.
-* **The vendor's own TA source is readable** (`ta.asm`, `sgx_mkif_client.h`
-  in the DDK 1.8 drop — GPL-2, outside the repo at
-  `/home/psyden/Pdrive/GFX_Linux_DDK-master`).  Its per-side invalidate
-  masks come from `sgxdefs.h`'s `FIX_HW_BRN_31474` branch — and 31474 IS in
-  our rev-120 errata list ("workaround in uKernel").
-* **The driver's `status` node now carries the TA/VDM/DPM registers**
-  (module `1a2949ab…`; all named in sgx540defs.h, trap-369-safe).  A
-  mid-hang read names the stuck unit by CLKGATESTATUS and shows every
-  programmed value.  Extend rather than rebuild instruments.
-* **The desktop is on llvmpipe**; the hd3 flasher image still lacks
-  llvmpipe/`libLLVM-13` (a reflash loses it).  The fast-tap guard
-  (`gesture-handle --height 0`) is temporary (DECISIONS §114).
-* **The kick10-era entry counter double-counts** — but the live firmware is
-  now `kick15pds`, built with `UK_ENTRYFIRST` and (since kick15) one counter;
-  entry(0x07) reads true.  The tick counter is GPU-side seeded (0x100) at
-  word 0x2c.
+* **The dispatch pipeline is alive and jobs complete** (session 78):
+  `EVENT_PDS_INFO` 0x0a70 = `0x00013c01` (`USE_PIPELINE_0`).  Keep it.  The
+  null family passes (`600 jobs` in ~90 ms).
+* **The µkernel's host-kick path is exhausted as a suspect** (session 79): the
+  kick is consumed, both TA commands' worth of protocol run, every
+  invalidate/OTPM/DPM load completes, and the per-scene TA register block
+  matches the vendor's `SGXMKIF_TAREGISTERS` field-for-field.  **Do not re-audit
+  the TA register tables.**
+* **Five SGX545-shaped µkernel bugs fixed** (traps 413/414): the 0x138
+  invalidate masks (per-request 0x03/0x05), the OTPM OP bit 3 (540 writes 1),
+  the STATUS2 b12 wait (545-only), the DPM PDS-page threshold (**0x614**), and
+  no free-list mode selector.
+* **`LASTKICK` is excluded by measurement** (session 81): the µkernel reads
+  `ta_flags` (`0x71` on kick 1, `0x73` with `-k 1`; `cmd+0x58` ready = 1) and
+  the flag is on **kick 2**, which is unreachable while kick 1 stalls.  **Do
+  not add the `ta_finished` branch.**  [trap 420]
+* **The instrument collision is known** (trap 422): `UK_CCBTRACE` and
+  `UK_WAITLOG` both write word 0x38; build the trace **without** `UK_WAITLOG`.
+* **`IDXFIFO` pinned ON is a non-fixer** (session 81, module `4a928e15…`); the
+  gate is already on through the hang.  [trap 419]
+* **The launch-stub comparison is closed** (static): the vendor's two-program
+  `emitpds` launch vs our driver-init + one `kick` is the known structural
+  difference (DECISIONS §115); `KickTA`'s per-kick path matches ours.
+* **The VDM stall is inside the STATE_LOAD records** (session 81, trap 425):
+  remove the STATE_LOADs and the TE clock wakes; remove the PRIMs and nothing
+  changes.  `IDXFIFO` b19 is therefore not the draw's index fetch.
+* **The state record's fields/segment and two USE-program variables are
+  excluded** (session 81): `USEPIPE = (1+pipe)<<13`, `PARTITIONS = 1` (b9),
+  `PDSDMADEPENDENCY` (b21), the 4-row/64-byte segment, `EMITMTE src1 = n`, and
+  dropping the 545-only `emit.t3`/`op0xd6` pair — each stalls identically.
+* **The desktop is llvmpipe** (DECISIONS §119), and the closed pvr stack is
+  blocked at modprobe.  The fast-tap guard (`gesture-handle --height 0`) is
+  temporary (DECISIONS §114).
+* **A render can wedge the DMM/TILER and storm IRQ 147 — intermittently**
+  (traps 423/424).  One bisection boot ran 13 resets with `irq 147: 0`, no DMM
+  errors, panel stable.  Do not assume it either way.
 
-## 0b. THE ONE EXPERIMENT FOR SESSION 81 — does the µkernel see `LASTKICK`?
+## 0b. THE ONE EXPERIMENT FOR SESSION 82 — diff our stream against the DDK's reference builder
 
-**Where it stands.**  Excluded by MEASUREMENT now, not argument: the host-kick
-path, the TA register block, the invalidate/OTPM/DPM-load protocol, the VDM
-control stream's **record field layout** (session 80: three per-core fields found
-in the vendor's own client builder and emitted for real renders — identical
-timeout both times), the `TA_TE` tail (pruned; mid-hang state unchanged), and
-the **state-load program content** (decoded clean).  The TA side runs; the TE
-never starts; `DPM_PAGE_STATUS` stays 0; nothing faults.
+**Why.**  Every field-level and USE-program variable we can vary has been
+excluded, and the single robust fact is that the VDM stops **in the state-load
+records** before the draw.  The DDK drop contains a complete, known-good
+**reference frame builder**: `eurasia/unittests/sgx_render_flip_test/
+sgx_render_flip_test.c` (it calls `USEGenWriteStateEmitProgram` and the codegen
+directly, and its build product is the same DDK).  One word-level diff of its
+stream against ours will either show the structural difference we have been
+unable to guess, or show that the stream is not the difference.
 
-**The suspect: `SGXMKIF_TAFLAGS_LASTKICK`.**  The operator cleared the whole DDK
-1.8 drop as evidence (DECISIONS §118), and its microkernel spec —
-`SGX Services Microkernel.Overview.1.1.5` §6.2.3 — is unambiguous:
+**Inputs (all already present).**
 
-> If this is the last TA command for the scene (indicated by the
-> **SGXMKIF_TAFLAGS_LASTKICK** flag) then **the scene is ready for rendering**.
-> In this case the SGXMKIF_HWRENDERDETAILS structure is removed from the
-> unfinished TA commands run list and added to the tail of the unfinished 3D
-> commands run list.
+* The DDK drop at `/home/psyden/Pdrive/GFX_Linux_DDK-master` (GPL-2; DECISIONS
+  §118 clears all of it, PDFs included).
+  * `eurasia/unittests/sgx_render_flip_test/sgx_render_flip_test.c`
+    (the reference stream builder; it also calls
+    `USEGenWriteStateEmitProgram` at `:2449`/`:3099`).
+  * `eurasia/codegen/{pds,use,vdm}` — the record and program generators
+    (`USEGenWriteStateEmitProgram` at `usegen/usegen.c:592`).
+  * `eurasia/eurasiacon/opengles2/validate.c:3033-3090` — the per-block state
+    record (`SetupStateUpdate`), the field layout we already matched.
+  * `…/target/intermediates/pds_mte_state_copy/pds_mte_state_copy.h` — the
+    23-word copy program.
+* Our stream: the frame tool can dump it (`SGXGEN_DUMP_PROGS=1`, or the
+  capture's 28 words `40e80120 0e022403 80c00003 …`), and `tools/gen/sgxgen.c`
+  is the builder (`state_block`, `vdm_draw`, `vdm_end`, `pds_secondary`,
+  `pds_pixel`).
+* The env-gated knobs in `tools/gen/sgxgen.c`/`mkusse.py` let us emit any
+  variant in one tool build (see §3).
 
-§6.2.4 then picks the render from that 3D run list and starts the 3D.  No
-LASTKICK ⇒ no 3D run-list entry ⇒ **the 3D is never started** — our symptom
-exactly.  The vendor's `ta.asm` tests the flag in seven places
-(`:425, 892, 1135, 1136, 2841, 2842`); our `do_ta` masks `ta_flags` with `#1`
-(FIRSTKICK only) and `ta_finished` does none of the last-kick work
-(`TACOMPLETE`, `sTARTData = 0`, TPC flush).  The kernel *does* deliver it
-(`pvrsgx_render.c:806,874-876`, and the frame tool submits 2 kicks, so kick 1
-carries LAST).
+**What each result means.**
 
-**STEP 1 IS A MEASUREMENT, NOT A CODE CHANGE.**  "The kernel sets it" is not
-"the µkernel sees it", and this project has had three instruments lie about
-exactly that gap (traps 403/406/410).  So:
+1. **The reference stream has a record/ordering/structure we lack** (e.g. a
+   different record class before the state block, a different state block form,
+   a word we do not write): change the generator to match, and submit one
+   render.  That is the fix candidate.  Verify with the TE-wake check
+   (`CLKGATESTATUS` b3) and the pixels.
+2. **The reference stream is structurally identical to ours** (field values
+   aside): then the stream is not the difference.  The next suspect is the
+   **state task's completion path** — instrument it GPU-side (e.g. have the
+   state-emit USE program write a known marker to a client-visible PDS
+   location, or use a per-program counter) and read it mid-hang.  Trap 425 has
+   the pieces.
+3. **The reference builder will not run as-is on our port** (it uses the DDK's
+   services path, not our DRM uAPI): extract its *stream words* (or a
+   normalised trace of them) rather than trying to run it; the diff is the
+   deliverable.
 
-1. Build the µkernel with **`UK_CCBTRACE=1`** (the existing instrument,
-   `ukernel/ukernel.py:53`; it stores `cmd+0x04` to control-block word **0x38**
-   at `do_ta`, line 1617).  All other `UK_*` flags as usual (§3).
-2. Gate it (§3 step 2), deploy it, one boot, one render, and read **ctlblk word
-   0x38** — expected `0x…|0x3` on kick 1 (`FLAGS_BASE 0x60 | FIRST 1 | LAST 2`)
-   and `0x…|0x2` on the terminate kick.
-   * `0x3`/`0x2` present → the µkernel sees it; go to step 2 below.
-   * `0x1`/`0x0` → the kernel is *not* delivering what `pvrsgx_render.c`
-     appears to write; instrument the driver instead.  **That alone would be a
-     finding.**
-3. Only then add the last-kick branch to `ta_finished`, modelled on
-   `ta.asm:1125-1178`, gated per-core with the SGX545 golden byte-identical,
-   and submit one render.
+**Do NOT re-run:** the stream's record field layout (trap 416/425), the
+`TA_TE` tail, the TA register tables, the doorbell read-back (trap 407),
+`CACHE_CTRL`'s PARTDM fields (trap 411), the vendor-image load (a driver port
+— see §5), the `EMITMTE`/VCB/segment variants (trap 425), or Mesa work.
 
-**If `LASTKICK` is not it**, the next discriminator is the **launch stub**:
-ours is `[0]=0x0020000f [1]=0x00000002 [2..3]=0 [4]=0x07000305
-[5]=0xaf000000`, while the vendor launches with two `emitpds.tasks.taske`
-instructions (`sgx_init.use.asm.preproc:4622,4643`).  Same class of check.
-
-**Also worth one boot, independent of the above:** `IDXFIFO` (trap 419) latches
-for the whole hang and exists only on the 540.  Pin its gate ON with
-`EUR_CR_CLKGATECTLOVR` b16-17 (`IDXFIFO_CLKO`) and see whether the stall moves.
-
-**Do NOT re-run:** the stream-encoding experiments (trap 416), the `TA_TE` tail,
-the state-load program content, the TA register tables, the doorbell read-back
-(trap 407), `CACHE_CTRL`'s PARTDM fields (trap 411), the vendor-image load (a
-driver port — see §5), or Mesa/compositor work.
+**Correct, but do not deploy blind:** the three known-wrong generator fields
+(`USEPIPE = (1+pipe)<<13`, `PARTITIONS = 1` at b9, `PDSDMADEPENDENCY` b21).
+They are real 540 divergences; fix them in the production generator once the
+stall is understood (they are currently env-gated variants, so the production
+stream is unchanged).
 
 **SETTLED (trap 417): do not build an argument on `EVENT_STATUS2`.**  It reads
-`0x10` on an idle driver and through every path, and nothing on this stack
-writes it.  **Session 79's "the TA task STARTS" is not supported by that bit.**
-
-**Read the DDK drop's specs and source before inferring behaviour** (DECISIONS
-§118).  `pdftotext -layout <pdf> <txt>` over
-`/home/psyden/Pdrive/GFX_Linux_DDK-master/docs/*.pdf`; the microkernel asm is in
-`…/services4/srvinit/devices/sgx/`.
+`0x10` on an idle driver and through every path.  What still supports "the VDM
+runs": `CLKGATESTATUS`, the VDM/TE register block, `VDM_CTRL_STREAM_BASE`.
 
 ## 0c. The media, and the way back
 
 * **region 0 = `0x02C1DDC2`** — `boot/chainloader/kernel.img`, 10 450 520 B,
-  sha256 `70474c01…`.  Keep the image FILE; it is not byte-reproducible.
+  sha256 `70474c01…`, magic `0xD7C82D1F`.  Keep the image FILE; it is not
+  byte-reproducible.
 * **region 1 = `20a5edd3…`** (64 MiB at raw `0x29000000`) — the BusyBox
-  fallback root, not booted; re-hashed live at the session-79 wrap-up.
+  fallback root, not booted; **re-hashed live at the session-81 wrap-up**.
 * **hd3 = the session-71 rebake** `5d3eac8f…`, flashed at loader block
   `0x4915`, grown to 62.5 G; live root `/dev/loop0` ext4 rw.
 * **To boot the ORACLE:** flash `local/work/ifs-shim-sealed.ifs` at block
@@ -175,26 +164,25 @@ writes it.  **Session 79's "the TA task STARTS" is not supported by that bit.**
   after `rm -f $K/usr/initramfs_data.cpio*` — and if the zImage does not
   relink, the cpio is embedded from the *old* one.
 
-## 1. Bench state at the session-80 close (read on the unit)
+## 1. Bench state at the session-81 close (read on the unit)
 
 | item | value |
 |---|---|
 | OS | **Linux `7.3.3`**, `Nura edge` — not TabletOS.  **No restore required** |
-| region 0 | **`0x02C1DDC2`** — no flash this session.  File `boot/chainloader/kernel.img`, 10 450 520 B, sha256 `70474c01…` |
-| region 1 | sha256 **`20a5edd3…`** (unchanged this session; re-hash live if it matters) |
-| hd3 | the session-71 rebake **`5d3eac8f…`** at `0x4915`, grown to 62.5 G; `/dev/loop0` ext4 rw |
-| `BOOTCTR_FCTRY` | **`0x20`** on the deploy boot (`pbrpmb: topup: … = 20000000`, above threshold, no write).  Self-maintaining; this session cost 3 boots |
+| region 0 | **`0x02C1DDC2`** — no flash this session.  File `boot/chainloader/kernel.img`, 10 450 520 B, sha256 `70474c01…`, magic `0xD7C82D1F` |
+| region 1 | sha256 **`20a5edd3a791a37ef5e6ab9a50d1c83f8967d8257ed76c9fe23a318d4b887422`** — re-hashed **live** this session |
+| hd3 | the session-71 rebake **`5d3eac8f…`** at `0x4915`, grown to 62.5 G; `/dev/loop0` ext4 rw, 941.7 M used |
+| `BOOTCTR_FCTRY` | **`0x30`** on the wrap-up boot (`pbrpmb: topup: … = 30000000`, above threshold, no write).  On the first deploy boot it read `0x1d` and the top-up fired (`0x1d -> 0x32`, `PASS`).  Self-maintaining; this session cost ~7 boots |
 | CPU | `nproc` 2; PID 1 affinity **`0,1`** |
-| GPU | `card1`/`renderD129` = **`powervr_sgx`**; `card0`/`renderD128` = `omapdrm`.  The null family passes (671 µs; 600 jobs/96 ms; `resets 0` between render attempts); the render stall is §0b's subject |
-| firmware | `/lib/firmware/powervr_sgx/sgx540_ukernel.bin` = **`kick16tail`** (wrapped md5 `744b072d…`; kick10's flags + UK_WAITLOG + the session-79 fixes + **the pruned `TA_TE` tail**).  Preserved beside it: **`.kick15pds` `24322c2a…`** (the session-79 image — the immediate revert), `.kick14otpm` `f1b16422…`, `.kick13inv` `688bfb8f…`, `.kick12inv` `81d7a183…`, `.kick11wl` `e5f1db18…`, `.kick10live` `3fbbd11b…`, and **`.working` = kick10 `3fbbd11b…`** (the session-78 proven pair) |
-| module | `powervr_sgx.ko` = **`1a2949ab…`** (the render wiring + the extended status dump) — **unchanged this session**.  Preserved: `.predumpregs` `85fe59a2…`, **`.pre-render` = `.working` = `10c6f435…`** (the session-78 proven pair = the revert) |
-| desktop | **llvmpipe** (measured: DECISIONS §119 — `pb-gbmsample` prints `GL=llvmpipe (LLVM 13.0.1, 128 bits)`, and the closed pvr userspace fails with `PVR:(Error): Couldn't connect to services` because `/etc/modprobe.d/powervr-open.conf` is `install pvrsrvkm_omap4_sgx540_120 /bin/false`).  Do **not** conclude "on the SGX" from `map_files`.  Not exercised this session |
-| panel | LVDS `card0-LVDS-1` connected, `bl_power` **0**.  Gesture handle 0 height in `/etc/catacomb/initrc` — a **temporary guard**, DECISIONS §114 |
-| WLAN | **`wlan0` UP** with a DHCP lease (`192.168.0.232/24`).  It goes down under the render attempts' GPU resets and re-associates **slowly** — waiting ~40 s was not enough mid-session, but it was up at the close.  (An earlier reading in session 80 said "will not re-associate"; that was premature.)  `usb0` `169.254.0.1/16` UP and SSH works throughout.  Note **`iw` is not installed on the Nura root**, so the documented `iw reg set <CC>` nudge is unavailable here |
+| GPU | `card1`/`renderD129` = **`powervr_sgx`**; `card0`/`renderD128` = `omapdrm`.  Status at the close: `firmware running: 1 lost: 0 resets: 13 irqs: 0` (13 resets from the bisection; no IRQ storm that boot) |
+| firmware | `/lib/firmware/powervr_sgx/sgx540_ukernel.bin` = **`kick18ccb`** (wrapped md5 `d4087521…`; kick10 flags + UK_ENTRYFIRST/UK_TICKLOG/UK_NO_PHAS/UK_TIMERDIV + **`UK_CCBTRACE` without `UK_WAITLOG`**; the session-79/80 fixes and the pruned `TA_TE`).  Preserved beside it: **`.kick17ccbtrace` `79bffc34…`** (the invalid CCBTRACE+WAITLOG build — do not cite its 0x38 value), `.kick16tail` `744b072d…` (session 80), `.kick15pds` `24322c2a…`, `.kick14otpm`, `.kick13inv`, `.kick12inv`, `.kick11wl`, `.kick10live`, and **`.working` = kick10 `3fbbd11b…`** |
+| module | `powervr_sgx.ko` = **`4a928e15…`** — adds `clkgatectl_idxfifo` in `pvrsgx_core_regs` (SGX540 `GENMASK(17,16)`) and a default-off `idx_clk_on` gate override in `pvrsgx_fw_start()`; **the option is reverted** (`/etc/modprobe.d/powervr-sgx-opts.conf` = `options powervr_sgx edm_init=1`).  Preserved: **`.pre-idxfifo` = `1a2949ab…`** (the session-79/80 module), `.predumpregs` `85fe59a2…`, **`.pre-render` = `.working` = `10c6f435…`** (the session-78 proven pair = the revert) |
+| desktop | **llvmpipe** (measured: catacomb holds only `/dev/dri/card0`/omapdrm and maps `kms_swrast_dri.so` + `libLLVM-13`).  Do **not** conclude "on the SGX" from `map_files` (DECISIONS §119) |
+| panel | LVDS `card0-LVDS-1` connected, `bl_power` **0**, dpms `On` at the close.  Gesture handle 0 height in `/etc/catacomb/initrc` — a **temporary guard**, DECISIONS §114 |
+| WLAN | **`wlan0` UP** with a lease (`192.168.0.232/24`); it goes down under GPU resets and re-associates slowly.  `usb0` `169.254.0.1/16` UP and SSH works.  **`iw` is not installed on the Nura root** |
 | SSH | `PB_LINK=usb tools/pbssh.sh` works; if it times out check the cable, the host VPN (trap 341) and ufw (trap 342) |
-| desktop | **llvmpipe** (measured: DECISIONS §119 — `pb-gbmsample` prints `GL=llvmpipe (LLVM 13.0.1, 128 bits)`, and the closed pvr userspace fails with `PVR:(Error): Couldn't connect to services` because `/etc/modprobe.d/powervr-open.conf` is `install pvrsrvkm_omap4_sgx540_120 /bin/false`).  Do **not** conclude "on the SGX" from `map_files` |
-| device-side files | the firmware variants above, `/etc/catacomb/initrc`, **`/tmp/powervr_sgx_test`**, and **`/tmp/powervr_sgx_frame`** = **`1177fafd…`** (session 79's VDM-stream dump restored **plus** the state-load-program extension) — with `.old79` = `efaefc61…` (session 79's tool) and `.s80base` = `83c8aef1…` kept beside it.  `/tmp` is on the ext4 (trap 354): survives reboots, lost on a reflash |
-| host | clone `local/work/powervr_sgx` (upstream `95f78ca` + our uncommitted patches — **nothing is in a patch file yet**, DECISIONS §110.  Session 80 touched `ukernel/cores/sgx540.py` (`TA_TE` pruned) and `tools/gen/sgxgen.c` (`dump_prog`/`dump_progs` extended, the word-5 divergence documented)); assembler `local/work/sgxasm/{sgx-asm,sgx-disasm}`; trees `local/kernel-tree-sgx` (compiles the module) and `local/kernel-tree` (the known-good closed-DDK tree); **GPL-2 DDK 1.8 reference at `/home/psyden/Pdrive/GFX_Linux_DDK-master` (outside the repo)** — note the microkernel binary's real path has an extra `eurasia/` segment: `…/eurasia/eurasiacon/binary2_540_omap4430_android_release/target/intermediates/ukernel/ukernel.bin` |
+| device-side files | the firmware variants above; `/etc/catacomb/initrc`; `/etc/modprobe.d/powervr-sgx-opts.conf`; **`/tmp/powervr_sgx_test`**; **`/tmp/powervr_sgx_frame`** = `1177fafd…` (session 79's dump + the state-program extension); **`/tmp/powervr_sgx_frame.bisect`** = `b3ee9342…` (the stream-omit/stub/segment knobs); **`/tmp/pb-emitn`** `411088d8…` and **`/tmp/pb-emitn-novcb`** `18d2c85c…` (the two USE-program variants).  `/tmp` is on the ext4 (trap 354): survives reboots, lost on a reflash |
+| host | clone `local/work/powervr_sgx` (upstream `95f78ca` + our uncommitted patches — **nothing is in a patch file yet**, DECISIONS §110).  Session 81 touched `drm/powervr_sgx/{pvrsgx_core.c,pvrsgx_core.h,pvrsgx_fw.c}` (the IDXFIFO gate) and `tools/gen/{sgxgen.c,mkusse.py}` (the env knobs).  **`tools/gen/usse_progs.h` currently holds the `EMIT_N + NO_VCB` build** — regenerate with plain `python3 tools/gen/mkusse.py` for production.  Assembler `local/work/sgxasm/{sgx-asm,sgx-disasm}`; trees `local/kernel-tree-sgx` (compiles the module) and `local/kernel-tree`; **GPL-2 DDK 1.8 at `/home/psyden/Pdrive/GFX_Linux_DDK-master`** (note the extra `eurasia/` segment in the binary path) |
 
 ## 2. Working rules (unchanged, plus what this session cost)
 
@@ -209,26 +197,25 @@ writes it.  **Session 79's "the TA task STARTS" is not supported by that bit.**
 * **Revert experiments and prove the revert.**  Look up every external fact.
   Write the durable fact into the repository in the same turn.
 * **A uAPI "pass" is only evidence once the fence is understood** (trap 388):
-  `powervr_sgx_frame` printed "render done" on timeout runs this session —
   check `resets` and the pixels, never the verdict alone.
-* **Parse every ctlblk dump BY WORD INDEX** (trap 403/406); **seed every
-  counter GPU-side** (trap 409); **count an instrument's store sites in the
-  disassembly** (trap 410); **decode multi-bit constants field-by-field
-  against the vendor's derivation** (trap 412).
-* **NEW (trap 413/414 class): a done-bit mask names only bits whose request
-  register the same path pulses; a header's field list is not a bitmask to
-  sum; and `EVENT_STATUS2` is a different register on the 540** — check
-  every wait/mask against sgx540defs.h, not the 545's.
+* **Parse every ctlblk dump BY WORD INDEX** (traps 403/406); **seed every
+  counter GPU-side** (trap 409); **count an instrument's store sites** (trap
+  410); **decode multi-bit constants field-by-field** (trap 412); **one word,
+  one instrument** (trap 422 — WAITLOG and CCBTRACE collide on 0x38).
 * **Firmware builds** must use explicit output paths, `build.py`'s output is
   raw and must be wrapped by `mkukfw --manifest`, and the SAME `UK_*` flags
   must stay set for `test_emu.py` (it REBUILDS from the environment).  Build
   both driver copies (`local/work/powervr_sgx` is the source of truth,
   `local/kernel-tree-sgx` compiles).  **A module change costs a reboot**;
   never unbind pvrsrvkm live (trap 383).  **GPU resets take `wlan0` down**.
-* **Reboot before measuring anything if the boot's `open microkernel` line
-  has wrapped out of dmesg** (trap 390).
+* **Reboot before measuring anything if the boot's `open microkernel` line has
+  wrapped out of dmesg** (trap 390).
+* **A render can (intermittently) wedge the DMM and storm IRQ 147** (traps
+  423/424): if it happens, the desktop/panel is not a witness and a later job
+  timeout is not pure GPU evidence — reboot, or read the GPU's registers
+  mid-hang instead.
 
-## 3. The build and deploy recipe, exactly (all of it was run this session)
+## 3. The build and deploy recipe, exactly
 
 ```bash
 cd local/work/powervr_sgx
@@ -238,6 +225,7 @@ export SGX_ASM=$PWD/../sgxasm/sgx-asm
 #    flags must stay set for the gate in step 2
 UK_TICKLOG=1 UK_ENTRYFIRST=1 UK_NO_PHAS=1 UK_TIMERDIV=100 UK_WAITLOG=1 \
   UK_BUILD_ID=<id> python3 ukernel/build.py sgx540 /tmp/<id>.bin /tmp/<id>.json
+#    (for a CCBTRACE build: UK_CCBTRACE=1 and NO UK_WAITLOG — trap 422)
 # 2. gates: both must pass before deploying, with the SAME environment
 SGX_CORE=sgx540 UK_TICKLOG=1 UK_ENTRYFIRST=1 UK_NO_PHAS=1 UK_TIMERDIV=100 \
   UK_WAITLOG=1 python3 ukernel/test_emu.py                        # all OK
@@ -253,190 +241,163 @@ cp drm/powervr_sgx/*.c drm/powervr_sgx/*.h \
    ../../kernel-tree-sgx/drivers/gpu/drm/powervr_sgx/
 cd ../../kernel-tree-sgx && make ARCH=arm CROSS_COMPILE=$CROSS_COMPILE \
   M=drivers/gpu/drm/powervr_sgx modules
-# 6. the frame tool (client-side; no reboot needed for a tool change)
+# 6. the frame tool (client-side; no reboot needed for a tool change).
+#    Plain = production programs; MKUSSE_EMIT_N / MKUSSE_NO_VCB change the
+#    state-emit USE program; SGXGEN_* env knobs change the stream at run time
+#    (see tools/gen/sgxgen.c "VDM-stream bisection").
 python3 tools/gen/mkusse.py > tools/gen/usse_progs.h     # needs SGX_ASM
 arm-buildroot-linux-gnueabihf-gcc -static -O2 -Wall -DSGXGEN_DRM \
   -Idocs/uapi -Itools/gen \
   -I$TC/arm-buildroot-linux-gnueabihf/sysroot/usr/include/drm \
   -o /tmp/pb-frame drm/tests/powervr_sgx_frame.c tools/gen/sgxgen.c -lm
-#    ($TC = local/toolchains/armv7-eabihf; the warning about `s` in main is
-#    pre-existing upstream).  Push as /tmp/powervr_sgx_frame.
-# 7. reboot -f; confirm `open microkernel <id>` in dmesg (trap 390); the null
-#    family FIRST (submit-null-job + submit-null-job-many), then the render.
+#    ($TC = local/toolchains/armv7-eabihf; the `s` warning in main is
+#    pre-existing).  Push as /tmp/powervr_sgx_frame.* and chmod +x (an upload
+#    through `cat >` loses the exec bit).
+# 7. reboot -f only for a firmware/module change; a tool change needs none.
+#    Confirm `open microkernel <id>` in dmesg (trap 390); run the null family
+#    FIRST, then the render, reading the GPU's registers mid-hang:
+#      background the tool; sleep 0.5; grep the status node; sleep 0.9; grep
+#    (samples at ~0.5/1.4 s catch the state before the 2 s reset)
 ```
 
 ## 4. Useful local extracts
 
 * `docs/captures/sgx540-first-render-2026-11-27.txt` — **the whole campaign,
-  now nine boots**: session 79's seven (the wiring, the first consumption, the
-  four wait-site finds and fixes, the vendor write-set diff, the mid-hang
-  TA/VDM/DPM state, the vendor field-for-field match, the stream dump) **and
-  session 80's "SESSION 80 CONTINUATION"** — the state-load program dump, the
-  three per-core record fields with their citations and word-level diffs, the
-  tail measurement, the identical timeout lines.  Read it before quoting
-  anything from either session.
-* `docs/reports/282-*.md` — the numbered report for session 79 (session 80 has
-  no numbered report; the capture continuation and `docs/sessions/session-80.md`
-  are the record).
-* `docs/reference/sgx540-factsheet.md` and `docs/reference/
-  sgx540-ddk18-facts.md` — the C/K facts, including the errata list (~50
-  BRNs at rev 120; 23055/31474/33181 are "workaround in uKernel") and the
-  ta3dctl layout derivation.
-* `local/work/powervr_sgx/ukernel/` — the microkernel; `build.py`,
-  `test_emu.py`, `golden/check.py`, `cores/{sgx540,sgx545}.py` (the register
-  tables and per-core constants — session 79's fixes and session 80's `TA_TE`
-  pruning landed in `cores/sgx540.py`).  The vendor's `ta.asm`/
-  `sgx_mkif_client.h` (in the DDK drop) are the TA-path ground truth.
-* **The vendor's client-side VDM stream builder** — the thing session 80
-  found and session 81 needs:
-  `/home/psyden/Pdrive/GFX_Linux_DDK-master/eurasia/eurasiacon/opengles2/
-  {validate,clear,scissor,accum}.c` and the record vocabulary in
-  `…/eurasia/hwdefs/sgxdefs.h` (the `EURASIA_TAOBJTYPE_*`, `EURASIA_TAPDSSTATE_*`
-  and `EURASIA_VDM_*` blocks, and every `#if defined(SGX545)` among them).
-* `docs/contradictions/sgx540-cache-ctrl-breaks-dispatch.md` — the
-  unresolved CACHE_CTRL tension (trap 411).  Do not write 0x0804's PARTDM
-  fields.
-* Reports 282 (session 79), 281 (session 78), 280 (session 77);
-  `docs/sessions/session-80.md`.
+  now ten boots**: sessions 79/80 and **five session-81 sections** (the
+  `UK_CCBTRACE` measurement, IDXFIFO, the panel/DMM mechanism, the static DDK
+  reading, and the **VDM-stream bisection**).  Read it before quoting anything.
+* `docs/sessions/session-81.md` — the session note (what is *not* in the docs
+  above, especially the dead ends).
+* `docs/reference/{sgx540-factsheet,sgx540-ddk18-facts}.md` — the C/K facts,
+  the ~50-BRN rev-120 errata list, the `ta3dctl` derivation.
+* `local/work/powervr_sgx/ukernel/` — `build.py`, `test_emu.py`,
+  `golden/check.py`, `cores/{sgx540,sgx545}.py`.
+* **The DDK's reference frame builder** (session 82's subject):
+  `eurasia/unittests/sgx_render_flip_test/sgx_render_flip_test.c`, plus
+  `eurasia/codegen/{pds,use,vdm}` and
+  `eurasia/eurasiacon/opengles2/validate.c` (`SetupStateUpdate` at
+  :3033-3090).
+* `docs/contradictions/sgx540-cache-ctrl-breaks-dispatch.md` — the unresolved
+  CACHE_CTRL tension (trap 411).  Do not write 0x0804's PARTDM fields.
+* Reports 282 (session 79), 281, 280; `docs/sessions/session-80.md`.
 
 ## 5. What could not be verified
 
-* **Why the VDM stalls** — the open question, now narrowed to `LASTKICK`, the
-  launch stub, or the index fetch (§0b).
-* **Whether `LASTKICK` reaches the µkernel** — step 1 of §0b; not yet measured.
+* **What in the STATE_LOAD record/program the VDM waits for** — §0b's subject.
+  Not settled by the field/segment/USE variants (all excluded).
+* **Whether the state-copy task ever runs to completion.**  A HALT-only program
+  also stalls; a GPU-side marker from the state-emit USE program would settle
+  it (not yet built).
+* **The exact source of the intermittent DMM wedge / IRQ-147 storm.**  Measured
+  on two boots, absent on a third; the trigger is not identified.
+* **The three known-wrong generator fields** (`USEPIPE` rotation,
+  `PARTITIONS = 1`, `PDSDMADEPENDENCY`) are real divergences and are **not**
+  deployed (env-gated variants only).  Correct them once the stall is
+  understood.
+* **`TE_PSG` (0x218) reads `0x01400000`** (b22 + b24) though the vendor 540
+  µkernel only ORs those on the terminate/context-switch paths; it is a
+  signature register by its neighbours.  A write/read-back would settle it.
 * **"Load the vendor microkernel as a control" is a driver port, not a file
-  swap** — established by reading the files, not attempted.  **Even the `limm`
-  patch sites do not line up**: the vendor `ukernel.bin` (19,984 B, 8-aligned)
-  has **9** sites matching our magic `(w0 & 0x1fffff) == 0xdbeef`, but all 9
-  carry word 1 = **`0xfc237150`** — the sentinel `0xdeadbeef` *fully encoded* —
-  whereas our own image's 2 placeholders carry **`0xfc200000`** (value bits
-  clear).  Our `fw_limm()` guard `!(i[1] & 0x0003f1f0)` therefore **rejects all
-  9** (`drm/powervr_sgx/pvrsgx_fw.c:170-182`): the vendor's values are already
-  filled in, ours are left blank.  And beyond that: (a) it exports **54 labels**
-  with one entry point *per kernel-CCB command type* (`HOSTKICKTA 0x978`,
-  `…TRANSFER 0x8A8`, `…POWER 0x6F0`, …), while our driver registers only
-  programs 0-4 (`ARRAY_SIZE(entry) == 5`) and our image has **one** `kick`
-  entry that branches internally; (b) it needs three init programs
-  (`InituKernelPrimary1/Secondary/Primary2`) launched with
-  `emitpds.tasks.taske` and `IUKP1_PDSDevAddrSec/Prim2`,
-  `IUKP2_PDSExec/PDSData` patches, where our launch is one `kick` with
-  `ctlblk`/`pdtable`; (c) the single-context core demands `SINGLE_CONTEXT` set,
-  `SECURE` clear **and** a `pdtable` patch, for which the vendor's two-context
-  protocol has no site.  Doing it means reimplementing the kick dispatch
-  driver-side.  Worth keeping in mind as the *strongest possible bed* for any
-  later fix, but it is not a session's side task.
-* **Whether pinning `IDXFIFO`'s gate ON moves the stall** — one boot, not run.
-* **`TE_PSG` (0x218) reads `0x01000000` (b24) though the vendor 540 µkernel
-  never writes that register** — it is a *signature* register by its
-  neighbours, so it may be read-only.  A write/read-back would settle it.
+  swap** — 9 `limm` sites match our magic but all carry the sentinel *encoded*
+  (`0xfc237150`), which our `fw_limm()` guard rejects; 54 per-command entry
+  points vs our 5; a three-program `emitpds` launch; no `pdtable` site.
+  (DECISIONS §115; do not re-derive.)
 * **`CACHE_CTRL`'s PARTDM semantics and reset value** — unchanged (the
-  contradiction file names the tests that would settle it).
-* The panel: not confirmed visually by the operator this session; `bl_power` 0.
-* Unchanged: `0xb14`'s write (trap 387), `sgx540_init_regs`, the microkernel
-  register tables' 3D half (`D3_RD` — never executed), the owed patch-series
-  export for the session-77/78/79/80 driver+firmware changes — nothing is
-  upstream (DECISIONS §110).
+  contradiction file names the tests).
+* Unchanged: the owed patch-series export for the session-77…81 driver and
+  microkernel changes — nothing is upstream (DECISIONS §110).
 
 ## 6. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 81 (absolute; Linux-era 75)
+PlayBook (OMAP4430 "winchester") — session 82 (absolute; Linux-era 76)
 
 Workspace: this repository — a git checkout.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 398-420) and §3,
-DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 112-119, docs/reports/INDEX.md,
+file), ROADMAP.md item 7a, KNOWN-ISSUES.md §2 (traps 398-425) and §3,
+DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 112-121, docs/reports/INDEX.md,
 report 282, docs/reference/sgx540-factsheet.md AND
 docs/reference/sgx540-ddk18-facts.md,
-docs/captures/sgx540-first-render-2026-11-27.txt (ALL THREE session-80
+docs/captures/sgx540-first-render-2026-11-27.txt (ALL session-80 and session-81
 sections), docs/contradictions/sgx540-cache-ctrl-breaks-dispatch.md,
-docs/sessions/session-80.md and session-79.md.
+docs/sessions/session-81.md, session-80.md and session-79.md.
 
-WHERE IT STANDS: Linux 7.3.3 on hd3 (Nura).  region 0 0x02C1DDC2 (no flash all
-session; re-verified from the tracked file this session — CRC 0x02C1DDC2, magic
-0xD7C82D1F), region 1 20a5edd3... (re-hashed live), hd3 = 5d3eac8f grown to
-62.5 G.  BOOTCTR_FCTRY 0x20.  card1/renderD129 = powervr_sgx running the open
-microkernel kick16tail (744b072d, the pruned TA_TE tail); module 1a2949ab.
-wlan0 UP with a lease (192.168.0.232); usb0 up; desktop LLVMPIPE -- measured,
-and the closed pvr stack is blocked at modprobe (install
-pvrsrvkm_omap4_sgx540_120 /bin/false).  Do NOT conclude "on the SGX" from
-/proc/PID/map_files -- it lists attempted dlopens; ask GL.
+WHERE IT STANDS: Linux 7.3.3 on hd3 (Nura).  region 0 0x02C1DDC2 (no flash;
+re-verified from the tracked file: CRC 0x02C1DDC2, magic 0xD7C82D1F, sha256
+70474c01..., 10 450 520 B), region 1 20a5edd3... (re-hashed live this session),
+hd3 = 5d3eac8f grown to 62.5 G, BOOTCTR_FCTRY 0x30.  card1/renderD129 =
+powervr_sgx running the open microkernel kick18ccb (d4087521, UK_CCBTRACE
+without UK_WAITLOG); module 4a928e15 (idx_clk_on default off, option reverted).
+wlan0 UP (192.168.0.232); usb0 up; desktop LLVMPIPE -- measured, and the closed
+pvr stack is blocked at modprobe.  Do NOT conclude "on the SGX" from
+/proc/PID/map_files -- ask GL (DECISIONS 119).
 
-THE RENDER STALL: the TA side runs and the 3D never starts -- TE never wakes,
-DPM_PAGE_STATUS 0, nothing faults.  Excluded BY MEASUREMENT: the host-kick path,
-the TA register block, the invalidate/OTPM/DPM-load protocol, the VDM control
-stream's RECORD FIELD LAYOUT (three per-core fields, emitted for real renders,
-identical timeout both times -- trap 416), the TA_TE tail (pruned, mid-hang
-state unchanged), and the state-load program CONTENT (decodes clean).
+THE RENDER STALL, NOW LOCALIZED: the VDM stops inside the STATE_LOAD records.
+Excluded BY MEASUREMENT: the host-kick path, the TA register block, the
+invalidate/OTPM/DPM-load protocol, the stream's RECORD FIELD LAYOUT (trap 416),
+the TA_TE tail, LASTKICK (the µkernel sees it on kick 2, which is unreachable
+while kick 1 stalls -- trap 420), IDXFIFO's gate (trap 419), the three 540
+record fields, the data-segment size, and two USE-program variables (trap 425).
+The bisection: removing the PRIMs changes nothing; removing the STATE_LOADs
+wakes the TE (CLKGATESTATUS 0x001800f8, b3).
 
-THE ONE EXPERIMENT (HANDOFF section 0b): does the microkernel SEE
-SGXMKIF_TAFLAGS_LASTKICK?  The operator cleared the WHOLE DDK drop as evidence
-(DECISIONS 118), and its microkernel spec -- SVG Services Microkernel.Overview
-1.1.5 section 6.2.3 -- says the scene becomes renderable ONLY on a kick carrying
-LASTKICK; section 6.2.4 then starts the 3D from that run list.  No LASTKICK =>
-the 3D never starts, which is our symptom.  The vendor's ta.asm tests the flag
-in seven places (425, 892, 1135, 1136, 2841, 2842); our do_ta masks ta_flags
-with #1 (FIRSTKICK only) and ta_finished does none of the last-kick work
-(TACOMPLETE, sTARTData=0, TPC flush).  The kernel DOES deliver it
-(pvrsgx_render.c:806,874-876; the frame tool submits 2 kicks).  STEP 1 IS A
-MEASUREMENT: build with UK_CCBTRACE=1, which stores cmd+0x04 to ctlblk word 0x38
-at do_ta (ukernel.py:53,1617), deploy, one render, read word 0x38 -- expect
-0x..3 on kick 1 (FLAGS_BASE 0x60|FIRST 1|LAST 2).  Only THEN add the branch,
-modelled on ta.asm:1125-1178, gated, SGX545 golden byte-identical.  If LASTKICK
-is not it: compare the LAUNCH STUB (ours [0]=0x0020000f ... [4]=0x07000305
-[5]=0xaf000000; the vendor's is two emitpds.tasks.taske instructions,
-sgx_init.use.asm.preproc:4622,4643).  Independent one-boot test: pin IDXFIFO's
-gate ON via EUR_CR_CLKGATECTLOVR b16-17 (trap 419).
+THE ONE EXPERIMENT (HANDOFF section 0b): a word-level diff of our 28-word VDM
+stream against the DDK's own reference frame builder,
+eurasia/unittests/sgx_render_flip_test/sgx_render_flip_test.c (it calls
+USEGenWriteStateEmitProgram and the codegen directly on this same DDK).  Read
+it, extract its state records and draw words for a small clear, and compare.
+If it has a record/ordering/structure we lack -> that is the fix candidate;
+submit one render and check the TE wake and pixels.  If it is structurally
+identical -> the stream is not the difference; instrument the state-copy task's
+completion GPU-side (a marker from the state-emit USE program) and read it
+mid-hang.  Do NOT re-run the excluded variants.
 
-READ THE DDK DROP, IT IS ALL EVIDENCE NOW (DECISIONS 118): the headers, the
-srvinit C, the MICROKERNEL ASSEMBLY (services4/srvinit/devices/sgx/*.asm --
-ta.asm is 4876 lines and exports TAEventHandler/KickTA/TAFinished), and the 30
-SPECIFICATION PDFs in its docs/ (pdftotext -layout <pdf> <txt> works).  Read the
-spec FIRST for behavioural questions.  DECISIONS 115 still stands: the microkernel
-we RUN is ours; the vendor binary is evidence, never a deployment target.
-"Load the vendor microkernel as a control" is a DRIVER PORT, not a file swap
-(9 patch sites match our limm codec, but it has 54 per-command entry points vs
-our programs 0-4, a three-program emitpds launch, and no pdtable site) -- see
-HANDOFF section 5.
+READ THE DDK DROP, IT IS ALL EVIDENCE (DECISIONS 118): the headers, srvinit C,
+the microkernel assembly (services4/srvinit/devices/sgx/*.asm -- ta.asm exports
+TAEventHandler/KickTA/TAFinished) and the 30 spec PDFs (pdftotext -layout
+works).  DECISIONS 115 still stands: the microkernel we RUN is ours; the vendor
+binary is evidence, never a deployment target.
 
-THE METHOD THAT WORKED: (1) UK_WAITLOG names the stuck wait site at ctlblk word
-0x35; (2) the driver's status node dumps the TA/VDM/DPM registers -- read it
-MID-HANG (background the frame tool, sleep 1.2s, cat status) and follow
-CLKGATESTATUS; (3) disassemble the vendor 540 binary with sgx-disasm -c sgx540
-(real path has an extra eurasia/ segment) and decode every str #imm site;
-(4) the vendor's ta.asm / sgx_mkif_client.h are the TA-path ground truth.
+THE METHOD THAT WORKED: read the driver's status node MID-HANG (background the
+tool, sample at ~0.5/1.4 s) and follow CLKGATESTATUS; UK_WAITLOG names a stuck
+wait at ctlblk word 0x35 (but never with UK_CCBTRACE -- trap 422); patch tables
+in one tool build with env knobs and batch variants per boot; read the DDK's
+own builder before inferring a record.
 
-TRAPS THAT COST TIME (416-420, new): the VDM stream's record encodings ARE
-per-core and ours were the 545's, but emitting the 540 values changed NOTHING;
-EVENT_STATUS2=0x10 is a CONSTANT on this stack (idle included) so it is not
-evidence a kick happened -- session 79's "the TA STARTS" rests on nothing;
-the 540 header NAMES what our code called "unnamed" (0x200 = VDM_START, 0x428 =
-ISP_START_RENDER, 0x694/0x698 = DPM_TASK_STATE/_CONTROL); IDXFIFO wakes mid-hang
-and LATCHES and exists ONLY on the 540; our microkernel never tests LASTKICK.
+TRAPS THAT COST TIME (422-425, new): one control-block word can hold only one
+instrument (CCBTRACE and WAITLOG collide on 0x38); a render can storm IRQ 147
+to 100001 and wedge the DMM/TILER, but INTERMITTENTLY -- a third boot ran 13
+resets with irq 147:0 and no DMM errors, so neither a healthy panel nor a
+timeout is proof on its own; LASTKICK is on kick 2, not kick 1; the state
+record's fields and USE-program variables are excluded and the stall is in the
+state load.
 
 TRAPS THAT STILL APPLY: a uAPI "pass" is only evidence once the fence is
 understood (trap 388); "consumed" after a reset equals "issued" (trap 389);
 dmesg's "open microkernel <build>" is the only truth about which firmware ran
-(trap 390) -- and /var/log/dmesg survives when the ring wraps; hd3 has no
+(trap 390) -- /var/log/dmesg survives when the ring wraps; hd3 has no
 scp/sftp-server -- push with cat FILE | tools/pbssh.sh 'cat > /path' and md5sum
-first (trap 391); /dev/mem cannot reach the GPU (trap 384); edm_init=1 is
-required (trap 385); a module change costs a reboot; never unbind pvrsrvkm live
-(trap 383); GPU resets take wlan0 down (it re-associates slowly); parse every
+first (trap 391), and chmod +x after an upload; /dev/mem cannot reach the GPU
+(trap 384); edm_init=1 is required (trap 385); a module change costs a reboot;
+never unbind pvrsrvkm live (trap 383); GPU resets take wlan0 down; parse every
 ctlblk dump BY WORD INDEX; seed counters GPU-side; measure a renderer by asking
-GL, not map_files (DECISIONS 119).
+GL (DECISIONS 119); do not build an argument on EVENT_STATUS2 (trap 417).
 
 BENCH: region 0 0x02C1DDC2; region 1 20a5edd3...; hd3 live /dev/loop0 ext4 rw
-56.5 G; BOOTCTR 0x20; nproc 2, PID 1 affinity 0,1; battery Full; panel
-bl_power 0; usb0 169.254.0.1/16 (PB_LINK=usb tools/pbssh.sh works; if it times
-out check the cable, the host VPN (trap 341) and ufw (trap 342) first).  NOTE:
-iw is NOT installed on the Nura root.  Firmware on hd3: sgx540_ukernel.bin =
-kick16tail (744b072d), preserved .kick15pds (24322c2a) and the earlier
-variants, .working = kick10 (3fbbd11b); module powervr_sgx.ko = 1a2949ab,
-.predumpregs (85fe59a2), .pre-render = .working (10c6f435).  The uAPI test
-binary is /tmp/powervr_sgx_test and the frame tool /tmp/powervr_sgx_frame
-(1177fafd; .old79 efaefc61) -- both on the ext4.  Full build/deploy recipe:
-HANDOFF section 3.
+56.5 G; BOOTCTR 0x30; nproc 2, PID 1 affinity 0,1; battery Full; panel
+bl_power 0, dpms On; usb0 169.254.0.1/16 (PB_LINK=usb tools/pbssh.sh works; if
+it times out check the cable, the host VPN (trap 341) and ufw (trap 342)
+first).  iw is NOT installed on the Nura root.  Firmware on hd3:
+sgx540_ukernel.bin = kick18ccb (d4087521), preserved .kick17ccbtrace
+(79bffc34, invalid -- do not cite), .kick16tail (744b072d) and the earlier
+variants, .working = kick10 (3fbbd11b); module powervr_sgx.ko = 4a928e15,
+.pre-idxfifo (1a2949ab), .pre-render = .working (10c6f435).  Tools on the
+ext4: /tmp/powervr_sgx_test, /tmp/powervr_sgx_frame (1177fafd),
+/tmp/powervr_sgx_frame.bisect (b3ee9342, the env-knob build), /tmp/pb-emitn
+(411088d8), /tmp/pb-emitn-novcb (18d2c85c).  The clone's
+tools/gen/usse_progs.h is the EMIT_N+NO_VCB build -- regenerate plain for
+production.  Full recipe: HANDOFF section 3.
 
 Kernel printk goes to the panel; use reboot -f; ask the operator for visual
 checks; do not screenshot; do not restart tinydm (trap 353) and do not kill
