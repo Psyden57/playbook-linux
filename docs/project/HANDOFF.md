@@ -77,62 +77,61 @@ browser.  The long-term graphics route is the open `powervr_sgx` stack
 * **A render can (intermittently) storm IRQ 147 and wedge the DMM/TILER**
   (traps 423/424) — observed on some boots, not others.
 
-## 0b. THE ONE EXPERIMENT FOR SESSION 83 — the µkernel's TA/USE dispatch
+## 0b. Where the next session picks up — the µkernel's TA/USE dispatch
 
-**Why.**  The client stream, the kernel command and every client-side encoding
-are proven against the DDK; `MTE_EMIT` (b17) is the wait; the state-copy USSE
-task never emits.  The wall is in our SGX540 µkernel.  Three concrete,
-untested µkernel-side differences remain, in cost order (do 1 and 3 first — they
-are cheapest and most likely).
+This section carries the state and the candidate next steps; it does not mandate
+a single experiment.  Do the cheapest/highest-signal one first and let its answer
+steer the rest.
 
-1. **The frame tool's two-kick layout (client-only, no reboot).**  The working
-   CE5310 form is two kicks: `[the scene's VDM stream]` then `[the terminate
-   words]` (`docs/log/entries/2026-11-03-0210-drm-first-frame.md`, "Why two
-   kicks").  Our `sgx_flush`/`sgx_render_job` (`tools/gen/sgxgen.c`) call
-   `vdm_end(c)` **twice**, so kick 0 = scene **+ a full terminate** and kick 1 =
-   another terminate.  Change it to **one** `vdm_end` (kick 0 = scene,
-   `k0 = vdm_start`; kick 1 = the terminate, `k1 = vdm_end()`), rebuild the frame
-   tool, one render.  If `CLKGATESTATUS` b3 (TE) wakes or pixels appear, the
-   extra terminate in a non-last kick was suppressing the scene.
-2. **A firmware trace of the `do_ta` `cmd+0x14`/`a74` path (trap 429).**  The
-   µkernel RMWs `0xa74` b27-31 with `cmd+0x14` (`ta_ctl[0] = 0x50000000`, built
-   by the kernel at `pvrsgx_render.c:880/642`), but `DMS_CTRL` reads `0x00208200`
-   idle and mid-hang — no TA field.  Add a `UK_*`-gated store of `cmd+0x14` (and
-   the post-store `0xa74`) to **free** ctlblk words (trap 403), rebuild, read
-   after a render.  A zero `cmd+0x14` read means the µkernel reads the wrong
-   command word; a non-zero read that does not reach `0xa74` means the write is
-   masked.  (On the 540 `0xa74` is `DMS_CTRL`, not a 545 TA-flag register, so
-   the RMW may not belong at all — but its doing nothing is a signal.)
-3. **Implement `FIX_HW_BRN_33181` (`IDLETA`/`RESUME_TA`) for the 540 (one
-   firmware build).**  This is one of the three rev-120 "workaround in uKernel"
-   errata (with 23055 and 31474 — 31474 is done, 23055 is the SPM/MTE page
-   deadlock); `usedefs.h:687` defines `IDLETA()`/`RESUME_TA()` to **idle and
-   resume the TA USE core** (`USE_IDLECORE_TA_REQ`, `PVRSRV_SGXUTILS_CALL(IdleCore)`).
-   Our µkernel does not implement it.  Read where `ta.asm` uses `IDLETA`/
-   `RESUME_TA` (the TA handler's enter/exit), port it to `ukernel/cores/sgx540.py`
-   + `ukernel.py` gated on the 540, build, one boot.
+**State.**  The client stream, the kernel TA command and every client-side
+encoding are proven against the DDK's own 540 capture; `MTE_EMIT` (b17) is the
+field the VDM waits on; the state-copy USSE task never delivers the emit.  The
+one thing still unknown is whether that task **runs at all** or **runs and its
+emit is not accepted** — that single answer splits the remaining work.
 
-**Inputs (all present).**
+**Candidate next steps, cheapest / highest-signal first.**
+
+1. **GPU-side marker — does the state-copy USSE task run? (client-only, no
+   reboot).**  Instrument the state-emit USE program — `state_emit()` in
+   `tools/gen/mkusse.py` — to **write a fixed marker to client-visible memory** as
+   its first instruction, then submit one render and read that word mid-hang.
+   * The store: `st.a.d` writes memory at `base + 4·(i+1)` (`docs/ISA.md:1485-1486`);
+     `st.a.d sa0, #0` writes word 1 of the task's `sa0` buffer.  Point `sa0` at a
+     known client BO — the tool sets the task control in
+     `state_block()`/`pds_secondary()` (`tools/gen/sgxgen.c`) — and read that BO
+     back at ~0.5/1.4 s (the same mid-hang window as the status samples, §3).
+   * **Marker present ⇒ the task runs** — the fault is the **emit** (its MTE
+     control / `emit.t1`); compare against the vendor's
+     `BuildEMITMTE`/`USEGenWriteStateEmitProgram`.
+   * **Marker absent ⇒ the task is never launched** — the wall is the PDS
+     `DOUTU` or the TA USE core; go to step 2 and re-check the `DOUTU` word.
+2. **`FIX_HW_BRN_33181` (`IDLETA`/`RESUME_TA`) — the one unused rev-120
+   "workaround in uKernel" (one firmware build + boot).**  `usedefs.h:687`
+   defines `IDLETA()`/`RESUME_TA()` to **idle and resume the TA USE core**
+   (`USE_IDLECORE_TA_REQ`, `PVRSRV_SGXUTILS_CALL(IdleCore)`); read where `ta.asm`
+   uses them (the TA handler's enter/exit) and port to `ukernel/cores/sgx540.py`
+   + `ukernel.py` gated on the 540.
+3. **A firmware trace of the `do_ta` `cmd+0x14`/`a74` path (trap 429).**  The RMW
+   does not land `0x50000000` in `DMS_CTRL`.  A `UK_*`-gated store of `cmd+0x14`
+   (and the post-store `0xa74`) to free ctlblk words (trap 403) says whether
+   `cmd+0x14` reads 0 — a broken command read would explain a lot.
+4. **The frame tool's two-kick layout (client-only).**  `sgx_flush` calls
+   `vdm_end` **twice**, so kick 0 carries a full terminate the working CE5310
+   form does not; make it one `vdm_end` (kick 0 = scene, kick 1 = terminate), one
+   render.
+
+**Reference inputs (all present).**
 
 * The DDK drop at `/home/psyden/Pdrive/GFX_Linux_DDK-master` (GPL-2; DECISIONS
-  §118).  `services4/srvinit/devices/sgx/usedefs.h:687` (the 33181 macros),
-  `ta.asm` (where `IDLETA`/`RESUME_TA` are used), `sgx_utils.asm`
-  (`IdleCore`/`Resume`), `sgxinit.c:4124` (`USE_CTRL`), `sgxerrata.h` (the
-  SGX530 vs SGX540 blocks).
+  §118): `services4/srvinit/devices/sgx/{usedefs.h,ta.asm,sgx_utils.asm,
+  sgxinit.c}`, `hwdefs/{usecodegen.h,sgxerrata.h,sgx540defs.h}`,
+  `codegen/{usegen,pds}`, `unittests/sgx_render_flip_test/`.
 * The upstream's own bring-up log `docs/log/entries/2026-11-03-{0700,0925}-*.md`
   (DDK renders, their open µkernel stalled, fixed by dir-list routing + `a74`)
   and `…-0210-drm-first-frame.md` (the two-kick form).
 * `docs/STATE.md` §2 — the DDK's own 540 capture words (the client reference).
 * The frame tool: `tools/gen/sgxgen.c` (`sgx_flush`, `sgx_render_job`,
   `state_block`, `vdm_end`) and `tools/gen/mkusse.py`.
-
-**What each result means.**  Two-kick fix wakes the TE / renders ⇒ the layout was
-the wall; keep it.  `cmd+0x14` reads 0 ⇒ the µkernel command read is broken (fix
-`SC_CMD`/the offset); it reads `0x50000000` but `0xa74` stays `0x00208200` ⇒ the
-write is masked or overwritten (chase the write).  `IDLETA`/`RESUME_TA` wakes the
-TE ⇒ BRN 33181 was needed.  If all three stall, instrument the state-emit USSE
-task directly (a USSE store to client memory; `docs/ISA.md`) to learn whether it
-runs.
 
 **Do NOT re-run:** the excluded record fields (traps 416/425), the PDS address
 (trap 427), the state-copy `DOUTD`, the USE pipe (0/1/all), `USE_CTRL`/EDM-32
@@ -313,14 +312,15 @@ SGX540 uKERNEL.  Excluded BY MEASUREMENT: the record fields (traps 416/425), the
 PDS address encoding (trap 427), the state-copy DOUTD, the USE pipe (0/1/all),
 USE_CTRL and EDM-32 (traps 426/428), LASTKICK (420), IDXFIFO (419).
 
-THE ONE EXPERIMENT (HANDOFF section 0b), cheapest first: (1) the frame tool's
-TWO-KICK layout -- our sgx_flush calls vdm_end TWICE so kick 0 carries a full
-terminate; the CE5310 working form is [scene]+[terminate]; make it one vdm_end,
-rebuild the tool, one render; (2) a firmware trace of do_ta's cmd+0x14 -> a74
-(DMS_CTRL never gets 0x50000000; trap 429) -- is cmd+0x14 read 0, or is the write
-masked?; (3) implement FIX_HW_BRN_33181 (IDLETA/RESUME_TA, idle the TA USE core;
-usedefs.h:687) for the 540.  If all stall, instrument the state-emit USSE task
-with a USSE store to client memory.  Do NOT re-run the excluded variants.
+WORK NEXT (HANDOFF section 0b), cheapest first: (1) a GPU-side MARKER -- write a
+fixed word to client memory as the first instruction of the state-emit USE task
+(st.a.d sa0, ISA.md:1485; mkusse.py state_emit), one render, read it mid-hang --
+does the state-copy USSE task RUN?  Present -> the emit/MTE-control is the fault;
+absent -> it is never launched, go to (2) and re-check the DOUTU; (2) implement
+FIX_HW_BRN_33181 (IDLETA/RESUME_TA, idle the TA USE core; usedefs.h:687) for the
+540; (3) a firmware trace of do_ta's cmd+0x14 -> a74 (DMS_CTRL never gets
+0x50000000; trap 429) -- is cmd+0x14 read 0, or is the write masked?; (4) the
+frame tool's two-kick layout.  Do NOT re-run the excluded variants.
 
 READ THE DDK DROP, IT IS ALL EVIDENCE (DECISIONS 118).  DECISIONS 115 stands: the
 microkernel we RUN is ours; the vendor binary is evidence, never a deployment
