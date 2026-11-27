@@ -671,6 +671,33 @@ flasher can replace at every point:
     sgx_render_flip_test.c`, which builds a complete known-good stream with the
     same codegen on this DDK.  Traps 419/420/422/423/424/**425**;
     capture `sgx540-first-render-2026-11-27.txt`, "SESSION 81".
+    (a4e) **THE STREAM DIFF IS ANSWERED: the wall is `MTE_EMIT` (b17), not the
+    record's address or fields (session 82, report 283).**  The DDK reference
+    builder made every VDM PDS address `PDSExecBase`-relative; ours were
+    absolute.  Emitting the relative form changed the stream byte-for-byte
+    (`40e80120`→`400c0120`, resolving to the same program) and left the stall
+    field-for-field identical, so it is a real divergence and **not the wall**
+    (trap 427; production stays absolute, `SGXGEN_REL_PDS` opts in).  A
+    one-variable bisection of the primary state record then localized it: the
+    primary record (SD | MTE_EMIT | USEPIPE_1 | PARTITIONS) stalls, the
+    vertex-secondary record (SECONDARY | USEPIPE_ALL, **no** MTE_EMIT) does not;
+    **clearing `MTE_EMIT` b17 wakes the TE (`CLKGATESTATUS 0x001800f8`), while
+    clearing `SD` or setting `USEPIPE_ALL` does not** (reproduced twice each).
+    So the VDM waits for the MTE state emit from the state-copy task and it
+    never arrives (trap 426).  The vendor's exact 540 state-emit USE program
+    form (`usegen.c:592-700`: no `phas`/prologue/VCB, `EMITMTE` flags `END`,
+    `src1 = numWrites`) **still stalls**, so the emit *instruction* is not the
+    wall — the task never reaches it.  **Next (two experiments):** (1) a
+    **GPU-side marker** — a fixed-constant store at the top of the state-emit
+    task (and right after the PDS `DOUTD`), read from the PDS-vertex ring after
+    a render — to say whether the task runs; (2) adopt the vendor's compiled
+    **`pds_mte_state_copy`** (23 words, 64-byte segment, loop at `17000CE0`,
+    `DOUTD` `src2` row 0x18 = `07030203`) with our DMA source and USE address
+    — the one program-content difference never submitted.  Do **not** re-run the
+    excluded record-field variants (traps 416/425); the DMM/IRQ-147 races are
+    intermittent (traps 423/424).  Capture `sgx540-first-render-2026-11-27.txt`,
+    "SESSION 82"; tools `.loc` `68bc15af…`, `.relpds` `ebf463f3…`, `.vend`
+    `a0d48593…`.
     (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b) attach the CPU supply or confirm 1.35 V for all OPPs and settle the

@@ -4599,3 +4599,45 @@ client-tool change.  The panel/desktop is not a witness after a render (trap
 `opengles2/validate.c:3033-3090` (state record) and
 `…/pds_mte_state_copy/pds_mte_state_copy.h` (the 23-word program and
 `PDS_MTESTATECOPY_DATA_SEGMENT_SIZE = 64`).
+
+## 122. The render stall is the MTE state EMIT (`MTE_EMIT` b17); diffing the DDK's own reference builder is the way to find a structural suspect (session 82)
+
+**Decision.**  Treat the render stall as **the VDM waiting for the MTE state
+emit** from the state-copy task: `MTE_EMIT` (b17) is the load-bearing field of
+the primary state record, and the next work is to make the state-copy task
+deliver that emit (or prove it never runs), not to vary the record's other
+fields.  Keep the word-level diff against the DDK's own reference frame builder
+as the instrument for "a record/ordering/structure we lack", and keep the
+generator's structural variants behind env knobs (`SGXGEN_REL_PDS`,
+`SGXGEN_STATE_NO_MTEEMIT/NO_SD/PIPE_ALL`, `MKUSSE_VENDOR_STATE`) so they never
+change the production stream.
+
+**Why.**  HANDOFF-82 §0b asked for the diff.  It found exactly one structural
+difference not previously varied — every PDS address in the VDM stream is
+`PDSExecBase`-relative on a core without `EDM_VERTEX_PDSADDR_FULL_RANGE`, and
+ours were absolute — and emitting the relative form changed the stream
+byte-for-byte but left the stall field-for-field identical.  That is a real
+divergence and a clean negative (per §117's rule, cited and measured, not
+deployed).  The diff then pointed at the record *type*: the primary MTE record
+stalls, the vertex-secondary one does not, and they differ in `MTE_EMIT`.  A
+one-variable bisection confirmed it — clearing b17 wakes the TE
+(`CLKGATESTATUS 0x001800f8`), clearing `SD` or setting `USEPIPE_ALL` does not.
+The vendor's exact 540 state-emit USE program form (`usegen.c:592-700`: no
+`phas`, no prologue, no VCB, `EMITMTE` flags `END` only, `src1 = numWrites`)
+still stalls, which moves the suspicion from the emit instruction to the task's
+launch (the PDS program's `DOUTD`/`DOUTU`).
+
+**Constraint.**  Production stream unchanged: the absolute PDS address and the
+plain state-emit program stay the defaults (all knobs default off), and the
+SGX545 golden is untouched (a client-tool change).  Nothing goes upstream
+(§110).  The vendor's compiled state-copy program and the GPU-side marker are
+the two experiments this hands on; do not re-run the excluded record-field
+variants (traps 416/425).
+
+**Evidence.**  Report 283; `docs/captures/sgx540-first-render-2026-11-27.txt`,
+"SESSION 82"; traps 426/427; `eurasia/unittests/sgx_render_flip_test/
+sgx_render_flip_test.c` (`srft_WriteMTEStateToVDM:2488`,
+`srft_WriteMTETerminateCode:3142`, `srft_WriteIndexListToVDM:3017/3064`) and
+`eurasiacon/opengles2/validate.c:387-388,3062-3067`; the tools
+`/tmp/powervr_sgx_frame.loc` `68bc15af…`, `.relpds` `ebf463f3…`, `.vend`
+`a0d48593…`.

@@ -851,3 +851,109 @@ complete known-good stream on this same DDK (it calls
 `USEGenWriteStateEmitProgram` and the codegen directly).  Extract its full
 state-record + draw words for a small clear and diff them against our 28-word
 stream, rather than varying our fields one at a time.
+
+
+SESSION 82 — the stream diff answers: MTE_EMIT is the wall
+==========================================================
+Session 82 (absolute; Linux-era 76), 2026-11-27.  HANDOFF-82 §0b: a word-level
+diff of our 28-word VDM stream against the DDK's reference frame builder.  Two
+measurement boots, six renders, no media writes.  Report 283.
+
+THE REFERENCE STREAM
+--------------------
+`eurasia/unittests/sgx_render_flip_test/sgx_render_flip_test.c` builds ONE kick
+as three records: a primary MTE STATE (`srft_WriteMTEStateToVDM`, 2 words), an
+INDEXLIST (`srft_WriteIndexListToVDM`, 6 words), a TERMINATE
+(`srft_WriteMTETerminateToVDM`, 2 words).  Our stream has the same classes plus
+a vertex-secondary STATE and an `empty_state`, and its state fields already
+match the reference at the 540's PARTITIONS.  See report 283 §1.
+
+THE ONE STRUCTURAL DIFFERENCE: THE PDS ADDRESS IS BASE-RELATIVE
+----------------------------------------------------------------
+On a core WITHOUT `SGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE` (the SGX540) the
+state-record and index-list base-address fields hold
+`(program - PDS_EXEC_BASE) >> 4`.  The reference subtracts `uPDSExecBase` before
+every such record (`:2488` state, `:3142` terminate, `:3017`/`:3064` index list)
+and so does the GLES2 client (`validate.c:387-388`, `:3062-3063`).  Our
+generator subtracted it only for the pixel PDS words inside the state block
+(`pds_word()`), not for the record headers.
+
+MEASURED: emitting the relative form everywhere (tool `.relpds` `ebf463f3…`)
+changes the stream exactly as predicted and moves NOTHING.  Before/after of the
+record fields (SGXGEN_DUMP_PROGS, one render each, same boot):
+
+    absolute (baseline)             40e80120 0e022403 80c00003 ...
+    relative (fix)                  400c0120 0e022403 80c00003 ...
+              index-list w4   70e80128 -> 700c0128
+              draw-state w0   40e80134 -> 400c0134
+              vsec w0         40e80140 -> 400c0140
+              triangle w4     f0e80144 -> f00c0144
+              terminate w0    60e80114 -> 600c0114
+    (state[0] field 0xc0120 = 0x0e801200 - 0x0dc00000; dump_progs re-adds the
+     base and prints the same 0x0e801200 program either way)
+
+    baseline  CLKGATESTATUS 0x001800f0  TE asleep  DPM_PAGE_STATUS 0  0/1
+    relative  CLKGATESTATUS 0x001800f0  TE asleep  DPM_PAGE_STATUS 0  0/1
+
+So the address encoding is a real divergence and NOT the wall.  Reverted to
+production (absolute) and PROVED: `.loc` (`68bc15af…`) emits
+`40e80120 0e022403 80c00003 00002100 f0000000 003fffff 70e80128 02c00082 /
+400c…` — i.e. the baseline 28 words again, stall reproduced.
+
+THE WALL IS MTE_EMIT (b17)
+--------------------------
+The primary state record (SD b25 | MTE_EMIT b17 | USEPIPE_1 | PARTITIONS) stalls;
+the vertex-secondary record (SECONDARY b8 | USEPIPE_ALL, no MTE_EMIT) does NOT
+(it survives the session-81 NO_STATE run).  One-variable variants of the primary
+record word, one boot, sampled mid-hang at 0.5/1.4 s:
+
+    variant                        CLKGATESTATUS    TE
+    baseline                       0x001800f0       asleep
+    MTE_EMIT b17 cleared           0x001800f8       AWAKE (b3)
+    SD b25 cleared                 0x001800f0       asleep
+    USEPIPE_ALL (7<<13)            0x001800f0       asleep
+
+Reproduced (two baselines 0x001800f0; two NO_MTEEMIT 0x001800f8).  0x001800f8 is
+the same signature as removing the state loads.  ⇒ the VDM waits for the MTE
+state EMIT from the state-copy task and it never arrives.
+
+THE VENDOR'S EMIT FORM DOES NOT FIX IT
+--------------------------------------
+`USEGenWriteStateEmitProgram` (usegen.c:592-700) for a 540 = the `mov o,pa`
+fragment + one EMITMTE with flags EURASIA_USE1_END, target EMIT_TARGET_MTE
+(emit.t1), mteCtrl 0, src1 = ui32NumWrites, and (UNLIMITED_PHASES and VCB both
+clear) NO phas, NO prologue, NO VCB.  Tool `.vend` (`a0d48593…`,
+MKUSSE_VENDOR_STATE=1): still stalls (0x001800f0, TE asleep, 0/1).  So the emit
+instruction is not the problem; the task never reaches it.
+
+WHAT IS LEFT
+------------
+The PDS state-copy program's LAUNCH of the task: its DOUTD (state DMA) or DOUTU
+(start the task).  The vendor's compiled `pds_mte_state_copy` (23 words, 64-byte
+segment) is a loop (`17000CE0`) whose DOUTD uses src2 row 0x18 (`07030203`);
+ours is a flat `TST;BRA;DOUTD ×2;DOUTU` with src2 0.  Next: (1) a GPU-side
+marker at the top of the state-emit task (and after the DOUTD), read from the
+PDS-vertex ring; (2) the vendor's compiled state-copy program with our DMA
+source and USE address.
+
+BENCH AT THE CLOSE
+------------------
+region 0 0x02C1DDC2 (no flash), region 1 20a5edd3…, hd3 /dev/loop0 ext4 rw
+56.5 G; BOOTCTR_FCTRY 0x2e (>= 0x1e, no write); firmware kick18ccb (d4087521…),
+module 4a928e15…; resets 8, BIF_FAULT 0; null family intact (submit-null-job
+7.5 ms, 1/1); irq 147 reached 100001 on the first measurement boot (trap 423)
+and stayed 0 on the wrap-up boot (intermittent); no DMM wedge (trap 424);
+wlan0 192.168.0.232/24, usb0 169.254.0.1/16; battery Full 4.149 V.
+
+Tools on the ext4: /tmp/powervr_sgx_frame.loc 68bc15af… (production default +
+the SGXGEN_STATE_NO_MTEEMIT/NO_SD/PIPE_ALL and SGXGEN_REL_PDS knobs), .relpds
+ebf463f3… (relative PDS), .vend a0d48593… (vendor emit form); the pre-session
+powervr_sgx_frame 1177fafd… / .bisect b3ee9342… / pb-emitn / pb-emitn-novcb
+untouched.  Source tools/gen/{sgxgen.c,mkusse.py} in the clone (uncommitted);
+tools/gen/usse_progs.h regenerated PLAIN.
+
+CORRECTION (session 81): `USEPIPE = (USEPIPE_1 + pipe) << 13` is a double shift.
+`EURASIA_TAPDSSTATE_USEPIPE_1` is already 1<<13 (sgxdefs.h:863); both the
+reference (:2521) and the client (validate.c:3067) write `(USEPIPE_1 + pipe)` =
+0x2000|pipe.  Our production `counter + 0x2000` already matched; the session-81
+STATE_540 variant's `(1+pipe)<<13` was the deviation (differs only for pipe>0).

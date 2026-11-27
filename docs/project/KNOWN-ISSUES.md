@@ -4780,6 +4780,69 @@ report 121 §3/§11/§12.
           81; capture `sgx540-first-render-2026-11-27.txt`,
           "VDM-STREAM BISECTION".)
 
+426. **The render stall is the MTE state EMIT — `MTE_EMIT` (b17) is the field the
+        VDM waits on, and the state-copy task never delivers the emit.**  The
+        session-81 bisection said "the VDM stops in the STATE_LOAD records"; this
+        names the record's field.  The record that stalls is the **primary** MTE
+        state record (`SD` b25 | `MTE_EMIT` b17 | `USEPIPE_1` | `PARTITIONS`); the
+        record that does **not** stall is the vertex-secondary one (`SECONDARY`
+        b8 | `USEPIPE_ALL`, **no** `MTE_EMIT`) — it survives the session-81
+        `NO_STATE` run, where the TE wakes.  One-variable variants of the primary
+        record's second word, one boot, read mid-hang (t=0.5/1.4 s):
+
+        | variant | `CLKGATESTATUS` | TE (b3) |
+        |---|---|---|
+        | baseline | `0x001800f0` | asleep |
+        | **`MTE_EMIT` b17 cleared** | **`0x001800f8`** | **awake** |
+        | `SD` b25 cleared | `0x001800f0` | asleep |
+        | `USEPIPE_ALL` (7<<13) | `0x001800f0` | asleep |
+
+        Reproduced twice each (`0x001800f0` baseline, `0x001800f8` with b17
+        cleared); `b3` set is the same signature as removing the state loads
+        entirely (trap 425).  **The vendor's exact 540 state-emit USE program
+        form does NOT help** — `USEGenWriteStateEmitProgram`
+        (`usegen.c:592-700`) on a 540 is `mov o,pa` + one `EMITMTE`
+        (flags `EURASIA_USE1_END`, target `emit.t1`, `mteCtrl` 0,
+        `src1 = ui32NumWrites`, no `phas`/prologue/VCB — `UNLIMITED_PHASES` and
+        `VCB` are both clear), and a tool built with exactly that still stalls
+        (`0x001800f0`, TE asleep, `0/1`).  So the emit *instruction* is not the
+        wall; the task never reaches it.  The remaining suspects are the PDS
+        state-copy program's **launch** of the task — its `DOUTD` (state DMA) or
+        `DOUTU` (start) — and the vendor's compiled `pds_mte_state_copy`
+        (`…/intermediates/pds_mte_state_copy/…h`, 23 words, 64-byte segment, a
+        loop at `17000CE0`, `DOUTD` `src2` row 0x18 = `07030203`) is a
+        never-submitted program-content difference (ours is a flat
+        `TST;BRA;DOUTD ×2;DOUTU` with `src2` 0).  **Do not re-run the record
+        field variants** (USEPIPE/PARTITIONS/DEP/SEG4/attr, traps 425/416); the
+        next tests are a GPU-side marker in the state-emit task and the vendor's
+        compiled state-copy program.  (Session 82; report 283; capture
+        `sgx540-first-render-2026-11-27.txt`, "SESSION 82".)
+
+427. **The VDM stream's PDS addresses are `PDSExecBase`-relative on the SGX540,
+        and ours were absolute — a real divergence, measured NOT the wall.**  On
+        a core without `SGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE` (this one) the
+        state-record and index-list base-address fields hold
+        `(program − PDS_EXEC_BASE) >> 4`, `PDS_EXEC_BASE` being the PDS-pixel
+        heap base (`0x0dc00000` here).  The reference builder subtracts
+        `uPDSExecBase` before every such record (`sgx_render_flip_test.c:2488`
+        state, `:3142` terminate, `:3017`/`:3064` index list) and so does the
+        GLES2 client (`validate.c:387-388`, `:3062-3063`); the clone's own
+        `docs/UAPI.md:638` states the rule.  Our generator already subtracted it
+        for the pixel PDS words *inside* the state block (`pds_word()` writes
+        `(addr − heap_base[H_PDSPIXEL]) >> 4`) but wrote the record headers
+        (`0x40000000 | addr>>4`) absolutely — an internal inconsistency.
+        **Emitting the relative form everywhere changed the stream exactly as
+        predicted** (state word0 `40e80120` → `400c0120`, resolving to the same
+        `0x0e801200` program) **and left the timeout signature and mid-hang
+        state field-for-field identical** (`CLKGATESTATUS 0x001800f0`, TE asleep,
+        `DPM_PAGE_STATUS 0`, `0/1`).  Per DECISIONS §117 the production stream
+        stays absolute; `SGXGEN_REL_PDS=1` opts in.  Also corrected: session 81's
+        "`USEPIPE = (USEPIPE_1 + pipe) << 13`" is a double shift —
+        `EURASIA_TAPDSSTATE_USEPIPE_1` is already `1<<13`, and both the reference
+        (`:2521`) and the client (`validate.c:3067`) write `(USEPIPE_1 + pipe)` =
+        `0x2000|pipe`, which our production `counter + 0x2000` already matched.
+        (Session 82; report 283.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it
