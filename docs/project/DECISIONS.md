@@ -4441,3 +4441,80 @@ earned by an experiment.**
 "SESSION 80 CONTINUATION" (the two experiments' word diffs and the identical
 timeout lines; the commit note for the restored dump); traps 416/417;
 `docs/sessions/session-80.md`.
+
+## 118. The whole DDK 1.8 drop is usable evidence — its microkernel source and its specification PDFs included (operator, session 80)
+
+**Decision.**  Read **anything** in the GPL-2 DDK 1.8 drop, and cite it: the
+headers, the host-side `srvinit` C, the **microkernel assembly**
+(`services4/srvinit/devices/sgx/*.asm`), **and the specification PDFs** in that
+drop's `docs/`.  Search the PDFs directly — `pdftotext -layout <pdf> <txt>` works
+on all of them.  The earlier "the specs are Strictly Confidential, so they are
+not usable evidence" reading is **withdrawn by the operator**:
+
+> "Don't worry about that, feel free to read them and grep them for anything we
+> need."
+
+**Why this changes the method.**  The specs describe the *behaviour* this port
+has been reconstructing from binaries and inference.  Session 80's best find
+came from one paragraph of `SGX Services Microkernel.Overview.1.1.5` §6.2.3 —
+the scene becomes renderable **only** on a kick carrying
+`SGXMKIF_TAFLAGS_LASTKICK` — which our µkernel never tests (trap 420).  Read the
+spec *first* for a behavioural question (kick semantics, run lists, completion,
+power), and the binary/source for what a specific instruction does.  The 30 PDFs
+in that drop cover the services architecture, the microkernel overview and
+scheduling, the Platform Guide for **OMAP4 Blaze** (our platform), the EGL/GLES
+reference drivers and the test specifications.
+
+**What this does NOT change.**  DECISIONS §115 stands unchanged and is not in
+tension with this: the microkernel this port *runs* is still **ours**, and the
+vendor's binary is still evidence, never a deployment target.  Reading their
+spec does not make their 2014 blob maintainable or modern-Mesa-capable.  (It
+does make "load the vendor image once as a control" a question worth answering —
+and session 80 answered that it is a driver port, not a file swap: the vendor
+image exports 54 per-command entry points where our driver registers programs
+0-4 only, and needs a three-program `emitpds` launch where ours is one `kick`
+with `ctlblk`/`pdtable`.  Even the `limm` patch sites do not line up: the vendor
+image has **9** sites matching our magic `(w0 & 0x1fffff) == 0xdbeef`, but all 9
+carry word 1 = `0xfc237150` — the sentinel `0xdeadbeef` *fully encoded* — where
+our own image's 2 placeholders carry `0xfc200000` (value bits clear).  Our
+`fw_limm()` guard `!(i[1] & 0x0003f1f0)` therefore **rejects all 9 vendor
+sites**; see `drm/powervr_sgx/pvrsgx_fw.c:170-182`.)
+
+**Provenance.**  `/home/psyden/Pdrive/GFX_Linux_DDK-master/` (operator-supplied,
+outside the repository).  The repository keeps **no copy**; cite path and
+line/page as with the QNX material.  The files are `docs/*.pdf` (30 files), the
+microkernel asm under `services4/srvinit/devices/sgx/`, the release binary under
+`eurasia/eurasiacon/binary2_540_omap4430_android_release/target/intermediates/ukernel/`
+(note the `eurasia/` segment the older notes omit).
+
+**Evidence.**  `docs/sessions/session-80.md` (the `LASTKICK` finding and the
+vendor-image analysis); trap 420; `docs/reference/sgx540-ddk18-facts.md` §9,
+whose "not usable as evidence" paragraph is superseded by this decision.
+
+## 119. The desktop is on llvmpipe because the closed pvr stack is blocked at modprobe — measure the renderer, never `map_files` (session 80)
+
+**Decision.**  Record the live GL renderer by asking GL, or by reading
+`/proc/<pid>/maps` **plus** a renderer string — never
+`/proc/<pid>/map_files`.  `map_files` lists *attempted* `dlopen`s, so the closed
+vendor userspace appears there even when it cannot initialise.
+
+**Why.**  Session 80 told the operator the compositor was rendering on the
+SGX540 through `libEGL_amber` → `pvr_dri.so` → `libGLESv2_PVR_MESA`, on the
+strength of `map_files`.  The operator disagreed from the bench ("it's way
+slower than it was on the GPU"), and measurement settled it:
+
+```
+/etc/modprobe.d/powervr-open.conf: install pvrsrvkm_omap4_sgx540_120 /bin/false
+/etc/modprobe.d/powervr-sgx-opts.conf:  options powervr_sgx edm_init=1
+lsmod: no pvrsrvkm            (trap 381)
+pb-gbmsample /dev/dri/card1:   GL=llvmpipe (LLVM 13.0.1, 128 bits)
+                               PVR:(Error): Couldn't connect to services
+```
+
+So the closed stack's userspace is present, gets mapped, tries to initialise,
+and fails because the kernel side is blocked; the compositor falls back to
+llvmpipe.  Both `pvr_dri.so` and `kms_swrast_dri.so` are mapped at once, which
+is what makes `map_files`/`maps` alone misleading.
+
+**Evidence.**  `docs/sessions/session-80.md` (dead ends); the live
+`pb-gbmsample` output; `tools/bench/egl/`.

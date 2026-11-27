@@ -374,13 +374,17 @@ the revert.  Module unchanged `1a2949ab…`.  `/tmp/powervr_sgx_frame`
 `1177fafd…` (session 79's dump restored + the state-program extension); the
 pre-experiment tools kept as `.old79` `efaefc61…` and `.s80base` `83c8aef1…`.
 `BOOTCTR_FCTRY 0x20` read on the deploy boot; region 0 `0x02C1DDC2` untouched.
-`wlan0` went DOWN under the render attempts' GPU resets and would not
-re-associate (`wlan0: regulatory prevented using AP config, downgraded` — the
-5 GHz/world-domain case whose documented fix `iw reg set` is unavailable, since
-**`iw` is not installed on the Nura root**); usb0 up and SSH unaffected.  By
-the close the `open microkernel kick16tail` line had wrapped out of dmesg
-(trap 390), so the live firmware is identified by the file hash
-`744b072d…`.
+`wlan0` went DOWN under the render attempts' GPU resets and re-associated
+**slowly** — it was up with a DHCP lease (`192.168.0.232/24`) at the close, so an
+earlier "would not re-associate" reading in this same session was premature.
+(`iw` is not installed on the Nura root, so `iw reg set` is unavailable here.)
+usb0 up and SSH unaffected.  By the close the `open microkernel kick16tail` line
+had wrapped out of dmesg (trap 390), so the live firmware is identified by the
+file hash `744b072d…`.  Region 0 was **re-verified from the tracked file this
+session**: CRC `0x02C1DDC2`, magic `0xD7C82D1F`, sha256 `70474c01…`, 10 450 520
+B.  Region 1 was **re-hashed live** (64 MiB at raw `0x29000000`) =
+`20a5edd3a791a37ef5e6ab9a50d1c83f8967d8257ed76c9fe23a318d4b887422`.  hd3 is
+`/dev/loop0` ext4 **rw**, 56.5 G.
 
 
 SESSION 80, SECOND CONTINUATION — trap 417 settled by one `cat`, and the
@@ -533,3 +537,51 @@ Unchanged from the close above (`kick16tail` `744b072d…`, module `1a2949ab…`
 The comment-only edits to `ukernel/cores/sgx540.py` and `ukernel/ukernel.py`
 rebuild to the **same wrapped image, `744b072d…`**, and both gates pass
 (SGX545 golden `83b5b0a7…`, 8/8 offline tests) — so nothing was re-deployed.
+
+
+SESSION 80, BENCH AT THE CLOSE (re-measured, not carried over)
+-------------------------------------------------------------
+Host-side, from the tracked image file (no flash all session):
+  boot/chainloader/kernel.img  10 450 520 B
+    stored CRC at len-4 = 0x02C1DDC2, computed CRC-32 over [0,len-4) = 0x02C1DDC2
+    magic at len-8 = 0xD7C82D1F, sha256[:8] = 70474c01
+Region 1, hashed LIVE on the unit this session:
+  dd if=/dev/mmcblk1 bs=1M skip=656 count=64 | sha256sum
+    20a5edd3a791a37ef5e6ab9a50d1c83f8967d8257ed76c9fe23a318d4b887422
+  (matches the docs' abbreviated 20a5edd3…)
+Device:
+  uname -r 7.3.3 #5 SMP Thu Nov 26 07:02:43 -03 2026 armv7l; PRETTY_NAME="Nura edge"
+  /  = /dev/loop0 ext4 rw, 56.5G, 935.7M used
+  sgx540_ukernel.bin  744b072d440de8d8021acbff51e9cc4c  (kick16tail, LIVE)
+  powervr_sgx.ko      1a2949ab67755e93d25a1cecdecea555  (unchanged this session)
+  /tmp/powervr_sgx_frame  1177fafdb6bcbee629bef263eb6b8e23
+  /proc status node:  firmware running: 1  lost: 0  resets: 12  irqs: 11
+  BOOTCTR_FCTRY: from /var/log/dmesg (the ring had wrapped — trap 390):
+    pbrpmb: topup: BOOTCTR_FCTRY at block 0x3a record@196 = 20000000
+    pbrpmb: topup: 0x20 >= threshold 0x1e, no write
+  wlan0  UP  192.168.0.232/24 (+ IPv6);  usb0 UP 169.254.0.1/16
+  battery POWER_SUPPLY_CAPACITY=100, CAPACITY_LEVEL=Full, VOLTAGE_NOW=4152000 uV
+
+TRAP 421 EVIDENCE — THE VENDOR limm SITES ARE FILLED, NOT BLANK
+--------------------------------------------------------------
+Scanned both images for our loader's magic and its guard
+(pvrsgx_fw.c:170-182):
+    ok = (i[0] & 0x1fffff) == 0xdbeef && !(i[1] & 0x0003f1f0)
+
+  vendor ukernel.bin (19 984 B, 8-aligned): 9 magic sites, 0 pass the guard
+    +0x0e50 0xfe60 0x0e68 0x0ea0 0x0eb0 0x0f00 0x0f10 0x3e38 0x3e50
+    every one: word1 = 0xfc237150
+  our image (sgx540_ukernel.bin): 2 magic sites, 2 pass the guard
+    +0x0078 0x00b8, word1 = 0xfc200000
+
+  0xfc237150 & 0x0003f1f0 = 0x37150, and
+    ((0xdeadbeef >> 17) & 0x1f0) | ((0xdeadbeef >> 26) << 12) = 0x37150
+  — i.e. the vendor encodes the *sentinel itself* there; our sites are blank.
+  sgx-disasm -c sgx540 of the vendor image shows the 9 sites as
+  `limm rN, #3735928559` (0xdeadbeef) at disassembly lines 459,461,462,469,
+  471,481,483,1992,1995.
+
+  Consequence: pointing our loader at the vendor image fails its own
+  placeholder check.  With its 54 per-command entry points vs our
+  `entry[5]` (pvrsgx_fw.c:230) and the three-program `emitpds` launch, the
+  vendor image is a driver port, not a file swap.

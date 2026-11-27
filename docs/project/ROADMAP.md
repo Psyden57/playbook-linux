@@ -577,9 +577,17 @@ flasher can replace at every point:
     0x230 MTE_OTPM_CSM_FLUSH_BASE (the vendor uses 0x230/0x234 as
     addresses), and a tail of SGX545-only registers (0x2a8, 0x2b0-0x2d4,
     0x324, 0x364-0x374, 0x520, 0x74c) the 540 build never writes.
-    **Next: check the VDM control-stream record formats and the client
-    state-load PDS/USE programs against the 540's encodings** (the 0xb14
-    method on the stream); then the TA_TE tail hygiene.
+    **Next: `SGXMKIF_TAFLAGS_LASTKICK` (session 80, trap 420).**  The state-load
+    program *content* was checked in session 80 and decodes clean (our own
+    `state_block()` records), so that is closed.  The operator cleared the whole
+    DDK 1.8 drop as evidence (DECISIONS §118) and its microkernel spec
+    (`SGX Services Microkernel.Overview.1.1.5` §6.2.3) says the scene becomes
+    renderable **only** on a kick carrying `LASTKICK`; §6.2.4 then starts the 3D
+    from that run list.  Our µkernel masks `ta_flags` with `#1` (FIRSTKICK only)
+    and `ta_finished` does none of the last-kick work; the vendor tests the flag
+    in seven places (`ta.asm:425, 892, 1135, 1136, 2841, 2842`).  The kernel
+    *does* deliver it (`pvrsgx_render.c:806,874-876`).  First step is a
+    **measurement** (`UK_CCBTRACE=1`, ctlblk word 0x38), not a code change.
     (a4c) **THE STREAM'S RECORD LAYOUT IS WALKED AND EXCLUDED (session 80).**
     The vendor's own *client-side* builder (GPL-2 DDK 1.8,
     `eurasiacon/opengles2/{validate,clear,scissor,accum}.c` and

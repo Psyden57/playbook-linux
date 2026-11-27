@@ -278,17 +278,26 @@ compared address for address, and the vendor's `SETUPDIRLISTBASE` /
 directory-list and queue handling is *itself* callable microkernel code on this
 core — consistent with the one-list model in §3.
 
-## 9. The microkernel's own specification is in the drop (and is closed material)
+## 9. The microkernel's own specification is in the drop (usable — operator, session 80)
 
 `docs/SGX Services Microkernel.Overview.1.1.5.External.pdf` and
 `docs/SGX Services Microkernel.Scheduling.1.0.23.External.pdf` are the vendor's
-behavioural specs for exactly the layer this port is reconstructing.  Both are
-marked **"Strictly Confidential"**, so under the project's cleanroom rule
-(`docs/CLEANROOM.md`) they are **not usable as evidence** — unlike the GPL-2
-headers and source above, which are.  Recorded here only so nobody re-derives
-that conclusion later, and so the boundary is explicit.
+behavioural specs for exactly the layer this port is reconstructing.  They are
+marked "Strictly Confidential"; **the operator has since cleared the whole drop
+as evidence, PDFs included** (DECISIONS §118, session 80), and the earlier
+"therefore not usable" reading is withdrawn.  Extract them with
+`pdftotext -layout <pdf> <txt>` — it works on all 30 PDFs in that directory —
+and search them for a behavioural question *before* inferring it from a binary.
 
-What the public, GPL-2 half of the drop does make exact:
+The one this paid for immediately: `SGX Services Microkernel.Overview.1.1.5`
+§6.2.3 states that a TA command carrying `SGXMKIF_TAFLAGS_LASTKICK` is what
+makes "the scene ready for rendering", by moving its `SGXMKIF_HWRENDERDETAILS`
+onto the 3D run list — and our µkernel never tests that flag (KNOWN-ISSUES
+trap 420).  Also in that drop: `SGX Android OMAP4 Blaze.Platform Guide` (our
+platform), the services architecture and functional specs, the EGL/GLES
+reference-driver specs and the test specifications.
+
+The downloadable public half of the drop still makes exact:
 
 * **The PDS is the scheduler.**  `EUR_CR_EVENT_PDS_ENABLE` (0x0a58) is the
   per-source dispatch mask, and `srvinit` writes it once at init from the value

@@ -4518,6 +4518,80 @@ report 121 §3/§11/§12.
         window, so t=1 is up to 0.3 s late).  (Session 80; capture
         `sgx540-first-render-2026-11-27.txt`.)
 
+420. **Our µkernel never tests `SGXMKIF_TAFLAGS_LASTKICK` — and the vendor's own
+        spec says the scene becomes renderable only on that flag.**  This is the
+        best structural suspect left on the render path and it was found by
+        reading the DDK drop's specification PDFs (DECISIONS §118), not the
+        binary.
+
+        `SGX Services Microkernel.Overview.1.1.5` §6.2.3, "Context CCB (TA)
+        Command Completion Details":
+
+        > 4. If this is the last TA command for the scene (indicated by the
+        >    **SGXMKIF_TAFLAGS_LASTKICK** flag) then **the scene is ready for
+        >    rendering**. In this case the SGXMKIF_HWRENDERDETAILS structure is
+        >    removed from the unfinished TA commands run list and added to the
+        >    tail of the unfinished 3D commands run list within the
+        >    HWRENDERCONTEXT.
+
+        §6.2.4 then has `SGXMK_TA3D_CTL` pick the render from that 3D run list,
+        check its synchronisation values, and start the 3D.  So with no LASTKICK
+        no render-details entry ever reaches the 3D run list and **the 3D is
+        never started** — which is exactly our symptom (the TA side runs,
+        `DPM_PAGE_STATUS` stays 0, the TE never starts, nothing faults).
+
+        * **The vendor's code tests it in seven places** —
+          `ta.asm:425, 892, 1135, 1136, 2841, 2842` (and mentions it twice more
+          in comments/traces at `:1130`, `:1279`; nine occurrences in all).  At
+          TA finish (`ta.asm:1125-1178`) it does work we do none of: set
+          `SGXMKIF_HWRTDATA_CMN_STATUS_TACOMPLETE`, clear
+          `SGXMK_TA3D_CTL.sTARTData`, write `EUR_CR_TE_TPCCONTROL` FLUSH, spin
+          on `EUR_CR_EVENT_STATUS_TPC_FLUSH`, and ack it.
+        * **Our code reads `ta_flags` and masks it with `#1`** —
+          `ukernel/ukernel.py:1646-1648` (`and r13, r13, #1`), i.e.
+          `SGXMKIF_TAFLAGS_FIRSTKICK` only.  `grep -rc 'LASTKICK\|LAST_KICK'`
+          over `ukernel/` returns **zero** hits in `ukernel.py` and
+          `cores/sgx540.py`.  `ta_finished` does none of the last-kick
+          work (no TACOMPLETE, no `sTARTData = 0`, no TPC flush/wait/ack).
+        * **The kernel does deliver the flag**:
+          `drm/powervr_sgx/pvrsgx_render.c:806` sets
+          `first = (k == 0)`, `last = (k == rj->nkicks - 1)`, and `:874-876`
+          writes `PVRSGX_TA_FLAGS_BASE | (first ? PVRSGX_TA_FIRST_KICK : 0) |
+          (last ? PVRSGX_TA_LAST_KICK : 0)`.  The frame tool submits 2 kicks
+          (`ta_kicks`), so kick 1 carries LASTKICK.
+
+        **Unmeasured caveat, and the first step:** "the kernel sets it" is not
+        "the µkernel sees it".  Build with `UK_CCBTRACE=1` (the existing
+        instrument, `ukernel.py:53`, logs `cmd+0x04` to ctlblk word **0x38** at
+        `do_ta`) and read that word on the unit **before** changing any code.
+        This project has had three instruments lie about exactly this kind of
+        gap (traps 403/406/410).  (Session 80; DECISIONS §118; the scratch
+        analysis is folded into `docs/sessions/session-80.md`.)
+
+421. **The vendor `ukernel.bin`'s `limm` sites are NOT interchangeable with
+        ours — the magic matches, the guard does not.**  Easy to misread, and
+        session 80 did misread it before checking:
+
+        * Both images have `limm` patch sites whose word 0 satisfies our test
+          `(i[0] & 0x1fffff) == 0xdbeef` — the vendor has **9** (all 8-aligned,
+          at `+0xe50, 0xe60, 0xe68, 0xea0, 0xeb0, 0xf00, 0xf10, 0x3e38,
+          0x3e50`), ours has **2** (`+0x78`, `+0xb8`).
+        * But `fw_limm()` also requires `!(i[1] & 0x0003f1f0)`
+          (`pvrsgx_fw.c:173`) — the "value bits are clear" guard.  Ours pass:
+          word 1 = **`0xfc200000`**.  The vendor's **all fail**: word 1 =
+          **`0xfc237150`**.
+        * `0x37150` is exactly the value bits of the sentinel `0xdeadbeef`
+          (`(0xdeadbeef >> 17) & 0x1f0 | ((0xdeadbeef >> 26) << 12)`), i.e. the
+          vendor's sites are the sentinel *fully encoded in the clear* — they are
+          **filled**, not blank placeholders.  A wrapper that patches them would
+          be told "no patch placeholder at +0x…" by our own loader.
+
+        So "the vendor image has the same patch codec, we can just point the
+        loader at it" is **false**; combined with the entry-table mismatch
+        (54 per-command labels vs our `entry[5]`), the vendor image is a driver
+        port.  Do not re-derive this.  (Session 80;
+        `drm/powervr_sgx/pvrsgx_fw.c:170-182`.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

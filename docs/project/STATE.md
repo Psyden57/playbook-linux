@@ -27,12 +27,30 @@ note — 92 `str #imm` sites over 41 offsets, none of the SGX545-only tail
 tests.  One boot: null family intact, and the render's timeout **and** its whole
 mid-hang TA/VDM/DPM state are field-for-field session 79's.
 
-**Next: the client state-load PDS/USE programs** (now dumpable — the five STATE
-records name five real programs in the PDS-vertex ring,
-`vdm_state[0/8/10/18/23]`), checked against the 540's USSE/PDS encoding; or the
-VDM↔USE handshake.  Everything else on the stream axis is now excluded by
-measurement.  Traps **416/417**; the capture's "SESSION 80 CONTINUATION"
-section is the record.
+**Next: `SGXMKIF_TAFLAGS_LASTKICK` (trap 420) — the best structural suspect
+left.**  The operator cleared the whole DDK 1.8 drop as evidence (DECISIONS
+§118), and its microkernel spec says the scene becomes renderable **only** on a
+kick carrying LASTKICK.  Our µkernel masks `ta_flags` with `#1` (FIRSTKICK only)
+and `ta_finished` does none of the last-kick work (`TACOMPLETE`,
+`sTARTData = 0`, TPC flush); the vendor tests the flag in seven places
+(`ta.asm:425, 892, 1135, 1136, 2841, 2842`).  The kernel *does* deliver it
+(`pvrsgx_render.c:806,874-876`).  **First step is a measurement, not a code
+change**: build with `UK_CCBTRACE=1` and read ctlblk word 0x38 at `do_ta`.  If
+that does not move it, the next discriminator is the **launch stub** — ours is
+`[0]=0x0020000f [1]=0x00000002 … [4]=0x07000305 [5]=0xaf000000`, while the
+vendor launches with two `emitpds.tasks.taske` instructions
+(`sgx_init.use.asm.preproc:4622,4643`).  Traps **416-420**; the capture's
+"SESSION 80 CONTINUATION" sections are the record.
+
+**Also found: `IDXFIFO` wakes mid-hang and LATCHES, and it exists only on the
+540** (trap 419).  `CLKGATESTATUS` sampled 7× at 0.3 s through the whole hang is
+`0x001000a0` at t=0 then `0x001800f0` at t=1…6; the wake set over idle is
+{MTE b4, VDM b6, **IDXFIFO b19**}, TE never wakes, and the driver's reset
+restores it bit-identically.  IDXFIFO is the index FIFO — the VDM's first read
+of a draw — and **the SGX545 header does not mention it once**, so it is the one
+unit this 545-derived port was written without.  `USE0_SERV_EVENT` also climbs
+through the hang (`0x10bdb` → `0x10c11`) while USE1 idles, i.e. the EDM is alive
+and the *render* is what is stuck.
 
 **Two corrections landed in the same session (traps 417/418).**  (1)
 **`EVENT_STATUS2 = 0x10` is non-discriminating** — it reads `0x10` on an *idle*
@@ -58,12 +76,17 @@ beside it `.kick15pds` (`24322c2a…`), the earlier variants and **`.working` =
 kick10 `3fbbd11b…`** as the revert.  Module `1a2949ab…` unchanged
 (`.pre-render` = `.working` = `10c6f435…`).  `/tmp/powervr_sgx_frame`
 `1177fafd…` (session 79's dump restored + the state-program extension), with
-`.old79` and `.s80base` kept.  `BOOTCTR_FCTRY 0x20` on the deploy boot;
-**`wlan0` DOWN** at the close (the render attempts' GPU resets take it down, and
-it will not re-associate — `wlan0: regulatory prevented using AP config,
-downgraded`, whose documented fix `iw reg set` is unavailable because **`iw` is
-not installed on the Nura root**); usb0 up and SSH unaffected; desktop
-llvmpipe, untouched.
+`.old79` and `.s80base` kept.  `BOOTCTR_FCTRY 0x20` (read from
+`/var/log/dmesg`: `pbrpmb: topup: … = 20000000`; the live dmesg ring had
+wrapped — trap 390).  region 0 re-verified this session from the tracked file:
+CRC `0x02C1DDC2`, magic `0xD7C82D1F`, sha256 `70474c01…`, 10 450 520 B;
+region 1 re-hashed **live** (64 MiB at raw `0x29000000`) =
+`20a5edd3a791a37ef5e6ab9a50d1c83f8967d8257ed76c9fe23a318d4b887422`.
+hd3 is `/dev/loop0` ext4 **rw**, 56.5 G, 935.7 M used.  **`wlan0` UP** with a
+DHCP lease (`192.168.0.232/24`) — it re-associated after the GPU resets, just
+slowly (an earlier "it will not re-associate" reading in this same session was
+premature and is corrected here); `usb0` `169.254.0.1/16` UP, SSH works;
+desktop **llvmpipe** (DECISIONS §119), untouched.
 **Trap 390 note:** the `open microkernel kick16tail` line had wrapped out of
 dmesg by the close, so the live firmware is identified by
 `md5sum /lib/firmware/powervr_sgx/sgx540_ukernel.bin` = `744b072d…`.
