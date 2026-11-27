@@ -40,69 +40,60 @@ a GPU-accelerated desktop (compositor **and** clients), and a modern browser.
 §107/§108): the closed pvr DDK's GBM cannot export dmabufs, which is what blocks
 the browser (report 275).  This is that port.
 
-## 0a. What session 77 established (do not re-derive)
+## 0a. What sessions 77–78 established (do not re-derive)
 
-* **The kick entry is never entered.**  `UK_KICKLOG` re-instrumented per
-  HANDOFF-77 §0b: the counter sits on the **first instruction of the `kick`
-  entry**, on control-block word **0x3f** — mechanically verified free (no
-  constant in `cores/sgx540.py`, no other `r17` access, no `st_sa(SA_SELF)`
-  site; `st.a.d r17, #63` assembles directly; the emitted image disassembles
-  back to exactly that form, and the tick site reads `st.a.d r17, #44` = word
-  0x2c).  Boot 1: `entry(0x07)=2, tick=0, kick(0x3f)=0, empty=0, word
-  0x2a=1` **unchanged across eight job submits** (`resets 0 → 8`, `issued 8`,
-  `irqs 0`, suite 24/50 = the trap-388 timeouts).  The instrument is
-  negatively controlled by its own siblings: the entry counter (same store
-  form, same dump) reads 2, so the zero is sound (DECISIONS §113).
-* **A bare doorbell would count if it landed and fetched.**  A host kick
-  leaves no `EVENT_STATUS` bit, so the entry's fallthrough reaches `ba kick`;
-  the counter at the entry's first instruction would climb.  It does not —
-  so either the doorbell never lands or the EDM never fetches.  The next two
-  findings bound it further.
+* **THE FIX (session 78, report 281): `EVENT_PDS_INFO` (0x0a70) carried
+  `USE_PIPELINE = TOGGLE` where the vendor derives `USE_PIPELINE_0` — one
+  bit, and the whole dispatch blocker.**  `0x00013d01 → 0x00013c01`; live
+  read-back at the wrap-up: `EVENT_PDS_INFO 0x00013c01` ✓.  The pipeline now
+  runs continuously (entry/tick climbing hours after boot) and jobs complete.
+* **The tick counter works — after a GPU-side seed (trap 409).**  The GPU's
+  initial view of the control-block tail is NOT the CPU's zero-filled view:
+  the old counter read 0xffffffff, +1 wrapped to 0, and "tick = 0" looked
+  like "no dispatch pass".  `init_set` now seeds 0x100; the first dispatch
+  pass reads 0x101 at exactly word 0x2c.  **Seed every ctlblk counter from
+  the GPU side with a non-identity value.**
+* **"4 fetches per life" was double counting (trap 410).**  With
+  `UK_ENTRYFIRST` and `UK_ENTRYLOG` both set the old counter still emits, so
+  word 0x07 increments TWICE per fetch.  The true count was 2.  **The live
+  `kick10` still double-counts** (both counters are in the deployed image) —
+  divide an `entry(0x07)` reading by 2, or rebuild with one counter.
+* **The kick entry is never entered (session 77, boots 1-4).**  `UK_KICKLOG`
+  re-instrumented: the counter sits on the **first instruction of the `kick`
+  entry**, on control-block word **0x3f** — mechanically verified free and
+  disassembly-verified (`st.a.d r17, #63`; the tick site then read
+  `st.a.d r17, #44`).  Zero across eight job submits that each cost a GPU
+  reset, with the entry counter's reads as the negative control.  (This was
+  the pre-fix pipeline; re-measure under `USE_PIPELINE_0`.)
 * **`EVENT_KICK` read-backs cannot show landing on this core (trap 407).**
-  Boot 2 (module `801d08a5…`, the `doorbell` node): `ccb_write()` samples the
-  register before and 8× after the write; the **launch kick in
-  `pvrsgx_fw_start()` is the control and reads all-zero too** — even the
-  provably-landing launch never shows NOW in a read-back.  `EVENT_KICKER`
-  reads `0x0f002010` (correct) in both windows.  Do not re-run this
-  instrument expecting it to discriminate.
-* **The dispatch path is dead after launch, for every trigger (trap 408).**
-  (1) The kick counter (above).  (2) b29 TIMER latched since boot with
-  `EVENT_TIMER` cycling, while the entry stays 2 and the tick stays 0 — a
-  dispatching timer pass would ack b29 and climb at 1 kHz.  (3) The
-  session-76 wrap-up's `relaunch` node: re-writing **`EVENT_KICK2` itself** —
-  the register whose boot write dispatched — does not re-fetch.  So the EDM
-  fetched the event program **twice during launch** (the launch evidently runs
-  two of our five PDS stubs, all of which DOUTU to entry 0x0, cf. the vendor's
-  PRIMARY1/SECONDARY/PRIMARY2) and never again.  This is the "task admission"
-  class session 76 suspected, and it is **upstream of the doorbell question**:
-  the doorbell may well land; nothing dispatches regardless.
-* **The never-written dispatch registers, now measured (boot 3, in `status`):
-  `DMS_AGE = 0`** (the vendor's launch writes `ENABLE | PVRSRV_SGX_MAX_DMS_AGE`;
-  the value is underivable from the DDK 1.8 drop — every header grepped),
-  **the PIXEL event-PDS pair entirely 0** (`0x0a5c/0x0a60/0x0a64`),
-  `EVENT_PDS_ENABLE2 = 0` (the vendor never writes it either), `EVENT_KICK1/
-  KICK3 = 0`.  The OTHER pair is programmed (`0x008039f0`/1/`0x00013d01`) and
-  `EVENT_PDS_ENABLE` carries TIMER (`0x2204b00f`).
-* **`UK_ENTRYLOG`'s STATUS-snapshot store has never worked (trap 406)** — in
-  `fix1` too.  It intends ctlblk word 0x39 (its comment: "word 0x39 -> 0xe4")
-  but runs `limm r5, #0x39` — **bytes** (`imae rD,rA,#imm,rB` is `rA*imm+rB`,
-  no scaling), so the store lands misaligned at byte 0x39.  Word 0x39 has read
-  0 in every dump of every build.  Fix the limm to `#{ENTRY_STATUS * 4}`
-  before ever citing word 0x39.
+  The doorbell instrument's control — the provably-landing launch kick —
+  reads all-zero too.  Do not re-run it expecting it to discriminate.
+* **The dispatch blocker was NOT**: DMS aging (`DMS_AGE = ENABLE|0x2c`
+  sticks, no effect; the vendor's own default is 0), the task-end emit with
+  the vendor's exact operand derivation (fires, no fetch — session 76's
+  "cannot re-fetch" was garbage operands, withdrawn), `UK_NO_PHAS` (the
+  vendor's working SGX540 image has no `phas` at all; ours was not where
+  anything died), or the DOUTU task-control words (now `MODE_PERINSTANCE`,
+  kept, not sufficient alone).
+* **The launch-script diff is COMPLETE, and `CACHE_CTRL` is load-bearing
+  (trap 411 + contradiction file): the vendor's own `0x0000ffff` breaks
+  event dispatch entirely** (bisected over three boots).  It is NOT written
+  and must not be.  The other five remaining registers (`USE_MOE`,
+  `ISP_DEPTHSORT`, `USE_G0/G1`, `DMS_AGE`) are compatible and programmed;
+  `USE_CTRL` was removed in the bisect and stayed out.
+* **The never-written dispatch registers, measured and in `status`**:
+  `DMS_AGE` (now programmed), the PIXEL event-PDS pair (0 — it belongs to
+  the VDM context-store terminate program, not event dispatch),
+  `EVENT_PDS_ENABLE2 = 0`, `EVENT_KICK1/KICK3 = 0`, `EUR_CR_LOOPBACK` (1 =
+  space — the vendor's EmitLoopBack spins while it is ZERO),
+  `USE0/1_SERV_EVENT` (per-pipe event service queues).
 * **"One init pass and one dispatch pass, and the dispatch pass is the
-  timer's" (session 76's correction) is withdrawn in its second half — there
-  is no dispatch pass.**  The `tick(0x2c) = 1` readings of sessions 75–76 are
-  misparse candidates: **control-block word 0x2a reads 1** on every boot
-  (three boots running; writer unidentified — nothing in the image stores
-  there, the driver memsets the block and writes only words 0x00–0x17), 0x2a
-  is the 3rd word of dump row 6 while 0x2c is the 5th.  Every entry-count and
-  register figure stands; the tick figures do not.
-* **`word 0x2a = 1` is itself unexplained.**  Candidate (unverified): the PDS0
-  launch stub's DOUTU deposit — our stub's data word DS1[0] is exactly
-  `0x00000001`, and our loader does no per-word DOUTU address patching (the
-  vendor patches DOUTU1 at [1],[5],[9],[13] etc., `sgxinit.c:2507-2510`), so a
-  misrouted deposit address is plausible.  Do not build on this word until
-  identified.
+  timer's" (session 76)** — CONFIRMED, after two corrections: the `tick = 1`
+  readings of sessions 75–76 were the tick counter wrapping through
+  0xffffffff (trap 409), not a misparse; and word 0x2a — which read 1 on
+  every pre-fix boot and fuelled the misparse theory — reads **0** since the
+  tick rework (boots 5+); its writer was never named and the line is now
+  GPU-written by the seed.
 * **The vendor's DDK 1.8 drop (`/home/psyden/Pdrive/GFX_Linux_DDK-master`,
   outside the repo) contains the SGX540 microkernel as source AND as a prebuilt
   binary** — reference only, never deploy it (DECISIONS §115).  Its event
@@ -134,11 +125,16 @@ packed into the kernel CCB — and the µkernel's `k_ta`/`do_ta`/`do_3d` path
 **Method — wire the render job type at the smallest scale, then submit one
 minimal frame.**
 
-1. Find what gates the render job type off for this core: `pvrsgx_core.c`'s
-   `sgx540` family entry and the uAPI's submit path (the SGX545's render path
-   exists upstream — the NULL-only advertisement is presumably a gate, not
-   missing code).  Enable it for the `sgx540` entry only, with the SGX545
-   serial image staying byte-identical (DECISIONS §112's rule).
+1. Find what gates the render job type off for this core — **found in the
+   source (verified at this wrap-up)**: `pvrsgx_cmd_defs.c`'s
+   `sgx540_render` / `sgx540_ta_kick` / `sgx540_transfer` exist but carry no
+   `.supported` flag ("like the sgx530 until a run on the core settles the
+   checked fields", the file's own comment) and no field tables;
+   `pvrsgx_drv.c`'s `COMMANDS_GET` then advertises NULL only.  The fix:
+   `.supported = true` plus field tables on the three `sgx540_*` defs —
+   the `sgx545_*` tables in the same file are the reference to copy — for
+   the `sgx540` entry only, with the SGX545 serial image staying
+   byte-identical (DECISIONS §112's rule).
 2. Keep the working firmware (`kick10`) and the working module baseline
    (`.working` pair) as the revert.  Build the module, boot, verify the
    null-job family STILL passes first (one `submit-null-job-many`) — the
@@ -146,10 +142,13 @@ minimal frame.**
 3. Submit ONE minimal render (a TA + 3D scene with a tiny PB/RT, as
    `run_ours.py TRACE` models; the DDK's es2gears single-frame path is the
    reference shape).  The µkernel's own markers are the instrument, all
-   host-readable via `ctlblk`/`status`:
-   `kick(0x3f)` (the kick entry), WAIT_LOG's stage bytes (0x35/0x37-0x3b:
-   do_ta/ta_finished/do_3d/render_done), `ta3dctl`'s TA/3D CCB words, and
-   `USE_SERV_*`.
+   host-readable via `ctlblk`/`status`: `kick(0x3f)` (the kick entry), the
+   tick/entry counters, `ta3dctl`'s TA/3D CCB words, and `USE_SERV_*`.
+   **Caveats**: the deployed `kick10` was built WITHOUT `UK_WAITLOG`, so the
+   WAIT_LOG stage bytes (0x35/0x37-0x3b: do_ta/ta_finished/do_3d/render_done)
+   are NOT populated — using them is a firmware rebuild (one boot); and
+   `kick10`'s entry counter double-counts (trap 410) — divide by 2 or rebuild
+   with one counter while you are rebuilding anyway.
 4. Interpret:
    * **`kick(0x3f)` climbs and the render completes** (`SC_COMPLETED` 0x27
      bumps, SW_EVENT, the fence signals) → the render path works; go to the
@@ -194,7 +193,7 @@ touch `CACHE_CTRL`/`USE_CTRL` (trap 411).  Keep `USE_PIPELINE_0`.
   cpio is embedded from the *old* one.  Verify by extracting the firmware from
   the built cpio and comparing md5s.
 
-## 1. Bench state at the session-77 close (read on the unit)
+## 1. Bench state at the session-78 close (read on the unit)
 
 | item | value |
 |---|---|
@@ -260,22 +259,28 @@ touch `CACHE_CTRL`/`USE_CTRL` (trap 411).  Keep `USE_PIPELINE_0`.
 
 ```bash
 cd local/work/powervr_sgx
-# 1. firmware: raw image + manifest, EXPLICIT output paths
-SGX_ASM=$PWD/../sgxasm/sgx-asm UK_TICKLOG=1 UK_ENTRYLOG=1 UK_KICKLOG=1 \
+# 0. the assembler path, once per shell (build.py and the gates both need it)
+export SGX_ASM=$PWD/../sgxasm/sgx-asm
+# 1. firmware: raw image + manifest, EXPLICIT output paths; the SAME UK_*
+#    flags must stay set for the gate in step 2 (test_emu REBUILDS the image
+#    from the environment -- without the flags it tests the un-instrumented
+#    build, not the one you just made)
+UK_TICKLOG=1 UK_ENTRYLOG=1 UK_KICKLOG=1 \
   UK_BUILD_ID=<id> python3 ukernel/build.py sgx540 /tmp/<id>.bin /tmp/<id>.json
-# 2. gates: both must pass before deploying
-SGX_CORE=sgx540 SGX_ASM=$PWD/../sgxasm/sgx-asm python3 ukernel/test_emu.py   # 8/8
-SGX_ASM=$PWD/../sgxasm/sgx-asm python3 ukernel/golden/check.py                # 83b5b0a7…
+# 2. gates: both must pass before deploying, with the SAME environment
+SGX_CORE=sgx540 UK_TICKLOG=1 UK_ENTRYLOG=1 UK_KICKLOG=1 \
+  python3 ukernel/test_emu.py                                                # 8/8
+python3 ukernel/golden/check.py                                             # 83b5b0a7…
 # 3. wrap it -- build.py's output is raw and the driver will reject it
 python3 drm/tools/mkukfw.py /tmp/<id>.bin -o /tmp/<id>w.bin --manifest /tmp/<id>.json
 python3 drm/tools/mkukfw.py --check /tmp/<id>w.bin                            # ok
 # 4. push (hd3 has NO scp/sftp-server -- trap 391)
 cat /tmp/<id>w.bin | tools/pbssh.sh 'cat > /lib/firmware/powervr_sgx/<name>; md5sum /lib/firmware/powervr_sgx/<name>'
-# 5. module: build BOTH source copies, then
-. tools/env.sh
-cp local/work/powervr_sgx/drm/powervr_sgx/*.c local/work/powervr_sgx/drm/powervr_sgx/*.h \
-   local/kernel-tree-sgx/drivers/gpu/drm/powervr_sgx/
-cd local/kernel-tree-sgx && make ARCH=arm CROSS_COMPILE=$CROSS_COMPILE \
+# 5. module: build BOTH source copies (env.sh lives at the REPO root)
+. ../../tools/env.sh
+cp drm/powervr_sgx/*.c drm/powervr_sgx/*.h \
+   ../../kernel-tree-sgx/drivers/gpu/drm/powervr_sgx/
+cd ../../kernel-tree-sgx && make ARCH=arm CROSS_COMPILE=$CROSS_COMPILE \
   M=drivers/gpu/drm/powervr_sgx modules
 ```
 
@@ -359,7 +364,9 @@ interrupts delivered, and the whole null-job family passes on real timings
 (null job 946/427 us; 600 null jobs in 91 ms).  The 20 remaining failures are
 SGX545-shaped TEST expectations (core_id 0x0115, va_bits 32, heap 0x3e000000;
 our core is 0x0114 / 28-bit).  wlan0 was UP at the wrap-up boot; usb0 up;
-desktop llvmpipe.
+desktop llvmpipe.  NOTE: the live EVENT_PDS_INFO reads 0x00013c01 (the fix);
+and kick10's entry counter DOUBLE-COUNTS (ENTRYFIRST+ENTRYLOG both emitted,
+trap 410) -- divide entry(0x07) by 2 or rebuild with one counter.
 
 THE SESSION-78 FIX WAS ONE BIT: EVENT_PDS_INFO (0x0a70) had USE_PIPELINE =
 TOGGLE (round-robin between the two USE pipes); the vendor's derivation is
@@ -380,11 +387,16 @@ CACHE_CTRL = 0x0000ffff, THE VENDOR'S OWN VALUE, BREAKS EVENT DISPATCH
 THE ONE EXPERIMENT (§0b): a REAL RENDER JOB.  The driver's job_types query
 advertises only the NULL job; the microkernel's k_ta/do_ta/do_3d path (the
 TA/3D register tables, all carried-over hypothesis) has never executed.  Wire
-the render job type for the sgx540 entry (the SGX545's render path exists
-upstream -- find the gate), keep the .working pair as the revert, verify the
+the render job type for the sgx540 entry -- the gate is FOUND:
+pvrsgx_cmd_defs.c's sgx540_render/ta_kick/transfer carry no .supported flag
+and no field tables ("like the sgx530 until a run on the core settles the
+checked fields"); set .supported = true and copy the sgx545_* field tables,
+sgx540-entry-only.  Keep the .working pair as the revert, verify the
 null-job family still passes, then submit ONE minimal TA+3D frame and read
-the microkernel's own markers (kick 0x3f, the WAIT_LOG stage bytes, ta3dctl's
-TA/3D words, USE_SERV_*).  Outcomes: render completes (SC_COMPLETED bumps,
+the microkernel's own markers (kick 0x3f, the tick/entry counters, ta3dctl's
+TA/3D words, USE_SERV_*).  Caveats: kick10 has NO UK_WAITLOG (the WAIT_LOG
+stage bytes are unpopulated -- using them is a firmware rebuild) and its
+entry counter double-counts.  Outcomes: render completes (SC_COMPLETED bumps,
 SW_EVENT, fence) -> frame loop, then Mesa; kick stays 0 with ccb wo advancing
 -> the CMDTA packing is wrong, diff against sgx_mkif.h; do_ta set but no
 ta_finished -> the TA register tables are wrong, walk one register at a time
