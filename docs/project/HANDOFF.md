@@ -1,33 +1,54 @@
-# Handoff — session 82 (absolute) → session 83
+# Handoff — session 83 (absolute) → session 84
 
 Self-contained.  **A paste-ready kickoff prompt is at the end (§6).**
 Numbering: the reports call the Linux-era sessions "session 1…N", i.e. absolute
-`N+6` — this handoff is for **absolute 83 = Linux-era 77**, written at the
-session-82 close.  See `docs/sessions/NUMBERING.md`.
+`N+6` — this handoff is for **absolute 84 = Linux-era 78**, written at the
+session-83 close.  See `docs/sessions/NUMBERING.md`.
 
-> **SESSION 82 RESULT: the render wall is the MTE state EMIT, and the CLIENT
-> STREAM IS NOW PROVEN — so the wall is the SGX540 µKERNEL.**  The DDK reference
-> builder gave one structural divergence not previously varied (the VDM stream's
-> PDS addresses are `PDSExecBase`-relative; ours absolute) — emitting it changed
-> the stream byte-for-byte and moved **nothing** (trap 427).  A one-variable
-> bisection then pinned the wall to **`MTE_EMIT` (b17)**: clearing it wakes the
-> TE (`CLKGATESTATUS 0x001800f8`), `SD`/`USEPIPE` do not (trap 426).  The DDK's
-> own 540 capture (`43040e00 0e022403`) is byte-identical to our clear record,
-> our `emit.t1` equals the vendor's `BuildEMITMTE` (`f3_20` = `EMIT_FREEP`), the
-> kernel builds the same TA command, and the upstream frame tool renders on
-> CE5310 — the client is correct.  Excluded by measurement: the state-copy
-> `DOUTD`, the USE pipe (0/1/all), the service counters.  Two real config bugs
-> fixed to the vendor's value and **neither moves it**: `USE_CTRL` (0x0a00 =
-> `0x7c000`, was unset) and `DMS_CTRL` EDM 63→32 (BRN-23632 is SGX530-only, trap
-> 401 corrected — trap 428).  New traps 426–429; report 283 §7/§8;
-> `docs/sessions/session-82.md`.
+> **SESSION 83 RESULT (2): a REAL 545-shaped port bug was found in the vendor
+> source and fixed, and the render's failure MOVED.**  `EUR_CR_DMS_CTRL`'s
+> `MAX_NUM_VERTEX_PARTITIONS` is per-core — shift 27 / 5 bits on the SGX545,
+> shift **25** / **3** bits on the SGX540 — and the port sent `10 << 27`
+> (`0x50000000`) for every core, i.e. **zero vertex partitions** here.  The pixel
+> half was missing too (render details +0x6c, which the µkernel ORs in at the
+> 3D/SPM, was inside a private pad).  Both are now per-core fields (SGX540
+> `4<<25`/`6<<22`; SGX545 bytes unchanged).  **The failure changed from a silent
+> 2 s `job timed out` to, 3/3, `job page fault at 0x00401000 (BIF status
+> 0x0000e000, requestor 0x2000, write)`** — a WRITE at 4 MiB + 4 KiB, the shape
+> of a relative address used absolutely, in no mapped heap.  The frame still
+> fails.  Trap 431; DECISIONS §124; capture "SESSION 83 CONTINUATION";
+> module `21833840…` (revert `.pre-dms540` `92e14ad4…`).
 
-> **SESSION 81 RESULT (context): `LASTKICK` and `IDXFIFO` are excluded, and the
-> VDM stall is localized to the STATE_LOAD records.**  Traps 419/420/422–425.
+> **SESSION 83 RESULT (1): the GPU-side marker was built and submitted, and it is
+> NOT VALIDATED — its zeros are not evidence.  The render wall is therefore
+> UNCHANGED (session 82's MTE state emit).**  Four marker programs, one
+> `H_GENERAL` BO, a `limm` patched at load, cache clean+invalidate on the readback,
+> all behind `SGXGEN_STATE_MARK`.  **Every marker read 0, and so did all four
+> controls** (state-emit task, the clear's vertex task, the pixel-event ptoff
+> task, a `sa0`-base store in the vertex-secondary task), with and without
+> `NO_STATE`.  The measured reason: the **vertex pipe services nothing** on this
+> stack (`USE0/1_SERV_VERTEX`, `USE0_SERV_PIXEL` EMPTY at idle/mid-hang/after),
+> the state-copy task runs on the vertex heap, and the only pipe that services
+> tasks (`USE0_SERV_EVENT`) is the **microkernel's** event handler — the client
+> pixel-event program runs per 3D tile, which never starts.  **So no client task
+> class can positively control the marker in a stalling frame.**  Five instrument
+> defects found and fixed (`st.a.d` writes base+4; the `limm` patch must be
+> read-modify-write or it drops `skipinv`; the shmem BO is cacheable; the marker
+> must follow the `phas`; a `r`-using program needs a nonzero DOUTU temp count).
+> Trap 430; `docs/sessions/session-83.md`.
 
-> **SESSIONS 78–80 (context): the dispatch pipeline is alive (USE_PIPELINE_0);
-> the first render job is consumed end to end; the stream's record layout and the
-> `TA_TE` tail are walked and excluded.**  Reports 281/282; traps 413–417.
+> **SESSION 82 RESULT (context): the render wall is the MTE state EMIT, and the
+> CLIENT STREAM IS PROVEN — so the wall is the SGX540 µKERNEL.**  `MTE_EMIT`
+> (b17) is what the VDM waits on; the state-copy USSE task never delivers the
+> emit.  The DDK's own 540 capture is byte-identical to our clear record, our
+> `emit.t1` equals `BuildEMITMTE`, the kernel builds the same TA command, and the
+> upstream frame tool renders on CE5310.  Excluded by measurement: record fields
+> (416/425), PDS address encoding (427), state-copy `DOUTD`, USE pipe (0/1/all),
+> `USE_CTRL`, EDM-32 (426/428), `LASTKICK` (420), `IDXFIFO` (419).
+
+> **SESSIONS 78–81 (context): the dispatch pipeline is alive; the first render job
+> is consumed end to end; the stream's record layout and the `TA_TE` tail are
+> walked and excluded; the VDM stall is in the STATE_LOAD records.**
 
 ## 0. The job, and where it stands
 
@@ -38,111 +59,104 @@ with a GPU-accelerated desktop (compositor **and** clients), and a modern
 browser.  The long-term graphics route is the open `powervr_sgx` stack
 (DECISIONS §107/§108) — this is that port, driving toward a rendered frame.
 
-## 0a. What sessions 78–82 established (do not re-derive)
+## 0a. What sessions 78–83 established (do not re-derive)
 
 * **The dispatch pipeline is alive and jobs complete** (session 78):
   `EVENT_PDS_INFO` 0x0a70 = `0x00013c01` (`USE_PIPELINE_0`).  Keep it.
-* **The µkernel's host-kick path is exhausted as a suspect** (session 79): the
-  kick is consumed, the invalidate/OTPM/DPM loads complete, the TA register
-  block matches the vendor's `SGXMKIF_TAREGISTERS` field-for-field.  **Do not
-  re-audit the TA register tables.**
-* **`LASTKICK` is excluded** (session 81): the µkernel sees it on **kick 2**,
-  unreachable while kick 1 stalls.  **Do not add the `ta_finished` branch.**
-* **The VDM stall is in the STATE_LOAD records** (session 81, trap 425); the
-  draw/index path is not the wall.
-* **The record's fields are excluded** (session 81): `USEPIPE`, `PARTITIONS`,
-  `PDSDMADEPENDENCY`, the segment size, `EMITMTE src1`, the 545-only
-  `emit.t3`/`op0xd6` pair.  (Correction: the vendor's `USEPIPE` is
-  `(USEPIPE_1+pipe)` = `0x2000|pipe`, which our production matched.)
-* **The VDM stream's PDS addresses are `PDSExecBase`-relative** (session 82, trap
-  427) — real divergence, **measured not the wall**; production stays absolute
-  (`SGXGEN_REL_PDS` opts in).
+* **The µkernel's host-kick path is exhausted as a suspect** (session 79).
+* **`LASTKICK` is excluded** (session 81, trap 420): it sits downstream of the
+  stall; **do not** add a `ta_finished` branch.
+* **The VDM stall is in the STATE_LOAD records** (session 81, trap 425).
+* **The record's fields are excluded** (traps 416/425), and so is the
+  `PDSExecBase`-relative address form (trap 427, measured not the wall).
 * **`MTE_EMIT` (b17) is the wall** (session 82, trap 426): clearing it wakes the
-  TE; the VDM waits for the MTE state emit from the state-copy task.
-* **The client stream is PROVEN against the DDK 540 capture** (session 82): the
-  clear record `43040e00 0e022403` is byte-identical to ours, our `emit.t1`
-  (`a0200600 fb2f4000`) equals the vendor's `BuildEMITMTE`, `f3_20` =
-  `EMIT_FREEP`, the kernel's TA command is the same, and the upstream frame tool
-  renders on CE5310.  **So the wall is µkernel-side.**
-* **Excluded by measurement (session 82):** the state-copy `DOUTD`
-  (`SGXGEN_STATE_NO_DOUTD` still stalls), the USE pipe (`USEPIPE` 0/1/all),
-  `IDXFIFO` (trap 419), the launch stub, `CACHE_CTRL`'s PARTDM (trap 411).  The
-  per-pipe `USE0/1_SERV_VERTEX` counters read empty even under `NO_STATE`, so
-  they do **not** track VDM TA tasks (not evidence either way).
-* **Two config bugs fixed to the vendor's value, neither moving the stall**
-  (session 82, trap 428): `EUR_CR_USE_CTRL` (0x0a00) = `0x7c000`; `DMS_CTRL` EDM
-  = 32 (`0x00208200`).
+  TE; the state-copy task never delivers the emit.
+* **The client stream is PROVEN against the DDK 540 capture** (session 82).
+* **Two config bugs fixed, neither moves the stall** (trap 428): `USE_CTRL`
+  `0x7c000`; `DMS_CTRL` EDM 32 (`0x00208200`).
+* **The GPU-side marker is BUILT but UNVALIDATED** (session 83, trap 430): on
+  this stack every client task class that could positively control it is
+  downstream of the same stall, so its zeros say nothing.  **The session-82
+  question — does the state-copy USSE task RUN? — is still open.**
 * **The desktop is llvmpipe** (DECISIONS §119); the closed pvr stack is blocked
   at modprobe.
 * **A render can (intermittently) storm IRQ 147 and wedge the DMM/TILER**
-  (traps 423/424) — observed on some boots, not others.
+  (traps 423/424).
 
-## 0b. Where the next session picks up — the µkernel's TA/USE dispatch
+## 0b. Where the next session picks up — one experiment: bound the faulting writer
 
-This section carries the state and the candidate next steps; it does not mandate
-a single experiment.  Do the cheapest/highest-signal one first and let its answer
-steer the rest.
+**State.**  The DMS_CTRL fix (trap 431) is in and on the wire; the render's
+failure is now a **page fault** that is proven to be a *side effect*: mapping the
+general-heap range at `0x400000` removes it and the job reverts to the session-82
+timeout.  The kernel-module source (`eurasia_km/`) was found this session and
+three leads were closed with it.  The render wall is unchanged.
 
-**State.**  The client stream, the kernel TA command and every client-side
-encoding are proven against the DDK's own 540 capture; `MTE_EMIT` (b17) is the
-field the VDM waits on; the state-copy USSE task never delivers the emit.  The
-one thing still unknown is whether that task **runs at all** or **runs and its
-emit is not accepted** — that single answer splits the remaining work.
+**THE EXPERIMENT (one boot, no rebuild — this is the whole next step).**
+Bound the writer's high-water mark with the existing tool knob, on a **fresh
+boot** (`resets` must be 0; a degraded GPU gives false readings — see trap
+423/424):
 
-**Candidate next steps, cheapest / highest-signal first.**
+```bash
+# on the device, after a clean boot:
+for sz in 0x001000 0x010000 0x040000 0x100000 0x400000; do
+  B=$(dmesg | wc -l)
+  timeout 20 env SGXGEN_MAP_AT=0x400000 SGXGEN_MAP_SIZE=$sz \
+        /tmp/frame-mapto -n 1 >/dev/null 2>&1
+  echo "== size $sz"; dmesg | tail -n +$((B+1)) | grep -E 'page fault|timed out' | tail -1
+done
+```
 
-1. **GPU-side marker — does the state-copy USSE task run? (client-only, no
-   reboot).**  Instrument the state-emit USE program — `state_emit()` in
-   `tools/gen/mkusse.py` — to **write a fixed marker to client-visible memory** as
-   its first instruction, then submit one render and read that word mid-hang.
-   * The store: `st.a.d` writes memory at `base + 4·(i+1)` (`docs/ISA.md:1485-1486`);
-     `st.a.d sa0, #0` writes word 1 of the task's `sa0` buffer.  Point `sa0` at a
-     known client BO — the tool sets the task control in
-     `state_block()`/`pds_secondary()` (`tools/gen/sgxgen.c`) — and read that BO
-     back at ~0.5/1.4 s (the same mid-hang window as the status samples, §3).
-   * **Marker present ⇒ the task runs** — the fault is the **emit** (its MTE
-     control / `emit.t1`); compare against the vendor's
-     `BuildEMITMTE`/`USEGenWriteStateEmitProgram`.
-   * **Marker absent ⇒ the task is never launched** — the wall is the PDS
-     `DOUTU` or the TA USE core; go to step 2 and re-check the `DOUTU` word.
-2. **`FIX_HW_BRN_33181` (`IDLETA`/`RESUME_TA`) — the one unused rev-120
-   "workaround in uKernel" (one firmware build + boot).**  `usedefs.h:687`
-   defines `IDLETA()`/`RESUME_TA()` to **idle and resume the TA USE core**
-   (`USE_IDLECORE_TA_REQ`, `PVRSRV_SGXUTILS_CALL(IdleCore)`); read where `ta.asm`
-   uses them (the TA handler's enter/exit) and port to `ukernel/cores/sgx540.py`
-   + `ukernel.py` gated on the 540.
-3. **A firmware trace of the `do_ta` `cmd+0x14`/`a74` path (trap 429).**  The RMW
-   does not land `0x50000000` in `DMS_CTRL`.  A `UK_*`-gated store of `cmd+0x14`
-   (and the post-store `0xa74`) to free ctlblk words (trap 403) says whether
-   `cmd+0x14` reads 0 — a broken command read would explain a lot.
-4. **The frame tool's two-kick layout (client-only).**  `sgx_flush` calls
-   `vdm_end` **twice**, so kick 0 carries a full terminate the working CE5310
-   form does not; make it one `vdm_end` (kick 0 = scene, kick 1 = terminate), one
-   render.
+Inputs: tool `/tmp/frame-mapto` `775889e7…` (`SGXGEN_MAP_AT`/`SGXGEN_MAP_SIZE`,
+general heap only), firmware `kick18ccb` `d4087521…`, module `96368b07…`
+(it prints the fault's requestor, direction, `DIR_LIST_BASE0` vs kernel PD,
+`*_REQ_BASE` and `MEM_REQ_STAT`).
+
+**What each result means.**
+* **The fault disappears at some size S and the job reports `job timed out`** —
+  S is the buffer the writer touches.  Compare S with the client-side sizes we
+  hand the GPU (`pages`, `tail_pointers_size`, `mt_bytes`, `MTRegionArraySize`,
+  region sizes, strides in `TA_PB`/`TE`/`D3_RD`) and the matching field is the
+  defect.  A multiple of 4 KiB points at a page count used as an address.
+* **The fault keeps moving past every size** — the writer walks the whole heap;
+  then it is a stride/base computation, and the next step is to log the `*_REQ_BASE`
+  at the fault for each step (the module already prints them) and see which one
+  tracks the fault address.
+* **The fault stays at `0x00401000` regardless of size** — the mapping did not
+  take (check the tool's `-v` heap line shows `0x00400000` for the enlarged BO),
+  and the run is invalid rather than informative.
+
+Then, and only then: name requestor bit 13 vs bit 1 (the drop gives the mask
+`0x3FFF` with no per-bit names; a per-bit test or a block-by-block disable is the
+only way), and decide with the operator whether an out-of-allocation write is in
+scope before the render wall.
+
+**Do NOT re-open** (settled this session): `TA_CTL`'s provenance (trap 431),
+`TE_STATE = 0`, `TE_PSG` b24, the `0x618` page-table base, the `0x234` OTPM base
+(written up in the capture).  **Do NOT** read a marker zero as evidence (trap
+430) — the marker is still unvalidated.
+
+**Still open, unchanged:** `FIX_HW_BRN_33181` (`IDLETA`/`RESUME_TA`,
+`usedefs.h:687`) unimplemented; the frame tool's two-kick layout; the owed
+patch-series export (§110).
 
 **Reference inputs (all present).**
-
 * The DDK drop at `/home/psyden/Pdrive/GFX_Linux_DDK-master` (GPL-2; DECISIONS
-  §118): `services4/srvinit/devices/sgx/{usedefs.h,ta.asm,sgx_utils.asm,
-  sgxinit.c}`, `hwdefs/{usecodegen.h,sgxerrata.h,sgx540defs.h}`,
-  `codegen/{usegen,pds}`, `unittests/sgx_render_flip_test/`.
-* The upstream's own bring-up log `docs/log/entries/2026-11-03-{0700,0925}-*.md`
-  (DDK renders, their open µkernel stalled, fixed by dir-list routing + `a74`)
-  and `…-0210-drm-first-frame.md` (the two-kick form).
+  §118).  **Both trees:** `eurasia/` (client + microkernel asm + hwdefs) and
+  **`eurasia_km/services4/srvkm/devices/sgx/`** (the kernel module:
+  `sgxkick.c`, `sgxutils.c`, `sgxinit.c`, `mmu.c`, `sgxreset.c`).
+* `local/work/powervr_sgx/docs/log/entries/` — the upstream's own bring-up logs.
 * `docs/STATE.md` §2 — the DDK's own 540 capture words (the client reference).
-* The frame tool: `tools/gen/sgxgen.c` (`sgx_flush`, `sgx_render_job`,
-  `state_block`, `vdm_end`) and `tools/gen/mkusse.py`.
+* The frame tool: `tools/gen/sgxgen.c`, `tools/gen/mkusse.py`,
+  `drm/tests/powervr_sgx_frame.c`.
 
 **Do NOT re-run:** the excluded record fields (traps 416/425), the PDS address
-(trap 427), the state-copy `DOUTD`, the USE pipe (0/1/all), `USE_CTRL`/EDM-32
-(all measured, none moves it — traps 426/428), `LASTKICK` (trap 420), `IDXFIFO`
-(trap 419), the TA register tables, the doorbell read-back (trap 407),
-`CACHE_CTRL`'s PARTDM (trap 411), the vendor-image load (a driver port — §5), or
-Mesa work.
+(trap 427), the state-copy `DOUTD`, the USE pipe (0/1/all), `USE_CTRL`/EDM-32,
+`LASTKICK` (420), `IDXFIFO` (419), the TA register tables, the doorbell read-back
+(trap 407), `CACHE_CTRL`'s PARTDM (trap 411), the vendor-image load (§5), Mesa
+work, **and do not add more marker variants without a positive control** (trap
+430: four controls already all read zero).
 
-**SETTLED (trap 417): do not build an argument on `EVENT_STATUS2`.**  What
-supports "the VDM runs": `CLKGATESTATUS`, the VDM/TE register block,
-`VDM_CTRL_STREAM_BASE`.
+**SETTLED (trap 417): do not build an argument on `EVENT_STATUS2`.**
 
 ## 0c. The media, and the way back
 
@@ -161,24 +175,24 @@ supports "the VDM runs": `CLKGATESTATUS`, the VDM/TE register block,
 * **A region-0 flash needs the initramfs rebuilt too** — `make … zImage` after
   `rm -f $K/usr/initramfs_data.cpio*`.
 
-## 1. Bench state at the session-82 close (read on the unit)
+## 1. Bench state at the session-83 close (read on the unit)
 
 | item | value |
 |---|---|
 | OS | **Linux `7.3.3`**, `Nura edge` — not TabletOS.  **No restore required** |
 | region 0 | **`0x02C1DDC2`** — no flash.  sha256 `70474c01…`, magic `0xD7C82D1F`, 10 450 520 B |
 | region 1 | sha256 **`20a5edd3a791a37ef5e6ab9a50d1c83f8967d8257ed76c9fe23a318d4b887422`** (live) |
-| hd3 | the session-71 rebake **`5d3eac8f…`** at `0x4915`, 62.5 G, `/dev/loop0` ext4 rw (957.6 M used) |
-| `BOOTCTR_FCTRY` | **`0x2a`** (`pbrpmb: topup: … = 2a000000`, above threshold, no write) |
+| hd3 | the session-71 rebake **`5d3eac8f…`** at `0x4915`, 62.5 G, `/dev/loop0` ext4 rw |
+| `BOOTCTR_FCTRY` | **`0x22`** (`pbrpmb: topup: … = 22000000`, above threshold, no write) |
 | CPU | `nproc` 2; PID 1 affinity `0,1` |
-| GPU | `card1`/`renderD129` = `powervr_sgx`; `card0`/`renderD128` = `omapdrm`.  Close: `resets 1`, `BIF_FAULT 0` |
-| firmware | `/lib/firmware/powervr_sgx/sgx540_ukernel.bin` = **`kick18ccb`** (`d4087521…`; rebuilt byte-identical from source).  Preserved `.kick17ccbtrace` `79bffc34…` (invalid), `.kick16tail` `744b072d…`, …, `.working` = kick10 `3fbbd11b…` |
-| module | **`92e14ad4…`** (EDM-32 + `USE_CTRL` + service counters + status).  Backups `.pre-edm32` `6ca3b4bf…`, `.pre-usectrl` `f54af284…`, `.pre-serv` `4a928e15…` (session-81 module), `.pre-render` = `.working` `10c6f435…` |
+| GPU | `card1`/`renderD129` = `powervr_sgx`; `card0`/`renderD128` = `omapdrm`.  Close: `resets 1`, one per render (each render faults and resets), `BIF_FAULT 0` |
+| firmware | `/lib/firmware/powervr_sgx/sgx540_ukernel.bin` = **`kick18ccb`** (`d4087521…`, 14 760 B).  Preserved `.kick17ccbtrace` `79bffc34…` (invalid), `.kick16tail` `744b072d…`, …, `.working` = kick10 `3fbbd11b…` |
+| module | **`96368b07…`** (per-core `DMS_CTRL` partitions + the fault message: requestor, direction, `DIR_LIST_BASE0` vs kernel PD, `*_REQ_BASE`, `MEM_REQ_STAT`).  Reverts: `.pre-dms540` `92e14ad4…`, `.pre-reqlog` `91729a08…`, `.pre-pdlog` `21833840…`, `.pre-reqbase` `2c191e1a…`, plus `.pre-edm32` `6ca3b4bf…`, `.pre-usectrl` `f54af284…`, `.pre-serv` `4a928e15…`, `.pre-render` = `.working` `10c6f435…` |
 | desktop | **llvmpipe** (DECISIONS §119).  Do **not** conclude "on the SGX" from `map_files` |
 | panel | LVDS `card0-LVDS-1`, `bl_power` 0, dpms On; gesture handle 0 height (temporary, DECISIONS §114) |
-| WLAN | **`wlan0` DOWN** (the GPU resets took it down; re-associates slowly).  `usb0` `169.254.0.1/16` UP, SSH works.  **`iw` is not installed** |
-| device-side tools | `/tmp/powervr_sgx_frame` `1177fafd…` (baseline), **`.loc` `68bc15af…`** (production default + `SGXGEN_STATE_NO_MTEEMIT/NO_SD/PIPE_ALL/PIPE0/NO_DOUTD` and `SGXGEN_REL_PDS`), `.relpds` `ebf463f3…`, `.vend` `a0d48593…` (**wrong form — do not cite**), `.doutd` `d285cd17…`, `.pipe` `c7ef9997…`, `.v540` `ef49eb03…`; `/tmp/powervr_sgx_test` `16545fd5…`.  `/tmp` is on the ext4 (trap 354) |
-| host | clone `local/work/powervr_sgx` (upstream `95f78ca` + uncommitted patches; DECISIONS §110).  Session 82 touched `drm/powervr_sgx/{pvrsgx_core.c,pvrsgx_fw.c,pvrsgx_dump.c}` (USE_CTRL, EDM 32, service counters/status) and `tools/gen/{sgxgen.c,mkusse.py}` — **none in a patch**.  `tools/gen/usse_progs.h` is **plain** (production).  Trees `local/kernel-tree-sgx` (compiles) and `local/kernel-tree`; DDK 1.8 at `/home/psyden/Pdrive/GFX_Linux_DDK-master` |
+| WLAN | **`wlan0` UP** (`192.168.0.231/24`); `usb0` `169.254.0.1/16` UP, SSH works.  **`iw` is not installed** |
+| device-side tools | `/tmp/powervr_sgx_frame` `1177fafd…` (baseline), **`.loc` `68bc15af…`** (production default + the `SGXGEN_*` knobs), **`.s83` `3da50fab…`** (the marker build; production default + `SGXGEN_STATE_MARK`), **`/tmp/frame-mapto` `775889e7…`** (`SGXGEN_MAP_AT`/`SGXGEN_MAP_SIZE`, general heap only), `.relpds` `ebf463f3…`, `.vend` `a0d48593…` (**wrong form — do not cite**), `.doutd` `d285cd17…`, `.pipe` `c7ef9997…`, `.v540` `ef49eb03…`; `/tmp/powervr_sgx_test` `16545fd5…`.  `/tmp` is on the ext4 (trap 354) |
+| host | clone `local/work/powervr_sgx` (upstream `95f78ca` + uncommitted patches; DECISIONS §110).  Session 83 touched `tools/gen/{mkusse.py,sgxgen.c,sgxgen.h}`, `drm/tests/powervr_sgx_frame.c` — **none in a patch**, and `tools/gen/usse_progs.h` carries the four added marker programs (production programs byte-identical).  Trees `local/kernel-tree-sgx` (compiles) and `local/kernel-tree`; DDK 1.8 at `/home/psyden/Pdrive/GFX_Linux_DDK-master` |
 
 ## 2. Working rules (unchanged, plus what this session cost)
 
@@ -195,6 +209,15 @@ supports "the VDM runs": `CLKGATESTATUS`, the VDM/TE register block,
 * **A uAPI "pass" is only evidence once the fence is understood** (trap 388).
 * **Parse every ctlblk dump BY WORD INDEX**; **one word, one instrument** (trap
   422); **a word is free only if no store anywhere touches it** (trap 403).
+* **New this session (trap 430):** a GPU-side marker's zero is not evidence
+  until a task of the **same class and pipe** has been seen to write.  On this
+  stack **no client task class can be that control in a stalling frame** — the
+  vertex pipe services nothing, and the event pipe that runs is the µkernel's.
+  Instrument rules that cost a defect each: `st.a.d base,#0` writes `base+4`
+  (ISA.md:1485); patch a `limm` with read-modify-write or you drop `skipinv`;
+  a shmem BO is **cacheable** (`map_wc` unset) so clean+invalidate before
+  reading; put the marker **after** the `phas`; a program that uses `r` needs a
+  nonzero DOUTU temp count (PDS.md:301-305).
 * **Firmware builds**: explicit output paths; `build.py`'s output is raw and must
   be wrapped by `mkukfw --manifest`; the SAME `UK_*` flags for `test_emu.py`.
   **A module change costs a reboot**; never unbind pvrsrvkm live (trap 383).
@@ -202,13 +225,10 @@ supports "the VDM runs": `CLKGATESTATUS`, the VDM/TE register block,
 * **Reboot before measuring anything if the boot's `open microkernel` line has
   wrapped out of dmesg** (trap 390) — or confirm the firmware file's md5.
 * **A render can (intermittently) wedge the DMM and storm IRQ 147** (traps
-  423/424): if it happens the panel is not a witness and a post-storm timeout is
-  not pure GPU evidence — reboot, or read the GPU's registers mid-hang.
+  423/424): reboot, or read the GPU's registers mid-hang.
 * **The client is proven (session 82)** — match the DDK capture/encoder before
   touching the µkernel; the wall is there.
-* **Do not trust the SGX545's init-register offsets for the 540** — the 545's
-  `0x818/0x810/0x814/0x4e8/0x800/0xaac/0xa78/0xa7c/0xa80` are not named in the
-  540 header; only `USE_CTRL` (0x0a00) was a real gap (trap 428).
+* **Do not trust the SGX545's init-register offsets for the 540** (trap 428).
 
 ## 3. The build and deploy recipe, exactly
 
@@ -252,21 +272,27 @@ arm-buildroot-linux-gnueabihf-gcc -static -O2 -Wall -DSGXGEN_DRM \
 ## 4. Useful local extracts
 
 * `docs/captures/sgx540-first-render-2026-11-27.txt` — **the whole campaign,
-  sessions 79–82**; read "SESSION 82" and "SESSION 82 CONTINUATION" before
-  quoting anything.
+  sessions 79–83**; read "SESSION 83" first (the marker result), then "SESSION
+  82" and "SESSION 82 CONTINUATION", before quoting anything.
 * `docs/reports/283-*.md` — the session-82 report (§7/§8 are the continuation:
   the client proof, the two fixes, the `a74` anomaly).
-* `docs/sessions/session-82.md` — the note (dead ends included).
+* `docs/sessions/session-83.md`, `session-82.md` — the notes (dead ends
+  included).
 * `docs/STATE.md` §2 — the DDK's own 540 capture words (the client reference).
 * `docs/reference/{sgx540-factsheet,sgx540-ddk18-facts}.md` — the C/K facts.
 * **The DDK drop**: `services4/srvinit/devices/sgx/{usedefs.h,ta.asm,
   sgx_utils.asm,sgxinit.c}`, `hwdefs/{usecodegen.h,sgxerrata.h,sgx540defs.h}`,
   `codegen/{usegen,pds}`, `unittests/sgx_render_flip_test/`.
 * `local/work/powervr_sgx/{ukernel,docs/log/entries/}` — the µkernel build and
-  the upstream's own bring-up logs.
+  the upstream's own bring-up logs (the `2026-11-03-0925` entry is the
+  TA-completion fix to diff against — §0b step 1).
 
 ## 5. What could not be verified
 
+* **Whether the state-copy USSE task runs at all** — §0b step 1.  The marker that
+  would answer it is built but **unvalidated** (trap 430): on this stack every
+  client task class that could positively control it is downstream of the same
+  stall.
 * **Why the state-copy USSE task never emits to the MTE** — §0b's subject.  All
   client-side and config causes are excluded.
 * **Why `do_ta`'s `cmd+0x14` → `0xa74` RMW does not land** (trap 429).
@@ -276,25 +302,31 @@ arm-buildroot-linux-gnueabihf-gcc -static -O2 -Wall -DSGXGEN_DRM \
   others; the trigger is not identified.
 * **`TE_PSG` (0x218) reads `0x01400000`** though the vendor 540 µkernel only ORs
   those on the terminate/context-switch paths; a write/read-back would settle it.
-* **The owed patch-series export** for the session-77…82 driver and µkernel
+* **Why the client vertex pipe services nothing** — `USE0/1_SERV_VERTEX` EMPTY
+  at idle, mid-hang and after (session 83).  Whether that counter is simply not
+  a VDM-TA observable, or no vertex-pipe task ever runs, is not established; it
+  is why the marker has no control.
+* **The owed patch-series export** for the session-77…83 driver, µkernel and tool
   changes — **nothing is in a patch** (DECISIONS §110), and this session added
-  driver changes (`pvrsgx_core.c`, `pvrsgx_fw.c`, `pvrsgx_dump.c`).
+  `tools/gen/{mkusse.py,sgxgen.c,sgxgen.h}` and
+  `drm/tests/powervr_sgx_frame.c`.
 
 ## 6. Paste-ready kickoff prompt
 
 ```
-PlayBook (OMAP4430 "winchester") — session 83 (absolute; Linux-era 77)
+PlayBook (OMAP4430 "winchester") — session 84 (absolute; Linux-era 78)
 
 Workspace: this repository — a git checkout.  Map: docs/README.md.
 
 READ FIRST, in this order: docs/project/SAFETY.md, STATE.md, HANDOFF.md (this
-file), ROADMAP.md item 7a (a4e), KNOWN-ISSUES.md §2 (traps 416-429) and §3
-(3.36), DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 112-122, docs/reports/INDEX.md,
-report 283 AND 282, docs/reference/sgx540-factsheet.md AND
-docs/reference/sgx540-ddk18-facts.md,
-docs/captures/sgx540-first-render-2026-11-27.txt (ALL session-81 and session-82
-sections incl. CONTINUATION), docs/contradictions/sgx540-cache-ctrl-breaks-dispatch.md,
-docs/sessions/session-82.md, session-81.md and session-80.md.
+file), ROADMAP.md item 7a (a4f then a4e), KNOWN-ISSUES.md §2 (traps 416-430) and
+§3 (3.36), DEVELOPMENT.md §2/3/3a/4/5/7a, DECISIONS.md 112-123,
+docs/reports/INDEX.md, report 283 AND 282,
+docs/reference/sgx540-factsheet.md AND docs/reference/sgx540-ddk18-facts.md,
+docs/captures/sgx540-first-render-2026-11-27.txt (ALL session-81, session-82 and
+session-83 sections incl. CONTINUATION),
+docs/contradictions/sgx540-cache-ctrl-breaks-dispatch.md,
+docs/sessions/session-83.md, session-82.md, session-81.md and session-80.md.
 
 WHERE IT STANDS: Linux 7.3.3 on hd3 (Nura).  region 0 0x02C1DDC2 (no flash),
 region 1 20a5edd3..., hd3 5d3eac8f grown to 62.5 G, BOOTCTR_FCTRY 0x2a.
@@ -304,23 +336,46 @@ card1/renderD129 = powervr_sgx running the open microkernel kick18ccb
 SGX" from /proc/PID/map_files -- ask GL (DECISIONS 119).
 
 THE RENDER STALL: the VDM waits for the MTE state EMIT (MTE_EMIT b17), and the
-state-copy USSE task never emits.  THE CLIENT IS PROVEN: the DDK's own 540
-capture (43040e00 0e022403) is byte-identical to our clear record, our emit.t1
-equals the vendor's BuildEMITMTE (f3_20 = EMIT_FREEP), the kernel builds the same
-TA command, and the upstream frame tool renders on CE5310.  So the wall is the
-SGX540 uKERNEL.  Excluded BY MEASUREMENT: the record fields (traps 416/425), the
-PDS address encoding (trap 427), the state-copy DOUTD, the USE pipe (0/1/all),
-USE_CTRL and EDM-32 (traps 426/428), LASTKICK (420), IDXFIFO (419).
+state-copy USSE task never emits.  THE CLIENT IS PROVEN (session 82): the DDK's
+own 540 capture (43040e00 0e022403) is byte-identical to our clear record, our
+emit.t1 equals the vendor's BuildEMITMTE, the kernel builds the same TA command,
+and the upstream frame tool renders on CE5310.  Excluded BY MEASUREMENT: the
+record fields (416/425), the PDS address (427), the state-copy DOUTD, the USE
+pipe (0/1/all), USE_CTRL and EDM-32 (426/428), LASTKICK (420), IDXFIFO (419).
 
-WORK NEXT (HANDOFF section 0b), cheapest first: (1) a GPU-side MARKER -- write a
-fixed word to client memory as the first instruction of the state-emit USE task
-(st.a.d sa0, ISA.md:1485; mkusse.py state_emit), one render, read it mid-hang --
-does the state-copy USSE task RUN?  Present -> the emit/MTE-control is the fault;
-absent -> it is never launched, go to (2) and re-check the DOUTU; (2) implement
-FIX_HW_BRN_33181 (IDLETA/RESUME_TA, idle the TA USE core; usedefs.h:687) for the
-540; (3) a firmware trace of do_ta's cmd+0x14 -> a74 (DMS_CTRL never gets
-0x50000000; trap 429) -- is cmd+0x14 read 0, or is the write masked?; (4) the
-frame tool's two-kick layout.  Do NOT re-run the excluded variants.
+SESSION 83, TWO RESULTS.  (1) The GPU-side marker was built and run and is NOT
+VALIDATED (trap 430): every marker read 0 AND SO DID ALL FOUR CONTROLS, because
+on this stack the vertex pipe services nothing (USE0/1_SERV_VERTEX EMPTY at
+idle/mid-hang/after) and the only pipe that runs is the microkernel's event
+handler.  Do not read a marker zero as evidence.  (2) Reading the vendor DDK 1.8
+source found a REAL 545-shaped port bug and fixed it: EUR_CR_DMS_CTRL's
+MAX_NUM_VERTEX_PARTITIONS is shift 27 / 5 bits on the SGX545 but shift 25 / 3
+bits on the SGX540, and the port sent 10<<27 (0x50000000) for every core -- i.e.
+ZERO vertex partitions here.  The pixel half was missing too (render details
++0x6c, OR'd into the same register by the uKernel at the 3D/SPM, sat in a
+private pad).  Both are now per-core (SGX540 4<<25 / 6<<22; SGX545 bytes
+unchanged) and the live command reads cmd+0x14/+0x18 = 08000000.
+
+THE STALL MOVED: from a silent 2 s "job timed out" (the signature sessions
+79-82 chased) to, reproducibly 3/3, "job page fault at 0x00401000 (BIF status
+0x0000e000, requestor 0x2000, write)" -- a WRITE at 4 MiB + 4 KiB, the shape of
+an address used relative to a base when it should be absolute, in no mapped
+heap.  The frame still fails (0/1).
+
+WORK NEXT (HANDOFF section 0b) -- ONE experiment, one boot, no rebuild: bound the
+page fault's writer by mapping growing general-heap ranges at 0x400000 with
+/tmp/frame-mapto (SGXGEN_MAP_AT / SGXGEN_MAP_SIZE) on a FRESH boot, and read the
+fault message (module 96368b07 prints requestor, direction, DIR_LIST_BASE0 vs
+kernel PD, the *_REQ_BASE registers and MEM_REQ_STAT).  A size at which the fault
+stops and the job reverts to "job timed out" is the buffer the writer touches --
+match it against pages / tail_pointers_size / mt_bytes / MTRegionArraySize /
+region sizes / strides and the field is the defect.  The exact recipe and the
+meaning of each outcome are in HANDOFF section 0b.  Then decide with the operator
+whether an out-of-allocation write is in scope before the render wall.
+
+SETTLED THIS SESSION -- do not re-open: TA_CTL's provenance (trap 431), TE_STATE=0,
+TE_PSG b24, the 0x618 page-table base, the 0x234 OTPM base.  Do NOT read a marker
+zero as evidence (trap 430): the instrument is still unvalidated.
 
 READ THE DDK DROP, IT IS ALL EVIDENCE (DECISIONS 118).  DECISIONS 115 stands: the
 microkernel we RUN is ours; the vendor binary is evidence, never a deployment
@@ -329,6 +384,8 @@ target.
 THE METHOD THAT WORKED: read the driver's status node MID-HANG (background the
 tool, sample at ~0.5/1.4 s) and follow CLKGATESTATUS/DMS_CTRL/USE_CTRL; advance
 one VARIABLE per boot; match the DDK capture/encoder before probing the uKERNEL.
+AND (session 83): a GPU-side instrument needs a positive control of the SAME task
+class and pipe -- on this stack none exists in a stalling frame (trap 430).
 
 TRAPS THAT STILL APPLY: a uAPI "pass" is only evidence once the fence is
 understood (388); "consumed" after a reset equals "issued" (389); dmesg's "open
@@ -340,18 +397,20 @@ module change costs a reboot; never unbind pvrsrvkm live (383); GPU resets take
 wlan0 down; parse every ctlblk dump BY WORD INDEX; one word, one instrument
 (422); do not build an argument on EVENT_STATUS2 (417); a render can storm IRQ
 147 and wedge the DMM/TILER, INTERMITTENTLY (423/424); the SGX545 init offsets
-are NOT the 540's (428).
+are NOT the 540's (428); a GPU marker's zero needs a same-pipe control (430).
 
-BENCH: region 0 0x02C1DDC2; region 1 20a5edd3...; hd3 live /dev/loop0 ext4 rw
-56.5 G; BOOTCTR 0x2a; nproc 2, PID 1 affinity 0,1; battery Full; panel
+BENCH: region 0 0x02C1DDC2; region 1 20a5edd3...; hd3 live /dev/loop0 ext4 rw;
+BOOTCTR 0x22; nproc 2, PID 1 affinity 0,1; battery Full; panel
 bl_power 0, dpms On; usb0 169.254.0.1/16 (PB_LINK=usb tools/pbssh.sh works; if
 it times out check the cable, the host VPN (trap 341) and ufw (trap 342) first).
 iw is NOT installed.  Firmware kick18ccb (d4087521), .working = kick10
-(3fbbd11b); module 92e14ad4, backups .pre-edm32 (6ca3b4bf), .pre-usectrl
-(f54af284), .pre-serv (4a928e15).  Tools: /tmp/powervr_sgx_frame (1177fafd),
-.loc (68bc15af, production default + SGXGEN_* knobs), .doutd (d285cd17), .pipe
-(c7ef9997), .relpds (ebf463f3), .vend (a0d48593, wrong form -- do not cite).
-The clone's tools/gen/usse_progs.h is PLAIN.  Full recipe: HANDOFF section 3.
+(3fbbd11b); module 96368b07 (per-core DMS_CTRL + fault diagnostics), reverts
+.pre-dms540 (92e14ad4), .pre-reqlog (91729a08), .pre-pdlog (21833840),
+.pre-reqbase (2c191e1a).  Tools: /tmp/powervr_sgx_frame (1177fafd),
+.loc (68bc15af, production default + SGXGEN_* knobs), .s83 (3da50fab, the marker
+build), .doutd (d285cd17), .pipe (c7ef9997), .relpds (ebf463f3), .vend
+(a0d48593, wrong form -- do not cite).  The clone's tools/gen/usse_progs.h is
+production PLUS the four added marker programs.  Full recipe: HANDOFF section 3.
 
 Kernel printk goes to the panel; use reboot -f; ask the operator for visual
 checks; do not screenshot; do not restart tinydm (353) or kill Kumo (367).  An

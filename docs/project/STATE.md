@@ -1,6 +1,73 @@
 # Current state
 
-## Current state — 2026-11-27 (session 82)
+## Current state — 2026-11-27 (session 83)
+
+**A REAL 545-SHAPED PORT BUG WAS FOUND IN THE VENDOR SOURCE AND FIXED, AND THE
+RENDER'S FAILURE MOVED FROM A SILENT TIMEOUT TO A SPECIFIC WRITE PAGE FAULT.**
+`EUR_CR_DMS_CTRL`'s `MAX_NUM_VERTEX_PARTITIONS` field is at shift 27 in a 5-bit
+field on the SGX545 but shift **25** in **3** bits on the SGX540, and the port
+sent the SGX545's `10 << 27` (`0x50000000`) for every core — which evaluates to
+**zero vertex partitions** on this one.  The pixel half was missing too (render
+details +0x6c, which the µkernel ORs into the same register at the 3D/SPM, sat
+inside a private pad we never wrote).  Both are now per-core fields with the
+vendor's own defaults (SGX540: `4<<25`, `6<<22`).  Trap 431; DECISIONS §124.
+
+* **The fix is on the wire**: the live TA command's cmd+0x14/+0x18 now read
+  **`08000000`** (`4 << 25`); before they read `50000000`.
+* **Measured effect — the stall moved.**  Before: `job timed out (ccb N,
+  consumed N-1, done word 0x0 for 0x1, events 0x0/0x10)` — the signature
+  sessions 79–82 chased.  After, reproducibly **3/3** renders: `job page fault at
+  0x00401000 (BIF status 0x0000e000, requestor 0x2000, **write**)`.  `0xe000` is
+  FAULT | `PF_N_RW` (a write) | `FLUSH_COMPLETE`.
+* **The page fault is diagnosed and is a SIDE EFFECT, not the wall.**  It runs
+  **with the client PD loaded** (`DIR_LIST_BASE0` ≠ kernel PD in the fault
+  message); `0x00401000` is **inside the general heap**
+  `[0x00001000, 0x04400000)`, merely *unallocated*; and **mapping that range makes
+  the fault vanish and the job revert to the session-79 timeout** — one clean
+  boot: baseline faults at `0x00401000` (requestor `0x2000`), 4 KiB at `0x401000`
+  moves it to `0x0001f000` (requestor `0x0002`), 1 MiB or 4 MiB at `0x400000`
+  leaves **no fault** and `job timed out (… events 0x20000000/0x00000010)`.
+  `TA_REQ_BASE 0x08800000`, `3D_REQ_BASE 0`, `ZLS_REQ_BASE 0`,
+  `MEM_REQ_STAT 0` — none names it.  So a block writes ~4 MiB into a heap it
+  never allocated: a real memory-safety defect, but not the render blocker.
+* **The render wall remains session 82's**: the MTE state emit from the
+  state-copy USSE task.
+* **The marker (trap 430) remains UNVALIDATED** — every marker reads 0 and so did
+  all four controls, because the vertex pipe services nothing
+  (`USE0_SERV_VERTEX` EMPTY) and the only pipe that runs is the µkernel's event
+  handler.  Re-run after the DMS fix, still 0.  **Do not read a marker zero as
+  evidence.**
+* **Leads closed by reading the vendor code** (no boots): `TE_STATE = 0` is
+  correct (the vendor zeroes `ui32TEState[]`); `TE_PSG = 0x01000000` is correct
+  (the vendor ORs b24 on every kick — this closes trap 418's open note); the
+  `0x618` page-table base `0x09822000` is correct (a byte address); the `0x234`
+  OTPM CSM-base write is **excluded by measurement** (`UK_NO284=1`, identical
+  fault, reverted).
+* **Next, cheapest first:** (1) run `UK_MAP_RANGE`-style sweeps to bound the
+  writer's high-water mark, which names the field; (2) name requestor bit 13 (the
+  drop gives only the mask); (3) decide with the operator whether the
+  out-of-allocation write is in scope before the wall.
+* **The kernel-module source IS in the DDK drop**: `eurasia_km/services4/srvkm/
+  devices/sgx/` — earlier sessions (and this session's first pass) missed it.
+
+**Bench at the session-83 close (read on the unit).**  Region 0 `0x02C1DDC2`
+(no flash; re-verified this session from a **live media read** — size 10 450 520,
+magic `0xD7C82D1F`, CRC `0x02C1DDC2`, sha256 `70474c01…`); region 1
+`20a5edd3…` (re-hashed live); hd3 the session-71 rebake, `/dev/loop0` ext4 rw
+(53.2 G free).  **`BOOTCTR_FCTRY 0x22`** at the last boot (`0x22 >= threshold
+0x1e, no write`), self-maintaining through this session's many module/firmware
+boots.  Firmware **`kick18ccb`** (`d4087521…`); module **`96368b07…`** (DMS fix +
+fault diagnostics), reverts `.pre-dms540` `92e14ad4…`, `.pre-reqlog`
+`91729a08…`, `.pre-pdlog` `21833840…`, `.pre-reqbase` `2c191e1a…`.  `resets` one
+per render (each faults and resets); `BIF_FAULT` 0 at idle.  `wlan0` **up**
+(`192.168.0.231/24`), `usb0` `169.254.0.1/16` up; battery `Full` 4.148 V, 100 %;
+panel `bl_power` 0, dpms On.  Desktop **llvmpipe** (DECISIONS §119).  Device
+tools `/tmp/powervr_sgx_frame.s83` `3da50fab…`, `/tmp/frame-mapto` `775889e7…`;
+pre-session `1177fafd…` / `.loc 68bc15af…` untouched.  **The clone's
+driver/generator/µkernel changes are uncommitted and not in a patch
+(DECISIONS §110).**
+
+## Previous state — 2026-11-27 (session 82)
 
 **THE WALL IS THE MTE STATE EMIT — AND THE CLIENT STREAM IS NOW PROVEN, so the
 wall is the SGX540 µKERNEL's dispatch of the VDM state-copy USSE task.**

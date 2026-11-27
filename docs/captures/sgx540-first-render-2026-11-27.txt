@@ -1034,3 +1034,648 @@ Tools: .loc 68bc15af, .relpds ebf463f3, .vend a0d48593 (wrong form), .doutd
 d285cd17, .pipe c7ef9997, .v540 ef49eb03, powervr_sgx_test 16545fd5.  Driver
 source changes (pvrsgx_core.c, pvrsgx_fw.c, pvrsgx_dump.c) are in the clone,
 uncommitted, NOT in a patch (DECISIONS §110).
+
+
+SESSION 83 — the GPU-side marker: built, submitted, and NOT VALIDATED
+=====================================================================
+Session 83 (absolute; Linux-era 77), 2026-11-27.  HANDOFF-83 §0b step 1: does
+the VDM's state-copy USSE task RUN?  Client-only work (tool + generator), no
+reboot, no flash, no module or firmware change.  ONE conclusion, negative about
+the INSTRUMENT (not about the microkernel): the marker cannot be validated on
+this stack, because every client task that could prove the store path works is
+itself downstream of the stall.
+
+WHAT WAS BUILT
+--------------
+* `tools/gen/mkusse.py`: `state_mark()` -- `limm r1,#<buffer>`, `limm r2,#<word>`,
+  `st.a.d r1,#0,r2`, emitted AFTER the phas+prologue.  Programs added (always
+  generated, selected at run time so production is byte-identical):
+  `state_emit_12_mark` (the state-copy task under test), `pe_ptoff_mark` (the
+  event pipe's ptoff task), `clear_vs_mark` (the clear's vertex task),
+  `empty_v_mark` (a `st.a.d sa0,#0,r1` in the vertex-secondary task, the exact
+  store form tools/iso proved on hardware).
+* `tools/gen/sgxgen.c`: `SGXGEN_STATE_MARK=1` allocates one `H_GENERAL` BO,
+  patches the marker `limm` at load (`limm_patch`: read-modify-write of the
+  assembler's words so dst/skipinv/class bits survive -- verified word-for-word
+  against sgx-asm for 9 addresses), selects the marked programs, and sets the
+  DOUTU temp count to 4 for them (PDS.md:301-305: 0 breaks programs using r).
+  `sgx_marker_read()`/`sgx_marker_vsec_read()` do a cache clean+invalidate
+  before reading (the BO is a CACHEABLE shmem mapping -- `map_wc` is not set --
+  so a plain load after the memset would return 0 whatever the GPU did).
+* `drm/tests/powervr_sgx_frame.c`: prints the marker mid/after the render.
+* PRODUCTION IS UNCHANGED: every `usse_*_w[]` the production path uses is
+  byte-identical to the pre-session header (a name-by-name word diff); the four
+  marker programs are additions only, and the stock tool's md5 is reproduced
+  from the same sources with the knob off.
+
+THE RESULT: ALL MARKERS READ 0, AND SO DOES THE CONTROL
+-------------------------------------------------------
+    SGXGEN_STATE_MARK=1 powervr_sgx_frame.mark -v -n 1
+      sgxgen: marker buffer 0x00047000 (read word 1 = buffer+4)
+      sgxgen: state_emit_mark @0x0fc08200 word0/1 = 00247000 fca00000
+      sgxgen: clear_vs_mark   @0x0fc08280 word0/1 = 00247000 fca00000
+      sgxgen: pe_ptoff_mark   @0x0f408300 word0/1 = 00247000 fca00000
+      marker 00047000 = 00000000  0: neither task wrote it
+      marker words: 00000000 00000000 ... (all 8 zero)
+      control (vsec sa0 block) word1 = 00000000  0: control did not write
+
+The same zeros with `SGXGEN_NO_STATE=1` (the run where session 81 measured the
+TE clock wake).  So NEITHER the state task, NOR the clear's vertex task, NOR the
+event ptoff task, NOR the vertex-secondary task wrote.  Per DECISIONS §113 a
+zero from an uncontrolled instrument is not evidence, and this one is
+uncontrolled: nothing in this frame demonstrably ran a client task.
+
+WHY (measured, this session): THE CLIENT TASK CLASSES ARE ALL STALLED OR EMPTY
+-----------------------------------------------------------------------------
+The USE service counters, sampled idle / 1.0 s into the stalled render / after
+(one boot, three reads; `status`):
+
+    USE0_SERV_PIXEL   0x00010000   (EMPTY b16 set: zero serviced)
+    USE0_SERV_VERTEX  0x00010000   (EMPTY: zero serviced, before/during/after)
+    USE0_SERV_EVENT   0x0001067e -> 0x000106ab -> 0x000106d7  (climbs ~40/s idle)
+    USE1_SERV_*       0x00010000   (all EMPTY)
+
+So the event pipe services tasks continuously, and the **vertex pipe services
+NOTHING at all, before or during the render** -- and the state-copy task runs on
+the vertex heap (DOUTU base 10+).  That is consistent with the session-82 finding
+that `USE0/1_SERV_VERTEX` is "empty even under NO_STATE": the counter is either
+not a VDM-TA observable OR no vertex-pipe task ever runs on this stack.  Either
+way it means the state task's pipe has no independent-positive control here.
+**Do not read the climbing `USE0_SERV_EVENT` as the client's pixel-event task
+running:** that counter is the microkernel's own event handler on the event pipe
+(it climbs while the GPU is idle), and the client's pixel-event program is
+dispatched per 3D tile -- which never starts while the VDM stalls.  So the
+`pe_ptoff_mark` control was mis-chosen: the event pipe is the *microkernel's*,
+not a client task's, and it does not touch the client's attributes or buffer.
+
+Five instrument defects were found and fixed on the way, each a real one:
+  1. `st.a.d base,#0` writes base+4 (ISA.md:1485), not base -- readback was word 1.
+  2. the marker's `limm` patch initially overwrote word 1 and DROPPED `skipinv`
+     (`limm r1,#0` = `fc200000`, `[skipinv]` = `fca00000`); now a read-modify-write.
+  3. the BO's shmem mapping is CACHEABLE, so a bare load saw the memset's 0;
+     cache clean+invalidate added.
+  4. the marker was emitted BEFORE the phas; moved after phas+prologue.
+  5. the marked tasks use r1/r2 and the DOUTU temp count was 0 (PDS.md:301-305
+     says 0 breaks such programs); set to 4 for the marked programs.
+The zeros survived all five, which is why the control question is the primary
+result and not a footnote.
+
+WHAT THIS DOES NOT SAY
+----------------------
+* It does NOT say the state-copy task never runs; the marker that would say that
+  is unvalidated, so it says nothing yet.
+* It does NOT re-open any trap-416/419/425/426/427/428 exclusion -- none was
+  re-run.
+* It does NOT change the production tool or the stream: default md5 reproducible.
+
+NEXT FOR THE MARKER (any one validates it before its zero is read):
+ (a) run the marker on a build where a VERTEX-heap client task provably completes
+     -- i.e. get any client vertex task to run once (the upstream's CE5310 frame
+     does; ours stalls), or
+ (b) instrument the microkernel's OWN event handler (the event pipe is the only
+     one that provably services tasks, ~40/s idle) to write a word into a
+     `ctlblk`/kernel buffer -- that validates "a GPU task's store is visible to
+     the host" independently of the VDM, but NOT "a client task on the vertex
+     pipe can store"; or
+ (c) the debugfs route: have the driver read the client's marker BO from the GPU
+     side (a `ptov`/`snoop` node) instead of relying on CPU coherency, which
+     removes the mapping question entirely.
+(b) proves the readback path but not the client-task question; (a) is the one that
+makes the state task's zero mean what the handoff wants it to mean.
+
+
+SESSION 83 CONTINUATION — a REAL 545-shaped port bug: DMS_CTRL's vertex-partition
+field, and the timeout became a specific page fault
+================================================================================
+Read from the vendor DDK 1.8 source after the marker dead end (DECISIONS 118).
+One driver change, one reboot, three renders.  No firmware change, no flash.
+
+THE BUG (provable from the vendor's own source)
+-----------------------------------------------
+`EUR_CR_DMS_CTRL` (0xa74) carries the DMS's partition limits, and its
+`MAX_NUM_VERTEX_PARTITIONS` field is at a DIFFERENT PLACE ON EACH CORE:
+
+  sgx545defs.h  MASK 0xF8000000  SHIFT 27   (5 bits)
+  sgx540defs.h  MASK 0x0E000000  SHIFT 25   (3 bits)
+  sgx535defs.h  MASK 0x0E000000  SHIFT 25
+  sgx543defs.h  MASK 0x3C000000  SHIFT 26
+
+Our kernel sent one constant for every core: `TA_CTL = 0x50000000`, which is
+`10 << 27` — the SGX545's default (`SGX_DEFAULT_MAX_NUM_VERTEX_PARTITIONS 10`,
+sgxinfo_client.h).  On the SGX540 that value is entirely outside the 3-bit
+b25-27 field, so
+
+    0x50000000 & 0x0E000000 >> 25  ==  0
+
+i.e. **the SGX540 was given ZERO vertex partitions at every TA**, and the
+microkernel copies the command's control words into that field
+(ta.asm:3507-3548: read 0xa74, clear the VP mask, OR the command's
+`ui32NumVertexPartitions`, write back).  The vendor's client derives the word
+per core: `SGX_DEFAULT_MAX_NUM_VERTEX_PARTITIONS << shift`
+(sgxkick_client.c:1024), 4<<25 = **0x08000000** for the SGX540.
+
+That is the same shape as every other defect this port has found: a value that is
+right for the core the code was written on and wrong here (DECISIONS 112).
+
+Same story for the pixel side: the microkernel ORs
+`HWRENDERDETAILS.ui32NumPixelPartitions` (+0x6c) into DMS_CTRL at the 3D
+(3d.asm:2914-2920) and in SPM (spm.asm:2692-2698).  Our render-details struct had
++0x6c inside a "private" pad we never wrote, so the 3D got 0 pixel partitions too.
+The SGX540's default is 6<<22 (0x01800000).
+
+THE FIX (driver only; per-core, in the core table)
+--------------------------------------------------
+* `struct pvrsgx_cmd_core` gains `.ta_ctl` and `.pixel_partitions`;
+  sgx540 = `4<<25` / `6<<22`, sgx545 = `10<<27` / `31<<22`,
+  sgx530 = `4<<25` / `6<<22` (the SGX545's bytes are unchanged).
+* `pvrsgx_render_job_build()` takes them from the core entry instead of a
+  `#define TA_CTL 0x50000000`.
+* `pvrsgx_fw_render_details` gains `num_pixel_partitions` at +0x6c
+  (`static_assert(offsetof(...) == 0x6c)`), set from the core entry.
+* KUnit `core_test_sgx540` asserts both values per core and that each fits its
+  core's field mask, so the 545 value cannot creep back.
+
+MEASURED: the stall changed from a silent timeout to a specific page fault
+--------------------------------------------------------------------------
+Before (module 92e14ad4, sessions 79-82):
+    job timed out (ccb N, consumed N-1, done word 0x0 for 0x1, events 0x0/0x10); resetting
+After (module 91729a08 / 21833840, three renders, reproduced every time):
+    job page fault at 0x00401000 (BIF status 0x0000e000, requestor 0x2000, write); resetting
+
+`BIF status 0xe000` decodes as FAULT (b0-13) | **PF_N_RW b14 = 1, a WRITE** |
+FLUSH_COMPLETE b15.  `requestor 0x2000` is bit 13 of the fault-requestor mask.
+`0x00401000` is **4 MiB + 4 KiB** — the canonical shape of a RELATIVE address
+used absolutely, and it lies in no heap this VM maps (general starts
+0x04400000, PDS pixel 0x0dc00000, PDS vertex 0x0e800000, USSE 0x0f400000+).
+So the GPU now tries to WRITE to an address nothing maps instead of silently
+waiting: the job gets far enough to run a memory access, which is new.
+
+Reproduced 3/3 renders after the change (and before it, 0/3 gave anything but the
+2 s timeout).  Null family unaffected; boot clean
+(`open microkernel kick18ccb`, `microkernel started`, `BOOTCTR_FCTRY 0x29`).
+
+WHAT IT DOES NOT YET PROVE
+--------------------------
+The render still fails (`0/1 frames right`, centre/corner black).  The fault is
+now the next wall, not a fixed frame.  The requestor bit needs naming (the 1.8
+header calls the field a 14-bit mask, `FAULT_REQ_MASK 0x3FFF`, without per-bit
+names), and `0x00401000` needs to be matched to the pointer it came from.
+
+NEXT (cheapest first)
+---------------------
+ 1. Name the requestor bit 13 (0x2000): the BIF's requestor mask order matches
+    the `*_REQ_BASE` set (TA 0xc90, 3D 0xcac, ZLS 0xcb0, MEM 0xca8) plus the
+    EDM/USE/TE/PBE bank selectors in `EUR_CR_BIF_CTRL` (b8-15:
+    CACHE, VDM, TE, PBE, TSPP, ISP, USE).  A one-render decode settles it.
+ 2. Find the 4 MiB+4 KiB: grep the command/detail/heap bases the tool builds for
+    any field that is a 4 KiB page offset where a 4 MiB-aligned base is expected.
+    The obvious candidate class is a structure address used relative to its heap.
+ 3. Only then re-run the marker: with the vertex pipe now admitting tasks, the
+    marker may finally read MARK (route (a) of the trap-430 list, for free).
+
+
+SESSION 83, THIRD PART — the KM source gave a candidate; the 0x234 OTPM base is
+EXCLUDED by measurement (one variable, one boot)
+================================================================================
+The operator corrected a real mistake in my reading of the drop: the kernel module
+source IS there, at `eurasia_km/services4/srvkm/devices/sgx/` (sgxkick.c, mmu.c,
+sgxinit.c, sgxutils.c, sgxreset.c, sgxtransfer.c) — a top-level sibling of
+`eurasia/`, which I had never listed.  Everything below was read from it and from
+`eurasia/`'s client and microkernel sources.
+
+THE CANDIDATE (from the vendor source, not a guess)
+---------------------------------------------------
+Our µkernel's `TA_RT` table writes `EUR_CR_MTE_OTPM_CSM_LOAD_BASE` (0x234) from
+the RT-data entry's tail-pointer word (`cores/sgx540.py:363`,
+`(0x234, 0x1c//4)`).  Two facts from the drop make that wrong:
+
+* 0x234's field is a **device address in 16-byte units**
+  (`ADDR_MASK 0x0FFFFFF0`, `SHIFT 4`, sgx540defs.h:935-937), not a tail-pointer
+  word: the pointer we supply is a byte address, so the MTE would treat it as a
+  multiple of 16 — a shifted, unmapped target.  And the fault is a **write**,
+  which is what an MTE CSM load does.
+* **The vendor's own 540 path never writes an OTPM base at all.**  In `ta.asm`
+  the CSM-base write is inside `#if defined(EUR_CR_MTE_OTPM_CSM_BASE)`
+  (ta.asm:4211-4220, `str #EUR_CR_MTE_OTPM_CSM_BASE >> 2, r2` from
+  `SGXMKIF_HWRTDATA.sContextOTPMDevAddr[0]` = HWRTDATA+0x4c); only the SGX545
+  defines that register (`sgx545defs.h:1425`, also 0x234).  Our core takes the
+  `#else /* !SGX_FEATURE_RENDER_TARGET_ARRAYS */` branch, whose only OTPM action
+  is `str #EUR_CR_MTE_OTPM_OP >> 2, #CSM_INV` (ta.asm:4252).  So the 540 has no
+  CSM base to set, and writing one is a 545-shaped carry-over — the same class of
+  defect as trap 431, found the same day, in the same register block.
+* Supporting: the 540's `MTE_OTPM_OP` defines CSM_INV b0, CSM_LOAD b1, CSM_FLUSH
+  b2 and **no CSM_OTPM_MEM_CLEAR** (the 545's bit 3), which our core file already
+  notes.
+
+THE TEST (one variable, one firmware build, one boot)
+-----------------------------------------------------
+Built both firmwares from the same source with `UK_NO284` gating only the 0x234
+table entry (ukernel.py, after the core load).  Verified mechanically:
+
+    /tmp/s83/kick19ctl.bin    2033 insts,  str #141 (0x234>>2) x1    (control)
+    /tmp/s83/kick19no284.bin  2030 insts,  str #141 (0x234>>2) x0    (variant)
+    SGX545 golden 83b5b0a7… intact in both; test_emu 8/8 with UK_NO284=1
+    wrapped: kick19ctlw 3956feb5…, kick19no284w c7cc8e12… (crc 0xdf3f3b64 / 0x2a03ecd0)
+
+Booted `kick19no284` (named by dmesg) and rendered one frame:
+
+    frame 0: render done, centre 00000000, corner 00000080   ->  0/1 frames right
+    job page fault at 0x00401000 (BIF status 0x0000e000, requestor 0x2000, write)
+
+**IDENTICAL to the baseline.**  So the 0x234 OTPM-base write is **EXCLUDED** —
+it does not produce the fault.  Reverted to `kick18ccb` (`d4087521…`, md5 verified)
+and re-rendered: the same fault again, so the revert is proven and the fault is a
+property of the baseline.
+
+WHAT THAT LEAVES
+-----------------
+The fault is a write at 0x00401000 (4 MiB + 4 KiB) after the TA command and the
+per-core DMS_CTRL fix (trap 431).  The requestor mask (bit 13) has **no per-bit
+names in the drop** — the vendor's own reset path (sgxreset.c:335-337) uses
+`EUR_CR_BIF_INT_STAT_FAULT_REQ_MASK` only as a presence test, and `mmu.c`'s
+`MMU_CheckFaultAddr` walks the page tables for the *address* without decoding the
+requestor.  So the block has to be identified by testing, not by reading.
+Candidates that write an address early in a TA kick, in the order worth trying:
+ 1. `EUR_CR_TE_PSGREGION_BASE` (0x21c) / `EUR_CR_TE_TPC_BASE` (0x220) — both
+    `MASK 0x0FFFFFC0`, `SHIFT 6` (64-byte units).  Ours come from cmd+0x258/0x25c;
+    the values in the live command are 0f02c000/0f02f000, which ARE 64-byte
+    aligned, so these look right — but the *DMA the TE then does* into them is a
+    write.  Worth one boot: point them at a known-mapped page.
+ 2. `EUR_CR_BIF_TA_REQ_BASE` (0xc90) — `MASK 0x0FF00000`, `SHIFT 20` (1 MiB).  Ours
+    comes from cmd+0x274 = 0f010000, which is 1 MiB aligned. Fine.
+ 3. `EUR_CR_PDS_EXEC_BASE` (0xab8) — `MASK 0x0FF00000`, SHIFT 20.  The driver writes
+    the PDS-pixel base (0x0dc00000).
+ 4. The MTE's own transfer-region registers, if the write is a CSM **store** rather
+    than a load: `sgx_utils.asm:2505-2513` (SC_PS_OTPMCSBase) is the TA-side one,
+    `:2782-2797` (LC_PL_OTPMCSBase) the load-side one — the second is the analogue
+    of what we just excluded, on the load path, and is reached from a different
+    structure.
+None of these is proven; each is one gated build + one boot, and the fault's
+address and direction make a good discriminator (a wrong base usually moves the
+fault address, since `BIF_FAULT` reports it).
+
+Bench at this point: firmware `kick18ccb` (`d4087521…`) restored and named by
+dmesg; modules unchanged from the DMS_CTRL fix (`21833840…`), reverts
+`.pre-dms540`/`.pre-reqlog` in place; `UK_NO284` is a build-time gate, so the
+shipped image is untouched by it.  No flash, no media write.
+
+
+SESSION 83, FOURTH PART — a second `TA_RD` defect found the same way, and the
+hint that costs nothing: the fault address moves with the stream
+==================================================================
+Two findings after the 0x234 exclusion, both from the vendor source.
+
+A. `TA_RD` writes `EUR_CR_TE_STATE` (0x274) from a render-details pad we never
+   fill.  The vendor loads TE_STATE from a REAL field:
+       ta.asm:4340-4344
+         MK_MEM_ACCESS_BPCACHE(ldad)  r2, [R_TA3DCtl, #DOFFSET(SGXMK_TA3D_CTL.sTARenderDetails)], drc0
+         mov  r4, #OFFSET(SGXMKIF_HWRENDERDETAILS.ui32TEState[0])
+         iaddu32 r3, r4.low, r2
+         COPYMEMTOCONFIGREGISTER_TA(KTA_TEState, EUR_CR_TE_STATE, r3, r4, r5, r6)
+   i.e. `TE_STATE <- HWRENDERDETAILS.ui32TEState[0]`.  Ours:
+   `TA_RD = [(0x274, 0x124 // 4)]` (cores/sgx540.py:375) reads rd+0x124, which
+   falls inside `pad_118[9]` in `struct pvrsgx_fw_render_details` -- a private pad
+   the driver never writes.  So TE_STATE is loaded with a **0** that means
+   nothing (live read: `TE_STATE 0x0274 0x00000000`), and TE_STATE is a register
+   the microkernel also *saves* on a context switch (ta.asm:825,1198), so a
+   garbage value is not inert.  Same class as the DMS_CTRL pixel-partition pad
+   (trap 431): a real field the reconstruction folded into padding.
+   **Not yet tested against the fault** (needs the correct word, and our flat
+   render-details layout does not match the 1.8 struct's `SGXMKIF_3DREGISTERS
+   s3DRegs` prologue, so the 1.8 offset 0x5c is NOT directly usable -- see B).
+
+B. **A structural fact worth recording: our render-details layout is a FLAT
+   reconstruction of a struct the vendor defines NESTED.**  Compiling the 1.8
+   `SGXMKIF_HWRENDERDETAILS` gives `ui32TEState` at **0x5c**,
+   `ui32NumPixelPartitions` at **0x74**, `sizeof` **0x90** -- it begins with a
+   `SGXMKIF_3DREGISTERS s3DRegs` block and carries `PVRSRV_DEVICE_SYNC_OBJECT`
+   arrays, none of which our 0x1ec-byte flat struct models.  So (i) my earlier
+   hand-parsed "0x6c" for `ui32NumPixelPartitions` was wrong (it double-counted
+   the nested struct), and (ii) the per-core values I put at **our** +0x6c
+   (trap 431) are correct for **our** layout but the *field identity* rests on
+   our own reconstruction, not on the 1.8 offset.  The live dump confirms the
+   value lands where our struct says (`rd+0x6c = 0x01800000`, 6<<22), so the
+   mechanism -- "the µkernel reads a pixel-partition word we never wrote" -- is
+   proven for our layout even though the 1.8 byte offset differs.  Trap 431's
+   measured effect (the fault replacing the timeout) stands on its own.
+
+C. **The fault address moves with the stream, which is a free discriminator.**
+   Same firmware (`kick18ccb`), same boot, three variants:
+       baseline            -> page fault at 0x00401000  (write, requestor 0x2000)
+       SGXGEN_NO_PRIM      -> page fault at 0x00401000  (write)
+       SGXGEN_NO_STATE     -> page fault at 0x0dc00000  (write, requestor 0x2000)
+       -k 1 (single kick)  -> page fault at 0x00401000  (write)
+   `0x0dc00000` IS `PDS_EXEC_BASE` (the pds_pixel heap base, pvrsgx_core.c:288)
+   to the byte, and `0x00401000` is 4 MiB + 4 KiB, just above the general heap's
+   `0x00001000` base.  Both are **writes** with an offset of 0 or 0x1000 from a
+   heap base -- the signature of a DMA whose base register holds a heap base and
+   whose offset/size is 0 or a page.  Removing the state loads changes *which*
+   heap the bogus write lands in, so the writer is downstream of the state-load
+   path, and the state record's own fields are still implicated even though
+   session 81/82 excluded the *record encodings* -- what is new is that a write
+   actually happens now (the DMS fix, trap 431).
+   Next for this: try `SGXGEN_NO_DRAW` and `SGXGEN_NO_CLEAR` in one boot to see
+   which record class selects 0x00401000 vs 0x0dc00000; the answer names the
+   writer.  Then point that record's DMA at a known-mapped page and watch the
+   fault move or clear.
+
+
+SESSION 83, FIFTH PART — the fault is NOT in the client stream, and two leads
+closed by reading the vendor's own code
+====================================================================================
+Clean boot (`resets 0`), firmware `kick18ccb`, module `21833840…` (the DMS fix).
+Four stream variants, fresh dmesg window each:
+
+    SGXGEN_NO_CLEAR   -> page fault at 0x00401000 (write, requestor 0x2000)
+    SGXGEN_NO_DRAW    -> page fault at 0x00401000 (write)
+    SGXGEN_NO_PRIM    -> page fault at 0x00401000 (write)
+    SGXGEN_NO_STATE   -> page fault at 0x0dc00000 (write)
+
+and with ALL FOUR set (stream reduced to the vertex-secondary record + terminate
+only -- no clear, no draw, no state, no prims):
+
+    -> page fault at 0x00401000 (write, requestor 0x2000)
+
+**So the write is not produced by any record in the client stream.**  With the
+stream essentially empty the fault is still there, unmoved.  That rules out the
+whole "a DOCUMENT/state record's DMA writes to a bogus address" family and moves
+the writer to something the *kernel or the microkernel programs per kick*,
+independent of stream content.  `SGXGEN_NO_STATE` moving the address to
+`0x0dc00000` (== `PDS_EXEC_BASE` exactly) is then explained differently: with the
+state records present, some PDS-related register is programmed from the stream
+and the bogus write lands one way; without them it lands on the PDS base itself.
+Either way the address is a heap base + 0 or +0x1000, which is the signature of a
+base register being used with a zero offset.
+
+TWO LEADS CLOSED BY READING THE VENDOR'S CODE (cheap, no boots)
+---------------------------------------------------------------
+1. **`TE_STATE` = 0 is CORRECT, not a defect.**  `ta.asm:4340-4344` loads
+   `TE_STATE <- HWRENDERDETAILS.ui32TEState[0]`, and the client explicitly zeroes
+   it: `sgxkick_client.c:2098-2101  psHWRenderDetails->ui32TEState[i] = 0;`.  Ours
+   reads 0 (live: `TE_STATE 0x0274 0x00000000`) from a pad, but the *value* the
+   vendor sends is 0 as well, so `TA_RD = [(0x274, 0x124//4)]` is harmless as long
+   as the pad is zero -- which it is.  **Do not "fix" this by pointing it at a
+   real field**; the value would still be 0.  (Our struct is a flat
+   reconstruction of a struct the vendor defines nested -- see the fourth-part
+   note -- so the 1.8 offset 0x5c does not apply to us anyway.)
+2. **`TE_PSG` = `0x01000000` (b24 `ENABLE_CONTEXT_STATE_RESTORE`) is CORRECT.**
+   Session 80 left this open ("the vendor 540 µkernel only ORs those on the
+   terminate/context-switch paths").  `ta.asm:4346-4352` ORs it on **every TA
+   kick**, unconditionally, right after the TE_STATE load, and ORs
+   `ZLOADENABLE` on top only when the RT data's common status says so.  So the
+   "always bit" is the vendor's own behaviour; trap 418's open note can be closed.
+
+WHAT IS LEFT
+------------
+The writer is a per-kick register or structure the kernel/microkernel programmes
+regardless of stream content, and it writes to a heap base with a zero offset.
+Candidates still standing, in order, each one gated build + one boot:
+ 1. `TE_PSG`'s neighbour `TE_PSGREGION_BASE` (0x21c) / `TE_TPC_BASE` (0x220) --
+    `SHIFT 6` (64-byte units); the command carries 0f02c000/0f02f000 (aligned).
+    The **TE's own region/tail-pointer writes** go through them.
+ 2. `BIF_TA_REQ_BASE` (0xc90) from cmd+0x274 = 0f010000 (1 MiB aligned, fine).
+ 3. `PDS_EXEC_BASE` (0xab8) = 0x0dc00000 (the value NO_STATE faults at).
+ 4. The **PB free list / page table**: `EUR_CR_DPM_TA_ALLOC_PAGE_TABLE` 0x618 and
+    `_FREE_LIST` 0x61c read `0x09822000`/`0x10210000` in `status`; a DPM page
+    allocation writing at its base would look exactly like this.
+A cheap discriminator for all of them: after a **single** render, read
+`BIF_FAULT`'s address (already logged) *and* the register set in `status` in the
+same window; whichever base register equals the fault address (or fault & ~0xfff)
+names the writer.  That is one boot and no rebuild.
+
+
+SESSION 83, SIXTH PART — the fault window is BEHIND a correctly-loaded client PD,
+and the address is inside the mapped general heap
+====================================================================================
+Clean boot, `kick18ccb`, module `21833840…`.  Read `BIF_DIR_LIST_BASE0` every
+80 ms through one render:
+
+    0x84da6000   <- FIRST sample: the CLIENT PD (differs from the kernel PD)
+    0x85841000   <- every sample after: the kernel PD
+    ...
+    job page fault at 0x00401000 (write, requestor 0x2000)
+
+Facts established, each from a reading:
+* **The µkernel DOES load the client PD.**  `pd_load("do_ta")` resolves
+  `pdtable[slot]` through the r14 patch site (`imae r6, r4, #4, r14; ld.a.d r4,
+  r6, #0`) and writes `EUR_CR_BIF_DIR_LIST_BASE0` (`str #801` at image 0x1bf0,
+  first-kick path only).  The sample above caught it holding `0x84da6000`, which
+  is neither the kernel PD nor the idle PD -- so the write lands and the slot is
+  right.  The `0x85841000` that follows is the kernel's own restore (the driver's
+  reset/start path), not the µkernel undoing its load.
+* **`0x00401000` is INSIDE the general heap** `[0x00001000, 0x04400000)`
+  (pvrsgx_core.c:283), and the frame tool's own ring 0 is allocated at
+  `0x00002000` there (tool `-v`).  So the address is **mapped in the client PD**
+  and **not** mapped in the kernel PD (the kernel PD gets kernel_code,
+  kernel_data and sync shared into it, `pvrsgx_share_fw_heaps`, but *not*
+  general).  A write to it therefore faults exactly when it happens **while the
+  kernel PD is loaded** -- which is what the sample shows for all but the first
+  80 ms.
+* So the fault is not "a bogus pointer"; it is **"a write lands outside the TA's
+  own PD window"**: either after the microkernel has finished with the client PD,
+  or from a block (the EDM's bg-store path, the 3D, the TE's region writes) that
+  runs with list 0 back on the kernel PD.  That reframes the search from "which
+  pointer is wrong" to "which block writes after the PD is restored".
+
+TWO MORE LEADS CLOSED BY READING (no boots)
+-------------------------------------------
+* **`TE_STATE` = 0 is correct** (sgxkick_client.c:2098-2101 zeroes
+  `ui32TEState[]`); our `TA_RD` reading a zeroed pad yields the same value the
+  vendor sends.  Not a defect.
+* **`TE_PSG` = `0x01000000` is correct** (ta.asm:4346-4352 ORs
+  `ENABLE_CONTEXT_STATE_RESTORE` on *every* kick, unconditionally).  This closes
+  trap 418's open "always bit" question.
+* **The `0x618` page-table base is correct**: the vendor stores the raw
+  `sEVMPageTableDevVAddr` and masks `0x0FFFFFF0` (sgx_utils.asm:988-990,
+  sgxpb.c:231); the field is a byte address, and ours (`0x09822000`) is in the
+  3D-params heap with no low bits to lose.
+* **Our render-details struct is a flat reconstruction of a struct the vendor
+  defines nested** (it starts with `SGXMKIF_3DREGISTERS s3DRegs`, carries
+  `PVRSRV_DEVICE_SYNC_OBJECT` arrays, `sizeof` 0x90 against our 0x1ec).  The 1.8
+  field offsets therefore do NOT transfer to us; trap 431's per-core values are
+  correct **for our layout** (live `rd+0x6c = 0x01800000`) and its measured
+  effect stands, but no further 1.8 offset may be copied in without checking.
+
+NEXT (one boot each, cheapest first)
+------------------------------------
+ 1. Identify the block writing with the kernel PD loaded.  The EDM's bg-store
+    path is the prime suspect: `do_3d` routes the EDM to the client PD only for
+    the bg stores (`pd_route(0x1011)` at ukernel.py:2504) and back to the kernel
+    PD afterwards (`0x101f`), and the background block's PDS word is a client
+    address in the **general** heap.  Test: run with `SGXGEN_NO_DRAW` --
+    already done, still faults, so it is not the draw's bg object alone; next try
+    the *pixel event* program (render only, no bg) by pointing the RT's bg PDS
+    words at the empty pixel program.
+ 2. Watch `BIF_DIR_LIST_BASE0` and the fault **in the same 10 ms window** (the
+    current sampling shows the client PD for <80 ms); a tighter read (the driver
+    could print DIR_LIST_BASE0 in the fault message) would say definitively
+    whether the faulting write happens with the client PD or the kernel PD
+    loaded.  That is a one-line driver change and the decisive datum.
+
+
+SESSION 83, SEVENTH PART — THE DECISIVE DATUM: the faulting write runs inside the
+TA's own window, with the CLIENT PD loaded
+====================================================================================
+One driver line (pvrsgx_job.c: print DIR_LIST_BASE0 and the kernel PD in the fault
+message) settles the question the sixth part left open.  Module `2c191e1a…`.
+
+    job page fault at 0x00401000 (BIF status 0x0000e000, requestor 0x2000, write);
+    DIR_LIST_BASE0 0x8b843000 kernel PD 0x85e8d000
+    (client PD: the faulting write ran in the TA's own window)
+
+**So the write happens while the CLIENT page directory is loaded** -- the µkernel's
+`pd_load("do_ta")` did its job, the slot resolved to the client PD, and the write
+faulted *with that PD active*.  That kills the "the write runs after the PD is
+restored to the kernel PD" theory (which the 80 ms sampling had suggested) and
+narrows it to: **a block writes to `0x00401000` in the TA's window, and that
+address is not mapped in the client PD.**
+
+Which reopens a concrete, checkable question: is `0x00401000` really mapped in the
+*client* PD?  It is inside the general heap `[0x00001000, 0x04400000)`, and the
+tool allocates its ring 0 at `0x00002000` there -- but a heap's *range* being in
+the layout does not mean a *page* is mapped: our VM allocates on demand
+(`pvrsgx_gem`/gpuvm), so `0x00401000` (4 MiB + 4 KiB into the heap) may simply
+never have been touched, and the block writing there is writing to an address it
+computed rather than one it allocated.
+
+The block is still unnamed (requestor bit 13 has no per-bit name in the drop), but
+the window is now known exactly, and the address class is "general heap + 4 MiB +
+4 KiB".  Cheapest next:
+ 1. **Map and touch `0x00401000`** -- have the frame tool allocate a BO at that
+    exact address (`SGXGEN_MAP_401000`), one render.  If the fault disappears, the
+    block is writing to a *legitimate-looking but unallocated* address, and the
+    next question is which field it reads it from; if it persists, the address is
+    wrong regardless.
+ 2. Print `BIF_MEM_REQ_STAT` and the four `*_REQ_BASE` registers (TA 0xc90, 3D
+    0xcac, ZLS 0xcb0) in the same fault message: a `*_REQ_BASE` equal to
+    `0x00400000` (1 MiB-aligned, since their field is `SHIFT 20`) would name the
+    requestor's base as the culprit directly.
+ 3. Only then rebuild the µkernel around whichever field (1)/(2) names.
+
+Bench: module `2c191e1a3d65b1f82cfbfce044b001e6` (DMS fix + requestor/direction +
+PD-at-fault); reverts `.pre-dms540` `92e14ad4…`, `.pre-reqlog` `91729a08…`,
+`.pre-pdlog` `21833840…`; firmware `kick18ccb` `d4087521…`; `BOOTCTR_FCTRY` read
+on each boot, self-maintaining; boot clean each time.
+
+
+SESSION 83, EIGHTH PART — the fault is a write through the MMU to an UNMAPPED
+general-heap page, and it moves when that page is mapped
+====================================================================================
+New tool knob `SGXGEN_MAP_AT=<hex>` (tools/gen/sgxgen.c): place the next GENERAL
+heap allocation at a chosen address, so a page can be mapped on demand.  Tool
+`a9424592…`.  Firmware `kick18ccb`, module `2c191e1a…` (PD-at-fault logging).
+
+    baseline                 -> fault 0x00401000  status 0xe000  requestor 0x2000  write
+    SGXGEN_MAP_AT=0x400000   -> fault 0x0001f000  status 0xc002  requestor 0x0002  write
+    SGXGEN_MAP_AT=0x401000   -> fault 0x0001f000  status 0xc002  requestor 0x0002  write
+    SGXGEN_MAP_AT=0x1f000    -> fault 0x00401000  status 0xe000  requestor 0x2000  write
+                                                     (the knob holds ONE page, so this
+                                                      just swaps which one is missing)
+
+WHAT IT MEANS
+-------------
+* **The writer is aiming at a real, computed address inside the general heap.**
+  Mapping `0x00400000`/`0x00401000` makes the fault *move* to `0x0001f000` -- it
+  does not simply go away, and it does not stay put.  A wrong pointer would not
+  move when an unrelated page is mapped; a writer that walks *forward through the
+  general heap* does exactly that.  `0x00401000` is 4 MiB + 4 KiB and `0x0001f000`
+  is 31 pages in, both inside `[0x00001000, 0x04400000)`.
+* **The second fault is a different requestor** (`0x0002` = bit 1, vs `0x2000` =
+  bit 13) with status `0xc002` = FAULT(2) | PF_N_RW(write) | FLUSH_COMPLETE.  So
+  two distinct blocks write into the general heap: one at ~4 MiB (requestor bit
+  13) and one at ~124 KiB (requestor bit 1).  Neither is named by the drop.
+* **Both fault *with the client PD loaded*** (the driver's new message prints
+  `DIR_LIST_BASE0` and the kernel PD side by side; they differ in every run).
+  So the pages are genuinely **not mapped in the client PD** -- the VM maps on
+  demand and the tool only ever allocated `0x2000..0x87000` there (its own `-v`
+  output).  The writes are not to a bogus pointer but to a *plausible address the
+  client never allocated*.
+* The most likely shape, consistent with everything measured: a **DMA whose
+  destination is computed from a base plus a size/stride the client supplied** --
+  the same class of defect as the DMS_CTRL and 0x234 findings (a value used with
+  the wrong meaning), but on the *addressing* side rather than a register field.
+  Our `TA_PB`/`TA_TE`/`D3_RD` tables take `pages`, `tail_pointers_size`,
+  `mt_bytes`, `MTRegionArraySize`, region sizes and strides from the client; any
+  of those, used as an address or as an address offset, lands exactly here.
+
+NEXT — cheap and decisive
+-------------------------
+ 1. **Map a RANGE, not one page** (`SGXGEN_MAP_AT` currently holds one object):
+    4 MiB of general heap, then 8 MiB.  When the fault stops moving, the writer's
+    high-water mark is known, and *that number* names the field: e.g. if it stops
+    after 4 MiB the block wants `0x400000 + page`; if it walks the whole heap it
+    is a stride.
+ 2. **Print the four `*_REQ_BASE` registers (0xc90/0xcac/0xcb0) and
+    `BIF_MEM_REQ_STAT` in the fault message** -- one driver line, no boot beyond
+    the next.  A requestor base equal to the fault address's 1 MiB-aligned top
+    names the block; a `MEM_REQ_STAT` read count climbing during the stall says
+    the walk is live.
+ 3. Then the µkernel field is identified and the fix is one table entry.
+
+Bench: modules `92e14ad4…` (pre-dms540), `91729a08…` (pre-reqlog), `21833840…`
+(pre-pdlog), **`2c191e1a…` live** (DMS fix + requestor/direction + PD-at-fault);
+firmware `kick18ccb` `d4087521…`; tools `/tmp/powervr_sgx_frame.s83` `3da50fab…`,
+`/tmp/frame-mapto` `a9424592…`.  No flash, no media write; every boot clean.
+
+
+SESSION 83, NINTH PART — CLEAN-BOOT RESULT: mapping the range turns the page fault
+back into the original TIMEOUT, so the fault is a side effect of an unallocated write
+====================================================================================
+Fresh boot (`up 0 min`, `open microkernel kick18ccb`).  Tool `/tmp/frame-mapto`
+`775889e7…` (`SGXGEN_MAP_AT` / `SGXGEN_MAP_SIZE`, general heap only):
+
+    baseline                 -> page fault at 0x00401000  status 0xe000  requestor 0x2000  write
+    map 0x401000, 4 KiB      -> page fault at 0x0001f000  status 0xc002  requestor 0x0002  write
+    map 0x400000, 1 MiB      -> NO page fault
+    map 0x400000, 4 MiB      -> NO page fault
+
+and with the 1 MiB range mapped the frame reports:
+
+    frame 0: render FAILED, centre 00000000, corner 00000080    0/1 frames right
+    job timed out (ccb 10, consumed 9, done word 0x0 for 0x1, events 0x20000000/0x00000010)
+
+**So the page fault is a SIDE EFFECT, not the wall.**  Once the address range the
+writer touches is mapped, the fault disappears and the job fails with **exactly the
+pre-session-83 signature** -- `job timed out ... events 0x20000000/0x00000010`
+(EVENT_STATUS MADD b26 latched, the trap-417 constant on STATUS2).  That is the
+session-79 timeout, unchanged.
+
+What this establishes:
+* The block that was faulting writes into the **general heap at a computed
+  address around 0x00400000 (4 MiB in)**, and once that range exists it writes
+  successfully and the job proceeds to its real stall.
+* So the 0x00401000 fault introduced by the DMS_CTRL fix (trap 431) is **not the
+  wall** -- it is a *new, more diagnosable* symptom that sits on top of the old
+  one.  The old one is still there underneath.
+* The mapping knob is now a **switch between two failure modes**: with the range
+  unmapped, `page fault at 0x00401000`; with it mapped, `job timed out`.  That is
+  useful: the fault has a name and an address, and it can be turned off at will,
+  while the timeout cannot.
+* **A correction to this session's own eighth part:** the "map 1 MiB -> still
+  faults" readings there were taken at `resets 19` on a degraded GPU and are not
+  valid; on a fresh boot the 1 MiB mapping clears the fault.  (Trap 423/424 class
+  -- a post-reset GPU is not a witness.)  The eighth part's other facts stand:
+  the writer walks forward, the two requestors differ (0x2000 vs 0x0002), and
+  both writes run with the client PD loaded.
+
+Where that leaves the campaign: **the wall is still the session-82 timeout**
+(MTE state emit / the state-copy task), and session 83 added a real per-core
+fix (DMS_CTRL, trap 431) plus a diagnosable, toggleable side-fault.  The next
+question is whether the side-fault's writer is worth fixing for its own sake --
+it writes ~4 MiB into a heap it did not allocate, which on real hardware would be
+a memory-safety bug even if it is not the render wall.
+
+NEXT
+----
+ 1. Name the writer (requestor 0x2000 = bit 13, 0x0002 = bit 1).  With the range
+    mapped the fault is gone, so the *timeout* path can be studied cleanly again
+    -- and the side-fault studied by unmapping.
+ 2. `BIF_MEM_REQ_STAT` + the `*_REQ_BASE` registers in the fault message: one
+    driver line, and it names the block.
+ 3. Decide with the operator whether the side-fault is in scope before the wall
+    (it is a real out-of-allocation write) or parked until the render works.
+
+Bench: firmware `kick18ccb` `d4087521…`; module `2c191e1a…` (DMS fix + requestor
++ PD-at-fault); tools `3da50fab…` (frame), `a9424592…` (single-page),
+`775889e7…` (range).  Boots are clean; each render costs one reset; a fresh boot
+is required before trusting a mapping test (19 resets degraded it once).

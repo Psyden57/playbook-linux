@@ -704,6 +704,50 @@ flasher can replace at every point:
     423/424).  Capture `sgx540-first-render-2026-11-27.txt`, "SESSION 82" +
     "SESSION 82 CONTINUATION"; tools `.loc` `68bc15af…`, `.doutd` `d285cd17…`,
     `.pipe` `c7ef9997…`; modules `6ca3b4bf…`/`92e14ad4…`.
+    (a4g) **A 545-SHAPED BUG FIXED IN THE VENDOR SOURCE; the render wall is
+    UNCHANGED (session 83).**  `EUR_CR_DMS_CTRL`'s `MAX_NUM_VERTEX_PARTITIONS` is
+    per-core — shift 27 / 5 bits on the SGX545, shift **25** / **3** bits on the
+    SGX540 — and the port sent `10 << 27` (`0x50000000`) for every core, i.e.
+    **0 vertex partitions** here.  The pixel half was missing too
+    (`HWRENDERDETAILS.ui32NumPixelPartitions`, which the µkernel ORs into the same
+    register at the 3D/SPM, sat in an unwritten pad).  Both are now per-core
+    fields on `struct pvrsgx_cmd_core`, the live command reads `08000000`, and the
+    failure changed from `job timed out` to `job page fault at 0x00401000 (…
+    write)`.  **That fault is a SIDE EFFECT, now diagnosed:** it runs with the
+    client PD loaded, the address is inside the general heap but unallocated, and
+    **mapping 1 MiB at `0x400000` removes it and restores the session-79
+    timeout** — so the render wall is still session 82's MTE state emit
+    (trap 431/432; DECISIONS §124).
+    **Open sub-item — bound the faulting writer (one boot, no rebuild):** map
+    growing general-heap ranges at `0x400000` with `/tmp/frame-mapto`
+    (`SGXGEN_MAP_AT`/`SGXGEN_MAP_SIZE`) and find the size at which the fault stops
+    and the job reverts to `job timed out`; match that size against `pages`,
+    `tail_pointers_size`, `mt_bytes`, `MTRegionArraySize`, region sizes and
+    strides.  Recipe and outcome meanings: HANDOFF §0b.  An out-of-allocation
+    write is a real memory-safety defect even though it is not the blocker —
+    operator's call whether it precedes the wall.
+    (a4f) **THE GPU-SIDE MARKER IS BUILT AND SUBMITTED, AND IT IS NOT VALIDATED
+    (session 83)** — so the session-82 question (does the state-copy USSE task
+    run?) is still open.  Four marker programs (`state_emit_12_mark`,
+    `clear_vs_mark`, `pe_ptoff_mark`, `empty_v_mark`), `SGXGEN_STATE_MARK=1` in
+    `tools/gen/sgxgen.c`, one `H_GENERAL` BO, a `limm` patched at load (verified
+    against `sgx-asm`), cache clean+invalidate on the readback.  **Every marker
+    read 0, and so did all four controls**, with and without `NO_STATE`.
+    Measured reason: the **vertex pipe services nothing** on this stack
+    (`USE0/1_SERV_VERTEX`, `USE0_SERV_PIXEL` EMPTY at idle/mid-hang/after), the
+    state task runs on the vertex heap, and the only pipe that services tasks
+    (`USE0_SERV_EVENT`) is the **microkernel's** event handler — the client
+    pixel-event program runs per 3D tile, which never starts.  So no client task
+    class can positively control the marker in a stalling frame (trap 430;
+    DECISIONS §123).  **Also corrected:** the handoff's "point `sa0` at a client
+    BO" — kind-3 DMA lands in `pa`, and `sa0` is the vertex-secondary block's
+    self-address.  **Next, in cost order:** (a) get a vertex-heap client task to
+    complete (upstream's CE5310 does; ours stalls) — the only route that makes the
+    state task's zero meaningful; (b) a microkernel-side store (validates the
+    readback path only); (c) a driver debugfs read of the BO from the GPU side.
+    **Do not read a marker zero until one is in.**  Production unchanged (every
+    production program byte-identical; the default render reproduces the stall).
+    Capture "SESSION 83"; tool `3da50fab…`.
     (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b) attach the CPU supply or confirm 1.35 V for all OPPs and settle the

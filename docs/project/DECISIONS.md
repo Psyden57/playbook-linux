@@ -4670,3 +4670,125 @@ PROVEN, the wall is the SGX540 µkernel, and two config bugs were fixed.**
 
 **Evidence.**  Traps 426/428/429; report 283 §7/§8; the capture's "SESSION 82
 CONTINUATION"; driver modules `6ca3b4bf…` (USE_CTRL) and `92e14ad4…` (EDM 32).
+
+## 123. A GPU-side instrument must have a positive control on the same core path — and on this stack the client task classes are all downstream of the stall (session 83)
+
+**Decision.**  Do not read a GPU-side marker's zero as "the task did not run" until
+a store from a task of the **same class, on the same pipe, in the same frame** has
+been observed to land.  Keep the session-83 marker (`SGXGEN_STATE_MARK` in
+`tools/gen/{mkusse.py,sgxgen.c}`, `drm/tests/powervr_sgx_frame.c`'s readback) as
+the instrument, but treat its output as **unvalidated** until one of the routes in
+the trap-430 list is taken.  The session-82 question stays open.
+
+**Why.**  HANDOFF-83 §0b step 1 was the cheapest experiment on the list, and it
+was built and run (four marker programs; one client-only tool; no reboot).  Every
+marker read 0, and so did every control that could be devised: the state-emit task,
+the clear's vertex task, the pixel-event ptoff task, and a `sa0`-base store in the
+vertex-secondary task.  Per §113 a zero from an uncontrolled instrument is not
+evidence.  The reason is measured, not inferred: **the vertex pipe services
+nothing** (`USE0/1_SERV_VERTEX` and `USE0_SERV_PIXEL` are EMPTY at idle, mid-hang
+and after), the state-copy task runs on the vertex heap, and the one pipe that
+services tasks (`USE0_SERV_EVENT`) is the microkernel's own event handler — the
+client's pixel-event program is dispatched per 3D tile, which never starts while
+the VDM stalls.  So in a stalling frame there is **no client task class that can
+serve as a positive control**, and the marker as handed over cannot answer its
+question.  This is the §113 rule applied to the GPU side: an instrument must be
+proven where it is used, not where the hardware is healthy.
+
+**What the session settled as instrument rules** (each cost a real defect and was
+fixed): `st.a.d base, #0` writes `base + 4`, not `base` (ISA.md:1485); patching an
+assembled `limm` must be a read-modify-write (the naive rewrite drops `skipinv`,
+`fc200000` → `fca00000`); a shmem BO mapped by `drm_gem_shmem_object_mmap` is
+**cacheable** (`map_wc` is not set), so a GPU store is invisible to a plain load
+after a `memset` — clean and invalidate first; a marker placed before the `phas`
+may not execute, so it goes after; and a program that uses `r` registers needs a
+nonzero DOUTU word-0 temp count (PDS.md:301-305).  The `limm` patch matches
+`sgx-asm` word-for-word for nine addresses including `0` and `0xffffffff`.
+
+**Constraint.**  Production is unchanged: every `usse_*_w[]` the production path
+uses is byte-identical to the pre-session header, the marker is behind
+`SGXGEN_STATE_MARK`, and the default render reproduces the baseline stall.  The
+device tool is `/tmp/powervr_sgx_frame.s83` `3da50fab…`; the pre-session tools are
+untouched.  No media write, no flash, no module or firmware change, no RPMB write.
+Nothing goes upstream (§110).
+
+**Evidence.**  Trap 430; `docs/captures/sgx540-first-render-2026-11-27.txt`,
+"SESSION 83"; `docs/sessions/session-83.md`; the live `status` USE service
+counters; `tools/gen/mkusse.py` (`state_mark`, the four marker programs) and
+`tools/gen/sgxgen.c` (`SGXGEN_STATE_MARK`, `limm_patch`, `usse_load_patched`).
+
+## 124. A register field's POSITION is part of the per-core contract — derive it from the core's header, never share one constant (session 83)
+
+**Decision.**  Treat a register *field's bit position* exactly like the register
+address: per-core, taken from that core's own `sgx####defs.h`, and gated in the
+core table.  The specific case is `EUR_CR_DMS_CTRL`'s
+`MAX_NUM_VERTEX_PARTITIONS` / `_PIXEL_PARTITIONS`, but the rule is general and
+applies to every value the port has carried as a single `#define`.
+
+**Why.**  The port sent `TA_CTL = 0x50000000` for every core.  That is
+`10 << 27`, the **SGX545's** default vertex-partition count at its shift 27 in a
+5-bit field.  `sgx540defs.h` puts the same field at shift **25** in **3** bits
+(MASK `0x0E000000`), so on the SGX540 the value evaluates to **zero vertex
+partitions** — and the microkernel copies the TA command's control words into
+that field at every kick (`ta.asm:3507-3548`).  The pixel half had the mirror
+problem: the µkernel ORs `HWRENDERDETAILS.ui32NumPixelPartitions` (+0x6c) into
+the same register at the 3D and in SPM, and our render-details struct kept +0x6c
+inside a private pad, so the 3D got zero pixel partitions too.  The vendor
+derives both per core from `SGX_DEFAULT_MAX_NUM_{VERTEX,PIXEL}_PARTITIONS`
+(`sgxkick_client.c:896-913,1024`; `sgxinfo_client.h`), which is exactly the
+per-core discipline this project already applies to register *addresses*
+(DECISIONS §112, §117) — the shift had simply been overlooked because the value
+was a bare constant that looked plausible.
+
+**The measured consequence is the useful part.**  Fixing it changed the failure
+from a silent, 2-second `job timed out` (the signature sessions 79-82 chased)
+into a **specific, reproducible page fault**: `job page fault at 0x00401000
+(BIF status 0x0000e000, requestor 0x2000, write)`, 3/3 renders.  `0xe000` is
+FAULT | `PF_N_RW` (**a write**) | `FLUSH_COMPLETE`, and `0x00401000` is 4 MiB +
+4 KiB — the shape of an address used relative to a heap when it should be
+absolute — mapping in no heap the VM has.  So the job now reaches a memory access
+it never reached before.  **A stall that moves is progress even when the frame
+still fails**; it converts an unbounded "the VDM waits" into a bounded "this
+pointer is wrong".
+
+**Constraint.**  The SGX545's serial image and its command bytes are unchanged
+(`.ta_ctl = 10 << 27`, `.pixel_partitions = 31 << 22` reproduce the old
+constants exactly).  The values live on `struct pvrsgx_cmd_core` with the field
+mask and the citation, `pvrsgx_fw_render_details.num_pixel_partitions` carries a
+`static_assert(offsetof(...) == 0x6c)` so the pad cannot swallow it again, and
+KUnit's `core_test_sgx540` asserts each core's values and that each fits its own
+core's mask.  Nothing goes upstream (§110).
+
+**Evidence.**  Trap 431; `docs/captures/sgx540-first-render-2026-11-27.txt`,
+"SESSION 83 CONTINUATION"; the live TA command reading cmd+0x14/+0x18 =
+`08000000`; the DDK 1.8 headers `sgx{540,545,535,543}defs.h`, `ta.asm`,
+`3d.asm`, `spm.asm`, `sgxkick_client.c`, `sgxinfo_client.h`; modules
+`92e14ad4…` (before) and `21833840…` (after).
+
+**Added at the session-83 close — three consequences of the fix, recorded so they
+are not misread later.**
+
+1. **The fix's measured effect is a *change of failure*, not a render.**  The job
+   went from `job timed out (… events 0x0/0x10)` to
+   `job page fault at 0x00401000 (… write)`, 3/3.  That fault is now diagnosed as
+   a **side effect**: it runs with the client PD loaded, `0x00401000` is inside
+   the general heap but unallocated, and **mapping 1 MiB at `0x400000` removes it
+   and restores the timeout** (trap 432).  So the render wall is unchanged, and a
+   "the stall moved" result is progress in *diagnosability*, not in rendering.
+   Say so; do not report the fault as the wall.
+2. **The per-core rule now needs a companion: a field's offset in a reconstructed
+   struct is ours, not the vendor's.**  Our `struct pvrsgx_fw_render_details` is a
+   flat reconstruction (0x1ec bytes) of a struct the vendor defines nested
+   (`SGXMKIF_HWRENDERDETAILS` = `SGXMKIF_3DREGISTERS` prologue + sync-object
+   arrays, `sizeof` 0x90), so **no 1.8 offset may be copied into it**.  Trap 431's
+   values are correct *for our layout* (the live dump proves `rd+0x6c =
+   0x01800000`); a future field must be justified against our reconstruction and
+   the µkernel's own read site, not against the vendor's byte offsets.
+3. **The kernel-module source is part of the drop.**  `eurasia_km/services4/
+   srvkm/devices/sgx/` sits beside `eurasia/` and was missed by earlier sessions
+   and by this session's first pass.  Read both trees before concluding a
+   behaviour is "not in the source" (§118).
+
+**Evidence for all three.**  Traps 431/432; the capture's eighth and ninth
+parts; the driver's own fault message (`DIR_LIST_BASE0` vs kernel PD,
+`*_REQ_BASE`, `MEM_REQ_STAT`); `eurasia_km/` directory listing.

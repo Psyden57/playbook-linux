@@ -6,6 +6,68 @@ state is [`docs/project/STATE.md`](../project/STATE.md).
 
 ## Previous states
 
+## Previous state — 2026-11-27 (session 83, first half — the marker)
+
+**THE GPU-SIDE MARKER WAS BUILT AND SUBMITTED, AND IT IS NOT VALIDATED — its
+zeros are not evidence, because on this stack every client task that could prove
+the store path works is downstream of the same stall.**  Session 83 ran
+HANDOFF-83 §0b step 1 as a client-only change (generator + frame tool; no reboot,
+no firmware or module change, no media write).  Report: none (the capture is the
+record); trap 430.
+
+* **All markers read 0, and so do all four controls** (the state-emit task, the
+  clear's vertex task, the pixel-event ptoff task, and a `sa0`-base store in the
+  vertex-secondary task), with and without `SGXGEN_NO_STATE`.  A zero from an
+  uncontrolled instrument is not evidence (DECISIONS §113), so **the session-82
+  question — does the state-copy USSE task run? — stays open.**  [trap 430]
+* **Why, measured: the vertex pipe services nothing on this stack.**
+  `USE0_SERV_VERTEX`/`USE1_SERV_VERTEX`/`USE0_SERV_PIXEL` read `0x00010000`
+  (EMPTY) at idle, 1.0 s into the stall, and after; only `USE0_SERV_EVENT` climbs
+  (`0x1067e → 0x106ab → 0x106d7`), and that is the **microkernel's** event
+  handler, not a client task (the client pixel-event program runs per 3D tile,
+  which never starts).  The state-copy task runs on the vertex heap, so it has no
+  independent positive control here.
+* **Five instrument defects found and fixed** (each would have made the zero
+  dishonest): `st.a.d base,#0` writes `base+4` (ISA.md:1485); the `limm` patch
+  must be a read-modify-write (the naive rewrite dropped `skipinv`); the marker
+  BO's shmem mapping is **cacheable**, so a bare load read the `memset`'s 0
+  (clean+invalidate added); the marker must sit **after** the `phas`; and a
+  program using `r` registers needs a nonzero DOUTU temp count
+  (PDS.md:301-305).  The `limm` patch is verified word-for-word against
+  `sgx-asm` for nine addresses.
+* **HANDOFF-83 §0b's premise is wrong:** "point `sa0` at a known client BO" —
+  the state block is DMA'd kind 3 into the **primary** attributes (`pa`), and
+  `sa0` is the vertex-secondary block's own address.
+* **Production is unchanged:** every `usse_*_w[]` the production path uses is
+  byte-identical to the pre-session header; the marker is behind
+  `SGXGEN_STATE_MARK` and the default render reproduces the baseline stall.
+  Device tool `/tmp/powervr_sgx_frame.s83` `3da50fab…`.
+* **Next for the marker**, in cost order: (a) a vertex-heap client task that
+  provably completes (upstream's CE5310 does; ours stalls) — the only route that
+  makes the state task's zero mean what the handoff wants; (b) a
+  microkernel-side store, which validates only the readback path; (c) a driver
+  debugfs read of the BO from the GPU side, which removes the CPU-coherency
+  doubt.  **Do not read a marker zero until one of these is in.**
+
+**Bench at the session-83 close (read on the unit).**  Region 0 `0x02C1DDC2`
+(no flash; sha256 `70474c01…`, magic `0xD7C82D1F`, 10 450 520 B); region 1
+`20a5edd3…`; hd3 the session-71 rebake, `/dev/loop0` ext4 rw.  **`BOOTCTR_FCTRY
+0x2a`** (`0x2a >= threshold 0x1e, no write`).  Live firmware **`kick18ccb`**
+(`d4087521…`, 14 760 B) and module **`92e14ad4…`** (4 167 600 B) — both
+unchanged this session.  `resets 17` (one per render: each render times out and
+the driver restarts the µkernel), `BIF_FAULT 0`; `wlan0` down; `usb0`
+`169.254.0.1/16` up and SSH works; battery `Full` 100 %.  The desktop is
+**llvmpipe** (DECISIONS §119).  Device tool `/tmp/powervr_sgx_frame.s83`
+`3da50fab…`; the pre-session tools (`1177fafd…`, `.loc 68bc15af…`) untouched.
+**The clone's driver/generator changes are uncommitted and not in a patch
+(DECISIONS §110).**
+
+> **Superseded within session 83 itself.**  This was the session's first-half
+> snapshot, written before the session continued into the vendor DDK source.  The
+> current state is the session-83 entry in `docs/project/STATE.md`; it carries the
+> DMS_CTRL fix (trap 431), the diagnosed page fault, and the corrected bench
+> figures.  Kept as written.
+
 ## Previous state — 2026-11-26 (session 74)
 
 > **Superseded by session 75**, which measured that the event program is

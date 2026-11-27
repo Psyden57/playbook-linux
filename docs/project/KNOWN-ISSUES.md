@@ -4460,14 +4460,13 @@ report 121 §3/§11/§12.
           `LTAPB_WaitForPBLoad` (`sgx_utils.asm:1071-1097`).  Ours matches;
         * the client's VDM stream at `0x00042000` lies inside the general heap
           `{0x1000, 0x04400000}` on this core, so it is mapped for the client.
-        **Still unexplained, low value:** `TE_PSG` (0x218) is *not* in the
-        vendor 540 microkernel's write set (`ta.asm` only ORs
-        `COMPLETEONTERMINATE` b22 on the terminate path, and
-        `ENABLE_CONTEXT_STATE_RESTORE` b24 at `ta.asm:4349`, which is
-        context-switch-only), yet our read-modify-write makes it read
-        `0x01000000` = b24.  It is a *signature* register by its neighbours
-        (`MTE_SIG1/2`, `TE1/TE2`), so it may be read-only and the "always bit"
-        may be hardware's.  (Session 80.)
+        **CLOSED (session 83): `TE_PSG` = `0x01000000` is the vendor's own
+        value, not a mystery.**  `ta.asm:4346-4352` reads `TE_PSG` and ORs
+        `ENABLE_CONTEXT_STATE_RESTORE` (b24) into it on **every TA kick,
+        unconditionally**, then ORs `ZLOADENABLE` on top only when the RT data's
+        common status says so.  So the "always bit" is the vendor's behaviour and
+        our read-modify-write matches it.  (Session 83; vendor `ta.asm`; capture
+        "SESSION 83", fifth part.)
 
 419. **`IDXFIFO` — the index FIFO — wakes mid-hang, and it EXISTS ONLY ON THE
         SGX540.**  Reading `CLKGATESTATUS` at three points in one boot (idle,
@@ -4819,39 +4818,7 @@ report 121 §3/§11/§12.
         address (trap 427).  (Session 82; report 283 §7; capture
         `sgx540-first-render-2026-11-27.txt`, "SESSION 82 CONTINUATION".)
 
-428. **Two real SGX540 init/config bugs, both fixed to the vendor's value, and
-        neither moves the render stall.**  (a) **`EUR_CR_USE_CTRL` (0x0a00) was
-        never written on the 540** — `srvinit` writes it on *every* core as
-        `(31<<INSTLIMIT)|REGBOUND = 0x7c000` (`sgxinit.c:4124`); the SGX545 init
-        had `{0xa00,0x7c000}`, the SGX540's did not.  Added; live `0x0007c000`.
-        (b) **`DMS_CTRL`'s EDM task count was 63 and must be 32.**  `sgxerrata.h`
-        defines `FIX_HW_BRN_23632` **only** in the SGX530 (revs 110-125) and
-        SGX531 blocks — **not** the SGX540 — so the "at least 33 EDM tasks" bump
-        never applies and `0x00208200` (32/32/32) is correct (`ddk18-facts.md`
-        §3).  Trap 401 had assumed rev 120 has BRN-23632; wrong.  Corrected in
-        `pvrsgx_fw.c`; live `0x00208200`.  Each was one module build + reboot;
-        the stall signature stayed `CLKGATESTATUS 0x001800f0`, TE asleep, `0/1`.
-        Also: the SGX545's other init regs (`0x818/0x810/0x814/0x4e8/0x800/0xaac/
-        0xa78/0xa7c/0xa80`) are **not named in the 540 header** — do not copy
-        them; only `USE_CTRL` was a real omission.  (Session 82; modules
-        `6ca3b4bf…` and `92e14ad4…`.)
-
-429. **`do_ta`'s `cmd+0x14 → 0xa74` read-modify-write does not land the TA field
-        in `DMS_CTRL` — mechanism open.**  The µkernel RMWs `0xa74` b27-31 with
-        `cmd+0x14` (`ta_ctl[0] = TA_CTL = 0x50000000`, which the kernel builds at
-        `pvrsgx_render.c:880/642`; the RMW is at `do_ta`, disasm line 973 of the
-        deployed image: `ld.a.d r9,r17,#49; ld.a.d r5,r9,#5; ldr r6,#669; limm
-        r7,#0x07ffffff; and; or; str #669`).  Measured: `DMS_CTRL` reads
-        `0x00208200` idle **and** mid-hang (0.4 s / 1.2 s) — no `0x50000000`.
-        On the 540 `0xa74` is `DMS_CTRL` (not a 545 TA-flag register), so not
-        OR-ing it is arguably correct, but *why* the RMW leaves it unchanged (the
-        `cmd+0x14` read returns 0? the write is masked?) is unresolved.  Note
-        `cmd+0x04` reads correctly through the same `SC_CMD` pointer (the
-        session-81 `UK_CCBTRACE` read `0x71`), which makes a plain bad pointer
-        unlikely.  Settle with a firmware trace of `cmd+0x14` and the post-store
-        `0xa74`.  (Session 82; capture, "SESSION 82 CONTINUATION".)
-
-## 3. Corrections to older reports
+427. **The VDM stream's PDS addresses are `PDSExecBase`-relative on the SGX540,
         and ours were absolute — a real divergence, measured NOT the wall.**  On
         a core without `SGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE` (this one) the
         state-record and index-list base-address fields hold
@@ -4874,7 +4841,138 @@ report 121 §3/§11/§12.
         `EURASIA_TAPDSSTATE_USEPIPE_1` is already `1<<13`, and both the reference
         (`:2521`) and the client (`validate.c:3067`) write `(USEPIPE_1 + pipe)` =
         `0x2000|pipe`, which our production `counter + 0x2000` already matched.
-        (Session 82; report 283.)
+        (Session 82; report 283.  Restored to its place in the list at the
+        session-83 wrap-up: an earlier edit had lost this item's header and left
+        its body under a duplicate `## 3.` heading.)
+
+428. **Two real SGX540 init/config bugs, both fixed to the vendor's value, and
+        neither moves the render stall.**  (a) **`EUR_CR_USE_CTRL` (0x0a00) was
+        never written on the 540** — `srvinit` writes it on *every* core as
+        `(31<<INSTLIMIT)|REGBOUND = 0x7c000` (`sgxinit.c:4124`); the SGX545 init
+        had `{0xa00,0x7c000}`, the SGX540's did not.  Added; live `0x0007c000`.
+        (b) **`DMS_CTRL`'s EDM task count was 63 and must be 32.**  `sgxerrata.h`
+        defines `FIX_HW_BRN_23632` **only** in the SGX530 (revs 110-125) and
+        SGX531 blocks — **not** the SGX540 — so the "at least 33 EDM tasks" bump
+        never applies and `0x00208200` (32/32/32) is correct (`ddk18-facts.md`
+        §3).  Trap 401 had assumed rev 120 has BRN-23632; wrong.  Corrected in
+        `pvrsgx_fw.c`; live `0x00208200`.  Each was one module build + reboot;
+        the stall signature stayed `CLKGATESTATUS 0x001800f0`, TE asleep, `0/1`.
+        Also: the SGX545's other init regs (`0x818/0x810/0x814/0x4e8/0x800/0xaac/
+        0xa78/0xa7c/0xa80`) are **not named in the 540 header** — do not copy
+        them; only `USE_CTRL` was a real omission.  (Session 82; modules
+        `6ca3b4bf…` and `92e14ad4…`.)
+
+429. **SETTLED (session 83): the `cmd+0x14 → 0xa74` RMW DOES land — but `0xa74`'s
+        b27-31 is `MAX_NUM_VERTEX_PARTITIONS`, a partition COUNT, not TA flags.**
+        Session 82 read this as "the RMW does not land the TA field in
+        `DMS_CTRL`" and left the mechanism open.  The answer: `0xa74` b27-31 on the
+        SGX540 is `MAX_NUM_VERTEX_PARTITIONS` (`MASK 0x0E000000`, `SHIFT 25` —
+        three bits, so b27 is already **outside** the field), and the microkernel
+        writes it from the command's `ui32NumVertexPartitions`
+        (`ta.asm:3507-3548`), a per-core default derived by the vendor's client as
+        `SGX_DEFAULT_MAX_NUM_VERTEX_PARTITIONS << shift` (`sgxkick_client.c:1024`).
+        Our `TA_CTL = 0x50000000` is `10 << 27`, the **SGX545's** value at its
+        shift 27, so on the SGX540 it evaluates to **0** and the field reads what
+        srvinit left (0).  That is why nothing appeared to land.  Fixed per core
+        in trap 431: the live command now carries `0x08000000` (`4 << 25`).
+        **Do not re-open this as a µkernel bug.**  (Session 83; headers
+        `sgx{540,545}defs.h`; `ta.asm`, `sgxkick_client.c`; capture "SESSION 83".)
+
+430. **A GPU-side marker is only evidence once its store path is validated on the
+        core — and on this stack every client task that could validate it is
+        downstream of the same stall.**  Session 83 built HANDOFF-83 §0b step 1
+        (a fixed word written to client memory as the state-emit task's first
+        instruction) and every marker read 0 — **including four controls** (the
+        clear's vertex task, the pixel-event ptoff task, and a `sa0`-base store in
+        the vertex-secondary task).  Per DECISIONS §113 a zero from an
+        uncontrolled instrument is not evidence, so the marker did not answer the
+        question.  The measured reason: the vertex pipe services **nothing** on
+        this stack — `USE0_SERV_VERTEX`/`USE1_SERV_VERTEX`/`USE0_SERV_PIXEL` read
+        `0x00010000` (EMPTY) at idle, 1.0 s into the stall, and after — and the
+        state-copy task runs on the vertex heap.  The one pipe that services tasks
+        (`USE0_SERV_EVENT`, ~40/s) is the **microkernel's** event handler; the
+        client pixel-event program is dispatched per 3D tile, which never starts.
+        **So "a GPU task ran" cannot be shown from the client side in a stalling
+        frame**, and the marker needs one of: a vertex-heap client task that
+        provably completes, a microkernel-side store (validates the readback path
+        only), or a driver debugfs read of the BO from the GPU side.
+        Also settled here, as instrument rules: `st.a.d base,#0` writes `base+4`
+        (ISA.md:1485); a `limm` patch must be a read-modify-write (the naive
+        rewrite drops `skipinv`); a shmem BO mapped by `drm_gem_shmem_object_mmap`
+        is **cacheable** (`map_wc` unset), so a GPU store is invisible to a plain
+        load after a `memset` — clean+invalidate first; and the DOUTU word-0 temp
+        count must be nonzero for a program that uses `r` registers
+        (PDS.md:301-305).  The HANDOFF premise "point `sa0` at a known client BO"
+        is wrong: kind-3 DMA lands in `pa`, and `sa0` is the vertex-secondary
+        block's self-address.  **Production is unchanged** (the marker is behind
+        `SGXGEN_STATE_MARK` and every production program is byte-identical).
+        (Session 83; trap 426's question stays open; capture "SESSION 83".)
+
+431. **`EUR_CR_DMS_CTRL`'s `MAX_NUM_VERTEX_PARTITIONS` is per-core and the port sent
+        the SGX545's value to the SGX540 — so the SGX540 had ZERO vertex
+        partitions, and the render's failure changed from a timeout to a specific
+        write fault when it was fixed.**  The field moves per core:
+        `sgx545defs.h` MASK `0xF8000000`/SHIFT 27 (5 bits), `sgx540defs.h` MASK
+        `0x0E000000`/SHIFT 25 (3 bits), `sgx543defs.h` shift 26, `sgx535defs.h`
+        shift 25.  The single `#define TA_CTL 0x50000000` is `10 << 27`, the
+        SGX545's default (`SGX_DEFAULT_MAX_NUM_VERTEX_PARTITIONS 10`,
+        `sgxinfo_client.h`), and on the SGX540
+        `0x50000000 & 0x0E000000 == 0` — **zero vertex partitions** — while the
+        microkernel copies the command's control words into that field at every TA
+        (`ta.asm:3507-3548`).  The vendor's client derives it per core,
+        `SGX_DEFAULT_MAX_NUM_VERTEX_PARTITIONS << shift`
+        (`sgxkick_client.c:1024`), = `4 << 25 = 0x08000000` for the SGX540.
+        **The pixel half was missing as well:** the microkernel ORs
+        `HWRENDERDETAILS.ui32NumPixelPartitions` (+0x6c) into `DMS_CTRL` at the 3D
+        (`3d.asm:2914-2920`) and SPM (`spm.asm:2692-2698`); our render-details
+        struct kept +0x6c inside a private pad, so the 3D got 0 as well (SGX540
+        default `6 << 22`).  Both are now per-core fields on
+        `struct pvrsgx_cmd_core` (`.ta_ctl`, `.pixel_partitions`), the render
+        details carry the value with a `static_assert(… == 0x6c)`, the SGX545's
+        bytes are unchanged, and KUnit asserts each fits its core's mask.
+        **Measured effect:** the live command now reads cmd+0x14/+0x18 =
+        `08000000`, and the render's failure moved from
+        `job timed out (… events 0x0/0x10)` to, reproducibly 3/3,
+        `job page fault at 0x00401000 (BIF status 0x0000e000, requestor 0x2000,
+        write)`.  `0xe000` = FAULT | `PF_N_RW` (a **write**) | `FLUSH_COMPLETE`.
+        `0x00401000` is 4 MiB + 4 KiB, **inside the general heap**
+        `[0x00001000, 0x04400000)` (`pvrsgx_core.c:283`) and merely *unallocated*
+        — a correction: the first reading of it as "in no VM heap" was wrong.  The
+        frame still does not render (`0/1 frames right`), so this is not the fix.
+        (Session 83; vendor DDK 1.8; capture "SESSION 83 CONTINUATION".)
+
+432. **The post-DMS_CTRL page fault is a SIDE EFFECT, not the render wall — a block
+        writes ~4 MiB into an unallocated general-heap address — and mapping the
+        range removes it and restores the session-82 timeout.**  Diagnosed in one
+        clean boot with a new tool knob (`SGXGEN_MAP_AT` / `SGXGEN_MAP_SIZE`,
+        general heap only, `/tmp/frame-mapto` `775889e7…`):
+
+        | mapping | result |
+        |---|---|
+        | none | page fault `0x00401000`, requestor `0x2000`, status `0xe000`, write |
+        | 4 KiB at `0x401000` | fault **moves** to `0x0001f000`, requestor `0x0002`, status `0xc002`, write |
+        | 1 MiB / 4 MiB at `0x400000` | **no fault**; `job timed out (… events 0x20000000/0x00000010)` |
+
+        So (a) the writer **walks forward** through the general heap rather than
+        aiming at one wrong constant, and (b) with its range present it writes
+        successfully and the job fails with **exactly the session-79 timeout** —
+        the render wall is unchanged and this fault sits on top of it.  Facts that
+        constrain the writer: it runs **with the client PD loaded**
+        (`DIR_LIST_BASE0 0x8cf3e000` vs kernel PD `0x86599000` in the driver's own
+        fault message, so the address is not mapped in *that* PD); the
+        `*_REQ_BASE` set does not name it (`TA_REQ_BASE 0x08800000` = the 3D params
+        heap base, `3D_REQ_BASE 0`, `ZLS_REQ_BASE 0`, `MEM_REQ_STAT 0`); and the
+        requestor field is a **mask** (`FAULT_REQ_MASK 0x3FFF`) whose per-bit names
+        the 1.8 headers do not give — bit 13 (`0x2000`) and bit 1 (`0x0002`) both
+        appear, so two different blocks write into the heap.  It is a real
+        out-of-allocation write (a memory-safety defect on real hardware) but
+        **not** the render blocker.  **Next:** bound the high-water mark by
+        mapping growing ranges and matching the size where it stops against the
+        client-side sizes we hand the GPU (`pages`, `tail_pointers_size`,
+        `mt_bytes`, `MTRegionArraySize`, region sizes, strides).  **A degraded GPU
+        (`resets` high) gives false "still faults" readings** — one such reading
+        (eighth-part of the capture) was wrong and is corrected there.
+        (Session 83; capture "SESSION 83" eighth/ninth parts.)
 
 ## 3. Corrections to older reports
 
@@ -5247,6 +5345,18 @@ did NOT change the symptom" stands except for the value.  Related: `EUR_CR_USE_C
 ## 4. Documentation and tree defects (not behavioural bugs)
 
 ### Still open
+
+* **`tools/build_kernel_image.py` has no `--check` mode, and running it
+  overwrites `boot/chainloader/kernel.img` *and* the generated
+  `chainloader_kernel.{S,bin,elf,o}` in place.**  That file is **gitignored**
+  (`.gitignore:21 *.img`), so `git checkout` cannot restore it, and the printed
+  CRC is the only record of the previous content.  Session 83 lost it this way (an
+  assumed `--check` argument was ignored and the builder ran).  It was recovered
+  by reading region 0 off the media (`dd if=/dev/mmcblk1 bs=1M skip=129 count=10`)
+  and writing those exact bytes back — size `10,450,520`, magic `0xD7C82D1F`, CRC
+  `0x02C1DDC2`, sha256 `70474c01…`, matching the media record.  **Rule:** before
+  running the builder, copy `boot/chainloader/kernel.img` aside; and to identify
+  what is on media, read it rather than trusting the host file.  (Session 83.)
 
 * **The repository history still contains `hardware/TC358764XBG.PDF`.**  The file
   was tracked by mistake (a case-sensitive `*.pdf` ignore missed `.PDF`); it was
