@@ -4377,3 +4377,40 @@ fixed to `#{ENTRY_STATUS * 4}`; word 0x39 may not be cited until then.
 **Evidence.**  Report 280 and `docs/captures/
 sgx540-kick-entry-counter-2026-11-27.txt` (three boots in order: the kick
 measurement, the doorbell control, the dispatch-register dump); traps 406–408.
+
+
+## 117. The sgx540 entry takes the sgx545 command tables verbatim; every per-core register constant is settled against the 540 header or the vendor binary's write set (session 79)
+
+**Decision.**  Wire the render job type by giving `sgx540_render`/
+`sgx540_ta_kick`/`sgx540_transfer` the **sgx545 command tables verbatim**
+(`.supported = true`, the shared `fields`/`exts`, and
+`pvrsgx_cmd_core_sgx540.pds_row_bytes = 16`), and settle every µkernel
+per-core register constant by the 540 header **or** the vendor 540 binary's
+register-write set — never by carrying an SGX545 value.  The SGX545 serial
+image stays byte-identical through every change (DECISIONS §112's rule).
+
+**Why.**  The base and extension structs are shared uAPI and the render path
+(`pvrsgx_render_job_build`) reads the `sgx545_render`/`sgx545_ta_kick` union
+members unconditionally, so the tables are the only way to advertise the
+render type; Mesa sizes PDS programs in 16-byte rows on every core of this
+family.  The campaign that followed found **five** SGX545-shaped µkernel
+constants, each fixed against a primary source: the 0x138 invalidate-done
+masks (per-request 0x03/0x05 — the vendor's own ack is `0x140 ← 2`, the
+BRN_31474 shape), the OTPM OP write (the 540's `MTE_OTPM_OP` has no bit 3),
+the STATUS2 mem-clear wait (545-only), the DPM PDS-page threshold (0x614,
+not 0x668), and the free-list mode selector (absent on the 540).  The
+measured result: the first render job is consumed end to end and its failure
+point is localized to the VDM's control-stream execution — the host-kick
+path and TA register programming are exhausted as suspects.
+
+**Constraint.**  Nothing goes upstream until the core draws (DECISIONS
+§110); the session-77/79 driver+firmware changes are still not in a patch
+file — export before any upstream move.  The vendor binary is reference
+evidence only, never a deployment target (DECISIONS §115).  The known-open
+µkernel defects from the same diff (the `TA_TE` tail's 0x230 mapping and the
+SGX545-only register tail) are trap 415.
+
+**Evidence.**  Report 282; `docs/captures/sgx540-first-render-2026-11-27.txt`
+(boots 1-7); traps 413-415; `pvrsgx_cmd_defs.c` (the sgx540 entry);
+`ukernel/cores/sgx540.py` (the fixed constants); the vendor write-set diff
+method (§0b of HANDOFF-80).

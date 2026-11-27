@@ -542,6 +542,44 @@ flasher can replace at every point:
     WAIT_LOG stage bytes, `ta3dctl`'s TA/3D words).  The TA/3D register
     tables are the carried-over hypothesis — the 0xb14 discovery is the
     precedent for checking each against sgx540defs.h.  Then Mesa.
+    (a4b) **THE FIRST RENDER JOB (session 79, report pending): submitted,
+    consumed, and its failure point measured — the TA task STARTS and never
+    finishes.**  The render job type is wired (module `85fe59a2…`:
+    `pvrsgx_cmd_defs.c`'s `sgx540_render/ta_kick/transfer` carry the sgx545
+    command tables verbatim, `.supported = true`, `pds_row_bytes = 16`;
+    the job-types query advertises RENDER + TRANSFER, the suite reads 31/50),
+    the null family is intact, and `powervr_sgx_frame` (built from
+    `drm/tests/powervr_sgx_frame.c` + `tools/gen/sgxgen.c -DSGXGEN_DRM`) has
+    submitted real TA+3D jobs.  Four gated firmware builds with UK_WAITLOG
+    (`kick11wl`→`kick14otpm`) found and fixed THREE SGX545-shaped µkernel
+    bugs on the way (traps 413/414): the 0x138 invalidate-done masks
+    (per-request 0x03/0x05 — each done bit belongs to one request register),
+    the OTPM OP bit 3 (545-only; the 540 writes CSM_INV = 1), and the STATUS2
+    mem-clear wait (545-only, compiled out — the 540's OTPM done is
+    EVENT_STATUS b20, already waited).  On `kick14otpm` the render no longer
+    hangs in any wait: the µkernel consumes the kick, completes every
+    invalidate/load, and kicks the TA — **`EVENT_STATUS2 TRIG_TA` (b4)
+    latches at the timeout** — but TA_FINISHED never comes and the TA wrote
+    nothing (no region headers, BIF_FAULT 0).  **Continued the same session
+    (boots 6-7):** the vendor 540 binary's register-write set was diffed
+    against ours — two more µkernel fixes (the DPM PDS-page threshold is
+    **0x614** on the 540, not the 545's 0x668; the 540 has **no free-list
+    mode selector**, 0x664 is the 545's DPM_CONTEXT_PB_BASE — kick15pds) —
+    and the driver's status dump now carries the TA/VDM/DPM registers
+    (module `1a2949ab…`).  Mid-hang state: the TA registers are programmed
+    correctly (TE_SCREEN/MTILE exact for 256x256, thresholds right, the free
+    list loaded, VDM_CTRL_STREAM_BASE = the client's stream, which dumps as
+    well-formed), the **VDM/MTE/UCACHEL2/USE0 are clocked awake, the TE never
+    starts, the DPM allocates zero pages, no BIF fault**.  The vendor's TA
+    register block matches ours field-for-field (SGXMKIF_TAREGISTERS); its
+    invalidate ack (0x140 ← 2, DSC_INV0-only) matches the BRN_31474 shape we
+    adopted.  Found in OUR TA_TE tail, unfixed: cmd+0x2a4 (rt_flags) maps to
+    0x230 MTE_OTPM_CSM_FLUSH_BASE (the vendor uses 0x230/0x234 as
+    addresses), and a tail of SGX545-only registers (0x2a8, 0x2b0-0x2d4,
+    0x324, 0x364-0x374, 0x520, 0x74c) the 540 build never writes.
+    **Next: check the VDM control-stream record formats and the client
+    state-load PDS/USE programs against the 540's encodings** (the 0xb14
+    method on the stream); then the TA_TE tail hygiene.
     (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b) attach the CPU supply or confirm 1.35 V for all OPPs and settle the

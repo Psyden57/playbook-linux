@@ -4308,6 +4308,61 @@ report 121 §3/§11/§12.
           vendor's derivation before deploying it** — a hand-summed constant
           carries field values nobody chose.  (Session 78, boots 15-16.)
 
+413. **A PDS-cache-invalidate done mask must name only bits whose request
+        register the same path pulses — and a header's field list is not a
+        bitmask to sum.**  On the SGX540 each done bit of
+        `EUR_CR_PDS_CACHE_STATUS` (0x138) belongs to ONE request register:
+        b1 = `PDS_INV0` (0xad0), b2 = `PDS_INV1` (0xad4), b4 = `PDS_INV3`
+        (0xadc), b0 = `PDS_INV_CSC` (0xae0).  The µkernel's TA dispatch waited
+        0x1f — first because the core config summed the four header fields
+        wrongly (b0+b1+b2+b4 = 0x17, not 0x1f: **bit 3 does not exist**), then
+        with 0x17 it still hung, because b4's request register (0xadc) is
+        never pulsed on that path.  The vendor's own per-side derivation
+        (`sgxdefs.h`'s `FIX_HW_BRN_31474` branch — 31474 IS in the rev-120
+        list, "workaround in uKernel") waits one bit per side: TA =
+        DSC_INV0, 3D = DSC_INV1.  Fixed per-path: `INV_DONE_TA = 0x03`
+        (INV0+CSC requested), `INV_DONE_3D = 0x05` (INV1+CSC).  Found with
+        UK_WAITLOG: the render job spun in wait-site _wait8 until the 2 s
+        watchdog reset the GPU.  (Session 79; capture
+        `sgx540-first-render-2026-11-27.txt`.)
+
+414. **`EUR_CR_EVENT_STATUS2` is a different register on the SGX540 — do not
+        wait on an SGX545 STATUS2 bit.**  The 545 defines OTPM_MEM_CLEARED
+        b12, VDM_*/MTE_* b13-15 and TRIG_TA/3D/DL at b7/b6/b5; the 540 defines
+        ONLY bits 0-4 (DPM_TA/3D free-load b0/b1, TRIG_DL/3D/TA b2/b3/b4) and
+        keeps its OTPM events in `EUR_CR_EVENT_STATUS` instead (OTPM_FLUSHED
+        b19, OTPM_INV b20, OTPM_LOADED b21).  `dpm_load()`'s third wait
+        (STATUS2 0x1000) spun forever on the 540 — with no wait-id visible in
+        the first pass because the OTPM write itself also carried the 545's
+        bit 3 (`CSM_OTPM_MEM_CLEAR`, absent from the 540's `MTE_OTPM_OP`
+        0x24c, which defines only bits 0-2; the 540 writes 1 = CSM_INV).
+        Fixed with per-core constants (`OTPM_OP_INV_CLEAR`, and
+        `STATUS2_OTPM_CLEARED = 0` compiles the wait out on the 540); the
+        SGX545 golden stayed byte-identical.  (Session 79; same capture.  The
+        same session moved the render path past BOTH waits: the TA task is
+        now kicked and starts — `EVENT_STATUS2 TRIG_TA` latches at the
+        timeout — and the remaining failure is inside TA execution.)
+
+415. **Diff the vendor binary's register-write set before trusting any
+        carried-over table — and two such defects are still open in the
+        µkernel's `TA_TE` tail.**  Disassembling the vendor's own 540 release
+        binary (`binary2_540_omap4430_android_release/…/ukernel.bin`,
+        `sgx-disasm -c sgx540`) and decoding every `str #imm` site (93 of
+        them) settled three register questions in one pass: the DPM
+        PDS-page threshold is **0x614** on the 540 (our `TA_PB` wrote the
+        545's 0x668, undefined here), the free-list loads write **no mode
+        selector** (0x664 is the 545's `DPM_CONTEXT_PB_BASE`), and the
+        vendor's TA invalidate ack is `0x140 ← 2` (DSC_INV0 only — the
+        BRN_31474 shape trap 413 records).  Still open from the same diff:
+        our `TA_TE` maps cmd+0x2a4 (`rt_flags` = 0x88) onto **0x230
+        `MTE_OTPM_CSM_FLUSH_BASE`** — the vendor uses 0x230/0x234 as
+        ADDRESSES for its OTPM CSM flush/load (OP 4 / OP 2), so a flag word
+        there is bogus (inert until a CSM flush runs) — and it writes a tail
+        of **SGX545-only registers the 540 build never writes** (0x2a8
+        TE_TPC, 0x2b0/0x2b4/0x2d0/0x2d4 GSG*, 0x324, 0x364/0x368/0x370/0x374
+        the VDM PDS-program pointers, 0x520, 0x74c).  (Session 79; capture
+        `sgx540-first-render-2026-11-27.txt`, boots 6-7.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

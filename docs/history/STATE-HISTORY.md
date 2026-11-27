@@ -2671,3 +2671,520 @@ and reports `open microkernel <build>, interface 1.0, features 0x8`, `EDM init`,
 (`FLUSH_COMPLETE`, **no fault**), `BIF_FAULT 0`.  `card1`/`renderD129` =
 `powervr_sgx`; `card0`/`renderD128` stay `omapdrm`.  **Starting it needs
 `edm_init=1`** (the driver's §9 single-context launch, a boot default on hd3).
+## Previous state — 2026-11-24 (session 70)
+
+**The GPU buffer waste is fixed and deployed, and trap 349 is closed.**  Two
+findings, in order.  (1) The "second buffer fails" symptom was **omapdrm
+scan-out capacity**, not a pvr or compositor defect: rendering is the SGX540's
+job (`renderD129`) and scan-out is omapdrm's (`renderD128`), which streams
+through a fixed **128 MiB TILER aperture** (`0x60000000`, `2^14 × 2^13`) and
+pins each buffer into it; when the next does not fit, `tiler_reserve_1d()`
+returns `-ENOMEM` → `could not remap: -12 (3)` → `dma_buf_map_attachment
+failed: -12` → the client's `CreateImageShared: Failed to create buffer`.
+(2) **The capacity was being wasted 8×** by a pitch-alignment bug: `libdbm`
+describes a linear buffer as `width = 1, height = <total bytes>, bpp = 8`, and
+`omap_gem_dumb_create()` calls `drm_mode_size_dumb(dev, args, SZ_8, 0)`, which
+aligns the **pitch to 8 bytes** — a 1-byte row becomes an 8-byte pitch.
+[reports 270, 271; trap 349; DECISIONS §104]
+
+* **The fix is deployed on the live root**: `tools/bench/gpu/dbmfix.c`
+  (an `LD_PRELOAD` wrapper on `ioctl` that re-expresses the bytes as
+  `width=<bytes>, height=1`) installed as `/usr/local/lib/dbmfix.so`, enabled by
+  `/usr/local/bin/catacomb-dbmfix`, with `catacomb.desktop` `Exec=` repointed
+  (backup `catacomb.desktop.orig`).  No closed binary is modified — `libdbm`
+  reaches the kernel through `drmIoctl`'s PLT.
+* **Measured after the fix**: idle desktop pinned TILER **59.4 → 14.0 MiB**
+  (4 h uptime) and **9.5 MiB** on a fresh boot; **every** GEM object **1.00×**
+  (largest 2,457,600 B = one full frame, was 19,660,800); **8/8** re-rendering
+  pvr clients clean with occupancy **flat at 20.7 MiB** (before: 3/5 failed,
+  climbing 59.4 → 112.3 MiB); **panel operator-confirmed correct twice**.
+  **Trap 349 no longer reproduces.**
+* **The 10/10 threshold before the fix** (pinned 59.4 → clean, 112.3 → fail) and
+  the phoc-vs-catacomb comparison (39.8 vs 59.4 MiB idle; both release client
+  buffers 15–17 per run; both advertise `wl_drm.device("/dev/dri/renderD128")`,
+  i.e. omapdrm) are in report 270 — they established the mechanism before the
+  pitch bug explained the magnitude.
+* **Retracted this session** (all four kept in the reports): `-12 (3)` means
+  `TILFMT_PAGE`, **not** 32-bit tiling; the 8× is **not** slot rounding (linear
+  buffers are reserved 1:1); "prefer LINEAR buffers" therefore fixes nothing
+  (they are already linear); and "the DDK asks for height×8 rows" was the right
+  answer to the wrong question — the height was **bytes**, not rows (killed by
+  logging the ioctl arguments instead of inferring from the size).  Also
+  retracted: "catacomb sends zero `wl_buffer.release`" (trap 351).
+* **Bench at the close (fresh boot, re-measured)**: region 0 media trailer
+  `1f 2d c8 d7 13 d6 47 35` = CRC **`0x3547D613`** (no write); region 1 sha256
+  **`20a5edd3…`**; hd3 ext4 magic `0xEF53`, **15 273 984** × 4 KiB blocks, root
+  `/dev/loop0` rw; `BOOTCTR_FCTRY` **`0x1e`**; `nproc` 2, PID 1 mask `3`, zero
+  DSI errors, panel `connected`, backlight 255, battery Full 4.148 V.
+  **No region-0, region-1 or hd3 image write; no patch change.**
+* **Owed — the hd3 rebake, which must now also carry the pitch fix.**  The baked
+  image is the session-59 state, so a reflash loses the session-69 GPU result
+  *and* the shipped-behaviour buffer fix.  `tools/rebake-hd3.sh` applies the
+  measured delta (catacomb r10003, epitaph r10008, the inittab affinity line)
+  and takes `DBMFIX_SO=` to add the shim + wrapper + `.desktop` edit.  It is
+  **verified by dry run and not yet run** (needs root for the loop mount).
+
+
+## Previous state — 2026-11-24 (session 69)
+
+**The GPU client path is fixed and validated on the panel.**  Session 68 made
+Wayland clients *select* the SGX (the `wl_drm` shim); this session found and
+fixed the two defects that stopped them from *presenting*, and the desktop now
+runs with the clients on the SGX.
+
+* **Defect 1 — catacomb bound imported dma-bufs as incomplete GLES2 NPOT
+  textures.**  Smithay's `import_egl_image()` never set `GL_TEXTURE_WRAP_S/T`;
+  the default `REPEAT` makes a non-power-of-two texture incomplete, and it
+  samples opaque black with no GL error.  Client buffers are NPOT (1024x20,
+  1024x585).  wlroots sets `CLAMP_TO_EDGE`, which is why phoc worked.  Fixed in
+  `rootfs/catacomb/smithay-eglimage-clamp.patch`, catacomb **r10003**.  Measured
+  A/B in `tools/bench/egl/pb-gbmsample.c`: no clamp → `first=(0,0,0,255) nz=0`;
+  with clamp → `first=(0,255,0,255) nz=64/64`.  [report 269 §4g, trap 347,
+  DECISIONS §102]
+* **Defect 2 — epitaph hard-coded GL attribute/uniform indices.**  It passed
+  `0/1/2` to `glVertexAttribPointer` and wrote its projection with
+  `glUniform4f(0, …)`; the PowerVR linker assigns `a_Position=2, a_UV=1,
+  a_Flags=0, u_Projection=1, u_Texture=2`, so the projection was never set
+  (glyphs collapsed) and the write to location 0 hit the sampler
+  (`GL_INVALID_OPERATION`).  A one-shot framebuffer histogram inside the client
+  showed the whole bar as one colour `(24,24,24)`.  Fixed in
+  `rootfs/epitaph/bind-attribs.patch`, epitaph **r10008**.  [report 269 §4h,
+  trap 348, DECISIONS §103]
+* **Validated on the panel (operator):** wallpaper, keyboard and the bar's text
+  and icons all render on the SGX, and the UI is responsive — steady-state bar
+  draw **1.5–30 ms** (softpipe was 1.6–2.3 s), 1024x585 drawer 97 ms.
+  **The desktop now runs with the clients on the SGX**; `/etc/catacomb/initrc`
+  is the pvr variant (no `unset`) and the `wl_shm` safe state is retired.
+  [report 269 §4i]
+* **Bench verified at the close:** region 0 media trailer
+  `1f 2d c8 d7 13 d6 47 35` = CRC **`0x3547D613`** (matches
+  `boot/chainloader/kernel.img`, 10,448,868 B, sha256 `6ecd068d…`); region 1
+  sha256 **`20a5edd3…`** (read fresh, 64 MiB at `0x29000000`); hd3 ext4 magic
+  **`0xEF53`**, 15,273,984 blocks; root `/dev/loop0` rw; `BOOTCTR_FCTRY =
+  0x22`; `nproc` 2, PID 1 mask 3; SSH up.  **No region-0 change this session.**
+* **Installed on the live root:** catacomb `1.5.0-r10003`, epitaph
+  `1.4.0-r10008`, `/etc/catacomb/initrc` (pvr, 3168 B), and
+  `/usr/share/wayland-sessions/phoc-pb.desktop` (the comparison session).
+  **The hd3 baked image still has catacomb r10000, epitaph r10005 and no pvr
+  initrc** — a reflash reverts the whole result (trap-343 class); the rebake is
+  owed.
+* **Open:** trap **349** (a re-rendering pvr client fails on its second buffer
+  in 3/5 runs under catacomb, never under phoc — a pvr allocation defect), trap
+  **350** (cosmetic pixel glitches on shm/dmabuf clients, prime suspect the
+  bring-up-era upload/damage path), a heavy-redraw measurement, and the hd3
+  rebake.
+
+
+## Previous state — 2026-11-23 (session 68)
+
+> **Superseded by session 69** (the block above): session 68 solved the
+> *selection* gate and left the clients black; session 69 fixed the two
+> presentation defects.  The text below is that session's own snapshot.
+
+**The Wayland-client GPU wall is identified AND broken: it was the missing
+`wl_drm` global, and with pvrports' `phoc` a Wayland client gets the SGX.**
+Report 269.
+
+* **Why clients were software (measured + source):** Mesa 21.3.9's Wayland EGL
+  platform gets its DRM fd **only** through the legacy `wl_drm` protocol
+  (`dri2_initialize_wayland_drm()` bails at `dri2_dpy->wl_drm == NULL`,
+  `platform_wayland.c:1567`).  **catacomb (Smithay) advertises no `wl_drm`** —
+  `WAYLAND_DEBUG=1` shows `wl_shm` and `zwp_linux_dmabuf_v1` but no `wl_drm` —
+  so `eglInitialize()` silently retries with `ForceSoftware = TRUE`
+  (`eglapi.c:640`) and loads `swrast_dri`; `MESA_LOADER_DRIVER_OVERRIDE` is only
+  read by `loader_get_driver_for_fd()`, which that path never reaches.  First
+  EGL debug line is `MESA-LOADER: dlopen(…/swrast_dri.so)`, with or without the
+  override.  **Smithay has no `wl_drm` implementation at all** (source tree
+  checked), so catacomb cannot be fixed by a setting.
+* **The GBM/surfaceless path re-confirmed:** `gbmtest2.py` on `renderD129` →
+  `EGL 1.4`, 12 window configs, `PowerVR SGX 540`,
+  `EGL_MESA_image_dma_buf_export`; surfaceless the same.
+* **Stock phoc 0.59 proved the wlroots path**: its DRM backend trained on
+  `card0` (omapdrm) and its GLES2 renderer on the SGX (`GL renderer: PowerVR
+  SGX 540`), then died at `GL_EXT_unpack_subimage not supported` — the exact
+  thing pvrports patches.
+* **pvrports' phoc (0.52.rc1, `pkgrel=9992`) built and ran**: it advertises
+  `wl_drm`, modesets LVDS-1 at 1024x600, and a **Wayland-EGL client under it
+  with `MESA_LOADER_DRIVER_OVERRIDE=pvr` gets `GL_RENDERER = PowerVR SGX 540`
+  and maps `pvr_dri`** (12 ES2 configs, dmabuf export); without the override it
+  falls back to `swrast`/`softpipe`.  Proof: `local/work/waylandtest.py`.
+* **catacomb now serves a PRIME-only `wl_drm`; clients SELECT the SGX but their
+  frames do NOT present (open).**  The operator rejected a Phosh desktop (too
+  heavy for 1 GB), so the fix went into catacomb: a **PRIME-only `wl_drm`
+  global** (`src/protocols/wl_drm.rs`), shipped as catacomb **1.5.0-r10002**
+  (`wl-drm-prime.patch`, 432 lines).  The selection works: `global(32,
+  "wl_drm", 2)`; `waylandtest.py` → 12 ES2 configs, `PowerVR SGX 540`,
+  `pvr_dri`; `epitaph` logs `GL renderer "PowerVR SGX 540"`; the clients'
+  linear `AR24` dmabufs (stride 4096, `modifier: Invalid`) import without
+  error.  **But a `grim` capture shows only the compositor's chrome — the
+  client surfaces are black**, while a `wl_shm` client displays.  Cause not yet
+  separated (the client's pvr render not landing in the shared buffer, or a
+  black pvr texture sample).  Without the override a client falls back to
+  `swrast`.  [report 269 §4c–§4f, DECISIONS §101]
+* **Safe operational state:** the compositor (`catacomb`) keeps the SGX;
+  `/etc/catacomb/initrc` **unsets `MESA_LOADER_DRIVER_OVERRIDE` for its
+  children**, so the clients use `wl_shm`/softpipe and the desktop **displays**
+  (wallpaper, status bar, keyboard; verified with `grim`).  Backup
+  `/etc/catacomb/initrc.session68-pvr`; the `wl_drm` global stays advertised
+  but unused.  The pvr-node bind-mount experiment was reverted (it made the
+  clients exit) and the trace env file was removed.
+* **Bench:** catacomb `1.5.0-r10002` running on hd3 (the live root; the baked
+  image still has r10000 — **a reflash reverts the patch and the initrc**,
+  trap-343 class).  pvrports' phoc 0.52.rc1 is installed but unused (its
+  `phoc-test.desktop` was removed); tinydm points at `catacomb.desktop`.  A
+  host HTTP proxy (`local/work/httpproxy.py`, `169.254.0.2:8080`) served the
+  unit's plain-HTTP repositories without host root; WLAN credentials are in the
+  gitignored `local/work/wifi.conf`.  The clean reboot read `BOOTCTR_FCTRY =
+  0x23`, `nproc` 2, PID 1 mask `3`, battery Full ~4.1 V.
+* **Next:** establish whether the pvr dmabuf **client** render lands in the
+  shared buffer (a presenting pvr client under a wlroots compositor) or the
+  compositor's pvr texture sample is black; then try the wl_drm GEM-name path
+  or a compositor-owned copy.  After that: the hd3 rebake with catacomb r10002
+  + the initrc change, a heavy GPU workload/latency, then the owed
+  CPU/throughput/USB items.  The fully open `powervr_sgx` stack stays on the
+  roadmap as the long-term fix (with a current Mesa it needs no `wl_drm`).
+* **No region-0 change, no patch change, no kernel/flash work this session.**
+
+
+## Previous state — 2026-11-23 (session 67)
+
+**The second core was doing no userspace work at all — fixed; the mailbox fault
+is fixed too.**  Two findings this session, in order.  First, the mailbox fault
+was a TWL6030 comparator lifetime bug: `twl6030_usb_probe()` stored
+`&twl->comparator` in the PHY before `ldo_init()`, a deferred `vusb` was
+collapsed to `-ENODEV`, the probe failed permanently, devres freed the `twl`,
+and `phy->comparator` dangled (report 265).  Then, looking at the live unit,
+**PID 1 was affinity-masked to `{0}`**, so every userspace process inherited
+`{0}` and `nproc` reported **1** even though `online = 0-1` and
+`SMP: Brought up 1 node, 2 CPUs` (report 266).  Only kernel threads had `0-1`.
+This is why report 263 §4b's "two cores in parallel" scaled flat — CPU 1 was
+never given userspace work.
+
+* **Region 0 = `boot/chainloader/kernel.img`, CRC `0x3547D613`** (10,448,868 B,
+  sha256 `6ecd068d…`) — kernel `7.3.3 #109 SMP`, `-march=armv7-a`, no `maxcpus`,
+  **stock MUSB mailbox + comparator fix**, DSI-init TCON hook, inert
+  `console=ttyGS0`, `panic=0` (trap 335).  Flashed at block `0x825`
+  (`COMPLETE 0x40C0 -> cmd 0x4006`, `done`).  The previous `0xC9FEE2D1`
+  (`#105`, device-mode-only workaround, `panic=10`) is the known-good fallback
+  on the host.
+* **The CPU-affinity workaround is on hd3's root, not in the image.**
+  `/etc/inittab` carries `::sysinit:/usr/sbin/taskset -p 3 1` **before** the
+  OpenRC entries; PID 1 then runs `{0,1}`, `nproc` = 2, and a two-thread busy
+  loop spreads load evenly (`cpu0` 2643 / `cpu1` 2622 user ticks).  Backups:
+  `/etc/inittab.session67-orig` (OpenRC default) and `/etc/inittab.fixed`.
+  Verified 2 boots with it and 3 without.  **Still owed: a kernel-side fix** for
+  `sched_init_smp()`'s widening (see report 266 §1).
+* **`cpufreq-dt` is bound and scales** (`300000 600000 800000 1008000`,
+  `ondemand`); the handoff's "no `cpufreq` policy" was stale.  The CPU **supply**
+  is still unattached (no `supply-*` in the OPP debug dirs), and the
+  `twl6030_uv_to_vsel: OUT OF RANGE` lines are startup VC init clamped to VSEL
+  `0x3A` = 1.35 V — the same voltage the chainloader commands.  SmartReflex MPU
+  is present but idle (`autocomp = 0`).  [report 266 §2/§3]
+* **Region 1 and hd3 were read back this session, not assumed.**  Region 1
+  (64 MiB at raw `0x29000000`) now hashes **sha256 `20a5edd3…`** — drifted from
+  the recorded `6f5b8ca7…` (which itself drifted from `49e318bf…`), consistent
+  with read-back boots having mounted it rw; it is not booted.  hd3 is still the
+  Nura ext4: ext4 magic `0x53EF` at `0x49000438`, `Block count 15273984 × 4096`
+  = **62.56 GB** (`df`'s 56.5 G is usable blocks in GiB), mounted
+  `/dev/loop0 on / type ext4 (rw,relatime,nobarrier)`.  No 626 MB write this
+  session; no restore needed.
+* **Region 0 was re-verified on media this session**: its trailer read back from
+  `/dev/mmcblk1` at raw `0x8100000 + 10448868 − 8` is `1f 2d c8 d7 13 d6 47 35`
+  = CRC **`0x3547D613`**, byte-identical to `boot/chainloader/kernel.img`.
+* **`BOOTCTR_FCTRY = 0x24`** at the close (the mailbox validation boots read
+  `0x2a → 0x29 → 0x28`; the affinity half's reboots took it to `0x24`, still
+  above the `0x1e` top-up threshold).  `/init` tops up below `0x1e`.
+* **Patch = 67 files / 9 136 lines**, sha256 `d19adff8…`, 0 rejects / 67/67
+  identical; adds `phy-twl6030-usb.c` + `phy-omap-usb2.c`, and `omap2430.c` now
+  runs the stock call (mutex kept).  Tree walk (trap 211) clean outside the
+  known excluded diagnostics.  `kernel/source/` mirrors refreshed.
+* **Bench:** Linux/Nura on hd3; **`PB_LINK=usb tools/pbssh.sh` works** (ping
+  0.5 ms).  It appeared broken for most of the session because the **host's
+  WireGuard tunnel** blackholed `169.254.0.1` (`ip rule ... lookup 51820` with a
+  `default dev utun420` before `lookup main`); with the VPN off it is fine, and
+  `ufw allow in/out on enp8s0f3u1i2` is needed too.  [report 267 §1, traps
+  341/342]  The VUSB teardown (trap 337) is unchanged and open.
+* **hd3's `epitaph` was the broken `r0`** (segfault ~120 ms in, trap 292's
+  symptom); `epitaph-1.4.0-r10005` is now installed (trap 343), and it reports
+  `softpipe` — the session-60 llvmpipe `swrast_dri.so` is still absent from hd3.
+* **The SGX works on the GBM/DRM EGL platform; only the Wayland-client path does
+  not select it** (report 267 §3, corrected): `eglGetPlatformDisplay(
+  EGL_PLATFORM_GBM_MESA, <renderD129>)` gives `EGL 1.4`, **12 window configs**,
+  `GL_RENDERER = PowerVR SGX 540`, and `EGL_MESA_image_dma_buf_export` present.
+  A Wayland client with `MESA_LOADER_DRIVER_OVERRIDE=pvr` still gets `swrast`;
+  the reason is **not yet established** (an earlier "libEGL only supports
+  wayland" claim was a bad grep and is withdrawn — it supports
+  wayland/x11/gbm/surfaceless/device).  The kernel side is healthy: `pvrsrvkm`
+  is loaded and `catacomb` maps `pvr_dri` + `gbm`.  **Session 68 is dedicated to
+  this**; the plan, the seven outside sources and their value are in
+  **report 268**.
+
+
+## Previous state — 2026-11-19 (session 66)
+
+**The mailbox fault's bad indirect transfer is identified; the working image is
+back on region 0.**  HANDOFF-65 §0d's one experiment was run: an instrumented
+stock-mailbox kernel (winchester early return removed, mutex kept, `panic=0`)
+with `PBMBX` `printascii` markers was booted twice on dual-core, and the hung
+boot's DRAM ring was recovered through a warm reset + the quiet read-back
+image.  **Entry pointers are valid** — `status=4` (`MUSB_VBUS_OFF`), valid
+`xceiv`/`otg`, and `otg->set_vbus = 0xc0729b94` = `omap_usb_set_vbus` kernel
+text — so the "stale `usb_phy` at entry" branch is ruled out.  Branch markers
+show `sv` still valid right before `otg_set_vbus()`, then the Oops:
+`PC = 0xc2c05800`, a `kmalloc-1k` slab address, `LR =
+omap_musb_set_mailbox+0x1e0`; no `PBMBX prechain`, so it is not the notifier
+chain.  Disassembly pins the fault to `omap_usb_set_vbus()`'s tail-call
+`phy->comparator->set_vbus`: the TWL6030 `phy_companion` registered into the
+`omap-usb2` PHY is stale/corrupt (a PHY-lifecycle fault, one level below
+`musb->xceiv`).  [report 264; session-66 note; capture
+`docs/captures/musb-mailbox-fault-2026-11-19.txt`]
+
+* **Region 0 = `local/work/kernel-armv7-console-cpu1.img`, CRC `0xC9FEE2D1`**
+  (10,450,108 B) — **restored** after the experiment (marker images
+  `0xF1AA4568` / `0x405E8997` and the read-back image `0x5BBCD22E` were
+  temporary).  The same session-65 ARMv7 `#105 SMP` dual-core image: fast
+  chainloader, loud DTB **without `maxcpus`**, DSI-init TCON hook,
+  device-mode-only mailbox workaround, inert `console=ttyGS0`.  The operator
+  saw the Nura desktop boot cleanly after a few reset cycles; the USB link then
+  dropped at ~60 s (the intermittent VUSB teardown, trap 337) while the unit
+  kept running.  `boot/chainloader/kernel.img` was reset to this saved file.
+* **Region 1 = the BusyBox ext4 `6f5b8ca7…`** at `0x29000000` (unchanged,
+  fallback, not booted).  **hd3 = the Nura ext4 `07555bde…`**, grown to 62.5 G
+  with the ARMv7 modules (unchanged — no hd3 write this session).
+* **`BOOTCTR_FCTRY` not re-read this session** (the USB link was down at the
+  close); last known `0x26`.  `panic=0` prevented a trap-335 loop, so no
+  counter drain occurred.  Read `dmesg | grep pbrpmb` on the next SSH-capable
+  boot as a health check; `/init` tops up below `0x1e`.
+* **Bench:** Linux/Nura on hd3, not TabletOS.  dropbear on `169.254.0.1:22`
+  when the gadget is up (`PB_LINK=usb tools/pbssh.sh`); at the close the USB
+  link had dropped (~60 s after boot) and the panel console is the recovery
+  path — a cable replug does not re-enumerate (trap 337).  No persistent
+  device-side files were deployed this session (`/tmp/ringdump` and the ring
+  dumps were on the temporary read-back image and are gone).
+* **Build tree reverted and proven:** `omap2430.c` and the board DTS match
+  their pre-experiment backups byte-for-byte, the rebuilt `vmlinux` has zero
+  `PBMBX` strings and the DTB bootargs are back to `panic=10`.  No tracked
+  driver/DTS change; the export stays **65 files / 9 110 lines**,
+  sha256 `6f9bef24…`.  **No restore to TabletOS required.**
+
+
+## Previous state — 2026-11-18 (session 65)
+
+**The mailbox mutex is not the fix, the kernel is now ARMv7, and hd3 runs the
+Nura root.**  Serializing the two `omap_musb_set_mailbox()` callers with a glue
+mutex and restoring the stock bind-path call **still panics** on dual-core: the
+first dual-core boot of `0x19E24D8F` faulted in `omap_musb_set_mailbox` and
+`panic=10` rebooted it ~6 times, draining `BOOTCTR_FCTRY` `0x22 → 0x1c`.  It was
+recovered by reflashing `kernel-usbdev-cpu1.img` (`0xC675E206`), whose `/init`
+topped `0x1c → 0x32` (`PASS`).  The device-mode-only workaround stays until the
+real cause is known (the surviving overflow points at corruption of the
+`usb_phy`/`usb_otg`, not just the two-caller race).  [report 263; session-65 note]
+
+* **Region 0 = `local/work/kernel-armv7-console-cpu1.img`, CRC `0xC9FEE2D1`**
+  (10,450,108 B) — `#105 SMP`, **`-march=armv7-a`**, fast chainloader, loud DTB
+  **without `maxcpus`**, DSI-init TCON hook, device-mode-only mailbox
+  workaround.  The only change over `0x158D8A85` is an inert
+  `console=ttyGS0,115200` (the gadget tty has no kernel-console path; no
+  `console [ttyGS0] enabled`).  Dual-core `online = 0-1`, 1008 MHz; the 6/6
+  reboot set was run on `0x158D8A85`, and `0xC9FEE2D1` booted once for the
+  **376 s soak with the gadget link alive**.
+* **The kernel had been ARMv6K**, not ARMv7: `CONFIG_ARCH_MULTI_V6=y` selected
+  `CPU_ARM1176 → CPU_V6K → CPU_32v6`, and `arch/arm/Makefile` lets the v6K
+  `-march=armv6k` / `__LINUX_ARM_ARCH__=6` override v7 while `CPU_32v6` is set.
+  Disabling `ARCH_MULTI_V6` (OMAP4430 only) gives `-march=armv7-a` and module
+  vermagic `ARMv7 p2v8`.  The tracked `kernel/winchester-7.3.3.config` now
+  matches the working tree (`CONFIG_SMP=y`, `CONFIG_NR_CPUS=2`, no
+  `ARCH_MULTI_V6`).
+* **hd3 = the Nura root.**  The BusyBox ext4 that had been flashed there was
+  **damaged by power cycles** (`EXT4-fs: This should not happen!! Data will be
+  lost`, corrupt inode bitmap) — the rw root is mounted `nobarrier`.  The baked
+  Nura image (`local/work/nura/images/blackberry-playbook-root-osk-wvkbd.img`,
+  sha256 `07555bde…`, 625,999,872 B) was written at loader block `0x4915`
+  (626,065,440 B, `FLASH_OK`).  First boot grew it to 15,273,984 blocks
+  (**62.5 GB**), installed dropbear (crng init at 13.1 s, no seed needed) and
+  the ttyGS0 root shell.  Its pre-SMP modules were replaced with the ARMv7 set
+  (29 MB, `depmod` OK); after that `pvrsrvkm` binds (`Enabling quirks`),
+  `catacomb` runs, panel `connected`, backlight 255, `online=0-1`.
+* **Region 1 = the BusyBox ext4 `6f5b8ca7…`** at `0x29000000` — the fallback
+  root; not booted.  hd3 no longer holds a BusyBox root.
+* **`BOOTCTR_FCTRY` = `0x26`** (last boot, `0x26 ≥ 0x1e`, no write).  The panic
+  loop drained it `0x22 → 0x1c` and the recovery top-up restored `0x32`.
+  Healthy; `/init` tops up below `0x1e`.
+* **The USB teardown is intermittent, not an idle timer.**  It killed the link
+  at ~30 s on the BusyBox root (with a command every 15 s) and at ~90 s on Nura
+  (SSH traffic), but did **not** occur on the final boot: 240 s of continuous
+  ACM reads (`cat /dev/kmsg` streamed to the host) followed by 90 s with the
+  port closed ended at `uptime 376 s`, link alive, no VUSB message.
+  `audio-ldo: disabling` at ~31.8 s is a separate regulator event.  Only
+  `twl6030_usb_irq()` disables `usb3v3`; the trigger is still unproven.
+* **Bench:** SSH works on Nura — `PB_LINK=usb tools/pbssh.sh 'cmd'` (root,
+  key-only, `169.254.0.1:22`); the ttyGS0 shell is `playbook:~#` (not `pb> `,
+  trap 274 still applies to `pbcon.py`).  At wrap-up the unit is **up and on
+  USB** (uptime 376 s), running the desktop.  Flash: start the flasher, then
+  reset/power on; the power-on bootrom is caught reliably.
+* **No restore required.**  The way back is the 1917 IFS at block `0x825` plus
+  the vendor UFS at `0x4915`; region 1 is intact.
+
+
+## Previous state — 2026-11-17 (session 64)
+
+**The dual-core wedge is the USB gadget bind, and a targeted MUSB fix makes
+dual-core boot reliably.**  The IPI markers (HANDOFF-63 §0a) showed the
+TLB-flush IPI is sent, received and serviced — so the "IPI race" reading is
+superseded.  Panel diagnostics (a DSI-init TCON hook, report 261) exposed a
+real kernel panic in `omap_musb_set_mailbox` from the gadget bind performed by
+`/init`; a second mode was a `pbrpmb` hang.  Disabling the gadget entirely gave
+no wedge (>100 s), proving the trigger.  The targeted fix — call only
+`omap_control_usb_set_mode(USB_MODE_DEVICE)` from `omap2430_musb_enable()` on
+winchester, skipping the faulting mailbox — gave **3/3 clean dual-core boots**
+(`kernel-usbdev-cpu1.img`, `0xC675E206`).  [report 262; session-64 note]
+
+* **Region 0 = `local/work/kernel-usbdev-cpu1.img`, CRC `0xC675E206`** — `#102
+  SMP` zImage, fast chainloader, no-`nosmp` loud DTB, DSI-init TCON hook, MUSB
+  device-mode fix.  Dual-core `online = 0-1`, 1008 MHz, root ext4 on hd3.
+  Region 1 = the busybox ext4 `6f5b8ca7…` at `0x29000000` (inherited, not
+  re-hashed this session); hd3 = the same ext4 at `0x4915`, mounted rw.
+* **`BOOTCTR_FCTRY = 0x2c`** at the last boot (`2c000000`, above the `0x1e`
+  threshold, no write) — healthy after the session's wedge cycles (read at
+  `0x31`, drained to `0x18`, topped to `0x32`, then `0x29`/`0x2d`/`0x2c`).
+  Linux `/init` tops it up; no manual write was needed.
+* **OS: Linux**, not TabletOS.  dropbear on `169.254.0.1:22` after a
+  `pbconsole entropy <hex>` seed (trap 328); ACM `pb> ` is the fallback.  At
+  wrap-up the unit is **off USB** after ~32 s idle (`VUSB: disabling`, gadget
+  deactivated — idle runtime PM, not a wedge; the unit keeps running with its
+  panel console).  Cable replug did not re-enumerate; separate PM matter.
+* Device-side files: `/tmp/ringdump` (tmpfs, ephemeral).  **No restore required**;
+  the way back to TabletOS is the 1917 IFS at block `0x825`.
+* **Bench gotcha:** the ACM wraps at ~80 columns and `echo <hex> > /dev/random`
+  credits only ~21 bits per short write; seed with `/bin/pbconsole`'s
+  `entropy <hex>` driven via `tools/pbraw.py` (trap 328).  On the read-back
+  image the ACM is the bring-up console, so `entropy <hex>` works directly.
+* **Ghidra MCP**: the server lacked `GHIDRA_INSTALL_DIR`; `rea doctor` is
+  healthy with it set.  This session used the REA CLI + bundled `pyghidra`.
+
+## Current state — 2026-11-17 (session 63)
+
+**TRAP 326 IS A MISDIAGNOSIS — the "SMP-only ext4 mount failure" was a rootfs-
+offset difference between two images, not an SMP kernel bug.**  The SMP image
+(`kernel-smp-quiet.img`, `#78 SMP`) carries an initramfs with
+`ROOTFS_RAW_OFF = 0x49000000` (hd3); the UP read-back image (`#79`) uses
+`0x29000000` (region 1).  hd3 held the 1917 vendor UFS (QNX6), so `mount -t ext4`
+failed correctly.  Proof: the failing boot's loop capacity changed
+`0 → 124583936 → 122191872` sectors — a drop of exactly `0x49000000` bytes;
+`qnx6 49000000` mounted hd3 read-only as QNX6; `initramfs/init.c:452` has
+`ROOTFS_RAW_OFF = 0x49000000`.  After flashing the region-1 ext4 (`49e318bf…`)
+to hd3 at `0x4915`, the **same SMP kernel** mounts `/dev/loop0 on / type ext4`
+and boots a full userland.  [report 256; trap 326 corrected]
+
+* **The MPU runs at 1008 MHz via the fast chainloader.**  `boot/chainloader/
+  chainloader_kernel.S.in` now commands VDD_MPU = 1.35 V (VC bypass) and programs
+  the MPU DPLL to 1008 MHz at entry, before the copy/XZ decompress.  Kernel entry
+  is **3.276 s of 7.812 s** (decompression 2.959 s, down from 6.6 s), and the
+  clock persists through boot (`dpll_mpu_ck = 1008000000`,
+  `CM_CLKSEL = 0x0080D207`).  A runtime `clk_set_rate` measured a **2.54×**
+  CPU speedup (13.63 s vs 34.66 s); **1.2 GHz crashes the unit**.  Single-core
+  boot is now reliable (3/3 clean reboots).  [report 257 §1–§3; DECISIONS §91]
+* **CPU1 works; dual-core boot is flaky, not a cpu1 bug.**  `PBCPU1:` markers
+  through `post complete`, `online cpus=02`, `nproc=2` and `twd` interrupts on
+  both cores were measured; dual-core 1008 MHz booted cleanly once (`#91`,
+  stable >2 min) but a 3-boot set was 1 success / 2 wedges.  The wedge is a
+  clean `execve("/init")` hang — a timing/race in the IPI/TLB-flush path
+  (traps 329 corrected, 330).  Power is ruled out: MPU rail `0x3A` = 1.35 V,
+  battery 97 % / 3.819 V (trap 331).  [report 257 §4–§5]
+* **`nosmp` is not a `nr_cpu_ids=1` test** (trap 327): `nr_cpu_ids` stays 2
+  (`SLUB: CPUs=2`); a real test needs `CONFIG_NR_CPUS=1` or a DTB with `cpu@1`
+  dropped.  **SSH needs an entropy seed** each fresh boot (trap 328): dropbear
+  blocks in `wait_for_random_bytes`; `pbconsole entropy <hex>` fixes it.
+* **Bench at the wrap-up (verified off the media)**: region 0 =
+  `local/work/kernel-fastcl-nosmp.img`, CRC **`0x8B83421F`** (media trailer at
+  raw `0x8B10198` = `1f2dc8d7 1f42838b`), cmdline `loglevel=0 nosmp
+  clk_ignore_unused panic=10 fw_devlink=permissive`, `possible = 0-1`,
+  `online = 0`, 1008 MHz; root `/dev/loop0` ext4 **on hd3** (58.7 M, 42 % used).
+  Region 1 = the busybox ext4, sha256 `6f5b8ca7…` (drifted from `49e318bf…`
+  from read-back boots mounting it rw).  dropbear on `169.254.0.1:22` after an
+  entropy seed; `pb> ` on the ACM; `BOOTCTR_FCTRY = 0x20`.  `/tmp` empty (tmpfs,
+  nothing deployed).  No restore required; the way back to TabletOS is the 1917
+  IFS at `0x825` + `local/work/ufs-1917-devuser.ufs` (`482e0473…`) at `0x4915`.
+
+## Current state — 2026-11-16 (session 62)
+
+**THE SMP KERNEL NOW BOOTS TO USERSPACE (`possible = 0-1`, `online = 0`) — the
+blocker was the loader's 7.8125 s watchdog window, not a hang.**
+`+0x1000` never had a writer of its own: it is the ring's own character array at
+**character #3840**, the first byte past the old chainloader clear, so every
+early-death log was erased by the read-back boot.  The chainloader now **hands
+the ring off** (append-only, last two entry headers + timing saved, trap 321) and
+`tools/pb_ring.py` decodes it.  With that read: **`rcu_init()` completes** (every
+`PBDBG` marker through `rcu_init done`), the earlier stop points (3208/3943/4211
+chars) were the watchdog, and the fix was measured and applied:
+**kernel entry happened at 7.450 s of 7.812 s (362 ms left)** — chainloader copy
+0.825 s + XZ decompression **6.619 s** — while the kernel needs ~0.74 s to reach
+its own WDT2 re-program.  A **block copy** in the chainloader (0.83 s → a few
+hundred ms) plus a **quiet boot** (`loglevel=0`) buys that time, and the SMP
+kernel then boots.  [reports **255**; traps 312 corrected, 315 corrected, 317a
+closed, 321–326 added]
+
+* **The remaining SMP blocker is the root mount** (trap 326): the first SMP boot
+  fell back to the initramfs console with
+  `EXT4-fs (loop0): VFS: Can't find ext4 filesystem`, while the **same**
+  region-1 filesystem mounts cleanly on the UP image minutes later
+  (`/dev/loop0 on / type ext4 (rw,relatime,nobarrier)`, 58.7 M, 42 % used).  The
+  FS is intact; the loop/ext4 bring-up differs under SMP.  Next: `SMP=y` +
+  `NR_CPUS=1` and `nosmp`, and a retry/delay in the initramfs loop setup.
+* **The instrument** (verified on the bench, byte-exactly):
+  `boot/chainloader/chainloader_kernel.S.in` no longer clears the ring; it
+  sanitises a garbage header (`index >= 0x7F00` → 0), records `RHND` at `+0xb8`
+  with the last two entry headers (`+0xbc..+0xc8`) and the previous boot's
+  timing (`+0xcc` pre-jump CRR, `+0xd0` kernel-entry CRR, `+0xd4` entry stamp),
+  and copies in eight-word `LDMIA`/`STMIA` bursts.  Chainloader is 852 B.
+* **Images this session** (host, gitignored; media holds the read-back):
+  * region 0 now = **`local/work/kernel-readback-quiet.img`, CRC `0x5BBCD22E`**
+    (10 355 580 B): region-1 kernel `#79`, `earlyprintk` removed from its DT
+    `bootargs`, the hand-off + block-copy chainloader.  Boots to a shell.
+  * `local/work/kernel-smp-quiet.img` (`0xA2FA490E`) — **the SMP image that
+    boots** (plain SMP `#78` zImage + `loglevel=0` DTB + chainloader).
+  * `local/work/kernel-smp-loud.img` (`0x3BD64F22`) — same with
+    `earlyprintk`/`ignore_loglevel`: expected to work now that the kernel owns
+    the watchdog, **not yet booted**.
+  * `local/work/kernel-smp-mark62.img` (`0x0A70D405`) — `#86 SMP` with the dense
+    `PBDBG` set and the `head.S` CRR stamp; its boot gave the timing above.
+  * `local/work/kernel-smp-wdt.img` — **bad**, contains the rejected
+    chainloader WDT step (trap 322); do not flash.
+  * Re-wrapping a carved `zImage`+DTB reproduces `0x202E9F38`, `0x4F6CC563` and
+    the region-1 image **byte-identically**, so chainloader-only changes need no
+    kernel build (`local/work/carve/*`, `carve.py`).
+* **Do NOT program WDT2 from the chainloader** (trap 322): it wedged the boot
+  and left the timer stopped — no USB, no reset, dark panel; recovery was a
+  power-button power cycle plus a reflash through the power-on bootrom.
+* **Bench at the wrap-up (read on the unit):** the unit runs the read-back image
+  (`7.3.3 #79`, UP), root `/dev/loop0` (58.7 M, 42 % used), `pb> ` on the ACM,
+  dropbear on `169.254.0.1:22` (`PB_LINK=usb tools/pbssh.sh`); `/tmp` empty
+  (tmpfs — re-push the tools).  **`BOOTCTR_FCTRY = 0x28`** (the session's failing
+  boots drained it from `0x32`; one normal boot read `0x1d` and wrote `0x32`
+  earlier, `PASS`).  Region 1 = the busybox root (intact, mounts, 43 modules
+  that still do not match the config — trap 320).  hd3 = the 1917 vendor UFS.
+* **Bench laws that cost time this session:** the bootrom can hold **~20 s**
+  before the chainloader runs, so a read-back flash armed 10 s after the test
+  flash catches the bootrom *before the image under test has run* (trap 323) —
+  wait ≥25 s or poll `lsusb`; a **power-off wipes the ring**; and
+  `kernel-smp-marks{,2}` are **silent by construction** (trap 324).
+* **The tree** carries this session's instruments (they are gitignored and must
+  be removed before any patch re-export): the `PBDBG` marker set in
+  `local/kernel-tree/init/main.c` (pristine copy at
+  `local/work/carve/main.c.session62-orig`) and the WDT2 `CRR` stamp in
+  `local/kernel-tree/arch/arm/kernel/head.S`.  `.config` is now
+  **`CONFIG_SMP=y`, `CONFIG_NR_CPUS=2`**; the tracked
+  `kernel/winchester-7.3.3.config` is still non-SMP (the change is an
+  experiment until cpu1 works).
+
+
+## Previous state — 2026-11-16 (session 61)
+
+The ring method was built and the SMP kernel was found to boot and die early;
+**its conclusion ("stops inside `rcu_init()` after the RCU geometry print") is
+withdrawn this session** — that was the ring artefact (trap 315/317a).  Also:
+the oracle measured **dual-core at 1008 MHz** (`pidin info`), `SMC` from QNX
+user space is merely `SIGILL` (privileged instruction, trap 319), the SCU and
+every register the SMP path touches read cleanly from non-secure Linux, and
+hd3 was given up to the 1917 vendor UFS to get the oracle.  Full snapshot:
+`docs/sessions/session-61.md`, report 254.

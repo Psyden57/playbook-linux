@@ -1,0 +1,274 @@
+THE FIRST RENDER JOBS ON THE OPEN SGX540 MICROKERNEL — session 79
+==================================================================
+Session 79 (absolute; Linux-era 73), 2026-11-27.  HANDOFF-79 §0b's one
+experiment, run to its "precise failure point" outcome.  Five firmware builds,
+five boots, one module build; every build gated (test_emu 8/8 both cores, the
+SGX545 serial golden byte-identical `83b5b0a7…`) and pushed with md5
+verification.  Firmware variants preserved beside the live file as
+`.kick10live/.kick11wl/.kick12inv/.kick13inv`; the module's pre-change copy is
+`.pre-render` (= the session-78 `.working` `10c6f435…`).
+
+STARTING POINT (the session-78 wrap-up, re-verified live this session)
+----------------------------------------------------------------------
+kick10 live, `EVENT_PDS_INFO 0x00013c01` (the USE_PIPELINE_0 fix), `resets 0`,
+the null-job family passing (this session's runs: 640 µs; 600 jobs/120 ms),
+`BOOTCTR 0x28` -> spent one unit per boot, healthy.  `wlan0` UP with a DHCP
+lease (the report-281 "down" reading was mid-session).  Three HANDOFF/STATE
+inventory corrections committed first (kick8w/kick9w absent; the
+pre-doutu/prelaunch/pre-loopback hashes).
+
+BOOT 1 — the render job type wired (module `85fe59a2…`)
+-------------------------------------------------------
+§0b step 1.  `pvrsgx_cmd_defs.c`'s `sgx540_render`/`sgx540_ta_kick`/
+`sgx540_transfer` carried no `.supported` and no field tables; they now carry
+the sgx545 tables verbatim (`fields`/`exts` shared — the base and extension
+structs are common uAPI, and `pvrsgx_render_job_build` reads the
+`sgx545_render`/`sgx545_ta_kick` union members unconditionally), and
+`pvrsgx_cmd_core_sgx540.pds_row_bytes` 0 -> 16 (Mesa sizes PDS programs in
+16-byte rows on every core of this family — `pds_emit()` lays out
+"16-byte rows (DS0 DS0 DS1 DS1)"; our own µkernel data segments are 16-byte
+units, `EVENT_PDS_DATA = 1`).
+
+Firmware unchanged (kick10).  Results:
+  * dev-query-commands now advertises RENDER + TRANSFER (`c.job_types`
+    gains the bits; the suite reads **31/50**, one more test passing).
+  * THE NULL FAMILY IS INTACT: `submit-null-job` 640 µs, `submit-null-job-many`
+    600 jobs in 120 ms, `resets: 0`, the ring draining
+    (`issued == consumed`, climbing — 3075 at the wrap-up check, 3676 later;
+    the counter runs continuously because the timer dispatches keep coming).
+  * ONE RENDER (`powervr_sgx_frame -n 1`, the clear+triangle frame tool built
+    from `drm/tests/powervr_sgx_frame.c` + `tools/gen/sgxgen.c -DSGXGEN_DRM`,
+    `arm-buildroot-linux-gnueabihf-gcc -static`, pushed as
+    `/tmp/powervr_sgx_frame`): **`job timed out (ccb 3678, consumed 3676,
+    done word 0x0 for 0x1, events 0x24000000/0x00000000); resetting`**.
+  * Decode (word-index parse of `ctlblk`, trap 403/406's rule):
+    - The KERNEL CCB command was not consumed at timeout, but the CONTEXT CCB
+      advanced `RO 0x2c0` = exactly ONE TA command of the two the frame tool
+      writes (`-k 2` default): **the µkernel took the render kick and read the
+      first TA command** — deeper than any previous session.
+    - `EVENT_STATUS 0x24000000` = TIMER (b29) + **b26
+      MADD_CACHE_INVALCOMPLETE** — the MADD cache invalidate ran and completed,
+      nobody acked it.  b26 is not even in `EVENT_PDS_ENABLE`; it just latches.
+    - The TA wrote NOTHING: `rgn0/rgn1/ta40/ta50/ta88[0]/ta88[1]` all zero —
+      the TA task never executed.
+    - The µkernel's own counters kept climbing through all of this (entry
+      0x07 = 0x85c -> 0x1080 between reads; word 0x08 = 0x42d -> 0x83f; word
+      0x2b = 0x52d -> 0x93f = word 0x08 + the 0x100 seed) — the dispatch
+      pipeline stayed alive the whole time.  `MADD_CACHE_INVALCOMPLETE`
+      remained latched in the per-tick STATUS snapshot (word 0x39 = 0x24000000)
+      after the reset.
+
+BOOT 2 — kick11wl (`e5f1db18…`, kick10 flags + UK_WAITLOG)
+----------------------------------------------------------
+kick10 has NO UK_WAITLOG (the WAIT_LOG stage bytes are unpopulated — HANDOFF
+§0b's caveat), so the instrument build was next.  UK_WAITLOG stores the live
+`self.wait()` site id at ctlblk word 0x35 while a wait spins (cleared on
+return); the build manifest gives the id -> label map (`_wait1`…`_wait25`).
+Null family: 1/1 + 1/1, resets 0.
+
+ONE RENDER, polled at 8 Hz through the 2 s hang: **word 0x35 = 8** — the
+µkernel spins in **_wait8**.  Disassembly (`sgx-disasm -c sgx540`, address =
+(line-1)*8): _wait8 is the TA dispatch's PDS-cache-invalidate wait —
+
+    limm r6, #31            ; mask 0x1f
+    ldr  r5, #78            ; 78*4 = 0x138 EUR_CR_PDS_CACHE_STATUS
+    and/test/ba             ; spin while (0x138 & 0x1f) != 0x1f
+    str  #80, r6            ; 80*4 = 0x140 EUR_CR_PDS_CACHE_HOST_CLEAR ack
+
+BOOT 3 — kick12inv (`81d7a183…`): the mask 0x1f -> 0x17
+-------------------------------------------------------
+`sgx540defs.h`'s `EUR_CR_PDS_CACHE_STATUS` defines exactly FOUR done bits —
+CSC_INV b0, DSC_INV0 b1, DSC_INV1 b2, DSC_INV3 b4.  **There is no bit 3.**
+The core config's own comment listed those four fields and then wrote
+"0x1f is every bit this core defines" — the arithmetic error: b0+b1+b2+b4 =
+0x17.  Fixed `INV_DONE_TA/INV_DONE_3D = 0x17`.  Null family intact.
+
+ONE RENDER: still `_wait8`, still a timeout.  A mask bit whose invalidate was
+never REQUESTED never sets: bit 4 (DSC_INV3) belongs to `EUR_CR_PDS_INV3`
+(0x0adc), and the µkernel's `invalidate()` pulses only 0xad0 (INV0) + 0xae0
+(CSC) + MADD + 0xa08 (USE).  (trap-397's rule in both directions: a header
+naming a mask is not evidence, and neither is an arithmetic sum over one.)
+
+BOOT 4 — kick13inv (`688bfb8f…`): per-request masks 0x03 / 0x05
+---------------------------------------------------------------
+The vendor's own per-side derivation is the shape to copy
+(`sgxdefs.h`, the `FIX_HW_BRN_31474` branch — and 31474 IS in the rev-120
+list, marked "workaround in uKernel"): the TA side waits DSC_INV0 only, the
+3D/pixel side DSC_INV1 only, because each request register drives exactly one
+done bit:
+
+    EUR_CR_PDS_INV0   0xad0 -> done b1      EUR_CR_PDS_INV3  0xadc -> done b4
+    EUR_CR_PDS_INV1   0xad4 -> done b2      EUR_CR_PDS_INV_CSC 0xae0 -> b0
+
+Our `invalidate()` requests INV0 + CSC -> wait b1|b0 = **0x03**;
+`invalidate3d()`/the transfer path request INV1 + CSC -> wait b2|b0 = **0x05**.
+Fixed `INV_DONE_TA = 0x03`, `INV_DONE_3D = 0x05`.  Null family intact.
+
+ONE RENDER, polled: **the wait id moves past _wait8/_wait9/_wait10 to
+_wait15** (stage byte 0x3a = 0x01 = do_ta).  Then a timeout (resets 1) — the
+"render done" the tool printed was trap 388's fence path, not completion.
+_wait15 disassembled: `limm r6, #4096; ldr r5, #70` — 70*4 = 0x118
+EUR_CR_EVENT_STATUS2, mask 0x1000 = **bit 12**; ack 69*4 = 0x114
+EVENT_HOST_CLEAR2.
+
+BOOT 5 — kick14otpm (`f1b16422…`): the OTPM mem-clear wait dropped
+------------------------------------------------------------------
+STATUS2 bit 12 on the SGX545 = `OTPM_MEM_CLEARED` — a field the 540's
+`EUR_CR_EVENT_STATUS2` does not have (the 540 defines only bits 0-4: DPM
+free-load and TRIG_TA/3D/DL).  It was `dpm_load()`'s third wait, after the
+OTPM `CSM_INV` invalidate — whose 540 done bit (EVENT_STATUS b20 `OTPM_INV`)
+the previous line already waits, and which provably completed (the code got
+past it).  Also corrected the OP write itself: the µkernel wrote 9 (CSM_INV |
+bit 3); the 540's `EUR_CR_MTE_OTPM_OP` (0x24c) defines only bits 0-2 — bit 3
+is the 545's mem-clear, so the 540 now writes **1**.  Per-core constants:
+`OTPM_OP_INV_CLEAR` (9 on the 545, 1 here) and `STATUS2_OTPM_CLEARED`
+(0x1000 on the 545, 0 here — the wait is compiled out); the SGX545 golden
+stayed byte-identical through the refactor.  Null family intact.
+
+ONE RENDER, polled: **NO WAIT SPINS AT ALL** (word 0x35 = 0 through the whole
+hang window), stage = do_ta set — and the timeout line reads
+
+    job timed out (ccb 3, consumed 2, done word 0x0 for 0x1,
+                   events 0x00000000/0x00000010); resetting
+
+**EVENT_STATUS2 = 0x10 = TRIG_TA (b4) — the TA TASK WAS KICKED AND STARTED.**
+`EUR_CR_EVENT_STATUS = 0` — TA_FINISHED (b13) never latched: the TA task ran
+and never finished.  It wrote nothing before stalling (region headers, tail
+pointers and ta88 all still zero; BIF_FAULT 0).  The µkernel's task ended
+correctly after the kick; the completion was expected to come back through
+the TA_FINISHED event dispatch, which never happened because the TA itself
+never completed.
+
+WHERE THIS LEAVES §0b (the outcome table, answered)
+---------------------------------------------------
+* kick stays-0-with-ccb-advancing (the CMDTA packing): RULED OUT — the µkernel
+  consumes the kick, both TA commands' worth of protocol, and kicks the TA.
+* do_ta set but no ta_finished: **THIS IS THE STATE** — "the TA register
+  tables are wrong, walk one register at a time against sgx540defs.h (the
+  0xb14 discovery is the precedent)".  Three SGX545-shaped bugs of exactly
+  that class were already found and fixed on the way (the 0x138 masks, the
+  OTPM OP bit 3, the STATUS2 mem-clear wait); the tables that program the TA
+  itself (0x200/0x428 and friends — the carried-over hypothesis registers)
+  are the remaining suspect, along with the DPM free list the TA allocates
+  from and the VDM stream fetch.
+* BIF fault / lockup+reset: not the failure mode (BIF_FAULT 0 throughout; the
+  reset is the driver's 2 s watchdog on a silent TA).
+
+THREE NEW TRAPS (the 0xb14 class, register-per-register this time)
+------------------------------------------------------------------
+1. **A done-bit mask must name only bits whose request register the same path
+   pulses** — each 0x138 done bit belongs to one request register
+   (b1=0xad0, b2=0xad4, b4=0xadc, b0=0xae0); a sum over "the bits the header
+   defines" waits on invalidates that were never requested.
+2. **A bit the header does not define can still be waited on by arithmetic**
+   (0x1f over a four-bit field list).
+3. **EVENT_STATUS2 is a different register on the 540** — the 545's
+   OTPM_MEM_CLEARED b12, VDM_*/MTE_* b13-15 do not exist; the 540's OTPM done
+   bits live in EVENT_STATUS b19-21, and its TRIG_TA/3D/DL are b4/b3/b2 where
+   the 545 has b7/b6/b5.  Every STATUS2 wait needs the 540 header's field
+   list, not the 545's.
+
+CONTINUATION (same session): the TA register tables walked, and where the
+stall actually sits
+=====================================================================
+Two more header/vendor-binary fixes, then the vendor's own 540 TA code
+compared register-for-register against ours.
+
+BOOT 6 — kick15pds (`24322c2a…`): the DPM PDS-page threshold and the mode
+--------------------------------------------------------------------------
+The vendor 540 binary's complete direct register-write set (disassembled,
+`sgx-disasm -c sgx540`, all 93 `str #imm` sites decoded) shows its TA
+free-list path programming **0x614 EUR_CR_DPM_PDS_PAGE_THRESHOLD** beside
+0x620/0x624/0x628 — a register our TA_PB table did not write (we wrote the
+SGX545's 0x668 `DPM_PDS_PAGE_THRESHOLD`, which the 540 header does not
+define; the 540's own field is at 0x614, line 1598).  Fixed:
+`TA_PB`'s last entry `(0x668, w13) -> (0x614, w13)`.  The same diff shows the
+vendor's TA and 3D free-list loads write **no mode selector at all** — 0x664
+is the SGX545's `DPM_CONTEXT_PB_BASE` — so `dpm_freelist`'s 0x664 write is
+now compiled out on the 540 (`CR_DPM_FL_MODE = 0`).  SGX545 golden untouched.
+Null family intact.  ONE RENDER: unchanged — still no wait spinning, do_ta
+set, `events 0x00000000/0x00000010` (TRIG_TA) at the timeout.
+
+BOOT 7 — module `1a2949ab…` (`.predumpregs` preserved): the mid-hang TA state
+-----------------------------------------------------------------------------
+The driver's `status` dump gained the TA/VDM/DPM registers (all named in
+sgx540defs.h — no unnamed reads, trap 369).  Mid-hang, one render in flight:
+
+    VDM_START            0x0200 0x00000000   (pulsed; self-cleared)
+    TE_AA                0x0204 0x00000000
+    TE_MTILE1/2          0x0208 0x01004004 / 0x02008008   (exact for 256x256)
+    TE_SCREEN            0x0210 0x0000f007                 (xt 8, yt 16: exact)
+    TE_MTILE             0x0214 0x00000020
+    TE_PSG               0x0218 0x01000000   (the always bit; kick-1 flags)
+    VDM_CTRL_STREAM_BASE 0x0238 0x00042000   (the client's VDM stream)
+    MTE_CTRL             0x023c 0x000000a2   (the driver's vdm_ctl)
+    TE_STATE             0x0274 0x00000000
+    DPM_PDS_PAGE_THR     0x0614 0x00000f00   (the kick15 fix landed)
+    DPM_TA_ALLOC_*       0x618-0x648         (free list 0x10210000, alloc 0x10200000)
+    DPM_TA_FL_STATUS1/2  0x0700/0x0710 0x10210000 / 0x00001020
+    DPM_PAGE_STATUS      0x0724 0x00000000   <-- the TA allocated NOTHING
+    DPM_GLOBAL_PAGE_STAT 0x072c 0x00000000
+
+And CLKGATESTATUS mid-hang gains bits over idle: **VDM (b6), MTE (b4),
+UCACHEL2 (b11), USE0 (b12) awake; TE (b3), ISP, TSP never awake.**
+
+So: the TA task was admitted and the VDM is running (or spinning) with a
+correct-looking setup, the parameter buffer and free list are loaded, the DPM
+has allocated ZERO pages, the TE never started, and nothing faulted.
+
+THE VENDOR CROSS-CHECK (all static, sgx540defs.h + the vendor release binary
++ ta.asm/sgx_mkif_client.h)
+---------------------------------------------------------------------------
+* **The TA register block matches field-for-field.**  The vendor's
+  `SGXMKIF_TAREGISTERS` (540 config: 17 words, TE_AA .. BIFTAReqBase +
+  MTEMSCtrl) maps onto exactly the registers our `TA_TE` programs from the
+  same-shaped command words; `BIF_TA_REQ_BASE`'s vendor derivation
+  (`(params-heap base >> 20) << 20`) equals our `params_base`; the vendor's
+  `USE_LD_REDIRECT`/`USE_ST_RANGE` come from the kick and the only producer
+  in the whole DDK tree writes 0 — our zeros match.
+* **The vendor's TA cache-invalidate acks 0x140 with 2 — DSC_INV0 (b1) only**,
+  the BRN_31474 shape our `INV_DONE_TA = 0x03` already carries (ours also
+  waits the CSC bit b0, which our CSC request does set).
+* **The vendor's HOSTKICKTA is a queue stub** (a linked-list insert on the
+  render contexts, then `ba` into the shared TA-queue body); the body does
+  settle loops, a per-kick `DMS_CTRL` MAX_NUM_VERTEX_PARTITIONS update (ours
+  never touches it per kick — ours is nonzero at reset, 32), the
+  invalidate/`DIR_LIST_BASE0`/`BIF_CTRL` sequence we already do.
+* **Two defects found in OUR TA_TE tail, not yet fixed**: it maps cmd+0x2a4
+  (`rt_flags` = 0x88) onto 0x230 `MTE_OTPM_CSM_FLUSH_BASE` — the vendor uses
+  0x230/0x234 as ADDRESSES for its OTPM CSM flush/load (OP 4 / OP 2), so a
+  flag word there is bogus (inert until a CSM flush runs, but wrong); and it
+  writes a tail of SGX545-only registers the 540 lacks (0x2a8 TE_TPC,
+  0x2b0/0x2b4/0x2d0/0x2d4 GSG*, 0x324, 0x364/0x368/0x370/0x374 the VDM
+  PDS-program pointers, 0x520, 0x74c) — the vendor's 540 build writes none
+  of them (the SGX545-only block is `#if defined(SGX545)`).
+* **The client's VDM control stream is present and well-formed** (dumped with
+  an `SGXGEN_DUMP_PROGS` addition to `tools/gen/sgxgen.c`, frame tool
+  `efaefc61…`): 28 words at 0x42000 — STATE_LOAD records whose PDS programs
+  sit in the PDS-vertex heap (0x0e801200 + 0x140-span), two 3-vertex PRIM
+  records with index data in the general heap, and the two kick terminates.
+  The record encodings came from 545 captures.
+
+WHERE THE STALL SITS NOW
+------------------------
+Inside the VDM's control-stream EXECUTION: the stream is fetched from a
+correctly-mapped-looking base, the VDM and MTE are clocked awake, the DPM
+never allocates a page, the TE never starts, and nothing faults.  The
+remaining suspects, in order:
+1. **A VDM control-stream record format that differs on the 540** — the
+   encodings are 545-capture-derived; the STATE_LOAD record's PDS-address
+   field width and the PRIM record's fields are the ones to check against
+   sgx540defs.h (the 0xb14 method, now on the stream format).
+2. **The client state-load PDS/USE programs** (PDS-vertex heap) — same check
+   for the 540's USSE/PDS encoding; dumpable with the frame tool.
+3. The µkernel tail defects above (prune the 545-only writes; fix the 0x230
+   mapping) — cheap hygiene, unlikely to be the stall.
+
+BENCH AT THE CLOSE OF THE CONTINUATION
+--------------------------------------
+Live: firmware `kick15pds` (`24322c2a…`; preserved `.kick14otpm`,
+`.kick13inv`, `.kick12inv`, `.kick11wl`, `.kick10live`, `.working` = kick10),
+module `1a2949ab…` (`.pre-render` = `.working` = `10c6f435`, `.predumpregs`
+preserved).  `/tmp/powervr_sgx_frame` `efaefc61…` (with the VDM-stream dump).
+Region 0 `0x02C1DDC2` untouched all session; `BOOTCTR` self-maintaining;
+`wlan0` re-associated between the GPU-reset boots; usb0 up.

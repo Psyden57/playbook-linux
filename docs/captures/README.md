@@ -299,3 +299,9 @@ the tick fix, the instrument corrections, and the dispatch fix:
 | file | what it shows |
 |---|---|
 | `sgx540-kick-entry-counter-2026-11-27.txt` | **HANDOFF-77 §0b answered, then the fix — boots 1-16 in order.**  (1) The re-instrumented kick counter (ctlblk word **0x3f**, the `kick` entry's **first instruction**) reads 0 across eight job resets.  (2) The doorbell read-back's landing control.  (3) The dispatch-register dump (`DMS_AGE 0`, the zero PIXEL pair).  (4) **The tick counter fixed with a GPU-side seed** (0x100 → 0x101 at exactly word 0x2c — the GPU's initial view of the tail is not the CPU's zeros).  (5) The double-counting correction ("4 fetches" → 2).  (6) **The CACHE_CTRL bisect** (the vendor's own 0x0000ffff breaks dispatch).  (7) **THE FIX: `EVENT_PDS_INFO`'s USE_PIPELINE TOGGLE → PIPE_0** — and the live pipeline: `null job signalled in 946 µs`, `600 null jobs in 91 ms`, zero resets, `ccb issued 615 consumed 615`, `USE0_SERV_EVENT` count tracking the fetch count.  Read with traps 406-412 and DECISIONS §116 |
+
+Session **79** added one, covering the first render campaign (boots 1-7):
+
+| file | what it shows |
+|---|---|
+| `sgx540-first-render-2026-11-27.txt` | **The first render jobs through the open SGX540 microkernel.**  The render job type wired (the sgx545 command tables verbatim; 31/50, the null family intact); the first job consumed (`RO 0x2c0` of the context CCB, MADD latched); UK_WAITLOG naming each stuck wait site (`_wait8` the 0x138 invalidate, then `_wait15` the OTPM mem-clear); three SGX545-shaped µkernel bugs fixed (traps 413/414); the continuation — the vendor-binary write-set diff (the DPM PDS threshold 0x614, no mode selector), the extended status dump, the mid-hang TA/VDM/DPM state, the vendor `SGXMKIF_TAREGISTERS` field-for-field match, and the stall localized inside the VDM's control-stream execution.  Read with traps 413/414, DECISIONS §117, report 282 |
