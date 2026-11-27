@@ -4340,3 +4340,40 @@ patches only `ctlblk` and `pdtable`, and does **no** PDS-input routing at all �
 that is the largest single structural difference from the vendor's design, and it
 is ours to close in our own code.  (Session 76; capture
 `docs/captures/sgx540-vendor-ukernel-source-2026-11-26.txt`.)
+
+## 116. Parse every control-block dump by word index, verify a new instrument by disassembling it, and give a self-clearing register a landing control (session 77)
+
+**Decision.**  Three rules from one session, all instances of "the instrument
+must be proven before its numbers are read":
+
+1. **Parse every ctlblk dump by word index, never by eyeball.**  Dump rows are
+   8 words; ctlblk word 0x2a is the **3rd** word of row 6 while 0x2c — the tick
+   counter — is the **5th**.  The "tick = 1" readings of sessions 75–76 are
+   misparse candidates precisely because word 0x2a reads 1 on every boot and
+   sits two words away; a word-index parse of session 77's boots reads tick = 0
+   every time, and with it **"the dispatch pass is the timer's" is withdrawn**.
+2. **Verify a new instrument by disassembling the emitted image.**  The
+   session's snapshot-store bug (`limm r5, #0x39` — bytes — where the comment
+   says "word 0x39 → 0xe4"; `imae rD,rA,#imm,rB` is `rA*imm + rB` with **no**
+   scaling) was found in one minute by reading `st.a.d r5, #0, r4`'s neighbours
+   in `sgx-disasm` output, after two sessions of trusting the numeral.  The
+   same read verified the new kick counter (`st.a.d r17, #63`) and the tick
+   site (`st.a.d r17, #44`) before they were deployed.
+3. **A self-clearing register's read-back is not evidence without a landing
+   control.**  `EVENT_KICK`'s NOW bit read 0 in all 8 immediate post-write
+   samples — and so did the same register around the **launch** kick, whose
+   write demonstrably dispatches.  All-zeros is what a landing doorbell looks
+   like on this silicon; without the control the job-kick zeros would have
+   been read as "the doorbell never lands", which the launch control forbids.
+
+**Constraint.**  The kick counter now lives on the `kick` entry's **first
+instruction** at control-block word **0x3f** (free verified mechanically: no
+`cores/sgx540.py` constant, no other `r17` access, no `st_sa(SA_SELF)` site
+with `UK_REARM`/`UK_FRAMEPROF` off; `st.a.d r17, #63` assembles directly), and
+its zero is negatively controlled by the entry counter's 2 in the same dump
+(DECISIONS §113's rule).  The snapshot store stays broken until its limm is
+fixed to `#{ENTRY_STATUS * 4}`; word 0x39 may not be cited until then.
+
+**Evidence.**  Report 280 and `docs/captures/
+sgx540-kick-entry-counter-2026-11-27.txt` (three boots in order: the kick
+measurement, the doorbell control, the dispatch-register dump); traps 406–408.

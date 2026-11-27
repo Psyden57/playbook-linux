@@ -515,21 +515,33 @@ flasher can replace at every point:
     vendor also ends a task with a bare `mov.end` and no `phas`, as ours does).
     Extract: `docs/captures/sgx540-vendor-ukernel-source-2026-11-26.txt`;
     trap 399; DECISIONS §115.
-    (a4) **Does the kick path reach the microkernel at all?  This now blocks
-    everything upstream of it (session 76).**  With the interrupt reaching the
-    CPU, the PDS launch defects fixed and `DMS_CTRL` corrected, the corrected
-    entry counter reads `entry = 2, tick = 1`, unchanged over 94 s and across
-    eight host kicks — and a PDS-task emit, correctly placed on `tmr_tick_end`
-    and provably firing (the one-shot flag goes 1 → 0), produces **no** re-fetch
-    (traps 402/404).  `REARM flag` is still 1 after eight kicks, so **no task end
-    runs at all** in that configuration: `init_set`'s is the only one, and an
-    idle boot apparently never reaches a second.  The next unit is therefore not
-    the re-emit but whether a job reaches the microkernel: re-instrument the
-    `kick` entry on a control-block word **verified** free (trap 403 — 0x07 is,
-    0x1c is `CLEANUP_DEFER_CT`), read `ctlblk` before and after a submit, and
-    follow HANDOFF §0b's four outcomes.  **Owes also, and blocked on this:**
-    getting one job to complete, which is session 76's original goal and the
-    precondition for measuring any re-emit at all.
+    (a4) **SOLVED (session 78, report 281): the dispatch pipeline is ALIVE —
+    the open microkernel takes and completes jobs.**  `null job signalled in
+    946 µs`, `600 null jobs in 91 ms`, **zero GPU resets** for the whole uAPI
+    suite, the CCB ring draining (`issued 615 consumed 615`), host interrupts
+    delivered.  **The fix was ONE BIT: `EVENT_PDS_INFO` (0x0a70) had
+    `USE_PIPELINE = TOGGLE` (round-robin between the two USE pipes); the
+    vendor's derivation is `USE_PIPELINE_0`.**  Under round-robin the event
+    tasks alternated pipes and a stuck pipe blocked the toggle forever — the
+    one-dispatch-then-stuck signature sessions 74-77 chased.  The campaign
+    that found it (16 boots, `sgx540-kick-entry-counter-2026-11-27.txt`): the
+    instruments made trustworthy (the tick counter's GPU-side seed — the GPU's
+    initial view of the control-block tail is not the CPU's zeros, trap 409;
+    the double-counting ENTRYFIRST+ENTRYLOG emit, trap 410), the negatives
+    re-run correctly (DMS_AGE no effect; the emit with the vendor's operand
+    derivation — session 76's negative was garbage operands), the complete
+    vendor launch-script diff (`CACHE_CTRL` load-bearing — **the vendor's own
+    value breaks dispatch on our stack**, trap 411 + contradiction file), and
+    the DOUTU task-control words to `MODE_PERINSTANCE`.
+    **The 20 remaining suite failures are SGX545-shaped test expectations**
+    (core_id 0x0115, va_bits 32, heap 0x3e000000 vs our 0x0114/28-bit).
+    **Next (HANDOFF-79 §0b, the operator's directive): a REAL RENDER JOB** —
+    wire the render job type for the `sgx540` entry (only the NULL job is
+    advertised; the SGX545's render path exists upstream), submit one minimal
+    TA+3D frame, and watch the µkernel's own markers (`kick` 0x3f, the
+    WAIT_LOG stage bytes, `ta3dctl`'s TA/3D words).  The TA/3D register
+    tables are the carried-over hypothesis — the 0xb14 discovery is the
+    precedent for checking each against sgx540defs.h.  Then Mesa.
     (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b) attach the CPU supply or confirm 1.35 V for all OPPs and settle the

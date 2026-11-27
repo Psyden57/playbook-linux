@@ -4189,6 +4189,125 @@ report 121 §3/§11/§12.
           `7b0a2020`.  The images are `*.bin` and gitignored, so nothing in git
           was ever wrong; the *workdir* was.  (Session 76 wrap-up re-read.)
 
+406. **The trap-403 unit bug is in `UK_ENTRYLOG`'s STATUS snapshot too — the
+          `limm` loads BYTES where the comment says word 0x39 -> 0xe4 — and the
+          same slip is the likely source of the "tick = 1" readings.**  The
+          snapshot store intends ctlblk word 0x39 (its own comment says "word
+          0x39 -> 0xe4") but executes `limm r5, #0x39 / imae r5, r5, #1, r17 /
+          st.a.d r5, #0, r4`: `imae rD,rA,#imm,rB` is `rA*imm + rB` with NO
+          scaling (cf. `imae r6, r3, #32, r6` for the CCB command address), so
+          `r5 = r17 + 0x39` is a **misaligned byte address**, and word 0x39 has
+          read 0 in every dump of every build.  Fix the limm to
+          `#{ENTRY_STATUS * 4}` before ever citing word 0x39.  (Found by
+          disassembling the emitted image, boot 1 of session 77.)  The same
+          byte/word slip explains the session's other correction: **the
+          `tick(0x2c) = 1` readings of sessions 75–76 are misparse candidates**
+          — control-block word **0x2a reads 1** on every boot of session 77
+          (reproduced three boots running, writer still unidentified; nothing
+          in the image stores there and the driver memsets the block), 0x2a is
+          the 3rd word of dump row 6 while 0x2c is the 5th, and on session 77's
+          own word-index parse the tick is **0 on every boot**.  So **"one init
+          pass and one dispatch pass, and the dispatch pass is the timer's"
+          (the session-76 correction) is withdrawn in its second half — there
+          is no dispatch pass**; every entry-count and register figure stands,
+          the tick figures do not.  Re-measure `fix1` with a word-index parse
+          before citing any tick count.  (Session 77; capture
+          `sgx540-kick-entry-counter-2026-11-27.txt`.)
+
+407. **A self-clearing register's read-back proves nothing about landing —
+          even the LAUNCH kick reads EVENT_KICK as 0 in all 8 immediate
+          samples.**  `ccb_write()` sampled `EVENT_KICK` before and 8x
+          back-to-back after the doorbell write, with the launch kick in
+          `pvrsgx_fw_start()` — which demonstrably dispatches — as the control:
+          **both read all-zero** (`EVENT_KICKER` correctly `0x0f002010` in both
+          windows).  So an all-zero read-back is what a *landing* doorbell
+          looks like on this silicon, and `EVENT_KICK` read-backs cannot
+          separate "landed and consumed" from "never landed".  The rule:
+          **a self-clearing register needs a landing control before its
+          read-back is evidence** — the same shape as DECISIONS §113's
+          negative control, applied to registers.  (Session 77, boot 2; the
+          `doorbell` debugfs node keeps the instrument.)
+
+408. **No `EVENT_PDS_ENABLE`-masked source ever dispatches the event program
+          after the launch — the dispatch path is dead, not the doorbell.**
+          Three independent measurements (session 77): the kick entry never
+          runs across 8 job kicks costing 8 GPU resets (counter on word 0x3f,
+          first instruction, mechanically verified free); b29 TIMER stays
+          latched with the timer cycling while the tick counter stays 0 and the
+          entry stays 2 (a dispatching timer would ack b29 and climb at 1 kHz);
+          and the session-76 wrap-up's `relaunch` node showed re-writing
+          **EVENT_KICK2 itself** — the register whose boot write dispatched —
+          does not re-fetch.  So the EDM fetched the event program **twice
+          during launch** and never again for ANY trigger.  Measured on the
+          way (boot 3, now in `status`): `DMS_AGE = 0` (vendor launch writes
+          `ENABLE | PVRSRV_SGX_MAX_DMS_AGE`; value underivable from the DDK
+          1.8 drop), the **PIXEL event-PDS pair entirely 0** (`0x0a5c/0x0a60/
+          0x0a64`), `EVENT_PDS_ENABLE2 = 0`, `EVENT_KICK1/KICK3 = 0`.  The
+          next candidates are the launch-script registers the driver never
+          writes — `DMS_AGE` first (a stuck never-completed launch task with
+          aging disabled would block every later dispatch, which is exactly
+          the observed shape), then `PDS_DMS_CTRL2`/`USE_G0/G1`/`USE_CTRL`/
+          `USE_MOE`/`USE_CODE_BASE`.  **Do not re-run the doorbell read-back
+          (trap 407) or another kick counter** — the kick path is answered.
+          (Session 77; report 280.)
+
+409. **The GPU's initial view of the control-block tail is not the CPU's
+          zero-filled view — a counter seeded only by the CPU reads
+          0xffffffff, and +1 wraps it to 0, looking dead.**  The tick counter
+          (UK_TICKLOG, word 0x2c) read 0 on every boot while its store was
+          verified correct; the offline emulator put it exactly at 0x2c.  The
+          fix that proved it: `init_set` SEEDS the counter from the GPU side
+          (0x100), and the dispatch pass then reads 0x101 at exactly word
+          0x2c.  Any instrument whose GPU-side value is only ever
+          incremented-from-CPU-zero is suspect; **seed every counter from the
+          GPU side (init_set) and give it a non-identity starting value** so a
+          wrap or a mis-target is unmistakable.  The adjacent mystery (ctlblk
+          word 0x2a reading 1 on every boot) vanished when the old direct-form
+          tick code was removed and the line was written GPU-side — consistent
+          with the same dirty-line picture.  (Session 78; capture
+          `sgx540-kick-entry-counter-2026-11-27.txt`, boots 4-9.)
+
+410. **Instruments stack: with UK_ENTRYFIRST and UK_ENTRYLOG both set, the
+          old counter still emitted, so word 0x07 incremented TWICE per fetch
+          and "4 fetches per life" was really 2.**  Found by disassembling the
+          entry top (the two `ld.a.d r17, #7 / st.a.d r17, #7` pairs are
+          visible back to back) and confirmed by the second counter: any
+          arithmetic built on an instrument that may have been emitted twice
+          is suspect.  **Before counting anything, disassemble and count the
+          instrument's own store sites.**  (Session 78, boot 9.)
+
+411. **`EUR_CR_CACHE_CTRL` (0x0804) = 0x0000ffff — the vendor's own srvinit
+          value — breaks event dispatch entirely on our stack.**  Found by
+          programming the complete remaining vendor launch-script delta
+          (six registers; bisected over three boots): with all six, even the
+          FIRST timer dispatch dies (entry stuck at 1, tick stuck at the
+          seed); without CACHE_CTRL and USE_CTRL, dispatch returns.  The
+          PARTDM0..3 field semantics are not established on this silicon
+          (the vendor's kernel side never writes the register; the registry
+          apphint "CacheCtrl" may override it in the working system).  **Do
+          not write 0x0804 until its semantics are measured on a working
+          system**; the other five launch additions (USE_CTRL, USE_MOE,
+          ISP_DEPTHSORT, USE_G0/G1, DMS_AGE) are compatible and stay
+          programmed.  (Session 78, boots 11-13; contradiction file
+          `sgx540-cache-ctrl-breaks-dispatch.md`.)
+
+412. **`EVENT_PDS_INFO` (0x0a70) was hand-derived and carried
+          `USE_PIPELINE = TOGGLE` where the vendor's derivation is
+          `USE_PIPELINE_0` — and that one bit was the whole dispatch
+          blocker.**  Our 0x00013d01 sets b8; sgxinit.c:3640-3646 derives
+          `USE_PIPELINE_0` (0) — and the DDK names b8-set
+          `USE_PIPELINE_TOGGLE`, "round-robin between pipes".  Under
+          round-robin the event tasks alternated USE pipes (`USE0_SERV_EVENT`
+          AND `USE1_SERV_EVENT` both showed count 1), a stuck pipe blocked the
+          toggle forever, and the EDM dispatched the event program exactly
+          once per microkernel life — the signature sessions 74-77 chased
+          across a dozen hypotheses.  With PIPE_0 (0x00013c01) the pipeline
+          runs continuously and jobs complete (`null job signalled in 946 µs`,
+          `600 null jobs in 91 ms`, zero resets — report 281).  The rule:
+          **decode every multi-bit constant field-by-field against the
+          vendor's derivation before deploying it** — a hand-summed constant
+          carries field values nobody chose.  (Session 78, boots 15-16.)
+
 ## 3. Corrections to older reports
 
 These corrections are preserved deliberately. Each is newer than the text it

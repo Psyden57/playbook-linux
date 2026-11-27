@@ -141,3 +141,10 @@ unidentified.
 * WL1283/PMIC (resolved 2026-11-08): `twl-clk32kg-on-both-vs-0xbd-be-difference.md`
   — `CLK32KG` is APP-ON in both; the `0xBC`–`0xBE` resource is a different,
   still-unnamed resource (identity open).
+* SGX540 (open stack, open): **CACHE_CTRL** →
+  `sgx540-cache-ctrl-breaks-dispatch.md` — the vendor's srvinit writes
+  0x0000ffff at 0x0804, and on our open stack that value kills event dispatch
+  entirely (bisected, session 78).  The PARTDM field semantics, the reset
+  value, and the working system's live value are all unmeasured; the DDK's
+  "CacheCtrl" registry apphint may mean the closed stack never ran 0xffff.
+  Until measured, do not write 0x0804 (trap 411).

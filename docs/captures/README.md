@@ -292,3 +292,10 @@ anything the earlier captures say about *entry counts*:
 Read `sgx540-entry-counter-2026-11-26.txt`'s evidence inventory **before**
 citing any dispatch number from sessions 74–76: the register readings in the
 earlier captures stand, but their *entry counts* do not.
+
+Session **77-78** added one, and it covers sixteen boots across two sessions —
+the tick fix, the instrument corrections, and the dispatch fix:
+
+| file | what it shows |
+|---|---|
+| `sgx540-kick-entry-counter-2026-11-27.txt` | **HANDOFF-77 §0b answered, then the fix — boots 1-16 in order.**  (1) The re-instrumented kick counter (ctlblk word **0x3f**, the `kick` entry's **first instruction**) reads 0 across eight job resets.  (2) The doorbell read-back's landing control.  (3) The dispatch-register dump (`DMS_AGE 0`, the zero PIXEL pair).  (4) **The tick counter fixed with a GPU-side seed** (0x100 → 0x101 at exactly word 0x2c — the GPU's initial view of the tail is not the CPU's zeros).  (5) The double-counting correction ("4 fetches" → 2).  (6) **The CACHE_CTRL bisect** (the vendor's own 0x0000ffff breaks dispatch).  (7) **THE FIX: `EVENT_PDS_INFO`'s USE_PIPELINE TOGGLE → PIPE_0** — and the live pipeline: `null job signalled in 946 µs`, `600 null jobs in 91 ms`, zero resets, `ccb issued 615 consumed 615`, `USE0_SERV_EVENT` count tracking the fetch count.  Read with traps 406-412 and DECISIONS §116 |

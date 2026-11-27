@@ -7,9 +7,9 @@ must not be confused:
 > a clean mainline kernel.  The pre-Linux sessions are boot-chain research, not a
 > separate OS project.
 
-* **Absolute** (`session-01` … `session-76`) — chronological, used by the note
+* **Absolute** (`session-01` … `session-78`) — chronological, used by the note
   files in this directory.  This is the scheme the backfill uses.
-* **Linux-era** ("session 1…69") — used inside the reports and handoffs, because
+* **Linux-era** ("session 1…72") — used inside the reports and handoffs, because
   numbering only began when the CRC boot path was confirmed and the Linux work
   started.  **Linux session N = absolute session N + 6.**
 

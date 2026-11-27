@@ -1,0 +1,498 @@
+THE KICK ENTRY IS NEVER ENTERED — measured, boot 1 of session 77
+=================================================================
+Session 77 (absolute; Linux-era 71).  HANDOFF-77 §0b's one experiment:
+does the KICK path reach the microkernel at all?
+
+Firmware `kick2` (wrapped md5 `12847879a2e4de41a939d007fa45f21e`), built from
+the current ukernel tree with UK_TICKLOG=1 UK_ENTRYLOG=1 **UK_KICKLOG=1** (the
+re-instrumented form).  Module unchanged from the session-76 wrap-up
+(`94eaea61…`).  Unit rebooted (`reboot -f`); dmesg:
+
+    open microkernel kick2, interface 1.0, features 0x8
+    EDM init: event status 0x20000000, BIF int 0x8000, timer 0x0101cc46
+    microkernel started
+
+(no fault — the new store at the kick entry's first instruction does not break
+the launch).  `BOOTCTR_FCTRY` read fresh this boot:
+`pbrpmb: topup: BOOTCTR_FCTRY at block 0x3a record@196 = 23000000` =
+**0x23** (matches the arithmetic the handoff predicted; it had wrapped out of
+the previous boot's dmesg).
+
+THE INSTRUMENT (and the mechanical check that preceded it)
+----------------------------------------------------------
+UK_KICKLOG re-instrumented per HANDOFF §0b.  The session-75 counters (words
+0x3d/0x3e, placed AFTER the WO/RO read) read 0 in every build, so the count now
+sits on the **FIRST instruction of the `kick` entry** — it counts the entry
+itself — on word **0x3f**.
+
+Free-word verification, done mechanically BEFORE writing any store (trap 403's
+check, redone for this tree):
+
+  * every ctlblk-range constant in `cores/sgx540.py` listed and scanned:
+    0x3d/0x3e/0x3f are named by none of them (0x3f is UK_REARM's flag word and
+    UK_FRAMEPROF's FP_COUNTS — both flags OFF in this build);
+  * every `ld/st.a.d rN, r17, #imm` and every `st_sa(SA_SELF, N)` site in
+    `ukernel.py` scanned with the flags off: none touches 0x3d/0x3e/0x3f;
+  * `ld.a.d r17, #63` / `st.a.d r17, #63` assemble directly with `sgx-asm -b
+    -c sgx540` (rc=0), so no rebase is needed — word 63 is the last value the
+    offset field takes, and it fits;
+  * the emitted code was DISASSEMBLED and read back, not trusted from the
+    numeral: kick=0x440 in the image, and instruction 0x440 is
+
+        ld.a.d r4, r17, #63 [moe] / wdf / limm r0,#1 / imae r4,r0,#1,r4 /
+        st.a.d r17, #63, r4 [moe] / idf / wdf
+
+    — the exact UK_ENTRYLOG form (whose word 0x07 provably works), and the
+    tick site at 0x1d0 reads `st.a.d r17, #44` = word 0x2c as intended.
+
+The store is ctlblk-relative through r17, valid at the kick label: every path
+into `kick` is a same-task branch (`ba kick` from the bare-doorbell fallthrough
+and from tmr_tick_check's coincident-doorbell test), so the register the event
+top patched is still live.  Gates before deploying: `test_emu.py` 8/8 on both
+cores, SGX545 golden byte-identical (`83b5b0a7…`), `mkukfw.py --check` ok,
+patches exactly {ctlblk, pdtable}.
+
+THE MEASUREMENT
+---------------
+`/tmp/powervr_sgx_test` submitted its job set; ctlblk parsed BY WORD INDEX
+(row 1 = words 0x00-0x07 … row 8 = 0x38-0x3f):
+
+    BEFORE:  entry(0x07)=2  SC_VERSION(0x18)=0x10000  tick(0x2c/0x2d)=0
+             kick(0x3f)=0   empty(0x3e)=0    word 0x2a = 1
+    driver:  resets 0  issued 0  irqs 0
+
+    AFTER 8 job submits:
+             entry(0x07)=2  (UNCHANGED)  tick=0  kick(0x3f)=0  empty=0
+             word 0x2a = 1 (unchanged)
+    driver:  resets 8   issued 8   consumed 8   irqs 0
+    suite:   24/50 passed (the same trap-388 pattern as always: one timeout
+             per job; `consumed == issued` is the ring-reset artefact, trap 389)
+
+    20 s later, unchanged again.  EVENT_STATUS 0x20000000 (b29 TIMER latched),
+    EVENT_TIMER 0x01003aef (ENABLE set, cycling), BIF_INT_STAT 0x8000
+    (FLUSH_COMPLETE, no fault), BIF_FAULT 0.
+
+The instrument is negatively controlled by its own siblings: the entry counter
+(same store form, same mechanism, same dump) reads **2** and is host-visible,
+and SC_VERSION proves init ran — so a zero on 0x3f is a sound zero
+(DECISIONS §113's rule).  **The kick entry is never entered: not once, across
+eight job submits that each cost a GPU reset.**
+
+INTERPRETATION — HANDOFF §0b's FIRST OUTCOME
+--------------------------------------------
+"kick counter 0 with resets moving = the core resets before the event program
+is ever fetched for a kick.  That is the trap-388 timeout path, so the fault is
+upstream of the event program (job submission, CCB, doorbell)."
+
+Consistent with everything earlier: eight host kicks on fix1 left entry at 2
+(now reproduced with the kick instrument in place), the `kick`/empty counters
+read 0 in every earlier build, and `ccb wo 0 ro 0` after the window.
+
+NEXT (per HANDOFF §0b): the doorbell — read `EUR_CR_EVENT_KICK` (0xac8) and
+`EVENT_KICKER` (0xac4) from inside `ccb_write()` immediately after the write.
+A read from `status` proves nothing (EVENT_KICK is self-clearing); it must be
+sampled in the write's own context.  Module change → one reboot; firmware stays
+`kick2` so the kick counter rides along.
+
+TWO INCIDENTAL FINDINGS THIS BOOT (both recorded, neither blocks the above)
+---------------------------------------------------------------------------
+1. **tick(0x2c) = 0 on this boot, where the session-76 capture reports
+   tick(0x2c) = 1 for `fix1`.**  The timer path is byte-identical between the
+   two builds (the kick counter is off it; verified in the disassembly), and
+   the tick store is verified (`st.a.d r17, #44` = word 0x2c).  So either
+   fix1's "tick = 1" was a misparse of the adjacent mystery word (see 2 — 0x2a
+   is the 3rd word of row 6, 0x2c the 5th; an eyeball slip is plausible), or
+   the second fetch's identity genuinely differs between the boots.  Either
+   way **"one init pass and one dispatch pass, and the dispatch pass is the
+   timer's" (session 76's corrected reading) is now UNPROVEN**: no boot whose
+   dump was parsed by word index has ever shown the tick counter increment.
+   With entry = 2, tick = 0 and kick = 0, the second fetch took the init
+   branch again (HC_INIT still 0 when it read — the host writes INIT_COMPLETE
+   ~20 ms after the kick) or died between the entry counter and the dispatch.
+   Re-measure fix1's tick before citing "the dispatch pass is the timer's".
+2. **Control-block word 0x2a reads 1** on this boot, from boot onward, stable,
+   and NOTHING in the image stores there: the full `st.a.d` inventory of the
+   disassembled image contains no r17 store at #42 and no rebased store whose
+   target is r17+0xa8; the driver memsets the block and writes only words
+   0x00-0x17.  Candidate (unverified): the PDS0 launch stub's DOUTU deposit —
+   our stub's data word DS1[0] is exactly 0x00000001, and our loader does no
+   per-word DOUTU address patching (the vendor patches DOUTU1 at [1],[5],[9],
+   [13] etc., sgxinit.c:2507-2510), so a misrouted deposit address is
+   plausible.  Do not build on this word until identified.
+3. **The STATUS-snapshot store (`UK_ENTRYLOG`'s word 0x39) is broken by the
+   trap-403 unit bug family, in fix1 as well.**  The code intends "word 0x39 →
+   byte 0xe4" (its own comment says so) but executes
+   `limm r5, #0x39 / imae r5, r5, #1, r17 / st.a.d r5, #0, r4` — the limm
+   loads **0x39 bytes**, not 0xe4 (`imae rD,rA,#imm,rB` = rA*imm + rB, no
+   scaling — cf. `imae r6, r3, #32, r6` for the CCB command address).  The
+   store therefore lands at byte 0x39 (misaligned), which is why word 0x39 has
+   read 0 in every dump of every build.  Harmless to behaviour, but it means
+   the "dispatch-pass STATUS snapshot" instrument has never worked; fix the
+   limm to `#{ENTRY_STATUS * 4}` before ever citing word 0x39.
+
+BENCH AT THE CLOSE OF THIS BOOT
+-------------------------------
+Region 0 `0x02C1DDC2` (no flash), region 1 `20a5edd3…`, hd3 `/dev/loop0` ext4
+rw.  `BOOTCTR_FCTRY 0x23` (read this boot).  Firmware live =
+`kick2` (`12847879…`); preserved beside it: `.fix1w` (`f468a71d…`), `.tick2`
+(`7b44b33a…`), `.before-hostirq` (`12f12abb…`), and the session-76 variants.
+Module `94eaea61…` (unchanged this boot).  After the 8-reset job window
+`wlan0` is DOWN again (the session-76 caution: GPU resets take it over);
+`usb0` up, SSH fine.  Panel not visually checked this boot (operator).
+
+REVERT
+------
+`cp /lib/firmware/powervr_sgx/sgx540_ukernel.bin.fix1w
+/lib/firmware/powervr_sgx/sgx540_ukernel.bin` + `reboot -f` restores the
+session-76 wrap-up state (the module never changed).
+
+
+##############################################################################
+## BOOT 2 — the doorbell read from inside ccb_write (HANDOFF §0b's follow-up)
+##############################################################################
+
+Module change only (firmware stays `kick2`): `powervr_sgx.ko` = `801d08a5…`
+(`.pre-doorbell` = `94eaea61…` preserved).  New `ccb_write()` sampling: the
+`EVENT_KICK` register is read once BEFORE the doorbell write and 8x
+back-to-back after it, with `EVENT_KICKER` and `EVENT_STATUS` in the same
+window; `pvrsgx_fw_start()` samples the same register around the LAUNCH kick —
+which provably lands — as the control.  New `doorbell` debugfs node.
+
+Boot clean (`open microkernel kick2`, EDM init fine), then 8 job submits:
+
+    job doorbell writes        8
+      EVENT_KICK before write  0x00000000
+      8 samples after, NOW map 0x00000000
+      first/last raw           0x00000000 0x00000000
+      EVENT_KICKER             0x0f002010      <- the correct kicker address
+      EVENT_STATUS             0x20000000      <- b29 TIMER, unchanged
+    launch kick (control)
+      EVENT_KICK before        0x00000000
+      8 samples, NOW map       0x00000000      <- ALL ZERO TOO
+      first raw                0x00000000
+      EVENT_KICKER             0x0f002010
+
+**The control is decisive: even the LAUNCH kick — whose write demonstrably
+dispatches the event program — reads EVENT_KICK as 0 in all 8 immediate
+samples.**  So an all-zero read-back is what a LANDING doorbell looks like on
+this silicon, and the job kick's read-backs are indistinguishable from it.
+`EVENT_KICK` read-backs cannot show landing here; that question needs a
+different instrument.  What the window does establish: the kicker ADDRESS
+register is correctly programmed (`0x0f002010`) and the job kicks went out
+(8 writes, `resets 0 -> 8`, `issued 8`).
+
+ctlblk after: entry(0x07)=2, tick=0, kick(0x3f)=0, empty=0 — unchanged.
+And `word 0x2a = 1` REPRODUCED on this fresh boot (so it is a deterministic
+early write, not a one-off).
+
+##############################################################################
+## BOOT 3 — the complete dispatch-register dump, and the sharper conclusion
+##############################################################################
+
+Module change only: `powervr_sgx.ko` = `ea10d582…` (`.predump` preserved);
+status now also dumps the registers the driver never writes.  Fresh boot,
+idle, NOTHING submitted:
+
+    EVENT_STATUS         0x012c 0x20000000   b29 TIMER latched since boot
+    EVENT_PDS_ENABLE     0x0a58 0x2204b00f   TIMER set
+    EVENT_PDS_EXEC       0x0a68 0x008039f0   the OTHER pair, programmed
+    EVENT_PDS_DATA       0x0a6c 0x00000001
+    EVENT_PDS_INFO       0x0a70 0x00013d01
+    DMS_CTRL             0x0a74 0x003f8200   (session 76's fix)
+    DMS_AGE              0x0a78 0x00000000   *** unprogrammed ***
+    EVENT_PDS_ENABLE2    0x0a50 0x00000000   (vendor never writes it either)
+    EVENT_PIXEL_PDS_EXEC 0x0a5c 0x00000000   *** the PIXEL pair: all zero ***
+    EVENT_PIXEL_PDS_DATA 0x0a60 0x00000000
+    EVENT_PIXEL_PDS_INFO 0x0a64 0x00000000
+    EVENT_KICK1          0x0ab0 0x00000000
+    EVENT_KICK3          0x0ad8 0x00000000
+
+    ctlblk: entry(0x07)=2  tick(0x2c)=0  kick(0x3f)=0  word 0x2a=1
+            (the same baseline as boots 1 and 2, third boot running)
+
+**THE SHARPER CONCLUSION — the dispatch path is dead after launch, for every
+trigger.**  Three independent measurements now say the same thing:
+
+  1. The kick-entry counter (boot 1): the kick entry never runs, across 8
+     kicks that each cost a GPU reset.  If a doorbell landed AND the EDM
+     fetched, the entry counter would climb — our entry takes `ba kick` on a
+     bare doorbell (no STATUS bit) and would count.  It does not.
+  2. b29 TIMER has been latched since boot while the timer register cycles:
+     if the timer dispatched the event program, our entry would ack b29
+     (masked to its own snapshot) and the tick counter would climb at 1 kHz.
+     Entry is static at 2 and tick is 0 — so the timer does NOT dispatch
+     either.  **"One init pass and one dispatch pass, and the dispatch pass is
+     the timer's" (session 76's corrected reading) is WRONG in its second
+     half**: there is no dispatch pass.  The tick=1 reading the correction was
+     built on was very likely the adjacent word 0x2a misparsed (0x2a is the
+     3rd word of row 6, 0x2c the 5th).
+  3. The `relaunch` node (session-76 wrap-up, valid word-0x07 instrument):
+     re-writing EVENT_KICK2 — the register whose boot write DID dispatch —
+     does not re-fetch either.
+
+So: the EDM fetched the event program **twice during launch** (entry = 2; the
+launch sequence evidently fetches it twice, cf. the vendor's
+INITUKERNELPRIMARY1/SECONDARY/PRIMARY2 and our five PDS stubs all DOUTUing to
+entry 0x0) and **never again** — not for a timer tick, not for a job kick, not
+for a re-issued launch kick.  Every PDS_ENABLE-masked source is dead; only the
+launch path ever dispatched.  This is the "task admission" class session 76
+suspected, and it is UPSTREAM of the doorbell question §0b started with: the
+doorbell may well land; nothing dispatches regardless.
+
+WHAT DIFFERS BETWEEN THE LAUNCH AND EVERYTHING ELSE (the candidate list the
+next session works from — one variable per boot, cheapest first):
+  * **The remaining launch-script registers the driver never writes**:
+    `EUR_CR_DMS_AGE` (vendor: `ENABLE | PVRSRV_SGX_MAX_DMS_AGE`; ours 0 —
+    measured above), `EUR_CR_PDS_DMS_CTRL2`, `EUR_CR_USE_G0/G1`,
+    `EUR_CR_USE_CTRL`, `EUR_CR_USE_MOE`, and whether `EUR_CR_USE_CODE_BASE`
+    is written (HANDOFF §5 listed these as unchecked).  DMS_AGE is the
+    natural first write experiment: if the DMS holds the launch task(s) as
+    never-completed and aging is disabled, every later dispatch would be
+    blocked — which is exactly the observed shape.
+  * The PIXEL event-PDS pair being zero (measured above): if any source
+    routes through it, that fetch goes to offset 0.  The vendor's comment
+    ("host kick events always enabled") suggests kicks use the OTHER pair we
+    program, but the routing is not measured on this core.
+  * `PVRSRV_SGX_MAX_DMS_AGE` remains underivable from the DDK 1.8 drop
+    (every header grepped, session 76) — a write experiment must pick a value
+    (e.g. ENABLE | 0x2c, the age our init already writes into 0xa78's field)
+    and read the entry counter for the verdict.
+
+BENCH AFTER BOOT 3
+------------------
+Region 0 `0x02C1DDC2`, region 1 `20a5edd3…` (no media writes this session).
+Firmware live = `kick2` (`12847879…`), `.fix1w` preserved.  Module =
+`ea10d582…` with `.pre-doorbell` (`94eaea61…`) and `.predump` (`801d08a5…`)
+preserved.  `BOOTCTR_FCTRY 0x23` read on boot 1; boots 2 and 3 cost one unit
+each by arithmetic (0x22, 0x21 expected — NOT yet re-read; read `dmesg |
+grep pbrpmb` on the next boot).  wlan0 DOWN (the GPU resets); usb0 up.
+
+
+##############################################################################
+## BOOTS 4-9 (session 78 continues): the tick counter fixed, the entry count
+## corrected again, and the blocker narrowed to a jammed event pipeline
+##############################################################################
+
+Firmware kick4..kick9, all with the session-77 instruments plus fixes; the
+module grew the status dump (LOOPBACK, USE0/1_SERV_EVENT).  Each boot one
+variable; every build gated (test_emu 8/8 both cores, SGX545 golden
+byte-identical) and pushed with md5 verification.
+
+BOOT 4 (kick4, fcc7ed92) -- path markers.
+  Two markers: word 0x38 = 0x11111111 (after the STATUS snapshot, direct
+  store #56) and word 0x37 = 0x22222222 (at the tick site, direct #55) BOTH
+  LAND EXACTLY where encoded -- the direct store form is correct for these
+  immediates.  The tick was moved to the REBASED form (limm bytes + imae +
+  st #0, the program()/snapshot shape) as a test.
+
+BOOT 5 (kick5, 7b4a19d3) -- THE TICK COUNTER WORKS.
+  init_set now SEEDS the tick counter from the GPU side (0x100 into word
+  0x2c).  Result: word 0x2c = 0x00000101 -- seeded 0x100, +1 from the one
+  dispatch pass, at exactly the word the code names.  **The GPU's initial
+  view of the control-block tail is NOT the CPU's zero-filled view**: the old
+  counter read 0xffffffff, +1 wrapped to 0, and the counter looked dead.
+  With the old direct tick code gone, word 0x2a reads 0 -- **the mystery
+  0x2a=1 is gone too**; the seed's write evidently flushed/normalised that
+  cache line.  So "the tick = 1" readings of sessions 75-76 were probably
+  CORRECT observations of a counter whose increments land at 0x2a-adjacent
+  state -- and are now MOOT: the counter works, at 0x2c, with the seed.
+  trap 406's snapshot fix is in (word 0x39 = 0x20000000 -- the dispatch
+  pass's STATUS, finally visible).
+
+BOOT 6 (kick6, ee32967a) -- UK_ENTRYFIRST: "entry = 4".
+  Counter at the program's absolute first instruction: 4 per life.  Taken as
+  "two fetches die at the phas" -- WITHDRAWN below (double counting).
+
+BOOT 7 (kick7, b1276928) -- second counter at the old position (word 0x08):
+  0x07 = 4, 0x08 = 2.  Read then as "two fetches die at the phas".
+
+BOOT 8 (kick8, 444a817d) -- UK_NO_PHAS=1 (the vendor's working SGX540 image
+  contains NO phas instruction at all -- mnemonic census over all 2498
+  instructions of binary2_540_omap4430_android_release ukernel.bin):
+  0x07 = 4, 0x08 = 2 -- IDENTICAL.  The phas is innocent; the DDK task-end
+  sequence stays unnecessary.
+
+BOOT 9 (kick9, db69d7c5) -- the arithmetic correction, and two new registers.
+  Disassembling the entry top showed the OLD UK_ENTRYLOG counter still
+  emitted alongside the ENTRYFIRST counter: word 0x07 is incremented TWICE
+  per fetch.  So "4 fetches" = **2 fetches double-counted**, and 0x08 = 2 is
+  the same arithmetic (2 fetches; its GPU-side view started dirty and my
+  0x08 seed landed after fetch 1's count).  Corrected per-life picture:
+    2 fetches = one init pass + one dispatch pass (tick 0x101, snapshot
+    0x20000000, both markers set), and NOTHING further -- despite
+    timer_edge proving fresh b29 edges occur (clear works: STATUS -> 0;
+    re-latch works: -> 0x20000000 within 30 ms).
+  New in status:
+    LOOPBACK        0x0b04 0x00000001   <- the vendor's EmitLoopBack SPINS
+                                           while this bit is set ("loopback
+                                           FIFO full", sgx_utils.asm:2190)
+    USE0_SERV_EVENT 0x0b10 0x00010001   <- event service queue: COUNT 1,
+    USE1_SERV_EVENT 0x0b1c 0x00010001      EMPTY set -- one event task
+                                           admitted, never completed.
+  DMS_AGE = ENABLE|0x2c was programmed this session (boot: write sticks,
+  0x0001002c) and changed nothing -- DMS aging is not the blocker.
+
+WHERE THIS LEAVES THE BLOCKER
+-----------------------------
+The event pipeline jams after the FIRST dispatched event task: one service-
+queue item outstanding (SERV_EVENT count 1), the loopback FIFO full
+(LOOPBACK b0 = 1), and every later event edge (timer re-latches proven) is
+refused.  The emit fires with the vendor's operand derivation and does not
+fetch -- consistent with a pipeline that admits nothing while the first
+task's completion is outstanding.  The open question is now narrow: **what
+completes an event task in the EDM's book?**  The vendor's task end is bare
+(no phas anywhere, no cfi -- WRITEBACK_DCU is not set for the 540); its
+EventHandler EMITS A LOOPBACK before ending (emit.t2 at 0xea8/0xec0 in the
+release image precede nop [end]) -- which our kick5 life also did, with
+correct operands, and the FIFO then read FULL with the stub never fetched.
+
+NEXT CANDIDATES (one per boot, cheapest first):
+  * Read LOOPBACK/SERV_EVENT at BOOT (before any dispatch) -- is the FIFO
+    born full, or does the first dispatch fill it?  One more dump line, no
+    new variables.
+  * The vendor's EventHandler emits with r16 = the EVENTS BEING HANDLED (the
+    loopback re-publishes them as IR0).  Our emit used LOOPBACK_TAEVENTS.
+    An emit whose r16 = 0 is skipped by the vendor's own guard; the FIFO may
+    also require the DOUTU task control words the host patches
+    (INPUT_DOUTU1/2 etc.) -- our stub's DOUTU words are computed, not
+    patched, and may describe a task the EDM cannot admit.
+  * The pending-loopback protocol (ta3dctl word 0x34 in the vendor layout --
+    OUR image uses that word as SC_RTENTRY): the vendor never emits the same
+    event twice while pending.  Without the protocol our single emit may
+    have been correct anyway; revisit when the FIFO is understood.
+
+FIRMWARE/MODULE STATE AFTER BOOT 9
+----------------------------------
+Live firmware = kick9 (db69d7c5); preserved: .kick8w (444a817d), .kick2w,
+.fix1w, .tick2, .before-hostirq.  Module = 127a5fad (adds LOOPBACK +
+SERV_EVENT to status; DMS_AGE write; doorbell node; the corrected UKFW_PDS
+operands), preserved: .pre-loopback (be02c71f), .dmsage (be3d4b35),
+.predump (801d08a5), .pre-doorbell (94eaea61).  BOOTCTR: 0x23 read at boot 1
+of session 77; nine further boots since (this file's boots 1-9) -- read
+`dmesg | grep pbrpmb` on the next boot.  wlan0 DOWN (GPU resets).
+
+
+##############################################################################
+## BOOTS 10-13 (session 78 continued): the launch-script diff, CACHE_CTRL is
+## load-bearing, and the timer dispatches exactly once
+##############################################################################
+
+BOOT 10a (kick10, 3fbbd11b, UK_TIMERDIV=100): the timer period is 100 ms.
+  The EDM-init line at +20 ms reads "event status 0x00000000" -- no b29 yet,
+  so no timer edge had occurred when the launch completed.  The dispatch pass
+  nevertheless happened (tick 0x100 -> 0x101, snapshot 0x20000000): **the
+  second fetch waited for the first timer edge.**  So the launch does ONE
+  fetch (the init pass) and the TIMER dispatched exactly once.  (UK_TIMERDIV
+  = 1000 does not build -- imae's immediate field rejects #1000.)
+
+BOOTS 11-13 -- the vendor launch-script completion, and a bisect:
+  The vendor's srvinit launch script (sgxinit.c:3753-4350) was diffed
+  register-by-register against our launch.  Guards checked against
+  sgx540defs.h: the DCU_* block is under WRITEBACK_DCU (not set for the 540),
+  TSP_CONFIG under CEM_FACE_PACKING/DADJUST (absent), PDS_DMS_CTRL2 and
+  USE_TMPREG are not in the 540 header, MASTER_* is MP-only.  The whole
+  remaining delta is six registers:
+    USE_CTRL       0x0a00  31<<14          (INSTLIMIT 31, REGBOUND_RETURN_ONE)
+    USE_MOE        0x0b30  0x100           (CFASEL)
+    ISP_DEPTHSORT  0x04e8  0x100           (FB_ABC_ORDER)
+    CACHE_CTRL     0x0804  0x0000ffff      (PARTDM0..3 = 0xF each)
+    USE_G0/G1      0x0a7c/0x0a80  0
+  BOOT 11 (module b84dd8c0, all six): **EVENT DISPATCH DIES COMPLETELY** --
+  entry 1 (init only), tick stuck at the 0x100 seed, no dispatch pass even
+  at 10 s with the 100 ms timer.  One of the six kills the first dispatch.
+  BOOT 12 (d3cf527b, minus USE_CTRL): still broken.
+  BOOT 13 (a2656c72, minus USE_CTRL and CACHE_CTRL): **DISPATCH IS BACK**
+  (entry 4 = 2 fetches, tick 0x101, tick-site marker set).  **CACHE_CTRL =
+  0x0000ffff breaks event dispatch on our stack**, though the vendor's own
+  srvinit writes exactly that (guard `#if defined(EUR_CR_CACHE_CTRL)` is
+  taken -- the 540 header defines the register).  The kernel side never
+  writes it.  PARTDM0..3's semantics on this silicon are not established;
+  treat 0x0804 as sensitive and leave it at reset until measured on a
+  working system.
+  The remaining launch additions (USE_MOE, ISP_DEPTHSORT, USE_G0/G1,
+  DMS_AGE) are compatible: the one-dispatch-per-life anomaly is UNCHANGED
+  with them in place.  Jobs on boot 13: 8 kicks, resets 8, entry/tick
+  unchanged, and the two host IRQs were the timeout-reset path's own
+  ("job timed out ... events 0x20000000/0x00000000"), not progress.
+
+BOOTCTR HEALTH
+--------------
+The Linux top-up fired on the way (a boot below 0x1e wrote 0x32); the boot
+that read `2a000000` = **0x2a**, above threshold.  Self-maintaining as
+designed despite the heavy rebooting.
+
+NET STATE OF THE BLOCKER (end of session 78's bench run)
+--------------------------------------------------------
+Per microkernel life: the launch fetches the event program once (init pass);
+the FIRST timer edge dispatches it a second time (dispatch pass: tick
+0x100 -> 0x101, STATUS snapshot taken, markers set); every later timer edge
+(proven to re-latch by the timer_edge probe), every job kick, and the
+correctly-operand-ed task-end emit produce NO further fetch.  The event
+pipeline registers read idle (LOOPBACK b0 = 1 = space; USE0/1_SERV_EVENT
+count 1 / EMPTY set).  The remaining structural difference against the
+vendor's working design is the DOUTU task-control words: ours are computed
+constants (`[0]=0x0020000f [1]=0x04000000 [2]=0x00000001`), the vendor's are
+host-patched from `aui32USETaskCtrl` with SetUSEExecutionAddress and the
+TRC (temp-register-count) fields (`0x170004E0`-shaped) -- if our task
+control under-declares the task's resources, the first dispatched task
+would run while never releasing them, which is exactly a one-dispatch-then-
+stuck signature.
+
+
+##############################################################################
+## BOOTS 14-16 (session 78): THE DISPATCH PIPELINE IS ALIVE
+##############################################################################
+
+BOOT 14 (module 0e0fea3b) -- the DOUTU task-control words fixed to the
+  vendor's ukernel shape (word1 = DOUTU1_MODE_PERINSTANCE 0x2, word2 = 0;
+  they were SGX545-shaped: 0x04000000 = a reserved DOUTU1 bit with MODE
+  clear, and 1).  Kept (it matches sgxinit.c:1371-1385) -- but the
+  one-dispatch signature was UNCHANGED.  Sampled 30 s: static.
+
+BOOT 15+16 (module 10c6f435) -- **THE FIX: EVENT_PDS_INFO's USE_PIPELINE
+  bit.**  Our EVENT_PDS_INFO was 0x00013d01: bit 8 set = **USE_PIPELINE_
+  TOGGLE** (round-robin between the two USE pipes).  The vendor's derivation
+  is **USE_PIPELINE_0** (sgxinit.c:3640-3646, sgx540defs.h:2159-2168).
+  Changed 0x00013d01 -> 0x00013c01 (one bit) and the pipeline CAME ALIVE:
+
+    entry(0x07)  0x9d4 -> 0xd2a -> ... 0x15b2   CLIMBING (x2 per fetch)
+    tick(0x2c)   0x5e9 -> 0x794 -> ... 0x971    CLIMBING (seeded counter)
+    USE0_SERV_EVENT  0x00010696                 count = the fetch count --
+                                                tasks admitted AND retired
+    USE1_SERV_EVENT  0x00010000                 pipe 1 idle (PIPE_0)
+
+  With TOGGLE, the event tasks alternated between the two USE pipes (both
+  queues read count 1 earlier); a stuck pipe would block the toggle forever
+  -- the one-dispatch-then-stuck signature.  With PIPE_0 every dispatch
+  works.
+
+  THE UAPI SUITE ON THE LIVE PIPELINE (the first real job completions in the
+  port's history):
+
+    submit-null-job         null job signalled in 946 us / 427 us   ok
+    submit-null-job-many    600 null jobs in 91 ms                  ok
+    submit-null-job-timeline / -chain / -cache-ranges / -vm-destroyed  ok
+    submit-all-or-nothing / submit-invalid / submit-other-file /
+    submit-wait-unsignalled / rt-dataset-* / context-* / mmap-bo ...
+    -> 30/50 passed, and dmesg has NO "job timed out" lines.
+
+    resets: 0  (was one GPU reset PER JOB before this fix)
+    ccb wo 103 ro 103 issued 615 consumed 615   (the ring DRAINS)
+    irqs: 5   int 0x2/0x2                        (SW_EVENT/ACTIVE_POWER
+                                                  signalling live)
+
+  The remaining 20 failures are SGX545-shaped TEST expectations, not
+  dispatch failures: dev-query expects core_id 0x0115 / va_bits 32 /
+  heap base 0x3e000000 (ours: 0x0114 / 28 / the 28-bit sgx540_heaps), and
+  every vm_map failure maps at 0x3e000000-0x3e400000 -- 32-bit addresses a
+  28-bit VM correctly refuses (-22).
+
+  BOOTCTR at the fix: 0x28 (top-up fired during the session, healthy).
+
+PRESERVED ON THE UNIT
+---------------------
+/lib/firmware/powervr_sgx/sgx540_ukernel.bin.working = 3fbbd11b (kick10)
+/lib/modules/.../powervr_sgx.ko.working              = 10c6f435 (the fix)
+The live files ARE this pair.  .pre-doutu (0e0fea3b), .prelaunch, .pre-
+loopback, .dmsage, .predump, .pre-doorbell (94eaea61 = the session-76
+wrap-up) all preserved beside them.
