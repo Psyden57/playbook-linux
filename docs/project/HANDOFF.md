@@ -97,8 +97,8 @@ unable to guess, or show that the stream is not the difference.
   * `eurasia/unittests/sgx_render_flip_test/sgx_render_flip_test.c`
     (the reference stream builder; it also calls
     `USEGenWriteStateEmitProgram` at `:2449`/`:3099`).
-  * `eurasia/codegen/{pds,use,vdm}` — the record and program generators
-    (`USEGenWriteStateEmitProgram` at `usegen/usegen.c:592`).
+  * `eurasia/codegen/{pds,usegen,pixevent}` — the record and program
+    generators (`USEGenWriteStateEmitProgram` at `usegen/usegen.c:592`).
   * `eurasia/eurasiacon/opengles2/validate.c:3033-3090` — the per-block state
     record (`SetupStateUpdate`), the field layout we already matched.
   * `…/target/intermediates/pds_mte_state_copy/pds_mte_state_copy.h` — the
@@ -172,7 +172,7 @@ runs": `CLKGATESTATUS`, the VDM/TE register block, `VDM_CTRL_STREAM_BASE`.
 | region 0 | **`0x02C1DDC2`** — no flash this session.  File `boot/chainloader/kernel.img`, 10 450 520 B, sha256 `70474c01…`, magic `0xD7C82D1F` |
 | region 1 | sha256 **`20a5edd3a791a37ef5e6ab9a50d1c83f8967d8257ed76c9fe23a318d4b887422`** — re-hashed **live** this session |
 | hd3 | the session-71 rebake **`5d3eac8f…`** at `0x4915`, grown to 62.5 G; `/dev/loop0` ext4 rw, 941.7 M used |
-| `BOOTCTR_FCTRY` | **`0x30`** on the wrap-up boot (`pbrpmb: topup: … = 30000000`, above threshold, no write).  On the first deploy boot it read `0x1d` and the top-up fired (`0x1d -> 0x32`, `PASS`).  Self-maintaining; this session cost ~7 boots |
+| `BOOTCTR_FCTRY` | **`0x30`** on the wrap-up boot (`pbrpmb: topup: … = 30000000`, above threshold, no write).  It had drained to **`0x1d`** on a deploy boot, where the top-up fired (`0x1d -> 0x32`, `PASS`, RPMB counter 12659).  Self-maintaining |
 | CPU | `nproc` 2; PID 1 affinity **`0,1`** |
 | GPU | `card1`/`renderD129` = **`powervr_sgx`**; `card0`/`renderD128` = `omapdrm`.  Status at the close: `firmware running: 1 lost: 0 resets: 13 irqs: 0` (13 resets from the bisection; no IRQ storm that boot) |
 | firmware | `/lib/firmware/powervr_sgx/sgx540_ukernel.bin` = **`kick18ccb`** (wrapped md5 `d4087521…`; kick10 flags + UK_ENTRYFIRST/UK_TICKLOG/UK_NO_PHAS/UK_TIMERDIV + **`UK_CCBTRACE` without `UK_WAITLOG`**; the session-79/80 fixes and the pruned `TA_TE`).  Preserved beside it: **`.kick17ccbtrace` `79bffc34…`** (the invalid CCBTRACE+WAITLOG build — do not cite its 0x38 value), `.kick16tail` `744b072d…` (session 80), `.kick15pds` `24322c2a…`, `.kick14otpm`, `.kick13inv`, `.kick12inv`, `.kick11wl`, `.kick10live`, and **`.working` = kick10 `3fbbd11b…`** |
@@ -233,8 +233,9 @@ python3 ukernel/golden/check.py                    # SGX545 golden 83b5b0a7…
 # 3. wrap it -- build.py's output is raw and the driver will reject it
 python3 drm/tools/mkukfw.py /tmp/<id>.bin -o /tmp/<id>w.bin --manifest /tmp/<id>.json
 python3 drm/tools/mkukfw.py --check /tmp/<id>w.bin                            # ok
-# 4. push (hd3 has NO scp/sftp-server -- trap 391); preserve the old file first
-cat /tmp/<id>w.bin | tools/pbssh.sh 'cat > /lib/firmware/powervr_sgx/<name>.new; md5sum …'
+# 4. push (hd3 has NO scp/sftp-server -- trap 391); preserve the old file first.
+#    NOTE: cwd is local/work/powervr_sgx, so the helper is ../../tools/pbssh.sh
+cat /tmp/<id>w.bin | ../../tools/pbssh.sh 'cat > /lib/firmware/powervr_sgx/<name>.new; md5sum …'
 # 5. module: build BOTH source copies (env.sh lives at the REPO root)
 . ../../tools/env.sh
 cp drm/powervr_sgx/*.c drm/powervr_sgx/*.h \
@@ -246,13 +247,14 @@ cd ../../kernel-tree-sgx && make ARCH=arm CROSS_COMPILE=$CROSS_COMPILE \
 #    state-emit USE program; SGXGEN_* env knobs change the stream at run time
 #    (see tools/gen/sgxgen.c "VDM-stream bisection").
 python3 tools/gen/mkusse.py > tools/gen/usse_progs.h     # needs SGX_ASM
+TC=$PWD/../../toolchains/armv7-eabihf                    # local/toolchains/armv7-eabihf
 arm-buildroot-linux-gnueabihf-gcc -static -O2 -Wall -DSGXGEN_DRM \
   -Idocs/uapi -Itools/gen \
   -I$TC/arm-buildroot-linux-gnueabihf/sysroot/usr/include/drm \
   -o /tmp/pb-frame drm/tests/powervr_sgx_frame.c tools/gen/sgxgen.c -lm
-#    ($TC = local/toolchains/armv7-eabihf; the `s` warning in main is
-#    pre-existing).  Push as /tmp/powervr_sgx_frame.* and chmod +x (an upload
-#    through `cat >` loses the exec bit).
+#    (the `s` warning in main is pre-existing).  Push as
+#    /tmp/powervr_sgx_frame.* and chmod +x (an upload through `cat >` loses the
+#    exec bit).
 # 7. reboot -f only for a firmware/module change; a tool change needs none.
 #    Confirm `open microkernel <id>` in dmesg (trap 390); run the null family
 #    FIRST, then the render, reading the GPU's registers mid-hang:
@@ -263,7 +265,7 @@ arm-buildroot-linux-gnueabihf-gcc -static -O2 -Wall -DSGXGEN_DRM \
 ## 4. Useful local extracts
 
 * `docs/captures/sgx540-first-render-2026-11-27.txt` — **the whole campaign,
-  now ten boots**: sessions 79/80 and **five session-81 sections** (the
+  sessions 79–81**: sessions 79/80 and **five session-81 sections** (the
   `UK_CCBTRACE` measurement, IDXFIFO, the panel/DMM mechanism, the static DDK
   reading, and the **VDM-stream bisection**).  Read it before quoting anything.
 * `docs/sessions/session-81.md` — the session note (what is *not* in the docs
@@ -274,7 +276,7 @@ arm-buildroot-linux-gnueabihf-gcc -static -O2 -Wall -DSGXGEN_DRM \
   `golden/check.py`, `cores/{sgx540,sgx545}.py`.
 * **The DDK's reference frame builder** (session 82's subject):
   `eurasia/unittests/sgx_render_flip_test/sgx_render_flip_test.c`, plus
-  `eurasia/codegen/{pds,use,vdm}` and
+  `eurasia/codegen/{pds,usegen,pixevent}` and
   `eurasia/eurasiacon/opengles2/validate.c` (`SetupStateUpdate` at
   :3033-3090).
 * `docs/contradictions/sgx540-cache-ctrl-breaks-dispatch.md` — the unresolved
