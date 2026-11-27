@@ -22,6 +22,45 @@ stream and the state-load programs it names, check every record type against
 `sgx540defs.h` and the vendor's own stream builder, then the `TA_TE` tail
 hygiene, and one render to see whether the stall moved.
 
+## Second continuation (same session): trap 417 settled, and the state-load
+programs decode clean
+
+No boot — the state program dump and one register read.
+
+* **`EVENT_STATUS2 = 0x10` is non-discriminating (trap 417, now settled).**  It
+  reads `0x10` on an **idle** driver with no job submitted, and is unchanged
+  through a null job, through a full render, and mid-hang 1.2 s in.  Verified
+  by disassembly that nothing on this stack writes it: our image has **seven
+  stores to word 69 (`HOST_CLEAR2`) and zero to word 70 (`EVENT_STATUS2`)**, and
+  `srvinit` writes only `EVENT_HOST_ENABLE`/`_ENABLE2`.  ⇒ **Session 79's
+  "the TA task STARTS" is not supported by that bit**; read it as "the host
+  delivered the kick and the µkernel consumed it", which the CCB counters do
+  show.  `ukernel.py:62` also cited the SGX545's TRIG_TA (`0x80`/b7); the 540's
+  is `0x10`/b4.  Both corrected.
+* **The 540 header names what we called "unnamed" (trap 418):** `0x200` is
+  `EUR_CR_VDM_START`, `0x428` is `EUR_CR_ISP_START_RENDER`, `0x684`/`0x680` are
+  `EUR_CR_DPM_TASK_TA_FREE`/`_3D_FREE`, `0x694`/`0x698` are
+  `EUR_CR_DPM_TASK_STATE`/`_CONTROL`.  The 540 has **no** `VDM_TASK_KICK`, so
+  `VDM_START` is the TA kick — and the vendor's µkernel starts the VDM with
+  exactly `CTRL_STREAM_BASE <- ptr; VDM_START <- 1` (`ta.asm:925-939`).
+  Comments corrected; the wrapped image rebuilds **byte-identical**
+  (`744b072d…`), so nothing was re-deployed.
+* **Checked and matching (do not re-derive):** our `TA_TE` register order is
+  byte-for-byte the vendor's 540 order (`ta.asm:3439-3460` ∘
+  `SGXMKIF_TAREGISTERS`); that struct is 17 words on this core (the GSG*/VDM-PDS
+  tail is `#if defined(SGX545)`); `dpm_load` writes CLEAR=2 and waits
+  `EVENT_STATUS 0x240` = the *CLEAR* done bits (the 540's `#else` branch, since
+  `SGX_FEATURE_RENDER_TARGET_ARRAYS` is unset); `dpm_freelist` writes LOAD=1 and
+  acks `HOST_CLEAR2` like `LTAPB_WaitForPBLoad`; the stream at `0x42000` is
+  inside the general heap `{0x1000, 0x04400000}`.
+* **The state-load programs decode clean.**  Splitting each dump at
+  `data_rows*4` words gives 540 code that is exactly our own `state_block()`
+  shape (`tst;bra;doutd;tst;bra;doutd;doutu;halt`) and the empty stub's
+  `0x07000345 0xaf000000`.  No divergence.  (Instrument note: state[10]'s info
+  word is `0x0800e103`, rows=2 — reading it a word off produced a 36-word
+  over-read of data-as-code; documented so the next reader splits at
+  `data_rows*4`.)
+
 ## Confirmed (measured, read in a file, or seen on the bench)
 
 * **The bench matched the handoff exactly on arrival** — `kick15pds`

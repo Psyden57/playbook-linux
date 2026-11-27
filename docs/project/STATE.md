@@ -34,6 +34,24 @@ VDM↔USE handshake.  Everything else on the stream axis is now excluded by
 measurement.  Traps **416/417**; the capture's "SESSION 80 CONTINUATION"
 section is the record.
 
+**Two corrections landed in the same session (traps 417/418).**  (1)
+**`EVENT_STATUS2 = 0x10` is non-discriminating** — it reads `0x10` on an *idle*
+driver and through every path, verified by disassembling our own image (zero
+stores to word 70 `EVENT_STATUS2`, seven to word 69 `HOST_CLEAR2`), so
+**session 79's "the TA task STARTS" is not supported by that bit**; read it as
+"the host delivered the kick and the µkernel consumed it".  What still shows the
+VDM running: `CLKGATESTATUS` (VDM/MTE/UCACHEL2/USE0 awake), the VDM/TE
+register block, `VDM_CTRL_STREAM_BASE = 0x42000`.  (2) The 540 header **names**
+what our code called "unnamed" — `0x200` = `EUR_CR_VDM_START` (and there is no
+`VDM_TASK_KICK` on this core, so `VDM_START` *is* the TA kick), `0x428` =
+`EUR_CR_ISP_START_RENDER`, `0x694/0x698` = `EUR_CR_DPM_TASK_STATE`/`_CONTROL`
+(`CLEAR`=2), `0x684/0x680` = `EUR_CR_DPM_TASK_TA_FREE`/`_3D_FREE` (`LOAD`=1).
+Checked against the vendor and **matching**: the `TA_TE` register order, the
+17-word `SGXMKIF_TAREGISTERS`, `dpm_load`'s CLEAR write + `0x240` CLEAR-wait,
+`dpm_freelist`'s LOAD/ack shape.  The dumped **state-load programs decode clean**
+as our own `state_block()` records.  Comments corrected; the wrapped firmware
+rebuilds byte-identical (`744b072d…`), so nothing was re-deployed.
+
 **Bench**: region 0 `0x02C1DDC2` (no flash), region 1 `20a5edd3…`, hd3 the
 session-71 rebake.  Live firmware **`kick16tail`** (`744b072d…`); preserved
 beside it `.kick15pds` (`24322c2a…`), the earlier variants and **`.working` =

@@ -97,46 +97,60 @@ starts and never finishes: `EVENT_STATUS2 TRIG_TA` at the driver's 2 s
 timeout, no `TA_FINISHED`, `DPM_PAGE_STATUS 0`, the TE never starts, nothing
 faults, nothing is written.
 
-**What has never been checked on the 540 is two things, in order:**
+**What has never been checked on the 540 is now ONE thing: the VDM↔USE
+state-load handshake itself.**  (The previous handoff named two; session 80
+checked the first.)
 
-1. **The content of the client state-load PDS/USE programs** the five STATE
-   records name.  They are now dumped (`vdm_state[0/8/10/18/23]`, session 80 —
-   real programs in the PDS-vertex ring, not stubs), so this is a static job
-   that costs no boot: disassemble each with `sgx-disasm -c sgx540` (it will
-   refuse or garble what the 540 does not decode) and check every instruction
-   against the 540's USSE/PDS encoding.  Every one was assembled from
-   545-derived macros.
-2. **The VDM↔USE state-load handshake itself** — the state-load task is the
-   only client code the TA runs before the TE, and the USE side is the one
-   unit left whose state the status dump cannot show.
+1. ~~The content of the client state-load PDS/USE programs~~ — **DONE
+   (session 80): they decode clean.**  Splitting each dump at `data_rows*4`
+   words gives 540 code that is exactly our own `state_block()` record
+   (`tst;bra;doutd;tst;bra;doutd;doutu;halt`, and the empty stub's
+   `0x07000345 0xaf000000`); `0x0800e103` is a legitimate secondary record.
+   No divergence.  **Do not re-open this** unless a *specific* field is
+   suspected.
+2. **The VDM↔USE handshake — the state-load task is the only client code the
+   TA runs before the TE, and it is the one thing left.**  The USE side is the
+   only unit whose state the status dump cannot see.
 
 **Method.**
 
-1. **Static first, no boot.**  Disassemble the dumped state-load programs (the
-   capture has them word for word; re-dump with
-   `SGXGEN_DUMP_PROGS=1 /tmp/powervr_sgx_frame -n 1`).  Compare each against
-   `mesa/src/sgx/pds/` and the DDK's `eurasiacon/.../pds.asm` producers.
-2. **Then ONE boot with a USE-side instrument.**  The `status` dump already
-   carries `USE0_SERV_EVENT`/`USE1_SERV_EVENT`/`LOOPBACK`; add whatever per-unit
-   register the 540 header *names* (trap 369 — read only named registers) and
-   read it mid-hang (background the frame tool, `sleep 1`, `cat status`).
-3. **Do NOT** re-run the stream-encoding experiments (trap 416), the `TA_TE`
-   tail (closed), the TA register tables (0a), or `CACHE_CTRL`'s PARTDM fields
-   (trap 411 + the contradiction file).
+1. **The newest, sharpest observation (session 80, trap 419): `IDXFIFO` wakes
+   mid-hang and LATCHES.**  `CLKGATESTATUS` sampled 7× at 0.3 s intervals goes
+   `0x001000a0` at t=0 then `0x001800f0` for t=1…6 — the wake set over idle is
+   **{MTE b4, VDM b6, IDXFIFO b19}**, TE never wakes.  **IDXFIFO is the index
+   FIFO, the VDM's first read of a draw, and the SGX545 header does not mention
+   it at all** — so it is the one unit this whole 545-derived port was written
+   without.  There is no index-fetch *control* register (only the clock gate,
+   override, status and reset bits), so the experiment is the gate:
+   `EUR_CR_CLKGATECTLOVR` b16-17 (`IDXFIFO_CLKO`) to pin it ON for a run, and
+   `SOFT_RESET` b16 (`IDXFIFO_RESET`).  Both **named** (trap 369 satisfied).
+2. **Read the USE-side counters mid-hang too** (no boot): `USE0_SERV_EVENT`
+   (0x0b10) / `USE1_SERV_EVENT` (0x0b1c) are COUNT b0-15 / EMPTY b16 service
+   queues, and `LOOPBACK` (0x0b04) — all already in the `status` dump.
+   Session 80 measured USE0's count climbing through the hang and pipe 1 idle,
+   i.e. the EDM is alive and the *render* is what is stuck.
+3. **Do NOT** re-run: the stream-encoding experiments (trap 416), the `TA_TE`
+   tail (closed), the state-load program *content* (done — decodes clean), the
+   TA register tables (0a), the doorbell read-back (trap 407), `CACHE_CTRL`'s
+   PARTDM fields (trap 411), or Mesa/compositor work.
 
 **Interpretation:**
-* A state-load program that does not decode as 540 code, or that touches a
-  register the 540 header does not name → that is the fault; fix per-core,
-  SGX545 golden byte-identical, then one render.
-* The USE unit's counters show the task admitted and never retired → the
-  handshake, not the program.
+* Pinning `IDXFIFO` ON changes nothing → the fetch is not gate-limited; the
+  stall is in what it fetched or the VDM's consumption of it.
+* Pinning it ON *moves* the stall (TE starts, DPM allocates) → the auto-gate is
+  the wall and the 540's `CLKGATECTL`/override handling is the bug.
 * The TE starts / pixels appear → the whole stream axis was the wall; walk
   `do_3d` next (it has never run either) toward the frame loop.
 
-**A caution the session earned (trap 417):** `EVENT_STATUS2 = 0x10` at the
-timeout is read as `TRIG_TA` latching, but nobody has taken the cheap control —
-read `EVENT_STATUS2` *before* the kick.  If it is already 0x10, the latch is
-the launch's, not this kick's, and "the TA starts" needs a different proof.
+**SETTLED (trap 417) — do not build an argument on `EVENT_STATUS2`.**  It reads
+`0x10` (`TRIG_TA`) on an **idle** driver and through every path (null job, full
+render, mid-hang), and nothing on this stack writes it — our image has zero
+stores to word 70 and `srvinit` writes only the two `EVENT_HOST_ENABLE`
+registers.  **Session 79's "the TA task STARTS" is not supported by that bit**;
+it means "the host delivered the kick and the µkernel consumed it", which the
+CCB counters show.  What *does* show the VDM running: `CLKGATESTATUS`
+(VDM/MTE/UCACHEL2/USE0 awake), the VDM/TE register block, and
+`VDM_CTRL_STREAM_BASE = 0x42000`.
 
 ## 0c. The media, and the way back
 

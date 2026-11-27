@@ -4394,20 +4394,129 @@ report 121 §3/§11/§12.
         PDS-vertex ring), or the VDM↔USE handshake itself.  (Session 80;
         capture `sgx540-first-render-2026-11-27.txt` continuation.)
 
-417. **"`EVENT_STATUS2` reads `0x10` at the timeout" does not by itself prove
-        the TA started — check who *sets* the bit before reading it as a
-        trigger.**  `0x10` is `EUR_CR_EVENT_STATUS2_TRIG_TA` (sgx540defs.h), and
-        session 79 concluded from its latch that "the TA task was kicked and
-        started".  But the same register has a `HOST_ENABLE2` twin whose
-        `TRIG_TA` bit is bit 4 as well, and the µkernel writes `HOST_CLEAR2`;
-        a bit can be stale from the launch rather than set by this kick.  The
-        independent corroboration for session 79's reading is that it is *not*
-        a `TRIG_3D` bit and that the launch's own path demonstrably dispatches
-        — but the cheap control is `EVENT_STATUS2` **before** the kick, which
-        session 79 did not take.  Record the register state before a kick as
-        well as at the timeout.  (Session 80; the same latch reproduces on both
-        firmware builds and with every stream variant, so its constancy is
-        itself weak evidence that it is not this kick's.)
+417. **SETTLED — `EVENT_STATUS2 = 0x10` is NON-DISCRIMINATING: it reads 0x10 on an
+        IDLE driver, so it is not evidence that a kick happened.**  `0x10` is
+        `EUR_CR_EVENT_STATUS2_TRIG_TA` (sgx540defs.h) — the SGX545's TRIG_TA is
+        `0x80`/b7, and `ukernel/ukernel.py:62` still cites the 545's value.
+        Session 79's headline ("the TA task STARTS — `EVENT_STATUS2 TRIG_TA`
+        latches at the driver's timeout") rests on this bit; measured this
+        session, it does not support that claim:
+
+        | state | `EVENT_STATUS2` |
+        |---|---|
+        | idle, before any job | **`0x00000010`** |
+        | after a null job (the path that completes) | `0x00000010` |
+        | after a full render job (the stall) | `0x00000010` |
+        | at the 2 s timeout, in flight | `0x00000010` |
+
+        Who writes it: **nobody on this path** — verified by disassembling our
+        own image, not by grep: `sgx-disasm -c sgx540` on
+        `ukernel/build.py sgx540` output shows **seven stores to word 69
+        (`0x114`, `HOST_CLEAR2`) and ZERO to word 70 (`0x118`,
+        `EVENT_STATUS2`)**.  `srvinit` writes only `EVENT_HOST_ENABLE`/
+        `_ENABLE2` (`sgxinit.c:3897-3918`).  So the bit is a constant here and
+        any argument built on it is built on nothing.
+
+        **What still supports "the VDM runs":** `CLKGATESTATUS` gaining
+        VDM/MTE/UCACHEL2/USE0 over idle, the VDM/TE register block being
+        programmed with correct values, and `VDM_CTRL_STREAM_BASE` pointing at
+        the client's stream.  **What does NOT:** the STATUS2 latch, and
+        therefore the word "STARTS" in session 79's headline should be read as
+        "the host delivered the kick and the µkernel consumed it" — which is
+        what the CCB counters show — not as "the TA began executing".
+
+        **The cheap control this trap asked for, now taken:** read the register
+        **before** the kick as well as at the timeout.  It took one `cat`.
+        (Session 80; `docs/captures/sgx540-first-render-2026-11-27.txt`.)
+
+418. **The 540's `0x200` and `0x428` ARE named — in the 540 header, not the
+        vendored 1.17 one — and the 540 has no `VDM_TASK_KICK`.**  Our
+        `ukernel/cores/sgx540.py` carried `CR_TA_KICK = 0x200` ("unnamed") and
+        `CR_3D_KICK = 0x428` ("unnamed").  The DDK 1.8 `sgx540defs.h` names
+        both: **`0x200 = EUR_CR_VDM_START`** (:819, `PULSE_MASK` = 1) and
+        **`0x428 = EUR_CR_ISP_START_RENDER`** (:1207).  It also has **no**
+        `EUR_CR_VDM_TASK_KICK` (the SGX545's 0x1F8), which settles the polarity
+        question the "kick" naming raised: on this core `VDM_START` *is* the TA
+        kick, and the vendor's own µkernel starts the VDM with exactly
+        `CTRL_STREAM_BASE <- ptr; VDM_START <- 1` (`ta.asm:925-939`).
+        Corrected in place with the citations.  Related C facts gathered at the
+        same time and checked against our code (all **verified matching**, do
+        not re-derive):
+        * the vendor's 540 TA register order (`ta.asm:3439-3460`, read from
+          `SGXMKIF_TAREGISTERS` in struct order) is TE_AA, TE_MTILE1,
+          TE_MTILE2, TE_SCREEN, TE_MTILE, TE_PSG, **VDM_CTRL_STREAM_BASE**,
+          MTE_CTRL, … — **identical to our `TA_TE`**;
+        * `SGXMKIF_TAREGISTERS` is **17 words** on the 540 (TE_AA..BIFTAReqBase
+          + MTEWCompare/WClamp/MTEScreen/USELDRedirect/USESTRange); the GSG*
+          and VDM-PDS tail exists only under `#if defined(SGX545)` — which is
+          why session 80 could prune it;
+        * `dpm_load` writes **CLEAR (2)** to 0x694/0x698, and the 540 takes the
+          vendor's `#else` branch (`SGX_FEATURE_RENDER_TARGET_ARRAYS` is **not**
+          set) whose wait is `EVENT_STATUS` `0x240` = `DPM_STATE_CLEAR`(0x40) |
+          `DPM_CONTROL_CLEAR`(0x200) — **not** the LOAD bits.  Ours matches;
+        * `dpm_freelist` writes **LOAD (1)** to 0x680/0x684
+          (`EUR_CR_DPM_TASK_3D_FREE`/`_TA_FREE`) and waits `EVENT_STATUS2` b0/b1
+          then acks `HOST_CLEAR2` — the same shape as the vendor's
+          `LTAPB_WaitForPBLoad` (`sgx_utils.asm:1071-1097`).  Ours matches;
+        * the client's VDM stream at `0x00042000` lies inside the general heap
+          `{0x1000, 0x04400000}` on this core, so it is mapped for the client.
+        **Still unexplained, low value:** `TE_PSG` (0x218) is *not* in the
+        vendor 540 microkernel's write set (`ta.asm` only ORs
+        `COMPLETEONTERMINATE` b22 on the terminate path, and
+        `ENABLE_CONTEXT_STATE_RESTORE` b24 at `ta.asm:4349`, which is
+        context-switch-only), yet our read-modify-write makes it read
+        `0x01000000` = b24.  It is a *signature* register by its neighbours
+        (`MTE_SIG1/2`, `TE1/TE2`), so it may be read-only and the "always bit"
+        may be hardware's.  (Session 80.)
+
+419. **`IDXFIFO` — the index FIFO — wakes mid-hang, and it EXISTS ONLY ON THE
+        SGX540.**  Reading `CLKGATESTATUS` at three points in one boot (idle,
+        1.2 s into the stalled render, and after the driver's 2 s reset):
+
+        | | `CLKGATESTATUS` |
+        |---|---|
+        | idle | `0x001000a0` |
+        | mid-hang | `0x001800f0` |
+        | after the reset | `0x001000a0` (bit-identical to idle — the reset restores it) |
+
+        Isolated against the header's own `EUR_CR_CLKGATESTATUS_*_CLKS_MASK`
+        values, the units that are awake only mid-hang are **MTE (b4), VDM (b6)
+        and IDXFIFO (b19)**; TA/DPM/PDS are awake throughout and **TE (b3) never
+        wakes at any point**.  Session 79 recorded the wake set as
+        {VDM, MTE, UCACHEL2, USE0}; the sample above adds **IDXFIFO**, which is
+        the one that matters: the index FIFO is the VDM's **first read of a
+        draw** (the primitive's index list), so "the index fetch started and did
+        not finish" is what the clock gates say.
+
+        Two facts that make this a 540-specific blind spot:
+        * **the SGX545 header does not mention IDXFIFO once** — it is a 540-only
+          unit, so every 545-derived table, mask and instrument in this port was
+          written without it.  (Consistent with the fact-sheet's note that the
+          540's `CLKGATECTL` gates IDXFIFO and TA too, so the mask must be
+          `GENMASK(19,0)`.)
+        * there is **no index-fetch control register** in the 540 header: the
+          only IDXFIFO entries are `CLKGATECTL` b16-17, `CLKGATECTLOVR` b16-17,
+          `CLKGATESTATUS` b19 and `SOFT_RESET` b16.  So there is nothing to
+          program — the observable is the gate and the reset.
+
+        Live `CLKGATECTL = 0x000a66aa` has IDXFIFO = 2 (**AUTO**), as does
+        every unit except DPM and PDS (forced ON), so this is not a
+        mis-programming by itself.
+
+        **It LATCHES — sampled 7x at 0.3 s intervals through the whole hang:
+        `0x001000a0` at t=0, then `0x001800f0` at every one of t=1…6.**  So the
+        index fetch is *held on*, not cycling: the VDM opened the index FIFO,
+        the unit stayed clocked, and the draw never completed.  That is a stall
+        *inside* the fetch or the first record it consumed, not a gate
+        flickering.
+
+        **Next test (session 81):** pin the gate ON for a run to see whether the
+        stall moves — `EUR_CR_CLKGATECTLOVR` b16-17 (`IDXFIFO_CLKO`) and
+        `SOFT_RESET` b16 (`IDXFIFO_RESET`) are both named, so it is a one-boot
+        experiment on named registers (trap 369 satisfied).  Also worth capturing
+        the *first* sample sooner (the `do_ta` kick is at the start of the
+        window, so t=1 is up to 0.3 s late).  (Session 80; capture
+        `sgx540-first-render-2026-11-27.txt`.)
 
 ## 3. Corrections to older reports
 

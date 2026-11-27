@@ -381,3 +381,155 @@ re-associate (`wlan0: regulatory prevented using AP config, downgraded` — the
 the close the `open microkernel kick16tail` line had wrapped out of dmesg
 (trap 390), so the live firmware is identified by the file hash
 `744b072d…`.
+
+
+SESSION 80, SECOND CONTINUATION — trap 417 settled by one `cat`, and the
+state-load programs decode clean
+=====================================================================
+No boot: the state-load programs are dumped by the tool, and the STATUS2
+control costs one register read.
+
+TRAP 417 SETTLED — `EVENT_STATUS2 = 0x10` is NON-DISCRIMINATING
+----------------------------------------------------------------
+Session 79's headline is "the TA task STARTS (`EVENT_STATUS2 TRIG_TA` latches
+at the driver's timeout)".  Reading the register on an IDLE driver, before any
+job, gives **`0x00000010`** — and it is unchanged by a null job (the path that
+completes) and by a full render job (the stall):
+
+    idle, before any job          0x00000010
+    after submit-null-job         0x00000010
+    after powervr_sgx_frame -n 1  0x00000010
+    in flight at the 2 s timeout  0x00000010
+
+All four read directly, the last one by backgrounding the frame tool and
+sampling 1.2 s into the hang (`EVENT_STATUS` alongside it is `0` every time).
+
+Who could write it: disassembling our own image (`sgx-disasm -c sgx540`) gives
+**seven stores to word 69 (0x114 `HOST_CLEAR2`) and ZERO to word 70 (0x118
+`EVENT_STATUS2`)**; `srvinit` writes only `EVENT_HOST_ENABLE`/`_ENABLE2`
+(`sgxinit.c:3897-3918`).  So the bit is a constant on this stack.  The
+`ukernel.py:62` comment also cited the **SGX545's** TRIG_TA (0x80/b7); the
+540's is 0x10/b4.
+
+⇒ "the TA STARTS" must be read as "the host delivered the kick and the µkernel
+consumed it" (which the CCB counters show), not "the TA began executing".  What
+still supports the VDM running: `CLKGATESTATUS` (VDM/MTE/UCACHEL2/USE0 awake),
+the VDM/TE register block, `VDM_CTRL_STREAM_BASE = 0x42000`.
+
+THE 540 HEADER NAMES WHAT WE CALLED UNNAMED (C facts; code comments corrected)
+------------------------------------------------------------------------------
+    our name      offset   sgx540defs.h
+    CR_TA_KICK    0x200    EUR_CR_VDM_START          (:819, PULSE_MASK=1)
+    CR_3D_KICK    0x428    EUR_CR_ISP_START_RENDER  (:1207)
+    CR_DPM_TA_FL  0x684    EUR_CR_DPM_TASK_TA_FREE  (_LOAD_MASK=1)
+    CR_DPM_3D_FL  0x680    EUR_CR_DPM_TASK_3D_FREE  (_LOAD_MASK=1)
+    CR_DPM_STATE  0x694    EUR_CR_DPM_TASK_STATE    (_CLEAR_MASK=2)
+    CR_DPM_CONTROL 0x698   EUR_CR_DPM_TASK_CONTROL  (_CLEAR_MASK=2)
+There is **no** `EUR_CR_VDM_TASK_KICK` (the 545's 0x1F8) on the 540, so
+`VDM_START` *is* the TA kick — and the vendor's own µkernel starts the VDM
+with exactly `CTRL_STREAM_BASE <- ptr; VDM_START <- 1` (ta.asm:925-939).
+
+Verified MATCHING against our code (do not re-derive):
+  * the vendor's 540 TA register order (ta.asm:3439-3460, read from
+    `SGXMKIF_TAREGISTERS` in struct order) — TE_AA, TE_MTILE1/2, TE_SCREEN,
+    TE_MTILE, TE_PSG, **VDM_CTRL_STREAM_BASE**, MTE_CTRL, … — is byte-for-byte
+    our `TA_TE`'s order;
+  * `SGXMKIF_TAREGISTERS` is **17 words** (TE_AA..BIFTAReqBase); the GSG*/VDM-PDS
+    tail is `#if defined(SGX545)` only — which is why the session-80 prune was right;
+  * `dpm_load` writes **CLEAR = 2** and waits `EVENT_STATUS 0x240` =
+    `DPM_STATE_CLEAR(0x40)|DPM_CONTROL_CLEAR(0x200)` — the vendor's 540
+    `#else` branch (`SGX_FEATURE_RENDER_TARGET_ARRAYS` is NOT set), not a LOAD wait;
+  * `dpm_freelist` writes **LOAD = 1** and waits `EVENT_STATUS2` b0/b1 then acks
+    `HOST_CLEAR2` — the vendor's `LTAPB_WaitForPBLoad` shape (sgx_utils.asm:1071-1097);
+  * the VDM stream at 0x00042000 is inside the general heap {0x1000,0x04400000}.
+
+THE STATE-LOAD PROGRAMS decode as the records the generator intends
+-------------------------------------------------------------------
+Splitting each dump at `data_rows*4` words and disassembling the code gives
+clean 540 code — and it is *our own* `state_block()` shape:
+
+    vdm_state[0]  (0x0e801200)  tst;bra;doutd;tst;bra;doutd;doutu;halt
+    vdm_state[8]  (0x0e801340)  the same program
+    vdm_state[10] (0x0e801400)  the 10-dword vertex-secondary block
+    vdm_state[18/23](0x0e801100)  MOVS(MV,0,0,0,1,2,2,DOUTU); HALT = 0x07000345,
+                                0xaf000000 — exactly `pds_secondary(src=0)`
+i.e. `87000000 90000006 07000203 / 87040000 90000006 07040203 / 07080305
+af000000`, which is the `tst; bra; doutd; tst; bra; doutd; doutu` program
+`state_block()` assembles.  `0x0800e103` (state[10]'s info word) decodes as
+data_rows 2, USEPIPE 7, SECONDARY 1 — a legitimate secondary record, SEC_EXEC 0
+as the 540 requires.  No divergence found here; the state-load *content* is not
+obviously wrong.
+
+A NOTE ON THE INSTRUMENT ITSELF: `vdm_state[10]`'s info word is
+`0x0800e103` (rows = 2), not the `02400009` a first parse suggested — a state
+record's info word is the *next* stream word, and reading it one word off gave
+a 36-word over-read.  Splitting by `data_rows*4` (as above) is the correct
+reduction; the length rule in `dump_progs()` is `(w1>>26)*16 + 0x40` and is
+fine, but a reader must not mistake data for code.
+
+IDXFIFO WAKES MID-HANG — AND IT EXISTS ONLY ON THE SGX540
+-----------------------------------------------------------
+Reading `CLKGATESTATUS` (0x0008) at three points, one boot, no media write:
+
+    idle          0x001000a0
+    mid-hang      0x001800f0    (1.2 s into the frame tool's render)
+    after reset   0x001000a0    (bit-identical to idle, so the reset restores it)
+
+Decoded per sgx540defs.h `EUR_CR_CLKGATESTATUS_*_CLKS_MASK`, the units awake
+(isolated ones flipping):
+
+    MTE     0x000010   idle 0 -> mid 1   b4
+    VDM     0x000040   idle 0 -> mid 1   b6
+    IDXFIFO 0x080000   idle 0 -> mid 1   b19   <-- NOT in session 79's list
+    TA      0x100000   idle 1 -> mid 1
+    DPM     0x000020   idle 1 -> mid 1
+    PDS     0x000080   idle 1 -> mid 1
+    TE      0x000008   ** never wakes at any point **
+
+So the mid-hang wake set is {MTE, VDM, IDXFIFO}; session 79 recorded
+{VDM, MTE, UCACHEL2, USE0} — the difference is IDXFIFO, and UCACHEL2/USE0 are
+not latched at this sample.  **`IDXFIFO` is the index FIFO, i.e. the VDM's
+first read: the primitive's index list.**  It has no control register at all
+(sgx540defs.h's only IDXFIFO entries are the clock-gate/override/status/reset
+bits: `CLKGATECTL` b16-17, `CLKGATECTLOVR` b16-17, `CLKGATESTATUS` b19,
+`SOFT_RESET` b16), and **the SGX545 header does not mention it once** — it is a
+540-only unit, so a 545-derived image would never have gated or watched it.
+Live `CLKGATECTL = 0x000a66aa` has its field = 2 (AUTO), like every other unit
+except DPM and PDS (forced ON).  That is not a defect by itself, but it does
+mean the index fetch is *the* thing that started and did not finish.
+
+**Sampled 7× at 0.3 s intervals through the whole 2 s hang** (not one point):
+
+    t=0  0x001000a0
+    t=1  0x001800f0
+    t=2  0x001800f0
+    t=3  0x001800f0
+    t=4  0x001800f0
+    t=5  0x001800f0
+    t=6  0x001800f0
+
+It **latches once and stays** — the index FIFO is held clocked for the whole
+hang, so this is a stall *inside* the index fetch (or the first record it
+consumed), not a gate flickering or a unit that never started.
+
+USE SERVICE QUEUES: admitted, climbing, then thrown away by the reset
+--------------------------------------------------------------------
+`USE0_SERV_EVENT` (0x0b10, COUNT b0-15 / EMPTY b16) and `USE1_SERV_EVENT`
+(0x0b1c) at the same three points:
+
+    idle         USE0 0x00010bdb  USE1 0x00010000  (EMPTY: count 0)
+    mid-hang     USE0 0x00010c11  USE1 0x00010000  <-- USE0's count is CLIMBING
+    after reset  USE0 0x00010047  USE1 0x00010000  <-- thrown away by the reset
+
+`LOOPBACK` (0x0b04) reads `1` throughout.  So event work IS being admitted and
+retired continuously on USE pipe 0 while the render hangs, and pipe 1 is idle
+— consistent with the `USE_PIPELINE_0` fix (report 281) and with "the EDM is
+alive, the *render* is what is stuck".  It does not localise the stall further
+than CLKGATESTATUS already does.
+
+BENCH AT THIS SEGMENT'S CLOSE
+-----------------------------
+Unchanged from the close above (`kick16tail` `744b072d…`, module `1a2949ab…`).
+The comment-only edits to `ukernel/cores/sgx540.py` and `ukernel/ukernel.py`
+rebuild to the **same wrapped image, `744b072d…`**, and both gates pass
+(SGX545 golden `83b5b0a7…`, 8/8 offline tests) — so nothing was re-deployed.
