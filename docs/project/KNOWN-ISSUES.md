@@ -4963,8 +4963,7 @@ report 121 §3/§11/§12.
         `*_REQ_BASE` set does not name it (`TA_REQ_BASE 0x08800000` = the 3D params
         heap base, `3D_REQ_BASE 0`, `ZLS_REQ_BASE 0`, `MEM_REQ_STAT 0`); and the
         requestor field is a **mask** (`FAULT_REQ_MASK 0x3FFF`) whose per-bit names
-        the 1.8 headers do not give — bit 13 (`0x2000`) and bit 1 (`0x0002`) both
-        appear, so two different blocks write into the heap.  It is a real
+        the 1.8 headers do not give.  It is a real
         out-of-allocation write (a memory-safety defect on real hardware) but
         **not** the render blocker.  **Next:** bound the high-water mark by
         mapping growing ranges and matching the size where it stops against the
@@ -4973,6 +4972,433 @@ report 121 §3/§11/§12.
         (`resets` high) gives false "still faults" readings** — one such reading
         (eighth-part of the capture) was wrong and is corrected there.
         (Session 83; capture "SESSION 83" eighth/ninth parts.)
+
+433. **The page fault's writer is BOUNDED: it writes a fixed 5 pages (20 KiB) at
+        general-heap base + 4 MiB, and the footprint does NOT track the client —
+        so trap 432's candidate list (`pages`, `tail_pointers_size`, `mt_bytes`,
+        `MTRegionArraySize`, region sizes, strides) is ruled out.**  Session 84
+        ran HANDOFF-84 §0b after first fixing the instrument it handed over.
+
+        **The handed-over instrument could not answer the question.**  Session 83's
+        `SGXGEN_MAP_AT`/`SGXGEN_MAP_SIZE` did not add coverage: `bo_alloc`
+        **relocated the tool's own next general allocation** to the chosen
+        address, changing two things at once (mapping the target *and* unmapping
+        the baseline region), and because it only ever grows the allocation, the
+        prescribed sizes `0x1000`/`0x10000`/`0x40000` all produced the identical
+        configuration (the first general allocation is the 256 KiB `gen` ring).
+        Three of the five prescribed sweep points were duplicates.  Measured with
+        `-n 0` (setup only, no render), so no boot was spent finding it.  Fixed as
+        `map_extra_range()`: a separate range is bound at the chosen address and
+        the bump allocator steps over it, so the layout stays the baseline's
+        (verified case by case), and the tool announces
+        `sgxgen: cover <addr> +<len>`.
+
+        **Measured, three clean boots (`resets 0`), coverage at `0x400000`:**
+
+        | coverage | result |
+        |---|---|
+        | none | page fault `0x00401000`, requestor `0x2000`, status `0xe000`, write |
+        | 4 KiB / 8 KiB / 16 KiB | fault at the range **top**: `0x00402000` / `0x00404000` / `0x00405000` |
+        | 20 KiB | fault `0x00405000` |
+        | 24 KiB and above | **no fault** — `job timed out (… events 0x20000000/0x00000010)` |
+
+        So the writer covers `[0x401000, 0x406000)` = **5 pages at general-heap
+        base (`0x1000`) + 4 MiB**, and it is a **sequential forward** write (the
+        fault lands at the top of whatever is mapped; mapping `0x401000` alone
+        still faults at `0x402000`).
+
+        **The footprint is invariant to the client** — the new result.  With the
+        coverage held at 4 KiB, each of these was varied alone and the fault
+        stayed `0x00401000`: surface `64x64`, `256x256`, `512x512`; `-k 1` and
+        `-k 2`; `SGXGEN_NO_PRIM`; `SGXGEN_NO_DRAW`.  Every client size that scales
+        with those changes, so none of them is the base.  `SGXGEN_NO_STATE` alone
+        moves the write to **`0x0dc00000` = `PDS_EXEC_BASE` exactly**, so the base
+        is chosen from two field classes depending on the stream and the defect is
+        in the **offset**.
+
+        **Two things excluded on the way.**  The tool's VDM ring is `0x5000` — the
+        same 20 KiB — and doubling it to `0x8000` did **not** move the boundary
+        (coincidence, reverted and proven).  The live microkernel image
+        (`/tmp/k18.bin`) contains the word `0x00400000` three times as *data*
+        (`0x2f8`, `0x508`, `0x540`); a `limm` packs its immediate inside one
+        instruction word (`ISA.md:1604`), so decoding every instruction for
+        `imm == 0x400000` finds **none** — the 4 MiB is computed at run time, not
+        carried as a literal.
+
+        **Session 83's second fault (`0x0001f000`, requestor `0x0002`) does not
+        reproduce** with the corrected knob: it was the relocating instrument's
+        unmapped baseline ring, not a second writer.  Trap 432's "two different
+        blocks write into the heap" reading is withdrawn.
+
+        **A degraded GPU is not a witness** (trap 423/424 class): after ~15 resets
+        the sweep began returning empty messages; every number above is from a
+        boot with `resets 0`.  (Session 84; capture "SESSION 84"; tool
+        `/tmp/frame-mapto2` `f6b5c81a…`.)
+
+434. **The page fault ENDS the job in ~0.07 s — it has been masking the 2 s wall,
+        not replacing it — and the writer deposits no data when it succeeds.**
+        Two results from the session-84 continuation, both with instrument defects
+        found and fixed on the way.
+
+        **The timing.**  With `/proc/uptime` as the clock (the device's BusyBox
+        `date` has no `%N`, and my first attempt with it reported "0 ms" for
+        every run):
+
+        | coverage at `0x400000` | elapsed | result |
+        |---|---|---|
+        | 4 KiB (fault not cleared) | **0.07 s** | `job page fault at 0x00401000` |
+        | 24 KiB (fault cleared) | **2.05 s** | `job timed out (… events 0x20000000/0x00000010)` |
+
+        So the fault terminates the job almost at once (BIF raises it, the driver
+        resets) and the session-79 2 s timeout only appears underneath it.  **A
+        mid-hang measurement must clear the fault first**, or it samples a window
+        28× shorter than it believes.  This also explains why sessions 79–82 saw
+        only a silent timeout: the fault was not absent, it was unreachable (the
+        DMS_CTRL fix, trap 431, is what first got the job far enough to fault).
+
+        **The write deposits nothing.**  The coverage range is now read back
+        (`sgx_cover_map()`, pre-filled with `0xA5A5A5A5`): with the fault cleared
+        — i.e. the configuration where the writer SUCCEEDS — it reads **16384
+        dwords, 16384 untouched, 0 zeroed, 0 foreign**.  Per trap 430 that is not
+        yet evidence (no validated GPU store into a client BO exists on this
+        stack), but it is *directional*: the access deposits no data even when it
+        succeeds, which is the shape of a **page-table walk** (a PDE/PTE read or
+        an invalidate), not a mis-addressed data store.
+
+        **Two readback defects, each of which would have lied.**  (a) The pre-fill
+        must be flushed to DRAM *before* the GPU runs: glibc's `__clear_cache` on
+        ARM is `cacheflush(2)`, which **cleans** as well as invalidates, so a
+        read-time clean wrote the still-dirty pattern back over the GPU's data and
+        the first runs read all-zeros.  (b) A zeroed range cannot distinguish
+        "wrote zeros" from "never wrote", hence the fill pattern and the
+        untouched/zeroed/foreign split.
+
+        **Retracted in this session: "mapping `0x1000` makes the render done".**
+        One run printed `frame 0: render done` with `elapsed 0.04 s` and
+        `firmware running: 0` right after — that is the fence returning with the
+        firmware momentarily down (the trap-388/389 class), not a render.  On a
+        clean boot the same mapping gives the identical fault (0.05 s,
+        `0x00401000`), so nothing from that run stands.
+
+        **`BIF_FAULT`'s SB field names nothing either** (one module build,
+        reverted): `sb 0x00` — the sub-block selector below the requesting master
+        (b4-8, `sgx540defs.h:2828`) is zero, so it does not narrow requestor
+        bit 13.  Module `154bc398…`, revert `.pre-sb` `96368b07…`.
+
+        **`FIX_HW_BRN_31620` is checked and NOT implicated.**  It is in the 540
+        rev-120 block ("workaround in services"), our driver implements none of
+        it, and its constants match the fault's arithmetic exactly — a 4 MiB
+        page-table range (`BRN31620_PT_ADDRESS_RANGE_SHIFT 22`), a dummy page at
+        **offset `0x1000` in every directory** (PDE 0/PTE 1), and `0x401000` is
+        PDE 1/PTE 1.  But mapping `0x1000` does not move the fault, and covering
+        the faulting page yields a walk that deposits nothing.  So it stays
+        **unimplemented and unfalsified** — a candidate for the MMU writer, not
+        the cause.  (Session 84; capture "SESSION 84 CONTINUATION"; tool
+        `/tmp/frame-cover` `756ffd30…`.)
+
+435. **The faulting walk is STRUCTURALLY SOUND: the GPU walks to a VALID page
+        table and an EMPTY entry — so this is a well-formed translation to a page
+        the client never allocated, exactly `heap_base + 4 MiB + 1 page`.**  The
+        instrument already existed and had never been read: `pvrsgx_dump.c`'s
+        `dump_bif()` calls `dump_lookup("job's", bad->ctx->vm->mmu, addr)`, which
+        translates the faulting address **in the client directory** and prints
+        both PDE and PTE.  It rides the **devcoredump**
+        (`CONFIG_DEV_COREDUMP=y`), so `/sys/class/devcoredump/devcdN/data` holds
+        it.  Two one-variable boots:
+
+        | configuration | `job's` directory |
+        |---|---|
+        | baseline (nothing mapped at `0x401000`; PDE index 1 never created) | `pde 0x00000000 pte 0x00000000` |
+        | `0x400000` covered (a table exists at PDE 1, one page at PTE 0) | **`pde 0x8ae68001`** `pte 0x00000000` |
+
+        **Baseline: there is no page table at all for that 4 MiB block** —
+        `pde 0x00000000` in the client *and* the firmware directory.  So session
+        83's "inside the general heap, merely unallocated" was **too generous**:
+        the heap's *range* is declared in the layout
+        (`general = [0x1000, 0x04400000)`) but no table exists inside it.  The GPU
+        faults on the **walk**, not on a page.
+
+        **With a table present the PDE is valid (`0x8ae68001` = address |
+        4K page size | VALID) and the PTE is still empty.**  So the walk is
+        **structurally sound**: not a corrupt directory, not a wild pointer — a
+        correct table lookup that finds an unmapped page.  The access is a
+        legitimate translation to an address the client never allocated.
+
+        **The arithmetic is exact:** `0x401000` = general-heap base (`0x1000`) +
+        **4 MiB + 1 page**, and 4 MiB is precisely **one full page table**
+        (1024 × 4 KiB).  Two shapes fit and are now separable: (1) an address
+        computed from a 4 MiB-quantised base (something treating a PT *range
+        shift* of 22 as an address shift), or (2) a size used as an address where
+        the size is ~4 MiB.  Both are the trap-431/§124 class — a value used with
+        the wrong meaning — one level down, in the addressing rather than a
+        register field.
+
+        **Not the colour buffer.**  The 256×256 frame's general allocations are
+        all in PDE 0 (`gen 0x2000`, `vdm 0x42000`, colour `0x47000`), so the fault
+        is 4 MiB past the heap base rather than the colour buffer through a bad
+        base.
+
+        **`type 1` in the dump is the read/write bit, not a fault class** — both
+        cores set `bif_int_stat_fault_type = BIT(14)` and the 540 header defines
+        no separate fault-type field, so `type 1` = write.
+
+        **Instrument note (cost me a boot):** this kernel has **no `dismiss`
+        node**, the dump node is **consumed by the read**, and
+        `/sys/class/devcoredump/disabled` is a **one-way global kill switch** —
+        do not write to it; a reboot restores it.  Take one fault per fresh boot
+        and read the dump in the same pass.  (Session 84; capture "SESSION 84
+        THIRD PART".)
+
+
+436. **The 4 MiB the fault walks to is NOT in the TA command, the client sizes, the
+        microkernel source or any driver-read register — every TA address field is
+        sane.**  Checked after trap 435 left "address computed from a 4 MiB
+        quantity" as the hypothesis.  The live TA command does contain
+        `0x00400000`, so it was mapped word by word against `TA_TE`:
+
+        | register | command word | value | verdict |
+        |---|---|---|---|
+        | `0x218` `TE_PSG` | `cmd[0x24c]` | `0x00400000` | `BIT(22)` = `COMPLETEONTERMINATE`, a **flag** |
+        | `0x21c` `TE_PSGREGION_BASE` | `cmd[0x258]` | `0x0f025000` | 64-byte aligned, in its heap |
+        | `0x220` `TE_TPC_BASE` | `cmd[0x25c]` | `0x0f025050` | 64-byte aligned, in its heap |
+        | `0xc90` `BIF_TA_REQ_BASE` | `cmd[0x274]` | `0x08800000` | 1 MiB aligned, correct |
+
+        So every **address** the command programs is correct and the one 4 MiB-shaped
+        word is a documented bitfield.  Greps also find **no** `0x400000`, no
+        `<< 22`/`>> 22` and no 4 MiB constant in `ukernel/` (any core file) or in
+        the client generator's address paths.  The 4 MiB is therefore computed at
+        run time from a base — which is why the next step is a µkernel trace of
+        what feeds the walk, not another field check.
+
+        **Also noted (not the defect, but the same class):** the vendor's TA does
+        not *write* `TE_PSG` from the command — it **reads the register and ORs
+        into it** (`ta.asm:4346-4352`: `ldr r4, #EUR_CR_TE_PSG >> 2`, `or …`
+        `ENABLE_CONTEXT_STATE_RESTORE`, `str`).  Our port writes the command word
+        instead.  The value happens to be benign here, but it is a second place
+        where a hardware read-modify-write was replaced by a constant write —
+        check that pattern for other registers before trusting any of them.
+        (Session 84; capture "SESSION 84 FOURTH PART".)
+
+437. **The TA command's addresses are ALL well-formed; the faulting value is computed
+        inside the microkernel.**  Completed the field-by-field convention audit
+        against the vendor's *client* builder
+        (`eurasia/services4/srvclient/devices/sgx/sgxkick_client.c` — `srvclient`,
+        not `srvinit`).  Matches, so do not re-derive: `aui32SpecObject[0..2]` ->
+        our `bg_pds[0..2]` is a **straight copy** (:2481-2483) and ours are proper
+        `pds_word()` encodings; `ui32NumPixelPartitions` is a shifted **count**
+        (:896-913) and our `6<<22`/`31<<22` is right; `ui32TEState[]` is zeroed by
+        the client (:2101); `sHWRTDataDevAddr` is `base + offsetof + sel*size`
+        (:2092-2096), a finished device address, and our `rt_data`/`rt_data_entry`
+        are that shape.
+
+        The live TA command, every address well-formed:
+
+        | field | value |
+        |---|---|
+        | `TE_PSG` (0x24c) | `0x00400000` = `BIT(22)` `COMPLETEONTERMINATE`, a **flag** |
+        | `TE_PSGREGION_BASE` / `TE_TPC_BASE` | `0x0f025000` / `0x0f025050`, 64-byte aligned |
+        | `BIF_TA_REQ_BASE` | `0x08800000`, 1 MiB aligned |
+        | `render_details` / `rt_deps` / `rt_data` / `rt_data_entry` | `0x0f02c000` / `0x0f02f000` / `0x0f025000` / `0x0f025050` |
+        | `pb_desc` / `vdm_base` | `0x0f010000` / `0x0004205c` |
+
+        So nothing the command carries can produce an address at the general
+        heap's base; the bad value is computed **inside the µkernel** from values
+        it loads.  **Next, in this order:** (1) read `BIF_CTRL` b8-15
+        (`MMU_BYPASS_*`) mid-hang — a set bypass bit means it is not a walk at all,
+        and that would moot the arithmetic reasoning in one boot; (2) diff our
+        µkernel's TA/3D address arithmetic against `ta.asm`/`3d.asm` for
+        `sTARenderDetails`, `sTARTData`, `uRTDataEntry` and the
+        `sBGObjBaseDevAddr` **write** path (`3d.asm:3335-3341` writes three words
+        *through* a client-supplied address — the one place a wrong base lands
+        exactly like this fault).
+
+        **A caution recorded with it:** the "unique arithmetic fit"
+        (`0x401000 = 0x1000 + ((ta_data_base − pb_base) >> 4)`) is the difference
+        of two **fixed heap bases** — an identity any fixed layout satisfies, not a
+        value any pointer arithmetic produced.  It is a hypothesis generator, not a
+        result.  Its falsifiable prediction is that the fault moves if `pb_base`
+        moves (predict `0x003f1000` for `pb_base 0x08900000`); if it does not, the
+        line closes.  (Session 84; capture "SESSION 84" fifth/seventh parts.)
+
+438. **MMU bypass is EXCLUDED by measurement — the walk really is a walk — and a
+        latent "device address dereferenced as a pointer" defect sits in the
+        bgblock path (not this fault).**
+
+        **(a) Bypass excluded.**  `BIF_CTRL` (0x0c00) is already in the `status`
+        dump, so this cost no code change.  Sampled mid-hang with the fault
+        cleared (the job then runs its full 2 s and the BIF is genuinely
+        translating): `BIF_CTRL = 0x00000000` at idle, at 0.5 s, at 1.3 s and
+        after; `BIF_INT_STAT 0x00008000` (`FLUSH_COMPLETE` only); `BIF_FAULT 0`.
+        **Not one `MMU_BYPASS_{CACHE,VDM,TE,PBE,TSPP,ISP,USE}` bit (b8-15) is
+        set**, so every block goes through the MMU, trap 435's walk is a genuine
+        page-table walk, and the bypass hypothesis is closed by measurement.
+
+        **(b) A latent defect, not the cause.**  The vendor's 3D writes three
+        words from `aui32SpecObject` in the branch our core takes —
+        `SGX_FEATURE_RENDER_TARGET_ARRAYS` is **not** set for the SGX540 — as
+        `stad.f3` straight from the render details (`3d.asm:3321-3342`).  Our
+        µkernel computes the third word *through an address*:
+
+        ```
+        r6 = *(rd+0x114)   /* bg_pds_word: a DEVICE ADDRESS (0x0f02e000 live) */
+        r7 = *(rd+0x108)   /* inside pad_108[2] — the driver NEVER writes it, so 0 */
+        r6 = r6 + 4*r7
+        r6 = *(r6)         /* DEREFERENCE it */
+        bgblock[2] = r6
+        ```
+
+        Live values confirm the field map (`rd+0x110` = `word8` `0x0f02d000`,
+        `rd+0x114` = `bg_pds_word` `0x0f02e000`), so today the dereference lands on
+        `rd_w4`'s well-formed PDS word **by accident, because `pad_108` is zero**.
+        **It is not this fault** (the value it yields is sane) — but it reads an
+        uninitialised field as an index and treats a device address as a pointer.
+        Fix deliberately with one variable, outside a bisect: either write `0x108`
+        or take the third word from the struct as the vendor does.
+
+        **What is left:** with bypass excluded, the command clean (trap 437), the
+        client structures well-formed and the arithmetic identity withdrawn, the
+        remaining class is the µkernel computing an address from a value it loads.
+        The `sBGObjBaseDevAddr` write is still the best-shaped candidate — the one
+        place the µkernel writes *through* a client-supplied address — but its
+        base comes from an **RT-entry** word (`*(rtentry+0x10)`), not the render
+        details, so confirm that word's provenance next.
+        (Session 84; capture "SESSION 84 EIGHTH PART".)
+
+439. **`bg_block`'s provenance is CORRECT (and a parse error of mine is recorded);
+        the device-address-as-pointer in trap 438(b) is the only code defect left
+        in that path.**  Checked because the µkernel writes through `bg_block`.
+        Live RT data, parsed by word index:
+
+        ```
+        entry 0 @ rtdata+0x18:  hw_render_ctx 0e410000
+                                mt_units 2   mt_bytes 0x180
+                                bg_block 09863000   <- 3DPARAMS, correct
+                                ta_data 0c804000/0c801000/0c802000
+                                tail_pointers 0c800000 size 0x400 num_rts 1
+        ```
+
+        `PVRSGX_KRANGE_3DPARAMS` with a VM lands in the VM's own `drm_mm`
+        (`pvrsgx_vm.c:434`, base `params_3d.base = 0x08800000`), and `09863000` is
+        inside it, so the allocation is where the code says.  Our µkernel reads it
+        as `*(rtentry+0x10)`, which matches `struct pvrsgx_fw_rt_entry`
+        (`sizeof == 0x38`).
+
+        **A parse error of mine, recorded so it is not rediscovered as a finding:**
+        I first read `bg_block` as `0x0f026000` and concluded the heap was wrong.
+        That was mine — I indexed the dump's `words[]` with a **byte** offset
+        (`0x18 + 0x38*e`) instead of dividing by 4, so I read `entry_word` and
+        called it `bg_block`.  `0x0f026000` is `entry_word` and belongs in
+        kernel_data.  Second indexing slip this session; the rule is trap 116's —
+        **parse every dump by word index and divide the byte offset by four.**
+
+        **So every input to the bg-object write is confirmed correct**: `bg_block`
+        is a valid 3DPARAMS address in the client PD, `cmd+0x08/+0x0c` are proper
+        PDS words, `rd+0x114` is a valid device address, and the PB descriptor is
+        read from `command+0x24` (`0f010000` live, valid).  That *weakens* the
+        write path as the fault's source and leaves the field-by-field `ldad`-site
+        diff (below) as the next step.  Trap 438(b)'s defect — reading
+        `rd+0x108` (an unwritten pad) as an index and dereferencing a device
+        address — still stands and is still not this fault.
+
+        (Session 84; capture "SESSION 84" eighth/ninth parts.)
+
+440. **The `ldad`-site diff over the TA/3D path finds NO mixed-up field: the three PB
+        descriptors are legitimately zero, the context's PB descriptor is
+        populated, and the page directory resolves through `pdtable`.**
+        Completed the reading task trap 439 set (no boot, no build).
+
+        * **The three PB descriptors** (`sTAHWPBDesc`, `s3DHWPBDesc`,
+          `sHostHWPBDesc`, consecutive in `SGXMK_TA3D_CTL` — "KEEP THESE 3
+          VARIABLES TOGETHER FOR UKERNEL BLOCK LOAD"): `sgx_init.use.asm:1126-1127`
+          **zeroes the first two at init**, so 0 is the vendor's own "no PB" state.
+          Our control block has them at zero too (live `ta3dctl` =
+          `0f003000 0f003100 0f002000 0 0 0 0 …`) — **not a divergence**.
+          `ta.asm:604-620` compares TA/3D PBs to decide whether to idle the 3D
+          core; `3d.asm:2554-2590` is the 3D start's PB store/load/copy logic.
+        * **The render context's `sHWPBDescDevVAddr`**: live `hwctx @ 0x0e410000`
+          has `+0x18 pb_desc = 0f010000`, the same value the TA command carries at
+          `cmd+0x24`, and `+0x00 flags = 0x21` (VALID|OWN_PB).  The vendor's field
+          order differs (our struct is a flat reconstruction) but the **value** is
+          right — and copying vendor byte offsets into our structs is already
+          forbidden (trap 431's companion note).
+        * **`page_dir = 1` is a pdtable SLOT**, resolved by `pd_load()` through the
+          r14 patch (`ukernel.py:395-403`); session 83's sixth part already
+          measured it working (`DIR_LIST_BASE0` held the real client PD mid-TA).
+
+        So the reading route is exhausted for this question: the next step is a
+        **measurement** — a `UK_CCBTRACE`-style build that stores the address the
+        TA computes just before its first `stad`, read mid-hang (one word, one
+        instrument, trap 422).  (Session 84; capture "SESSION 84 TENTH PART".)
+
+441. **0x400000 is a STRUCTURAL constant of this core's heap layout, so arithmetic
+        "fits" are worthless here — and the reading route for "which field is
+        wrong" is now exhausted.**  Three heaps are exactly 4 MiB
+        (`sync` 0x0d800000–0x0dc00000, `kernel_code` 0x0e400000–0x0e800000,
+        `kernel_data` 0x0f000000–0x0f400000) and several base pairs differ by
+        exactly 4 MiB (`pds_pixel − sync`, `pds_vertex − kernel_code`,
+        `usse_pixel − kernel_data`, `ta_data − params_3d`, …).  So any
+        `(a − b) >> 4` or `size << 12` over these heaps yields `0x400000` for many
+        choices, and the general heap's base (`0x1000`) then makes it `0x401000`.
+        **Do not treat a matching number as a mechanism** — this session produced
+        four that matched (the fault address, the 20 KiB, the VDM ring's `0x5000`,
+        and `ta_data − params_3d`); three dissolved and the fourth is this.
+
+        Re-confirmed `tailptr_bytes` is excluded **twice over**: it is
+        `0x100`/`0x400`/`0x1000` for 64²/256²/512² and `× 4096` gives
+        `0x100000`/`0x400000`/`0x1000000`, so it does produce `0x400000` at
+        256×256 — but the fault did **not** move across those sizes (the
+        invariance test).
+
+        **Exhausted by reading** (all this session): the TA command is clean
+        (437), the client structures well-formed, MMU bypass excluded (438), the
+        PB descriptors and page-directory resolution match the vendor (440), and
+        the arithmetic is meaningless (this trap).  **The next step must be a
+        measurement** — a `UK_CCBTRACE`-style build storing the address the TA
+        computes immediately before its first `stad`, read mid-hang (one word, one
+        instrument, trap 422): the same shape that settled LASTKICK in session 81.
+        (Session 84; capture "SESSION 84" eleventh part.)
+
+442. **A ctlblk store instrument whose POSITIVE CONTROL also reads 0 has not been
+        validated — and mine read 0 four times.  The `st.a.d` offset question is
+        open and blocks every ctlblk-store instrument.**  Built the measurement
+        trap 441 asked for (`UK_ADDRLOG`, `UK_STAGELOG`), verified it statically,
+        proved the production image byte-identical, and could not make it write.
+
+        Statically it is right: `UK_ADDRLOG=1 UK_ADDRLOG_REG=<hex>` records the
+        value just written to a chosen config register (word 0x3d = the register,
+        0x3e = the value), and the disassembly shows `limm r5, #540`,
+        `st.a.d r17, #61`, `st.a.d r17, #62` with r4 holding the value.  Production
+        is untouched — rebuilding kick18ccb's exact recipe gives
+        `d4087521803889e860e6eccf1cb3c995`, bit-for-bit the deployed image — and
+        the SGX545 golden (`83b5b0a7…`) and `test_emu.py` both pass with the flags
+        on.  Both flags are default off.
+
+        **Every deployed build read 0** at 0x3d/0x3e: `addr21c`, `addr618`,
+        `stage1`, `stage2`, `stage5`.  **And so did the positive control** —
+        `stage3` stamped 100 at the `kick` entry, which demonstrably executes (it
+        reads the CCB; the TA is kicked; the render faults).  Word 0x37 =
+        `0x22222222`, the existing UK_TICKLOG marker, proves ctlblk stores from
+        this image *do* land.  So the defect is in my store path and **a zero from
+        it is worth nothing** (trap 430's rule applied to a new instrument).
+
+        Three hypotheses, each wrong or unresolved: (1) the offset field is narrow,
+        so rebase through `imae` — still 0; (2) `st.a.d base,#i` is 1-based
+        (`ISA.md:1484`, `base + 4*(i+1)`), so use `#(W-1)` — still 0, **and that
+        reading contradicts the working TICKLOG site**, which writes
+        `st.a.d r17, #0x37` and lands `0x22222222` at word 0x37 exactly; (3) the
+        stamp clobbers live registers — moved to r4 — still 0.
+
+        **Unresolved and load-bearing: does `st.a.d r17, #N` write word N or word
+        N+1 on this core?**  Settle it by copying the proven TICKLOG store
+        verbatim to a *different* word and reading both, changing one thing at a
+        time.  Every attempt above changed the form AND the word together, which
+        is why none isolated it.  Do not build another ctlblk-store instrument
+        until that is answered.
+
+        Firmware **reverted and proven** (`kick18ccb` `d4087521…`, named by
+        dmesg); the unvalidated images are kept as
+        `sgx540_ukernel.bin.stagetrace-unvalidated`.  No media write, no flash.
+        (Session 84; capture "SESSION 84 TWELFTH PART".)
 
 ## 3. Corrections to older reports
 

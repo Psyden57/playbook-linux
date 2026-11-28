@@ -748,6 +748,119 @@ flasher can replace at every point:
     **Do not read a marker zero until one is in.**  Production unchanged (every
     production program byte-identical; the default render reproduces the stall).
     Capture "SESSION 83"; tool `3da50fab…`.
+    (a4h) **THE PAGE FAULT'S WRITER IS BOUNDED, AND IT IS NOT A CLIENT FIELD
+    (session 84).**  The writer covers **`[0x401000, 0x406000)` — 5 pages,
+    20 KiB, at general-heap base (`0x1000`) + 4 MiB** — and it is a
+    **sequential forward** write.  Measured on three clean boots (`resets 0`) by
+    mapping growing ranges at `0x400000`: 4/8/16 KiB land the fault at the range
+    **top** (`0x402000`/`0x404000`/`0x405000`), 20 KiB at `0x405000`, and
+    **24 KiB clears it** and reverts the job to `job timed out (… events
+    0x20000000/0x00000010)` — the session-79 signature, so this fault is a side
+    effect and **the render wall is unchanged** (session 82's MTE state emit).
+    **The footprint does not move with the client**: surface
+    `64x64`/`256x256`/`512x512`, `-k 1`/`-k 2`, `NO_PRIM` and `NO_DRAW` all leave
+    it at `0x00401000`, so `pages`, `tail_pointers_size`, `mt_bytes`,
+    `MTRegionArraySize`, region sizes and strides — the candidates session 83
+    named — are **ruled out** as the base.  `SGXGEN_NO_STATE` alone moves the
+    write to `0x0dc00000` = `PDS_EXEC_BASE` exactly, so the base is picked from
+    two field classes and the **offset** is the defect.  **The instrument had to
+    be fixed first, and it cost no boot:** session 83's `SGXGEN_MAP_AT`/
+    `SGXGEN_MAP_SIZE` did not add coverage, it **relocated the tool's own next
+    general allocation** (so every point also unmapped the baseline region, and
+    the three smallest prescribed sizes were the identical configuration — found
+    with `-n 0`, no render).  Rebuilt as `map_extra_range()`: the layout stays
+    the baseline's and the tool announces `sgxgen: cover <addr> +<len>`.
+    **Consequence: session 83's second fault (`0x0001f000`, requestor `0x0002`)
+    does not reproduce** — it was that tool's unmapped baseline ring, not a
+    second writer (trap 432's "two different blocks" reading is withdrawn).  Also
+    excluded: the tool's VDM ring is `0x5000` (the same 20 KiB) and doubling it
+    does not move the boundary; and the `0x00400000` words in the microkernel
+    image are **data**, not `limm` immediates (a `limm` carries its immediate
+    inside one word, `ISA.md:1604` — decoding every instruction finds none).
+    **Next, cheapest first:** (a) add `BIF_FAULT`'s `SB` field (b4-8,
+    `sgx540defs.h:2828`) to the fault message — a sub-block selector below the
+    requesting master, which the 14-bit requestor mask lacks; (b) read
+    `BIF_CTRL` b8-15 (`MMU_BYPASS_*`) mid-hang — the fault *is* a mapped-address
+    fault, so a bypass bit would be a different mechanism; (c) then decide with
+    the operator whether a 20 KiB out-of-allocation write is in scope before the
+    render wall.  Trap 433; DECISIONS §125; capture "SESSION 84"; tool
+    `/tmp/frame-mapto2` `f6b5c81a…` (and `/tmp/frame-mapto` `775889e7…` is
+    superseded — its layouts must not be cited).
+    **Continuation in the same session (trap 434):** the page fault **ENDS the
+    job in ~0.07 s** (coverage 4 KiB) while the timeout takes **2.05 s** (coverage
+    24 KiB) — so the fault has been **MASKING the 2 s wall**, and any mid-hang
+    measurement must clear it first or sample a window 28× too short.  With the
+    fault cleared the writer **deposits no data** (the coverage range reads back
+    `16384 dwords, 16384 untouched`, pre-filled `0xA5A5A5A5`) — *directional*
+    (a page-table walk, not a mis-addressed store) but **not evidence** (trap 430:
+    no validated GPU store into a client BO exists on this stack).  `BIF_FAULT`'s
+    `SB` field names nothing (`sb 0x00`; module `154bc398…`, reverted to
+    `.pre-sb` `96368b07…`).  `FIX_HW_BRN_31620` is **checked and not
+    implicated**: it is in the 540 rev-120 block and its constants match the
+    fault's arithmetic (4 MiB PT range `SHIFT 22`; dummy page at `0x1000` in every
+    directory, PDE 0/PTE 1; the fault `0x401000` is PDE 1/PTE 1), but mapping
+    `0x1000` does not move the fault and the successful access deposits nothing —
+    unimplemented and **unfalsified**, an MMU-writer candidate, not the cause.
+    Two readings of mine retracted: "mapping `0x1000` makes the render done" was a
+    firmware-down fence artefact, and the first readback's all-zeros was the
+    instrument (`__clear_cache` *cleans*).  **Next: `BIF_CTRL` b8-15
+    (`MMU_BYPASS_*`) mid-hang** — the cheapest thing left.  Tool
+    `/tmp/frame-cover` `756ffd30…`.
+    **Fifth–seventh parts (traps 436/437):** the timeout-path coredump carries no
+    new 4 MiB (the only `0x00400000` is `TE_PSG` `BIT(22)`), and the convention
+    audit against the vendor's *client* builder
+    (`srvclient/…/sgxkick_client.c`) is complete — `aui32SpecObject` is a straight
+    copy, `ui32NumPixelPartitions` a shifted count, `ui32TEState` zeroed by the
+    client, `sHWRTDataDevAddr` a `base + offsetof + sel*size`.  **Every address the
+    live TA command carries is well-formed**, so the bad value is computed
+    **inside the µkernel**.  A "unique arithmetic fit"
+    (`0x401000 = 0x1000 + ((ta_data_base − pb_base) >> 4)`) was **withdrawn as an
+    identity** — it is the difference of two fixed heap bases, which any fixed
+    layout satisfies; its falsifiable prediction (the fault moves if `pb_base`
+    moves) is recorded.  **Next:** (1) `BIF_CTRL` b8-15 mid-hang, which settles
+    whether the writing block goes through the MMU at all; (2) diff the µkernel's
+    arithmetic for `sTARenderDetails`/`sTARTData`/`uRTDataEntry` and the
+    `sBGObjBaseDevAddr` **write** path (`3d.asm:3335-3341`) — the one place the
+    µkernel writes *through* a client-supplied address.
+    **Eighth–ninth parts (traps 438/439):** MMU bypass **EXCLUDED** — `BIF_CTRL`
+    is `0x00000000` at idle, 0.5 s, 1.3 s and after (fault cleared), so no
+    `MMU_BYPASS_*` bit is ever set and the trap-435 walk is genuine.  `bg_block`
+    and every other input to the bg-object write is confirmed correct
+    (`09863000`, 3DPARAMS in the VM's own `drm_mm`; `cmd+0x08/+0x0c` proper PDS
+    words; `rd+0x114` valid; PB descriptor `command+0x24` = `0f010000`), which
+    weakens that path as the source.  A **latent defect** is recorded there (our
+    µkernel dereferences `rd+0x114` as a pointer and uses the unwritten
+    `rd+0x108` as an index — correct only because the pad is zero); fix
+    deliberately, not mid-bisect.  **Next:** the `ldad`-site diff in
+    `ta.asm`/`3d.asm` (`sTAHWPBDesc` vs `s3DHWPBDesc`, `sTARenderContext` vs
+    `sTARenderDetails`), then one `UK_CCBTRACE` build storing the TA's computed
+    address, then `FIX_HW_BRN_33181`.
+    **Tenth–eleventh parts (traps 440/441): the READING ROUTE IS EXHAUSTED.**  The
+    `ldad`-site diff finds no mixed-up field (the three PB descriptors are zeroed
+    at init by the vendor itself, `sgx_init.use.asm:1126-1127`; the context's
+    `sHWPBDescDevVAddr` is populated and equals the command's `pb_desc`;
+    `page_dir = 1` is a pdtable slot that resolves correctly).  And `0x400000` is
+    a **structural constant** of this layout — three heaps are exactly 4 MiB and
+    several base pairs differ by exactly that — so arithmetic fits are worthless
+    (four numbers matched something this session; three dissolved).  **The next
+    step must be a measurement:** a `UK_CCBTRACE`-style build storing the address
+    the TA computes immediately before its first `stad`, read mid-hang (one word,
+    one instrument — trap 422), then `FIX_HW_BRN_33181`.
+    **Twelfth part (trap 442): the trace was BUILT and is NOT VALIDATED, and that
+    is what blocks the next step.**  `UK_ADDRLOG` (the value written to a chosen
+    config register: word 0x3d = register, 0x3e = value) and `UK_STAGELOG`
+    (milestones 1–6 through `do_ta`) are in `ukernel/ukernel.py`, default off, with
+    production **byte-identical** (`d4087521…`), the SGX545 golden intact and
+    `test_emu.py` all OK.  **Six deploys read 0 at 0x3d/0x3e — including a stamp of
+    100 at the `kick` entry**, which demonstrably executes, while word 0x37
+    `0x22222222` proves ctlblk stores land.  So the instrument is unvalidated and a
+    zero from it means nothing (trap 430).  **The open question it exposes: does
+    `st.a.d r17, #N` address word N or word N+1?**  (`ISA.md:1484` says 1-based;
+    the working TICKLOG site `st.a.d r17, #0x37` contradicts that — unresolved.)
+    **Next experiment:** copy the proven TICKLOG store verbatim and add a second
+    store of `0x12345678` to `#0x3e`, then read words 0x37/0x3d/0x3e/0x3f by
+    index; the three outcomes are in HANDOFF §0b's TWELFTH PART block.  **Do not
+    build another ctlblk instrument until that is settled.**
     (a2) a
     heavy-redraw/frame-latency measurement (now meaningful — the TILER pressure
     is gone) and trap 350; (b) attach the CPU supply or confirm 1.35 V for all OPPs and settle the

@@ -4792,3 +4792,233 @@ are not misread later.**
 **Evidence for all three.**  Traps 431/432; the capture's eighth and ninth
 parts; the driver's own fault message (`DIR_LIST_BASE0` vs kernel PD,
 `*_REQ_BASE`, `MEM_REQ_STAT`); `eurasia_km/` directory listing.
+
+## 125. An instrument that changes the layout it is supposed to probe is not an instrument — and a bounded writer is a named defect (session 84)
+
+**Decision.**  Before a measurement whose meaning depends on a *layout*, check
+what the knob actually does to that layout, and make it change one thing.  When a
+sweep's answer is "the fault stops at size S", report S as the writer's footprint
+**only** after showing that the unprobed layout was unchanged — and then try to
+move S with the client, because a footprint that does not respond to the client is
+not a client field.
+
+**Why.**  HANDOFF-84 §0b's sweep could not answer its own question, and finding
+that cost nothing because it was measured with `-n 0` (setup only, no render, so
+no GPU reset).  `SGXGEN_MAP_AT` did not add coverage: it **relocated the tool's
+own next general-heap allocation** to the chosen address.  So every point both
+mapped the target *and* unmapped the baseline region — two variables — and because
+`bo_alloc` only grows a size, the three smallest prescribed sizes were the same
+configuration.  Reworked as `map_extra_range()` (a separate bound range the bump
+allocator steps over), the layout is byte-for-byte the baseline's and the tool
+announces what it mapped.
+
+The measurement then said something §0b had not anticipated.  The writer covers
+**`[heap_base+0x400000, +0x6000)` — 5 pages, 20 KiB** — and **does not move** when
+the surface size (64/256/512), the kick count (1/2), the draw or the primitives
+change; every client size §0b listed scales with exactly those.  So the base is
+not a client field.  `SGXGEN_NO_STATE` moves the write to `0x0dc00000` =
+`PDS_EXEC_BASE` to the byte, which says the base is picked from two field classes
+and the defect is the **offset**.  And the VDM ring happening to be `0x5000` —
+the same 20 KiB — is a coincidence: doubling it does not move the boundary.
+
+Two instrument lessons, both of the §113/§116 family and both earned here:
+
+1. **A knob that relocates is not a knob that covers.**  The session-83 tool's
+   readings were still useful ("mapping *a* range clears the fault"), but the
+   *size* sweep built on it could not be extrapolated, and its second fault
+   (`0x0001f000`, requestor `0x0002`) was that tool's unmapped baseline ring —
+   which had been read as a second writer.  With the corrected knob the fault is
+   `0x40xxx`/`0x2000` in every configuration, so the "two writers" reading is
+   withdrawn.
+2. **An instruction's encoding is part of reading a binary.**  The live
+   microkernel contains the word `0x00400000` three times, and pairing it with the
+   following `0xfc200000` suggested three `limm` sites computing the fault's base.
+   A `limm` carries its immediate *inside one instruction word*
+   (`ISA.md:1604`), so those are data; decoding every instruction for
+   `imm == 0x400000` finds none.  The 4 MiB is computed at run time.  Corrected
+   before it was used as a claim — the trap-403/406/410 class applied to a
+   disassembly reading rather than to a store.
+
+**Constraint.**  Client-side only: no module, no firmware, no flash, no media
+write, and the production stream is unchanged.  The corrected tool is
+`/tmp/frame-mapto2` `f6b5c81a…`; session 83's `/tmp/frame-mapto` `775889e7…`
+relocates and its layouts must not be cited.  Every number is from a boot with
+`resets 0` — a swept GPU is not a witness (traps 423/424).
+
+**What this does NOT decide.**  Whether the out-of-allocation write is in scope
+before the render wall: it is a real memory-safety defect (20 KiB at a fixed 4 MiB
+offset into a heap the client never allocated) but it is not the blocker, and
+session 83's ninth part already showed the wall underneath it is unchanged.  That
+is the operator's call.  Nothing goes upstream (§110).
+
+**Evidence.**  Trap 433; `docs/captures/sgx540-first-render-2026-11-27.txt`,
+"SESSION 84"; `docs/sessions/session-84.md`;
+`local/work/powervr_sgx/tools/gen/{sgxgen.c,sgxgen.h}` (`map_extra_range`);
+`local/work/powervr_sgx/docs/ISA.md:1604` (the `limm` encoding).
+
+## 126. Time a failure with a real clock; a fault that ends the job early is masking what is underneath; and a readback must be able to see a write (session 84)
+
+**Decision.**  Three rules from the session-84 continuation, each earned by a
+measurement that would otherwise have been read wrong.
+
+1. **Time every failure mode, not just its message.**  The page fault and the
+   session-79 timeout are the *same* wall seen through different end conditions:
+   coverage 4 KiB (fault not cleared) → **0.07 s** `page fault`; 24 KiB (cleared) →
+   **2.05 s** `job timed out`.  The fault terminates the job almost immediately, so
+   it has been **masking** the 2 s stall and cutting the measurement window 28×.
+   **Clear the fault before any mid-hang sample.**  (It also explains sessions
+   79–82: the fault was not absent, it was unreachable until the DMS_CTRL fix got
+   the job far enough to make a memory access at all.)  And use `/proc/uptime` —
+   the device's BusyBox `date` has no `%N`, and my first attempt with it reported
+   "0 ms" for every run, which is exactly the kind of number that gets believed.
+2. **A readback instrument must be shown able to see the event it measures.**
+   The coverage range now reads back after the render, and the first version
+   reported "0/16384 nonzero".  Two defects: `__clear_cache` on ARM is
+   `cacheflush(2)`, which **cleans** as well as invalidates, so a read-time clean
+   wrote the still-dirty pre-fill back over the GPU's data; and a zeroed range
+   cannot distinguish "wrote zeros" from "never wrote".  Fixed by flushing the
+   fill pattern to DRAM *before* the GPU runs and by counting
+   untouched/zeroed/foreign.  The result — with the fault cleared, i.e. the
+   configuration where the writer **succeeds**, the range is **16384 dwords, all
+   untouched** — is still not evidence per §113/trap 430 (no validated GPU store
+   into a client BO exists on this stack), but it is *directional*: the access
+   deposits no data even when it succeeds, which is the shape of a **page-table
+   walk**, not a mis-addressed store.  Say "directional", not "measured".
+3. **A retraction is part of the record.**  I read "mapping `0x1000` makes the
+   render done" as a result; it was a fence returning with the firmware
+   momentarily down (`elapsed 0.04 s`, `firmware running: 0` right after — the
+   trap-388/389 class).  On a clean boot the same mapping gives the identical
+   fault.  The reading is withdrawn here, and the *shape* of the error is worth
+   keeping: a suspiciously fast "success" on a GPU that resets is a fence, not a
+   render.
+
+**What was checked and excluded.**  `FIX_HW_BRN_31620` is in the SGX540 rev-120
+block ("workaround in services"), our driver implements none of it, and its
+constants match the fault's arithmetic exactly — a **4 MiB** page-table range
+(`BRN31620_PT_ADDRESS_RANGE_SHIFT 22`), a dummy page at **offset `0x1000` in
+every directory** (PDE 0/PTE 1), while the fault at `0x401000` is PDE 1/PTE 1.
+It is nonetheless **not implicated**: mapping `0x1000` does not move the fault,
+and covering the faulting page yields a walk that deposits nothing.  It stays
+unimplemented and **unfalsified** — an MMU-writer candidate
+(`docs/reference/sgx540-ddk18-facts.md` §6), not the cause.  Likewise
+`BIF_FAULT`'s `SB` field (b4-8), added to the driver's fault message for one
+module build, reads **`sb 0x00`** and does not narrow requestor bit 13.
+
+**Constraint.**  Client-side plus one module build that was **reverted**
+(`154bc398…` → `.pre-sb` `96368b07…`, file restored and md5-verified).  No
+firmware, flash, media or RPMB change.  The live tool is `/tmp/frame-cover`
+`756ffd30…`; production is unchanged.  Nothing goes upstream (§110).
+
+**Evidence.**  Trap 434; capture "SESSION 84 CONTINUATION";
+`docs/sessions/session-84.md` (the continuation section);
+`eurasia_km/services4/srvkm/devices/sgx/mmu.c` (the BRN31620 block, its
+constants and `BRN31620InvalidatePageTableEntry`); `sgxerrata.h:965` (the
+rev-120 block); `sgx540defs.h:2828` (the `SB` field).
+
+## 127. Read the driver's own coredump before building an instrument — and a valid PDE with an empty PTE is a different bug from a missing table (session 84)
+
+**Decision.**  Before adding an instrument for a memory fault, read the one the
+driver already has.  `pvrsgx_dump.c`'s `dump_bif()` translates the faulting
+address in the **client directory** and prints PDE and PTE, and it rides the
+**devcoredump** (`CONFIG_DEV_COREDUMP=y` is in the image) — so
+`/sys/class/devcoredump/devcdN/data` already answers "is the walk sound?", and it
+had never been read in ten sessions of work on this fault.
+
+**What it said, and why it changes the diagnosis.**  Two one-variable boots:
+
+| configuration | `job's` directory |
+|---|---|
+| baseline (nothing mapped at `0x401000`; PDE index 1 never created) | `pde 0x00000000 pte 0x00000000` |
+| `0x400000` covered (table at PDE 1, one page at PTE 0) | **`pde 0x8ae68001`** `pte 0x00000000` |
+
+* **Baseline: no page table exists at all** for that 4 MiB block, in the client
+  *or* the firmware directory.  This corrects session 83: "inside the general
+  heap, merely unallocated" was too generous.  The heap's *range* is declared
+  (`general = [0x1000, 0x04400000)`) but **no table exists inside it**, so the GPU
+  faults on the *walk*.
+* **With a table present the PDE is valid and the PTE is still empty.**  So the
+  walk is **structurally sound** — a correct table lookup that finds an unmapped
+  page, not a corrupt directory and not a wild pointer.
+
+That distinction decides the search.  "Missing table" would point at the MMU
+driver or at heap setup; **"valid table, empty entry"** says the client GPU state
+is asking for a page the client never allocated, and the address's exact shape —
+`heap_base + 4 MiB + 1 page`, where 4 MiB is *one whole page table* — names the
+two candidate mechanisms: a **page-table range shift (22) used as an address
+shift**, or **a ~4 MiB size used as an address**.  Both are the §124/trap-431
+class (a value used with the wrong meaning) one level down, in the addressing
+rather than in a register field.
+
+**Constraint.**  Read-only: no code change, no module build, no flash.  The
+coredump interface is fussy and cost a boot to learn — this kernel has **no
+`dismiss` node**, the node is **consumed by the read**, and
+`/sys/class/devcoredump/disabled` is a **one-way global kill switch** (do not
+write it; reboot to restore).  So: one fault per fresh boot, read the dump in the
+same pass.
+
+**What it does NOT decide.**  Which of the two mechanisms it is, and where the
+value comes from.  The next split is a µkernel-side trace of what feeds the walk,
+or `BIF_CTRL`'s `MMU_BYPASS_*` bits mid-hang (does the writing block go through
+the MMU at all).  Whether the out-of-allocation access is in scope before the
+render wall is still the operator's call.
+
+**Evidence.**  Trap 435; capture "SESSION 84 THIRD PART";
+`drm/powervr_sgx/pvrsgx_dump.c` (`dump_bif`, `dump_lookup`),
+`pvrsgx_mmu.c` (`pvrsgx_mmu_lookup`, `pte_get`);
+`CONFIG_DEV_COREDUMP=y`; `sgx540defs.h:2815-2829` (no separate fault-type field —
+`type` is the read/write bit).
+
+## 128. A measurement tool needs its own positive control before its zeros count — and in this address map, a number that matches is not a mechanism (session 84)
+
+**Decision.**  Three rules, all earned by this session's failures.
+
+1. **A new measurement instrument gets a positive control in the same build, and
+   the control must be something already known to work.**  The ctlblk trace
+   (`UK_ADDRLOG`/`UK_STAGELOG`) was built, statically verified, its production
+   image proved byte-identical (`d4087521…`) and its golden and emulator gates
+   passed — and it read 0 six times.  The positive control (a stamp of 100 at the
+   `kick` entry, an entry that demonstrably executes) **also read 0**, while word
+   0x37 `0x22222222` proved ctlblk stores from that image do land.  So the
+   instrument was the failure, and every zero it produced is worth nothing.  This
+   is trap 430's rule turned on my own tool: **an instrument whose positive
+   control also reads zero has not been validated, and its zeros are not
+   evidence.**
+2. **Change one thing at a time, even when the hypothesis is obvious.**  Three
+   hypotheses each changed the store *form* and — in the same edit — the word it
+   targeted, so none of them isolated the variable: (a) narrow offset field → rebase
+   via `imae`; (b) `st.a.d base,#i` 1-based per `ISA.md:1484` → `#(W−1)`; (c) live
+   register clobber → move to r4.  The experiment that would have settled it was
+   the cheap one and never ran: **copy the proven TICKLOG store verbatim to a
+   different word and read both.**
+3. **In this address map a matching number is not a mechanism.**  `0x400000` is a
+   *structural* constant: three heaps are exactly 4 MiB (`sync`, `kernel_code`,
+   `kernel_data`) and several base pairs differ by exactly 4 MiB, so any
+   `(a−b) >> 4` or `size << 12` over these heaps yields it for many choices.  This
+   session produced four numbers that "matched" something — the fault address, the
+   20 KiB extent, the VDM ring's `0x5000`, and `ta_data_base − pb_base` — and three
+   dissolved on contact.  A numerical fit is a **hypothesis generator**; it becomes
+   evidence only when it predicts something falsifiable and the prediction is then
+   tested (e.g. "the fault moves if `pb_base` moves").  The same caution applies to
+   `tailptr_bytes`, which does yield `0x400000` at 256×256 (`0x400 × 4096`) but is
+   excluded by the size invariance.
+
+**Why it matters beyond this session.**  The render wall has now survived ten
+sessions of *inference* — stack traces, field encodings, arithmetic coincidences —
+and the two things that actually moved it were measurements (the DMS_CTRL fix in
+traps 431, and the bounded-writer / structural-walk results here).  The lesson is
+not "measure more"; it is that **an unvalidated measurement is worse than no
+measurement**, because it produces a confident wrong answer that costs a session
+to unwind.
+
+**Constraint.**  The instrument stays in the tree (`ukernel/ukernel.py`, both
+flags default off) because it is nearly right and the fix is one experiment away;
+but it must not be cited until the offset question is settled by the
+TICKLOG-store-copy test.  The unvalidated firmware images are kept on the unit as
+`sgx540_ukernel.bin.stagetrace-unvalidated`; the live firmware is reverted and
+proven (`kick18ccb` `d4087521…`).  Nothing goes upstream (§110).
+
+**Evidence.**  Trap 442 (the instrument) and trap 441 (the layout constants);
+`docs/sessions/session-84.md` (the twelfth part and Dead ends);
+`docs/captures/sgx540-first-render-2026-11-27.txt` (eleventh/twelfth parts);
+`local/work/powervr_sgx/docs/ISA.md:1484` and the UK_TICKLOG site in `ukernel/ukernel.py` (the
+contradiction that blocks it).
